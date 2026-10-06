@@ -1,9 +1,10 @@
 # 0005 — Vehicle-to-home: the vehicle as a second, part-time AC-coupled store
 
-- **Status:** Proposed. No code yet; implementation is planned for 0.8.0
-  after the AC-coupled battery work (#419), once the maintainer accepts or
-  amends the decisions below (#420).
-- **Date:** 2026-10-06
+- **Status:** Proposed, with the fourteen decisions taken by the maintainer
+  on 2026-10-06 and 2026-10-07 (see [Decisions](#decisions)). No code yet;
+  implementation is planned for 0.8.0, after the AC-coupled battery work
+  (#419). Tracked in #420.
+- **Date:** 2026-10-06; decisions taken 2026-10-06 and 2026-10-07
 
 ## Context
 
@@ -40,9 +41,16 @@ Its contract:
 - results with the energy to and from the vehicle, unmet departure targets
   and the cost of extra wear.
 
-This record answers each point or lists it as an open decision. It changes
-no code. Its options carry a recommendation; the maintainer's answers
-will replace the open decisions, as they did for ADR 0004.
+This record answers each point. It changes no code. The maintainer took
+its fourteen decisions on 2026-10-06 and, after a second design review,
+revised four of them on 2026-10-07: trip energy is gross, with optional
+charging away from home (decision 4); it is withdrawn over driving legs
+(decision 6); the vehicle pack is replaced at its threshold (decision 10);
+and wear is valued through replacement outlays and terminal credits
+(decision 11). The sections below follow the decisions, and
+[Decisions](#decisions) lists them. The contract's "state of charge at
+arrival" is no longer an input: arrival is an outcome of driving and away
+charging.
 
 ## Current behaviour this record relies on
 
@@ -108,6 +116,14 @@ Monte Carlo scales the load by a sampled factor
 gate the stationary pack per step. `daily_persistence` plans with the
 canonical day loop (`_DayEvaluator`, `breos/_daily_targets.py:361`) and is
 refused by Monte Carlo (`breos/montecarlo.py:429`).
+
+**Replacement.** At a day close, a stationary pack at or below
+`eol_percentage` is replaced by `_apply_battery_replacement`
+(`breos/battery.py:1092-1145`), which books the removed and added energy
+and starts the new pack at `max_soc` (`:1127`), unless a guard skips the
+swap (`_replacement_skipped_by`, `:1440`; ADR 0003 E11) and the pack is kept
+or retired (E12). Economics books each swap at its instant
+(`replacement_booking_time`, `breos/economics.py:277`; E3, E4).
 
 **Terminal credit.** ADR 0003 E10 credits the final pack's health above the
 end-of-life threshold, `f = clip((h − h*) / (1 − h*), 0, 1)`, priced at the
@@ -184,9 +200,12 @@ models no protocol.
 - **V2H only.** The vehicle discharges to the house load and never exports,
   as the stationary battery never does (ADR 0004 C1). Vehicle-to-grid
   (export from the vehicle, or market services) is out of scope.
-- Charging and driving away from home are outside the site. The energy a
-  trip uses is the net energy the vehicle's battery loses between departure
-  and arrival, whatever charged it on the way.
+- **Away from home** the vehicle drives and may charge, at work or at a
+  public charger. Both change the energy on board and cross no site meter:
+  the site's balance sees the vehicle leave and come back, and the vehicle's
+  own on-board balance books the driving and the away charging (V6). Away
+  purchases are a separate source of energy, priced and counted in emissions
+  in every household (V8, V11).
 - The model applies to a DC bidirectional charger (the converter sits in the
   wall unit) and to an AC one (the converter is the vehicle's on-board
   charger) alike: in both, one bidirectional converter sits between the AC
@@ -204,7 +223,7 @@ mode = "v2h"                      # "uncontrolled", "v1g" or "v2h"
 battery_kwh = 60                  # nominal capacity
 min_soc = 0.10                    # lowest state of charge the vehicle allows
 max_soc = 1.00
-departure_soc = 0.80              # required at every departure
+departure_soc = 0.80              # required at every departure from home
 v2h_min_soc = 0.40                # V2H never discharges below this
 charge_efficiency = 0.95          # battery, DC in to stored
 discharge_efficiency = 0.95       # battery, stored to DC out
@@ -212,14 +231,22 @@ charger_ac_rating_kw = 7.4        # bidirectional, AC side
 charger_efficiency = 0.94         # nominal, no default
 charge_periods = ["off_peak"]     # optional; needs [tariff]
 discharge_periods = ["peak"]      # optional; needs [tariff]; "v2h" only
-reference_mode = "v1g"            # the household the benefit is measured against
-charger_cost = 2500               # extra cost of this charger (V10)
-battery_cost_per_kwh = 120        # values the vehicle pack's wear (V10)
+reference_mode = "v1g"            # R1, the household V2H is compared with (V8)
+charger_cost = 2500               # installed premium over the reference charger (V10)
+battery_cost_per_kwh = 120        # vehicle pack price, for replacements and wear (V10)
+eol_percentage = 0.70             # vehicle pack replacement threshold (V9)
+outside_charging_price = 0.60     # optional penalty per kWh of unserved driving (V5)
+
+[vehicle.away_charging]           # optional (V6)
+target_soc = 0.70                 # stopping target, not a ceiling
+power_kw = 3.7                    # at the purchased-energy boundary
+efficiency = 0.90                 # stored energy per purchased energy
+price = 0.0                       # away_charging_price per kWh purchased; 0 = free
 
 [vehicle.schedule]
 weekday = { arrive = "18:30", depart = "07:45", trip_kwh = 9.0 }
 weekend = { arrive = "14:00", depart = "10:00", trip_kwh = 12.0 }
-# or: file = "trips.csv"  (departure, arrival, trip_kwh per row)
+# or: file = "trips.csv"  (V3)
 ```
 
 - **Modes.** `"uncontrolled"` charges at the charger's full rating from
@@ -233,39 +260,57 @@ weekend = { arrive = "14:00", depart = "10:00", trip_kwh = 12.0 }
   capacity (nominal times its health), as a vehicle displays it, not a
   fraction of the usable window. `0 ≤ min_soc ≤ v2h_min_soc ≤ max_soc ≤ 1`
   and `min_soc ≤ departure_soc ≤ max_soc`. `v2h_min_soc` is refused outside
-  `"v2h"`; its default is `min_soc`.
+  `"v2h"`; its default is `min_soc`. The state of charge at arrival is an
+  outcome of the run, never an input.
 - **No defaults for equipment facts.** `battery_kwh`, `departure_soc`,
   `charger_ac_rating_kw` and `charger_efficiency` are required. BREOS has no
   sourced value for any of them, and a charger efficiency is not the PV
   inverter's 0.96, as ADR 0004 C2 says of the battery inverter. The battery
   efficiencies default to the stationary battery's (`DEFAULT_CHARGE_EFFICIENCY`,
-  `DEFAULT_DISCHARGE_EFFICIENCY`).
+  `DEFAULT_DISCHARGE_EFFICIENCY`). With `[vehicle.away_charging]`, all four
+  of its keys are required; `price = 0` is valid (free charging at work).
 - **Rating units** follow ADR 0004 C4: the rating is AC, the charger's
   input when charging and its output when discharging, and it enters every
   per-step limit as `P_wh = P × hours_per_step`.
+- **Replacement keys** mirror the stationary battery's (V9):
+  `enable_replacement`, `replacement_min_remaining_years`,
+  `skipped_replacement_action` and an optional `battery_replacement_cost`
+  (one swap's invoice, as ADR 0004 C9 gives App).
 - The lower level takes `VehicleConfig` and a resolved `VehicleSchedule`
   (V3) through new optional `_simulate_core` arguments, as instructions and
   controllers arrive today.
 
-### V3. Plug-in schedule and trips
+### V3. Plug-in schedule, trips and away charging windows
 
-**Input forms.** Options:
+**Input forms.** Decided 2026-10-06 (decision 3). The options were:
 
 - (a) Arrival and departure times for weekdays and weekend days, each with
   the trip energy, plus an optional file of trips.
 - (b) A per-step plugged-in mask from a file.
 - (c) Statistical trip generation (sampled arrival, departure and distance).
 
-Recommendation: (a). Times per day type cover the common study, and the
-file covers measured logbooks. A mask (b) cannot carry the energy of each
-absence, which the trip needs, and generation (c) is a behaviour model BREOS
-has no data for; a study can generate a trip file itself.
+(a) is decided. Times per day type cover the common study, and the file
+covers measured logbooks. A mask (b) cannot carry the energy of each
+absence, and generation (c) is a behaviour model BREOS has no data for; a
+study can generate a trip file itself.
 
-- **Trip file.** One row per absence: `departure`, `arrival` (timestamps
-  with an offset or in the location's timezone, as load files are read) and
-  `trip_kwh`. Rows must not overlap. Within the simulated year, a file
-  replaces the weekday and weekend rules; it is replayed every project year
-  like the tariff calendar (ADR 0002 A2).
+- **Trip energy.** `trip_kwh` is the gross energy the trip withdraws from
+  the energy stored in the pack, driving losses included (decision 4). It
+  does not depend on away charging: charging on the way is a separate input
+  to the pack (V6), never a reduction of `trip_kwh`. There is no
+  arrival-state input.
+- **Day types.** Without a file, each absence follows the weekday or weekend
+  rule of its departure's civil date, and the template of V6 places its
+  energy in two driving legs with a parked interval between. Each day type
+  may set `away_charging = false` to have no charging window.
+- **Trip file.** One row per segment of an absence, in time order:
+  `start`, `end` (timestamps with an offset or in the location's timezone,
+  as load files are read), `kind` (`"drive"` or `"park"`), `energy_kwh` for
+  a drive (gross, as `trip_kwh`), and `away_charging` (true or false) for a
+  park. An absence is the run of segments between two home periods. Rows
+  must not overlap. A segment may cross days and the year end. Within the
+  simulated year a file replaces the weekday and weekend rules, and it is
+  replayed every project year like the tariff calendar (ADR 0002 A2).
 - **Civil time.** Times are local wall-clock times in the configured
   timezone, resolved as a tariff schedule is (ADR 0002 A1), never from the
   index's own offset. A day type is the configured-zone civil date's
@@ -273,33 +318,28 @@ has no data for; a study can generate a trip file itself.
 - **Steps.** A step is plugged in only if the vehicle is home for the whole
   step. An arrival rounds up to the next step boundary and a departure rounds
   down. At hourly steps an arrival at 18:30 plugs in at 19:00 and a
-  departure at 07:45 leaves at 07:00. Options: this conservative rounding,
-  or ADR 0002 A3's strict policy, which refuses a time off the step grid.
-  Recommendation: conservative rounding, recorded in provenance. A schedule
-  is behaviour data, not a regulatory boundary; refusing 07:45 at hourly
-  steps would force invented times. The rounding never gives the vehicle more
-  time at home than the schedule says.
+  departure at 07:45 leaves at 07:00. The rounding never gives the vehicle
+  more time at home than the schedule says, and never gives it more away
+  charging time either: a charging window's hours in a step are the parked
+  hours the schedule gives inside that step, not the whole step. The other
+  option was ADR 0002 A3's strict policy, which refuses a time off the step
+  grid; a schedule is behaviour data, not a regulatory boundary, and
+  refusing 07:45 at hourly steps would force invented times.
 - **Resolution.** The schedule resolves once, on the simulated index, to
   per-step arrays: `plugged` (bool), `steps_to_departure` (the number of
   plugged steps left before the next departure, this one included; 0 when
-  away), and `trip_wh` at each departure step. They are hashed for
-  provenance as instructions are. Every project year replays them, and a
-  plug-in that crosses the year end continues at the head of the year
-  (A2's seam). A `[period]` run takes the next departure after its end from
-  the same rules.
-
-**Energy while away.** Options:
-
-- (a) Trip energy in kWh per absence, at the battery (DC, out of the store).
-- (b) The state of charge at arrival.
-
-(b) makes the trip's energy depend on the departure state: a vehicle that
-leaves fuller after V1G drives the same distance but would lose more. The
-difference between two households would then include energy that no trip
-used. Recommendation: (a) is the model. (b) is accepted as input and
-converted to (a) against the departure target:
-`trip_wh = (departure_soc − arrival_soc) × capacity`, at the vehicle's
-current capacity. With every target met, both forms give the same run.
+  away), and, for away steps, `drive_first_wh`, `park_hours` (charging
+  window hours) and `drive_second_wh`: the step's driving before its
+  parked time, its parked charging time, and its driving after. They are
+  hashed for provenance as instructions are. Every project year replays
+  them, and a plug-in or an absence that crosses the year end continues at
+  the head of the year (A2's seam). A `[period]` run takes the next
+  departure after its end from the same rules.
+- **Sub-step order.** A step with more alternations of driving and parking
+  than drive, park, drive is resolved to those three in order: the driving
+  before its first parked time, all its parked time, and the rest of its
+  driving. At 15-minute steps this is rare; it is an approximation the docs
+  state.
 
 ### V4. Dispatch order
 
@@ -318,9 +358,9 @@ the vehicle second, on the AC flows the stationary step left:
    Import_From_Grid = grid_import - Vehicle_AC_To_Load + Grid_AC_To_Vehicle
 ```
 
-Options for the order:
+Decided 2026-10-06 (decision 1): (a). The options were:
 
-- (a) Stationary battery first, vehicle second (recommended).
+- (a) Stationary battery first, vehicle second.
 - (b) Vehicle first, stationary battery second.
 - (c) One joint step that shares PV surplus and deficit between the two by
   a rule (for example in proportion to their power ratings).
@@ -410,15 +450,18 @@ draw    = dc_out / eff_d                                  # Vehicle_Discharge_DC
 - **Unmet targets.** A target that cannot be reached (the vehicle arrived
   too empty, stayed too briefly, or the site limit bound) is not refused. The
   vehicle charges at full power and leaves short; the shortfall is reported
-  (V11). Options: report it (recommended), refuse the run, or buy the
-  shortfall at an outside charging price. Refusing would make a whole study
-  fail on one late arrival. An outside price is a study assumption, so it is
-  an optional key, `vehicle.outside_charging_price`, with no default: set, it
-  prices unserved trip energy in every household (R0, R1, R2) as a cost of
-  that household, so households that drive the same trips stay comparable.
-  Unset, the shortfall and unserved trip energy are reported only, and the
-  V2H benefit is flagged as not comparable when R2 leaves more driving
-  unserved than R1 (V8).
+  (V11). Decided 2026-10-06 (decision 5); the other options were to refuse
+  the run, which would make a whole study fail on one late arrival, or to
+  buy the shortfall at a price. A short departure shows up on the road: the
+  trip then runs out of energy sooner, and `Vehicle_Drive_Unserved` records
+  it (V6). `vehicle.outside_charging_price` is an optional penalty per kWh
+  of unserved driving, with no default: set, it is a cost in every
+  household (R0, R1, R2), so households that drive the same trips stay
+  comparable. It is money only; it restores no energy. Away charging (V6)
+  is the physical alternative, power-limited and priced at what it buys.
+  Unset, shortfalls and unserved driving are reported only, and a
+  comparison is flagged as not comparable when R2 leaves more driving
+  unserved (V8).
 - **One direction per step,** as A8 requires: a step that charges does not
   discharge. The guard gives `d_max ≤ 0` whenever `mandatory > 0`.
 - **Limits.** `P_wh` bounds charger AC in and AC out; `site_room` bounds
@@ -428,37 +471,74 @@ draw    = dc_out / eff_d                                  # Vehicle_Discharge_DC
   in its enclosure, and a vehicle's thermal management is outside BREOS. This
   is an assumption, and the docs state it.
 
-### V6. Departure, absence and arrival
+### V6. Departure, driving, away charging and arrival
+
+Decided 2026-10-07 (decisions 4 and 6). Trip energy is withdrawn over
+driving legs, with parked time between them in which the vehicle may charge
+away from home.
 
 - **Departure** happens at the start of the first step that is not plugged
-  in. The vehicle's stored energy `E_dep` leaves the site: the ledger books
-  `Vehicle_Departure_Energy = E_dep`, and the in-site stored energy becomes 0.
-  On board, `trip_wh` is removed at once. If it exceeds the usable energy
-  `E_dep − min_soc × cap_v`, the on-board energy stops at `min_soc × cap_v`
-  and the rest is `Vehicle_Trip_Unserved`.
-- **Away,** the vehicle is neither load nor storage: every vehicle flow is
-  0 and the in-site stored energy is 0. The on-board energy is reported as a
-  state, for the ageing model and the reader, and does not enter any balance.
+  in. The vehicle's stored energy `E_dep` leaves the site: the site ledger
+  books `Vehicle_Departure_Energy = E_dep`, and the in-site stored energy
+  becomes 0. The on-board energy is unchanged by crossing the boundary.
+- **Template legs.** Without a trip file, half of `trip_kwh` is withdrawn
+  in the first away step and half in the last; the steps between are parked.
+  An absence of one step holds both halves, the first before and the second
+  after any parked time in that step (there is none in the template). This
+  is a coarse template, not a measured driving profile, and the docs say so.
+  A trip file gives the legs, their energy, their duration and the charging
+  windows instead; a drive segment's energy is spread over its steps in
+  proportion to the time it spends in each.
+- **Driving within a step** runs in the order of V3: `drive_first_wh`, then
+  the parked time, then `drive_second_wh`. Each withdrawal is served down to
+  `min_soc × cap_v` and no further. What cannot be served is
+  `Vehicle_Drive_Unserved`; a withdrawal never borrows from charging later
+  in the same step or a later step, and the energy on board never goes
+  negative.
+- **Away charging.** In a parked window with `[vehicle.away_charging]`, the
+  vehicle charges toward `target_soc × cap_v`. Per step it stores at most
+  `power_kw × park_hours × efficiency`, and never more than the room to the
+  target. `target_soc` is a stopping target, not a ceiling: a vehicle above
+  it keeps its energy, does not charge, and later driving may take it below.
+  The target need not be reached. `power_kw` and `efficiency` are at the
+  purchased-energy boundary: `Vehicle_Away_Charge_Purchased` is the energy
+  bought, `Vehicle_Away_Charge_Loss` the part that is not stored. The home
+  charger's rating and efficiency are not assumed for away charging.
+- **Away charging and the departure target.** Away charging happens only
+  away. It cannot meet a departure target, which must be met before the
+  vehicle leaves home (V5); the guard counts home steps only.
 - **Arrival** is the first plugged-in step after an absence. The on-board
-  energy enters the site: `Vehicle_Arrival_Energy`, booked before that
-  step's dispatch.
-- **Timing of the trip energy.** Removing it at departure means the ageing
-  model sees the arrival state of charge during the absence. Options: at
-  departure (recommended), at arrival, or spread linearly over the absence.
-  The linear form is closest to driving but invents a time profile the
-  input does not have; the two step forms bracket it. At departure is chosen
-  so that an absence that ends after the simulated year needs no trip
-  energy from the next year.
+  energy enters the site as `Vehicle_Arrival_Energy`, booked before that
+  step's dispatch. The arrival state of charge is whatever driving and away
+  charging left.
+- **Absences across days and years.** Legs and charging windows of a
+  multi-day absence carry over civil days and the year seam, as the
+  schedule arrays do (V3).
 - **Origins.** The vehicle's stored energy has the three origins of ADR 0002
-  A8. A trip removes them in proportion; the arrival energy keeps the
-  departure shares. PV-origin energy used by trips is reported as PV used
-  for driving.
+  A8. Driving removes them in proportion. Away charging adds to the grid
+  origin: it is grid energy, bought off site. PV-origin energy used by
+  driving is reported as PV used for driving.
 - **Start.** The vehicle starts the project at its departure target,
   unattributed, plugged in or away as the schedule says at the first step.
-  Between project years the on-board energy, its origins and its health
-  carry over as the stationary battery's do (`physical_carry`).
+  Between project years the on-board energy, its origins, its health and
+  its replacement state carry over as the stationary battery's do
+  (`physical_carry`).
+
+The options for the timing of the trip energy were: all at departure, all
+at arrival, spread uniformly over the absence, or over driving legs with
+parked intervals between. All at departure holds the state of charge low
+through the absence and lets no away charging serve the way back; all at
+arrival holds it high and lets later charging pay for a trip the pack could
+not have made; a uniform spread makes a parked car drive all day, and with
+away charging it charges while driving. Driving legs order driving and
+charging correctly, and the template keeps the weekday and weekend input
+simple. Endpoint deductions do not bracket the leg model's wear or
+replacement cost, since ageing is not linear in the state of charge;
+studies test their sensitivity with a trip file.
 
 ### V7. Smart charging and tariffs
+
+Decided 2026-10-06 (decision 7).
 
 - `[smart_charging]` keeps its meaning and gates the stationary battery
   only. The vehicle's own `charge_periods` and `discharge_periods` select
@@ -482,193 +562,287 @@ draw    = dc_out / eff_d                                  # Vehicle_Discharge_DC
   `annual_network_credit` (ADR 0002 A15). The operator's right to reduce the
   charging power in a grid emergency is not modelled.
 
-### V8. The reference household and the comparison
+### V8. The households and the comparisons
 
-Three households are defined, all with the same vehicle and trips:
+Decided 2026-10-06 (decision 8). Three households are defined, all with the
+same vehicle, trips, away-charging rules and prices, and the same vehicle
+replacement policy:
 
-| Household | System | Vehicle charging | Used for |
+| Household | System | Vehicle charging at home | Used for |
 |---|---|---|---|
-| R0, no system | none | `"uncontrolled"`, from the grid | NPV baseline, emissions baseline |
+| R0, no system | none | `"uncontrolled"`, from the grid | NPV baseline, emissions baseline, household-adjusted NPV |
 | R1, reference | the configured PV and battery | `reference_mode` | V2H benefit |
 | R2, study | the configured PV and battery | `mode` | every reported result |
 
 - **R0** extends today's no-system household: it buys the house load and the
   uncontrolled vehicle charging from the grid. `Baseline_Import_Cost` prices
-  both, so a system's NPV is not charged for owning a vehicle. R0's vehicle
-  charging comes from the vehicle step on a site with no PV and no battery,
-  simulated once per project year with the vehicle's ageing.
+  both, so a system's NPV is not charged for owning a vehicle. R0 is a
+  vehicle-only projection (no PV, no battery) with the vehicle's ageing and
+  replacements, simulated once per project year. It runs whenever
+  `[vehicle]` is set.
 - **R1** is a second projection of the configured system with
-  `vehicle.mode = reference_mode`. Options for `reference_mode`: (a) a key
-  that defaults to `"v1g"` for `"v2h"` and to `"uncontrolled"` for `"v1g"`,
-  with `"none"` to skip R1 (recommended); (b) always `"uncontrolled"`;
-  (c) always `"v1g"`. (a) isolates the value of discharge for V2H by
-  default, which is #420's question, lets a study measure V1G against
-  uncontrolled charging, and lets a sweep skip the second run. (b) would mix
-  the value of smart charging into the value of V2H.
-- **Benefit.** The V2H benefit is R1's discounted cost less R2's, less the
-  extra wear of V9 and the extra charger cost of V10's CAPEX. It is reported
-  with its parts. R1 doubles the dispatch time of a run; App runs both. A
-  `reference_mode` equal to `mode` is refused.
-- **Same driving.** The benefit is only meaningful if both households drive
-  the same trips. R1 and R2 report their unserved trip energy and departure
-  shortfalls. With `vehicle.outside_charging_price` set, unserved trip energy
-  is a cost in each household and the benefit includes the difference (V5).
-  Without it, a benefit where R2 leaves more trip energy unserved than R1 is
-  reported with `comparable = false`, and the docs say why.
+  `vehicle.mode = reference_mode`. `reference_mode` defaults to `"v1g"` for
+  `"v2h"` and to `"uncontrolled"` for `"v1g"`; `"none"` skips R1 and the
+  V2H benefit. A `reference_mode` equal to `mode` is refused, and
+  `"uncontrolled"` has no R1.
+- **Run time.** A V2H run is three household trajectories: R0, a light
+  vehicle-only run, and R1 and R2, full system runs. Each has its own
+  vehicle degradation lifecycle and swap dates, so a V2H run costs about
+  twice a run without a vehicle in dispatch and three vehicle lifecycles in
+  degradation. App runs all three. Monte Carlo runs all three per
+  trajectory on the same sampled weather and load (V12).
+- **System NPV** keeps today's meaning: the system's cash flows against R0's
+  bill. It does not include vehicle wear or away purchases.
+- **Household-adjusted NPV**, reported beside it and labelled as such: the
+  system NPV, less the present value of R2's away purchases over R0's, less
+  the vehicle wear `W_{2−0}` (V10), less R2's priced unserved driving over
+  R0's when `outside_charging_price` is set. It answers what the household
+  gains from the system once its vehicle is counted.
+- **V2H benefit**, R2 against R1: operating savings (R1's home electricity
+  bill, export revenue, away purchases and priced unserved driving, less
+  R2's), less `charger_cost` (V10), less the vehicle wear `W_{2−1}`. It is
+  reported with its parts.
+- **Same driving.** Both comparisons are only meaningful if the households
+  drive the same trips. Each household reports its unserved driving and
+  departure shortfalls. With `outside_charging_price` set, unserved driving
+  is a cost in each household (V5). Without it, a comparison in which R2
+  leaves more driving unserved than its comparator is reported with
+  `comparable = false`, and the docs say why.
 
-### V9. Vehicle battery degradation and wear from home use
+The other options for `reference_mode` were always `"uncontrolled"`, which
+would mix the value of smart charging into the value of V2H, and always
+`"v1g"`, which leaves no comparison for a V1G study.
 
-**Model.** Options:
+### V9. Vehicle battery degradation and pack replacement
 
-- (a) A second degradation lifecycle for the vehicle pack, stepped at the
-  same positional day windows as the stationary pack, on the vehicle's
-  on-board state of charge, trips included, and its temperature. The engine
-  is chosen as for the stationary battery: native by default, BLAST by key.
-- (b) No ageing model; a wear price per kWh of V2H discharge, as the
-  planner's `wear_cost_per_kwh` (ADR 0002 A17).
-- (c) No wear.
-
-Recommendation: (a). It reuses the `DegradationLifecycle` boundary, runs in
-Python between day windows as the stationary pack's does, and so leaves the
-kernel's ageing-free contract intact. It captures calendar ageing, which
-V2H can lower as well as raise by changing the average state of charge;
-(b) cannot. Limits stated in the docs: the native model is calibrated on LFP
-cells, many vehicles use NMC or NCA, and a BLAST key names one cell model,
-not a vehicle pack (battery degradation policy). The vehicle has its own
+**Model.** Decided 2026-10-06 (decision 9): a second degradation lifecycle
+for the vehicle pack, stepped at the same positional day windows as the
+stationary pack, on the vehicle's real on-board state of charge (driving,
+away charging and home use included) and its temperature. The engine is
+chosen as for the stationary battery: native by default, BLAST by key. It
+reuses the `DegradationLifecycle` boundary and runs in Python between day
+windows, as the stationary pack's does, so the kernel stays free of ageing.
+It captures calendar ageing, which V2H can lower as well as raise. The other
+options were a wear price per kWh of V2H discharge, as the planner's
+`wear_cost_per_kwh` (ADR 0002 A17), which misses calendar ageing, and no
+wear. Limits the docs state: the native model is calibrated on LFP cells,
+many vehicles use NMC or NCA, and a BLAST key names one cell model, not a
+vehicle pack (battery degradation policy). The vehicle has its own
 `degradation_engine`, `blast_model` and `calendar_model` keys, defaulting to
 the stationary battery's defaults.
-
-**Separating home use from driving.** Driving wear and V2H wear act on the
-same cells at the same time, and a cycle-counting model has no additive
-split. The record therefore uses the counterfactual: R1 and R2 have the same
-trips, so the wear from home use is the difference between the vehicle's
-health at the end of R1 and of R2. It includes every change V2H makes to the
-vehicle's state of charge, charging as well as discharging. It can be
-negative, when V2H keeps the pack at a lower average state of charge.
-Options: this difference (recommended), or a throughput share (V2H discharge
-over all discharge, times total wear), which assumes every kWh wears the
-same and ignores calendar ageing.
 
 **Temperature.** `vehicle.battery_temperature` takes `"weather"`, a fixed
 value or a CSV, as `battery_temperature` does, without the indoor model.
 Default `"weather"`. A vehicle's thermal management keeps its cells warmer
 in winter and cooler in summer than the air; this is an assumption, stated.
 
-**Lifetime.** One vehicle pack serves the whole project; it is not replaced,
-and its fading capacity limits dispatch and lowers `T` (A7's rule, applied
-to the vehicle). Options: one pack for the horizon (recommended for 0.8.0),
-or a `vehicle_holding_years` after which a new vehicle arrives at full
-health. A real household changes vehicles; a study can set the projection
-horizon to the holding period meanwhile. The holding period can follow as an
-amendment.
+**Capacity.** Fade lowers `cap_v`, and with it `T`, `F` and the window
+(A7's rule, applied to the vehicle). Stored energy above the new
+`max_soc × cap_v` at a day close is booked as
+`Vehicle_Capacity_Window_Loss`, as `_apply_capacity_window` books it for the
+stationary pack, without the temperature factor.
+
+**Replacement.** Decided 2026-10-07 (decision 10). The vehicle pack is
+replaced when its health reaches `eol_percentage`, with the stationary
+pack's rules: the check at a day close, the minimum-remaining-years guard
+(ADR 0003 E11), the terminal-period guard, and the keep or retire action for
+a skipped swap (E12). `"retire"` switches the pack off: the vehicle neither
+charges nor discharges, and every later trip is unserved driving. Every
+household (R0, R1, R2) applies the same policy and simulates its own swap
+dates.
+
+- **Replacement energy** is explicit. A swap removes the old pack's
+  on-board energy (`Vehicle_Replacement_Energy_Removed`, with its origin
+  shares) and adds the new pack's (`Vehicle_Replacement_Energy_Added`,
+  unattributed). The new pack starts at the old pack's state of charge, so
+  a swap neither fills nor empties the vehicle; the stationary pack's
+  start at `max_soc` (`breos/battery.py:1127`) would give the vehicle energy
+  no one bought. A swap may fall while the vehicle is away: both rows then
+  belong to the on-board balance only, and the site balance does not see
+  them. While plugged in they belong to both.
+- **A study policy, not a prediction.** Owners do not replace packs at a
+  universal state-of-health threshold. The U.S. Department of Energy says
+  that "EV batteries are generally designed to last for the expected
+  lifetime of the vehicle but will wear out eventually"
+  ([Electric Vehicles for Consumers](https://afdc.energy.gov/vehicles/electric-consumers),
+  checked 2026-10-07). The threshold is what makes the wear of different
+  households comparable over a project longer than a pack's life; the
+  docs say so.
+- **The pack, not the car.** BREOS replaces the pack. Replacing the whole
+  vehicle would need its purchase price, resale value and non-battery
+  depreciation; putting a car's price into the pack formula would charge
+  them to battery wear.
+
+The draft's one pack for the whole project was rejected: over 20 years
+both households' packs can pass their thresholds, and a comparison of final
+health alone then compares a worn pack with a new one (V10, VH7).
 
 ### V10. Costs and wear valuation
 
-- **Charger.** `vehicle.charger_cost` is the extra cost of the configured
-  charger over the standard charger every household is assumed to own
-  already, R0 included, since every household charges the vehicle. It is
-  required with `"v2h"`, has no default and no preset (BREOS has no sourced
-  price), and an explicit 0 is valid. It joins the system's CAPEX.
-  `"uncontrolled"` and `"v1g"` accept it too, so a study can price a smart
-  charger's premium; there, omitted means 0, because a standard charger is
-  assumed to support controlled charging. That is an assumption, stated in
-  the docs. Options: an incremental price (recommended), or
-  two prices (configured and standard charger). The NPV uses only their
-  difference, so two keys would be two required inputs for one number. The
-  risk of one key is reading it as the full price, so its documentation
-  says "extra cost over a standard charger".
-- **Wear.** With `h` the vehicle pack's final health in each household and
-  `h*` the vehicle's `eol_percentage` (default the stationary default, 0.70),
-  the extra wear is `C_v × (h_R1 − h_R2) / (1 − h*)`, where
-  `C_v = battery_cost_per_kwh × battery_kwh`: the share of the pack's useful
-  health range that home use consumed, at the pack's price, as ADR 0003 E10
-  values health. It is booked at `t = T`, escalated and discounted as E10's
-  credit is. Unlike E10's credit it is not clipped at `h*`: a single pack
-  kept for the whole project can fall below its threshold in both
-  households, and a clipped value would then read 0 however much more V2H
-  aged it. It is negative when V2H ages the pack less.
-  `battery_cost_per_kwh` is required with `"v2h"`, with no default.
-- **Where the wear goes.** Options: (a) reported beside the unadjusted NPV
-  and inside the V2H benefit (recommended); (b) inside the system's NPV. (a)
-  follows E10: the NPV keeps its meaning (cash flows of the system), and the
-  vehicle's value belongs to the household, not the system. The V2H benefit
-  is where the wear matters, and it includes it.
-- No vehicle O&M, no charger replacement and no charger standby consumption,
-  for the same reasons as ADR 0004 decision 7.
+Decided 2026-10-07 (decision 11).
+
+- **Charger.** `vehicle.charger_cost` is the installed premium of the
+  configured charger over the reference charger, which R0 and R1 own and
+  which is assumed to support V1G. It joins the system's CAPEX, so the
+  system NPV (R2 against R0) counts it once, and the V2H benefit (R2
+  against R1) subtracts it once; no comparison counts it twice. A study of
+  V1G against uncontrolled charging sets it to the smart charger's premium;
+  a study on hardware already owned sets it to 0 explicitly. It is required
+  with `"v2h"`, with no default and no preset (BREOS has no sourced price);
+  in the other modes it is optional and omitted means 0. The other option,
+  a configured and a standard price, gives a clearer procurement breakdown,
+  but only the difference enters any result.
+- **Replacement outlays.** For household `r`, with swaps `j` at simulated
+  instants `t_rj` (years from commissioning, as `Replacement_Time_Years`
+  books a stationary swap), general inflation `i`, replacement-cost learning
+  `ℓ` and the nominal discount rate `d`:
+
+  ```text
+  P_r = Σ_j C_swap × (1 + i)^t_rj × (1 − ℓ)^t_rj / (1 + d)^t_rj
+  ```
+
+  `C_swap` is `battery_replacement_cost` when set (it may include
+  installation), else `battery_cost_per_kwh × battery_kwh`. Booking time,
+  escalation, learning and discounting follow ADR 0003 E3, E4 and E11.
+- **Terminal credit.** The pack-only credit of ADR 0003 E10, on the final
+  installed pack's health `h_r(T)` and the vehicle's `h* = eol_percentage`:
+
+  ```text
+  H_r = C_pack × (1 + i)^T × (1 − ℓ)^T / (1 + d)^T × clip((h_r(T) − h*) / (1 − h*), 0, 1)
+  ```
+
+  `C_pack = battery_cost_per_kwh × battery_kwh`, never the swap invoice, as
+  ADR 0004 C9 amends E10. Each credit is clipped; at or below the threshold
+  it is 0. It is computed for this valuation only: it does not switch on
+  `[terminal_value]`, which stays optional and off by default, and it
+  changes no NPV.
+- **Wear.** The wear of household `a` against household `b` is
+
+  ```text
+  W_{a−b} = P_a − P_b + H_b − H_a
+  ```
+
+  The difference is not clipped. Positive means `a` costs the vehicle more;
+  negative means it saves vehicle value. The V2H benefit uses `W_{2−1}`,
+  the household-adjusted NPV `W_{2−0}`. The outlays-only difference
+  `P_a − P_b` is reported beside it: the cash the household actually pays,
+  which a swap just before the horizon swings strongly.
+- **Who pays.** The household pays the replacement invoices. Warranty
+  reimbursement, resale value and the vehicle's downtime during a swap are
+  excluded.
+- The other options for valuing wear were a price per kWh discharged, which
+  misses calendar ageing and replacement timing, and the draft's
+  final-health difference, which after a swap compares different packs and
+  can reward the household that has just bought one (VH7). Neither is added
+  on top.
+- No vehicle O&M, no charger replacement and no charger standby
+  consumption, for the same reasons as ADR 0004 decision 7.
 
 ### V11. Ledger and results
 
-**Ledger columns.** Options: (a) vehicle rows in the one ledger, zero
-without a vehicle (recommended); (b) a second, vehicle-only frame. (a) keeps
-one closure test over one frame and one row-write path in the day loop, as
-ADR 0004 C8 did. Its cost is memory and write time for every run; PR 2
-measures it, and a later PR may drop all-zero vehicle rows from summary
-buffers as the PV-only summary buffer does.
+**Ledger columns.** Decided 2026-10-06 (decision 12): vehicle rows in the
+one ledger, zero without a vehicle. The other option was a second,
+vehicle-only frame. One ledger keeps one closure test over one frame and
+one row-write path in the day loop, as ADR 0004 C8 did. Its cost is memory
+and write time for every run; PR 2 measures it, and a later PR may drop
+all-zero vehicle rows from summary buffers as the PV-only summary buffer
+does.
 
-New state rows: `Vehicle_Plugged` (0 or 1), `Vehicle_Energy` (in-site, Wh,
-0 away), `Vehicle_Energy_Onboard` (Wh), `Vehicle_SOC_Absolute`,
-`Vehicle_SOH`, `Vehicle_PV_Origin_Energy_End`,
-`Vehicle_Grid_Origin_Energy_End`. New flow rows (average W):
-`PV_AC_To_Vehicle`, `Grid_AC_To_Vehicle`, `Vehicle_Charge_Conversion_Loss`,
-`Vehicle_Charge_Input`, `Vehicle_Charge_Loss`, `Vehicle_Discharge_DC`,
-`Vehicle_Discharge_Loss`, `Vehicle_Charger_Loss`, `Vehicle_AC_To_Load`,
-`PV_Origin_Vehicle_AC_To_Load`, `Grid_Origin_Vehicle_AC_To_Load`,
-`Vehicle_Departure_Energy`, `Vehicle_Arrival_Energy`, `Vehicle_Trip_Energy`,
-`PV_Origin_Vehicle_Trip_Energy`, `Grid_Origin_Vehicle_Trip_Energy`,
-`Vehicle_Trip_Unserved`, `Vehicle_Departure_Shortfall`. The ledger schema
-becomes `"3.2"` (additive, after ADR 0004's 3.1). The result format stays
-`"1"`.
+- **State rows:** `Vehicle_Plugged` (0 or 1), `Vehicle_Energy` (in site,
+  Wh, 0 away), `Vehicle_Energy_Onboard` (Wh), `Vehicle_SOC_Absolute`,
+  `Vehicle_SOH`, `Vehicle_PV_Origin_Energy_End`,
+  `Vehicle_Grid_Origin_Energy_End`.
+- **Home flows** (average W): `PV_AC_To_Vehicle`, `Grid_AC_To_Vehicle`,
+  `Vehicle_Charge_Conversion_Loss`, `Vehicle_Charge_Input`,
+  `Vehicle_Charge_Loss`, `Vehicle_Discharge_DC`, `Vehicle_Discharge_Loss`,
+  `Vehicle_Charger_Loss`, `Vehicle_AC_To_Load`,
+  `PV_Origin_Vehicle_AC_To_Load`, `Grid_Origin_Vehicle_AC_To_Load`.
+- **Site boundary:** `Vehicle_Departure_Energy`, `Vehicle_Arrival_Energy`,
+  `Vehicle_Departure_Shortfall`.
+- **Away flows:** `Vehicle_Drive_Energy` (served), `Vehicle_Drive_Unserved`,
+  `Vehicle_Away_Charge_Purchased`, `Vehicle_Away_Charge_Loss`, and the PV-
+  and grid-origin shares of the driving.
+- **Removals and additions:** `Vehicle_Capacity_Window_Loss`,
+  `Vehicle_Replacement_Energy_Removed`, `Vehicle_Replacement_Energy_Added`,
+  with the PV- and grid-origin shares of each removal, as A9 has for the
+  stationary pack.
+
+The ledger schema becomes `"3.2"` (additive, after ADR 0004's 3.1). The
+result format stays `"1"`.
 
 **Existing columns.** `PV_AC_Export` and `Import_From_Grid` are the site's
 final exchange, after the vehicle. `Houseload` stays the house load without
-the vehicle. `Grid_AC_To_Battery` stays the stationary battery's.
+the vehicle. `Grid_AC_To_Battery` stays the stationary battery's. Away
+purchases are never part of `Import_From_Grid`: they are a source of their
+own, off the site's meter.
 
 **Year rows** gain the vehicle's AC charged from PV and from the grid, AC to
-the house load, trip energy, PV used for driving, unserved trip energy,
-departures short of target (count and kWh) and the vehicle's health.
+the house load, driving served and unserved, PV used for driving, away
+energy purchased and its cost at `away_charging.price`, departures short of
+target (count and kWh), the vehicle's health, and its swaps (count,
+replaced capacity and `Replacement_Time_Years`, as the stationary pack's).
 `Self_Consumption_kWh` adds PV-origin vehicle AC to the load, an AC
-quantity like its other terms. PV used for driving is stored DC energy, so
-it is reported on its own, not added to it. Avoided emissions keep A10's net
-exchange, with R0's import in place of the load:
-`(Import_R0 − Import_From_Grid − B_u) × CI + PV_AC_Export × CI_export`,
-where `B_u` is the stationary battery's unattributed energy to the load, as
-in A10. Without a vehicle `Import_R0` is the load and the formula is A10's,
-bit for bit. Grid energy that passes through the vehicle and back to the
-house enters through `Import_From_Grid`, so its losses count against the
-system. Both households start with the vehicle at its target, so its
-unattributed starting energy cancels. `calculate_co2_projection` gains
-R0's yearly import as an input.
+quantity like its other terms; PV used for driving is stored DC energy, so
+it is reported on its own.
 
-**App result** gains a `vehicle` block: the configured modes, those year-row
-totals, the end health in R1 and R2, the wear and its present value, and the
-V2H benefit with its parts. `provenance.vehicle` records the resolved table,
-the schedule hash and its rounding.
+**Emissions.** Away purchases are grid energy and count at the grid factor
+in every household. Avoided emissions keep A10's net exchange, with R0's
+energy in place of the load:
+
+```text
+(Import_R0 + Away_R0 − Import_From_Grid − Away − B_u) × CI + PV_AC_Export × CI_export
+```
+
+`Away` is `Vehicle_Away_Charge_Purchased`, and `B_u` the stationary
+battery's unattributed energy to the load, as in A10. Without a vehicle the
+formula is A10's, bit for bit. Grid energy that passes through the vehicle
+and back to the house enters through `Import_From_Grid`, so its losses count
+against the system. Equal starting energy does not make the households'
+vehicle energy cancel, since away purchases and replacement energy differ
+between them; the formula counts what each one bought.
+`calculate_co2_projection` gains R0's yearly import and away purchases and
+the household's away purchases as inputs.
+
+**App result** gains a `vehicle` block: the configured modes; those year-row
+totals for R0, R1 and R2; each household's replacement history (dates,
+reasons, outlays) and final pack health; `P_r`, `H_r`, the wear `W_{2−1}`
+and `W_{2−0}` and the outlays-only differences; the household-adjusted NPV;
+the V2H benefit with its parts; and the `comparable` flags.
+`provenance.vehicle` records the resolved table, the schedule hash and its
+rounding.
 
 ### V12. Default behaviour, backends and entry points
+
+Decided 2026-10-06 (decision 13).
 
 - **No `[vehicle]`, no change.** `_simulate_core` takes the vehicle as an
   optional argument; without it the day loop's vehicle branch is skipped,
   the vehicle rows are written as zeros, `_dispatch_dc_step` and ADR 0004's
-  AC step are not edited, and the PV-only path stays vectorised. App goldens,
-  golden outputs and the parity harness pass unchanged; the stored gallery
-  results and goldens are regenerated for the provenance field
-  (`vehicle: null`) and the ledger version only.
+  AC step are not edited, and the PV-only path stays vectorised. Every
+  existing column and value is unchanged; the App golden fixtures and the
+  stored gallery results are regenerated for the new zero rows, the ledger
+  version and the provenance field (`vehicle: null`) only.
 - **Numba.** `_dispatch_vehicle_step` is registered with `register_jitable`.
-  `_dispatch_day` gains the vehicle scalars and the three schedule arrays
-  (empty without a vehicle), so the kernel keeps one signature. The vehicle's
-  degradation, departures' effect on health and the carry between years stay
-  in Python. Python and Numba must agree bit for bit with a vehicle too.
-- **Monte Carlo.** Each trajectory runs R2 and, with a `reference_mode`, R1
-  on the same sampled weather and load, so the benefit is paired. The load
-  scale applies to the house load only; trips are not sampled.
+  `_dispatch_day` gains the vehicle scalars and the schedule arrays of V3
+  (empty without a vehicle), so the kernel keeps one signature. Driving and
+  away charging are part of the vehicle step, since they change the
+  on-board energy the next home step reads. The vehicle's degradation,
+  replacement and the carry between years stay in Python. Python and Numba
+  must agree bit for bit with a vehicle too.
+- **Monte Carlo.** Each trajectory runs R0, R2 and, unless `reference_mode
+  = "none"`, R1 on the same sampled weather and load, so both comparisons
+  are paired. The load scale applies to the house load only; trips are not
+  sampled. A trajectory then costs about twice the dispatch and three times
+  the vehicle ageing of one without a vehicle (V8).
 - **Optimizer.** Refused with a `[vehicle]` table in 0.8.0. The vehicle is
-  not a design variable, and the reference run would double every candidate.
-  Options: refuse (recommended), or accept with R1 off. A study can sweep
-  App runs meanwhile.
+  not a design variable, and the three households would triple every
+  candidate's vehicle work. A study can sweep App runs meanwhile.
 
 ## Energy closure
 
-Per step, with the vehicle away contributing nothing:
+Two balances close per step: the site's, in which the vehicle away is
+neither load nor storage, and the vehicle's on-board balance, which follows
+the pack everywhere.
 
 1. Load supply: `Houseload = PV_AC_To_Load + Battery_AC_To_Load +
    Vehicle_AC_To_Load + Import_From_Grid − Grid_AC_To_Battery −
@@ -683,19 +857,35 @@ Per step, with the vehicle away contributing nothing:
    Vehicle_Charge_Conversion_Loss = Vehicle_Charge_Input`.
 4. Charger, discharging: `Vehicle_Discharge_DC − Vehicle_Discharge_Loss −
    Vehicle_Charger_Loss = Vehicle_AC_To_Load`.
-5. Vehicle store, in site: `ΔVehicle_Energy = Vehicle_Charge_Input ×
-   eff_c − Vehicle_Discharge_DC − Vehicle_Departure_Energy +
-   Vehicle_Arrival_Energy`.
-6. Trip: `Vehicle_Trip_Energy = Vehicle_Departure_Energy −` the on-board
-   energy after departure.
-7. Whole system: the inputs gain `Vehicle_Arrival_Energy`; the outputs gain
-   the four vehicle losses, `Vehicle_Departure_Energy` and
-   `ΔVehicle_Energy`. `PV_AC_To_Vehicle` and `Grid_AC_To_Vehicle` are
-   internal and grid AC enters through `Import_From_Grid` as today.
-8. Origins: the three vehicle origins reconcile step by step, with trips
-   removing them in proportion.
-9. Rating: `PV_AC_To_Vehicle + Grid_AC_To_Vehicle ≤ P` and
-   `Vehicle_AC_To_Load ≤ P`, in average W, to rounding.
+5. On board: `ΔVehicle_Energy_Onboard = Vehicle_Charge_Input −
+   Vehicle_Charge_Loss − Vehicle_Discharge_DC +
+   Vehicle_Away_Charge_Purchased − Vehicle_Away_Charge_Loss −
+   Vehicle_Drive_Energy − Vehicle_Capacity_Window_Loss −
+   Vehicle_Replacement_Energy_Removed + Vehicle_Replacement_Energy_Added`.
+   Crossing the site boundary is not a change on board.
+6. Site boundary: `Vehicle_Energy` equals `Vehicle_Energy_Onboard` on a
+   plugged-in step and 0 away. `Vehicle_Departure_Energy` is the on-board
+   energy at the start of the departure step, and `Vehicle_Arrival_Energy`
+   the on-board energy at the start of the arrival step.
+7. Whole site: the inputs gain `Vehicle_Arrival_Energy` and, on a plugged-in
+   step, `Vehicle_Replacement_Energy_Added`; the outputs gain the four home
+   vehicle losses, `Vehicle_Departure_Energy`, on a plugged-in step
+   `Vehicle_Capacity_Window_Loss` and `Vehicle_Replacement_Energy_Removed`,
+   and `ΔVehicle_Energy`. `PV_AC_To_Vehicle` and `Grid_AC_To_Vehicle` are
+   internal, grid AC enters through `Import_From_Grid` as today, and away
+   flows are not in the site balance.
+8. Driving: `Vehicle_Drive_Energy + Vehicle_Drive_Unserved` equals the
+   step's scheduled driving, and driving never takes the on-board energy
+   below `min_soc × cap_v`.
+9. Away charging: the energy stored, `Vehicle_Away_Charge_Purchased −
+   Vehicle_Away_Charge_Loss`, is `efficiency` times the purchase, at most
+   `power_kw × park_hours × efficiency`, and never takes the on-board energy
+   above the larger of `target_soc × cap_v` and its value before.
+10. Origins: the three vehicle origins reconcile on board step by step, with
+    driving, capacity-window and replacement removals in proportion and away
+    charging added to the grid origin.
+11. Rating: `PV_AC_To_Vehicle + Grid_AC_To_Vehicle ≤ P` and
+    `Vehicle_AC_To_Load ≤ P`, in average W, to rounding.
 
 ## Reference cases
 
@@ -704,8 +894,8 @@ Every case uses a vehicle of 40 000 Wh at full health, `min_soc = 0.1`,
 battery efficiencies 0.95, and a 7400 W charger at 0.95 on the part-load
 curve, hourly steps, no stationary battery and no site limit. One
 full-power step stores `s_max = 7400 × 0.95 × 0.95 = 6678.5` Wh. Values
-are Wh per step, computed with `_dc_ac` and `_dc_for_ac` at `567df2a`
-following the pseudocode of V5.
+are Wh per step. VH1–VH3 are home steps; VH4–VH6 follow the vehicle away
+(V6) and through a swap (V9); VH7 values wear (V10).
 
 **VH1 — PV surplus to the vehicle.** PV inverter without a rating at 0.96,
 PV DC 5000, load 1000, `E` = 20 000, ten steps to departure (no mandatory
@@ -749,23 +939,69 @@ flat price this V2H run costs more than V1G; with `discharge_periods` on a
 peak and the buy-back in an off-peak period it can cost less. The
 comparison of V8 reports either.
 
-**VH4 — departure, absence and arrival.** At departure `E` = 32 000, of which
-PV origin 16 000 and grid origin 8000; `trip_wh` = 9000.
-`Vehicle_Departure_Energy` 32 000, `Vehicle_Trip_Energy` 9000 (PV origin
-4500, grid origin 2250), `Vehicle_Energy` 0 and every vehicle flow 0 while
-away, `Vehicle_Energy_Onboard` 23 000 (PV origin 11 500, grid origin 5750),
-`Vehicle_Arrival_Energy` 23 000 on the arrival step. The whole-system
-balance holds on each step with the house side unchanged.
+**VH4 — driving legs and away charging.** The vehicle leaves with 32 000,
+of which PV origin 16 000 and grid origin 8000, on an absence of four hourly
+steps with `trip_kwh` = 9 (the template: 4500 in the first and in the last
+away step), and away charging with `target_soc` 0.7 (28 000), 3.7 kW and
+efficiency 0.9 in the two parked steps.
 
-**VH5 — an unmet target.** `E` = 10 000 on the last plugged step (`k` = 1):
-the charger runs at full power, stores 6678.5, and the vehicle leaves with
-16 678.5. `Vehicle_Departure_Shortfall` 15 321.5. With `trip_wh` = 9000 the
-trip is served and arrives with 7678.5. With `trip_wh` = 15 000 only
-`16 678.5 − 4000 = 12 678.5` is usable: the vehicle arrives with 4000 and
-`Vehicle_Trip_Unserved` is 2321.5.
+| Away step | Driving served | Away purchased | Away loss | On board | PV origin | Grid origin |
+|---|---|---|---|---|---|---|
+| 1, first leg | 4500 | 0 | 0 | 27 500 | 13 750 | 6875 |
+| 2, parked | 0 | 555.555556 | 55.555556 | 28 000 | 13 750 | 7375 |
+| 3, parked | 0 | 0 | 0 | 28 000 | 13 750 | 7375 |
+| 4, last leg | 4500 | 0 | 0 | 23 500 | 11 540.178571 | 6189.732143 |
 
-The reference-case tests compare with the full-precision helper values to
-1e-9 relative, and the exact landings exactly, as ADR 0004's AC7 does.
+`Vehicle_Departure_Energy` is 32 000 on the first away step and
+`Vehicle_Arrival_Energy` 23 500 on the next home step; every home flow and
+`Vehicle_Energy` are 0 while away. Step 3 holds at the target, a stopping
+target, and the last leg takes the vehicle below it. PV-origin driving is
+2250 + 2209.821429 = 4459.821429.
+
+**VH5 — an unmet target and unserved driving.** `E` = 10 000 on the last
+plugged step (`k` = 1): the charger runs at full power, stores 6678.5, and
+the vehicle leaves with 16 678.5. `Vehicle_Departure_Shortfall` 15 321.5.
+The absence has three steps and `trip_kwh` = 15 (7500 per leg).
+
+| Away charging | After first leg | Purchased while parked | Driving served | `Vehicle_Drive_Unserved` | Arrival |
+|---|---|---|---|---|---|
+| none | 9178.5 | 0 | 12 678.5 | 2321.5 | 4000 |
+| 0.7, 3.7 kW, 0.9 | 9178.5 | 3700 | 15 000 | 0 | 5008.5 |
+
+Without away charging the last leg stops at `min_soc` (4000). With it, the
+parked hour stores 3330 and the trip is served. The departure shortfall is
+15 321.5 in both: away charging cannot meet a target that had to be met at
+home.
+
+**VH6 — a swap while away.** At a day close the vehicle is away with 20 000
+on board, and its pack's health reaches 0.70 (capacity 28 000, state of
+charge 0.714286). The swap books `Vehicle_Replacement_Energy_Removed`
+20 000, with its origin shares, and `Vehicle_Replacement_Energy_Added`
+28 571.428571, unattributed: a new 40 000 pack at the same state of charge.
+The on-board balance closes with both rows; `Vehicle_Energy` stays 0 and the
+site balance is unchanged.
+
+**VH7 — wear valuation.** Pack price `C_pack = C_swap` = 40 kWh × 120 =
+4800, `i` = 0.02, `ℓ` = 0, `d` = 0.03, `T` = 20, `h*` = 0.70. R1 keeps its
+first pack and ends at health 0.78; R2 swaps once at `t` = 12.5 and ends at
+0.88.
+
+| Quantity | Value |
+|---|---|
+| `P_1` | 0 |
+| `P_2` | 4248.915318 |
+| `H_1` | 1053.098298 |
+| `H_2` | 2369.471170 |
+| `W_{2−1} = P_2 − P_1 + H_1 − H_2` | 2932.542446 |
+| Outlays only, `P_2 − P_1` | 4248.915318 |
+
+The draft's final-health formula would have given −1316.372872: it would
+have credited V2H for the new pack its extra wear made the household buy.
+
+VH1–VH6 are computed with `_dc_ac` and `_dc_for_ac` at `567df2a` by the
+script that accompanies the PR, following V5 and V6; VH7 follows V10. The
+tests compare with the full-precision values to 1e-9 relative, and the
+exact landings exactly, as ADR 0004's AC7 does.
 
 **Invariants**, tested at hourly and 15-minute steps, Python and Numba:
 
@@ -778,10 +1014,14 @@ The reference-case tests compare with the full-precision helper values to
   without a vehicle bit for bit (for a run without a stationary battery,
   the PV-only flows, by ADR 0004 P2).
 - Q4. Every identity above holds to the existing tolerances; no step both
-  charges and discharges the vehicle; the vehicle never exports.
+  charges and discharges the vehicle at home; the vehicle never exports;
+  driving never takes the on-board energy below `min_soc × cap_v`.
 - Q5. With no site limit and every target reachable, no departure is short
   in any mode.
-- Q6. R0's vehicle charging does not depend on the system configured.
+- Q6. R0's vehicle (its charging, driving, away purchases and swaps) does
+  not depend on the system configured.
+- Q7. Energy enters or leaves the pack at a swap only through the two
+  replacement rows, plugged in or away.
 
 ## Alternatives considered
 
@@ -789,21 +1029,32 @@ The reference-case tests compare with the full-precision helper values to
   cannot discharge, so it cannot be V2H, and the energy it holds would not
   close.
 - **Reuse `BatteryConfig` with an availability mask.** Rejected: the
-  stationary pack's capacity window, temperature derating, standby,
-  replacement and retirement rules do not apply to a vehicle, and two
-  stores in one config would change the stationary contract.
-- **Vehicle first, or a joint step.** Rejected for 0.8.0 (V4).
+  stationary pack's capacity window, temperature derating and standby rules
+  do not apply to a vehicle, and two stores in one config would change the
+  stationary contract.
+- **Vehicle first, or a joint step.** Rejected (V4).
 - **A forecast-based vehicle planner.** Deferred: the guard is causal and
   serves the departure target; a planner is a later mode.
 - **Vehicle-to-grid.** Out of scope (V1). It needs export from storage,
   market or tariff rules for it, and a different reference.
-- **Arrival state of charge as the model.** Rejected (V3).
+- **Arrival state of charge as an input.** Rejected (decision 4): it made
+  the trip's energy depend on the departure state; the arrival state is an
+  outcome.
+- **Trip energy at departure, at arrival or spread uniformly.** Rejected
+  for driving legs (V6, decision 6).
+- **One vehicle pack for the whole project, and wear from final health
+  alone.** Rejected (V9, V10, decisions 10 and 11; VH7).
+- **Whole-vehicle replacement.** Rejected (V9): it needs purchase, resale
+  and non-battery depreciation that are not battery wear.
 
 ## Implementation plan and effort
 
-Six PRs, about 18 working days for one developer, plus review and the
-platform CI runs each kernel change needs. Once the work ships, this section
-is replaced by an implementation status, as in ADR 0002.
+Six PRs, about 22 working days for one developer, plus review and the
+platform CI runs each kernel change needs; the decisions of 2026-10-07
+(driving legs, away charging, vehicle pack replacement and the
+replacement-aware wear valuation) added about 4 to the draft's 18. Once the
+work ships, this section is replaced by an implementation status, as in
+ADR 0002.
 
 **Dependency on ADR 0004 (#419).** V2H reuses ADR 0004's charging and
 discharging conversion (C4), its rating units (`P_wh`), the PV chain arrays
@@ -819,93 +1070,121 @@ and the ledger schema 3.1 (C8). Precisely:
   exposes AC coupling, and the cost refusal follows the pattern of #419
   PR 3.
 - The reference cases and goldens are computed after #417 and #418, on the
-  final PV defaults, as ADR 0004's are.
+  final PV defaults, as ADR 0004's are. ADR 0006 is implemented after this
+  work.
 
 **Rollout gates.** No merged state runs a vehicle half-built:
 
 - PR 1 adds `VehicleConfig`, the `[vehicle]` table and the schedule, and
   refuses to simulate a vehicle.
-- PR 2 lifts that refusal for a direct `_simulate_core` call only.
-- PR 4 is the first PR that exposes `[vehicle]` in App, with R0, R1 and
+- PR 2 lifts that refusal for a direct `_simulate_core` call only, with
+  replacement off.
+- PR 3 adds the vehicle's ageing and replacement; a direct call may then
+  turn replacement on.
+- PR 4 is the first PR that exposes `[vehicle]` in App, with R0, R1, R2 and
   every required price.
 
 | PR | Scope | Effort | Main risk |
 |---|---|---|---|
-| 1 | `VehicleConfig` and `[vehicle]` validation; schedule resolution to per-step arrays (civil time, rounding, year seam, trip file), its hash; arrival SOC converted to trip energy; simulation refused. No behaviour change. | 2.5 days | Civil-time edge cases (DST, year seam). |
-| 2 | `_dispatch_vehicle_step` with the deadline guard and exact landing; departure and arrival; vehicle rows and ledger schema 3.2; origins; the day-loop branch and its arguments in `_day_arguments`; Numba registration; closure helper; reference cases VH1–VH5 and invariants Q1–Q5; parity scenarios. | 5 days | Stationary bit identity (Q2), and the kernel's compile time and memory with more rows. |
-| 3 | The vehicle's degradation lifecycle between day windows, its temperature, its carry between years; refusal of `daily_persistence` with a vehicle. | 2.5 days | A second lifecycle in the day-close path without moving the stationary one. |
-| 4 | App: R0's vehicle charging in the baseline (invariant Q6), R1 as a second projection, the V2H benefit and its comparability flag, `outside_charging_price`, wear valuation, `charger_cost` and `battery_cost_per_kwh` required and refused when missing, emissions, year rows, the `vehicle` result block, provenance, regenerated config docs and golden provenance. | 4.5 days | A path that reaches economics before a price is checked. |
-| 5 | Monte Carlo: paired R1 per trajectory, load scale on the house only; optimizer refusal. | 1.5 days | Memory of two projections per trajectory. |
-| 6 | Docs: configuration guide (`[vehicle]`, the assumptions in V5 and V9), energy-balance and results pages, a gallery case, CHANGELOG; ADR implementation status. | 1.5 days | None significant. |
+| 1 | `VehicleConfig` and `[vehicle]` validation, with `[vehicle.away_charging]` and the replacement keys; schedule resolution to per-step arrays (civil time, rounding, year seam, the leg template, the trip file's drive and park segments, charging windows), its hash; simulation refused. No behaviour change. | 3 days | Civil-time edge cases (DST, year seam) and multi-day absences. |
+| 2 | `_dispatch_vehicle_step` with the deadline guard and exact landings; departure, driving legs, away charging and arrival; vehicle rows and ledger schema 3.2; on-board and site balances; origins; the day-loop branch and its arguments in `_day_arguments`; Numba registration; closure helper; reference cases VH1–VH5 and invariants Q1–Q5; parity scenarios. | 6 days | Stationary bit identity (Q2), and the kernel's compile time and memory with more rows. |
+| 3 | The vehicle's degradation lifecycle between day windows, its temperature, capacity-window loss, replacement with the stationary rules and explicit replacement energy, plugged in or away, its carry between years; VH6 and Q7; refusal of `daily_persistence` with a vehicle. | 3.5 days | A second lifecycle and a second swap path in the day-close code without moving the stationary one. |
+| 4 | App: R0 as a vehicle-only projection (invariant Q6), R1 and R2; the baseline with R0's charging; away purchases; `P_r`, `H_r` and the wear `W`; the household-adjusted NPV, the V2H benefit and the `comparable` flags; `outside_charging_price`; `charger_cost` and `battery_cost_per_kwh` required and refused when missing; emissions with away purchases; year rows, the `vehicle` result block, provenance, regenerated config docs and golden provenance; VH7. | 5.5 days | A path that reaches economics before a price is checked, and three projections' memory. |
+| 5 | Monte Carlo: R0, R1 and R2 paired per trajectory, load scale on the house only; optimizer refusal. | 2 days | Memory and run time of three households per trajectory. |
+| 6 | Docs: configuration guide (`[vehicle]`, the leg template and its approximation, away charging, replacement as a study policy, the assumptions in V5 and V9), energy-balance and results pages, a gallery case, CHANGELOG; ADR implementation status. | 2 days | None significant. |
 
 Risks across the work:
 
 - **Stationary bit identity.** Order V4 makes Q2 a test, not a hope; it runs
   on PR 2 with every C10 gate of ADR 0004.
-- **Performance.** R1 doubles a V2H run. The new rows add memory to every
-  run; PR 2 measures it with `tools/benchmark_montecarlo.py` and the
-  cold-compile time.
+- **Performance.** A V2H run is three households (V8). The new rows add
+  memory to every run; PR 2 measures it with `tools/benchmark_montecarlo.py`
+  and the cold-compile time, and PR 5 measures Monte Carlo with three
+  households.
 - **Model validity.** The charging direction of the part-load curve (ADR
-  0004 C4), the vehicle's temperature and the use of cell ageing models for
-  a vehicle pack are assumptions, and the docs say so.
-- **Data.** Charger prices, charger efficiencies and vehicle pack prices are
-  user inputs; BREOS ships none.
+  0004 C4), the vehicle's temperature, the leg template, the use of cell
+  ageing models for a vehicle pack and replacement at a fixed threshold are
+  assumptions, and the docs say so.
+- **Data.** Charger premiums, charger efficiencies, away charging prices
+  and vehicle pack prices are user inputs; BREOS ships none.
 
-## Open decisions for the maintainer
+## Decisions
 
-1. **Dispatch order (V4):** stationary battery first, vehicle second, on the
-   AC residual; no storage-to-storage transfer (proposed); or vehicle
-   first; or a joint rule?
-2. **Charger model (V2, V5):** ADR 0004's battery inverter core in both
-   directions, with a required rating and efficiency (proposed); or flat
-   efficiencies?
-3. **Schedule (V3):** weekday and weekend times plus an optional trip file,
-   with conservative rounding to whole steps (proposed); or strict
-   boundaries as for tariffs?
-4. **Energy while away (V3):** trip energy in kWh as the model, arrival SOC
-   converted to it against the target (proposed); or arrival SOC as a
-   state?
-5. **Departure target (V5):** a hard constraint through the deadline guard,
-   with unmet targets reported and not refused; an optional
-   `outside_charging_price` that prices unserved trip energy in every
-   household, and without it a benefit flagged as not comparable when V2H
-   leaves more driving unserved (proposed)? Or refuse the run?
-6. **Trip timing (V6):** trip energy removed at departure (proposed), at
-   arrival, or spread over the absence?
-7. **Smart charging (V7):** vehicle periods in `[vehicle]`, `[smart_charging]`
-   for the stationary battery only, `daily_persistence` refused with a
-   vehicle in 0.8.0 (proposed)?
-8. **Reference (V8):** R0 with uncontrolled charging as the no-system
-   baseline; R1 with `reference_mode` defaulting to `"v1g"` for `"v2h"`
-   (proposed); or always uncontrolled?
-9. **Degradation (V9):** a second lifecycle on the on-board SOC, native by
-   default, wear from home use as the R1 − R2 health difference (proposed);
-   or a throughput wear price?
-10. **Vehicle lifetime (V9):** one pack for the horizon (proposed); or a
-    holding period with a new vehicle?
-11. **Costs (V10):** `charger_cost` as the extra cost over a standard
-    charger, required for `"v2h"` with no preset, optional in the other
-    modes; wear valued at the pack price on the R1 − R2 health difference,
-    unclipped, booked at `T`, reported beside the NPV and inside the V2H
-    benefit (proposed)?
-12. **Ledger (V11):** vehicle rows in the one ledger, schema 3.2 (proposed);
-    or a separate frame?
-13. **Entry points (V12):** App and Monte Carlo, optimizer refused in 0.8.0
-    (proposed)?
-14. **Target release:** 0.8.0 after #419, with the gates above.
+Taken by the maintainer on 2026-10-06, and for decisions 4, 6, 10 and 11
+on 2026-10-07, after a second design review. The body sections follow them.
+Decisions 4, 6, 10 and 11 changed the proposal.
+
+1. **Dispatch order** (2026-10-06): the stationary battery first, the
+   vehicle second on the AC residual; no storage-to-storage transfer (V4).
+2. **Charger model** (2026-10-06): ADR 0004's battery inverter model in both
+   directions; rating and efficiency required (V2, V5).
+3. **Schedule** (2026-10-06): weekday and weekend times or a trip file,
+   with conservative whole-step rounding (V3).
+4. **Energy while away** (2026-10-07, changed): `trip_kwh` is the gross
+   energy withdrawn from the pack, driving losses included. Optional away
+   charging tops up toward a stopping target in parked windows, with a power
+   limit, an efficiency at the purchased-energy boundary and a price (0 for
+   free charging at work); its purchases are priced the same in R0, R1 and
+   R2, tracked apart from site import and counted in emissions. The arrival
+   state of charge is an outcome; the arrival-state input and its
+   conversion are removed. Away charging and `outside_charging_price` are
+   distinct (V2, V3, V6, V8, V11).
+5. **Departure target** (2026-10-06): a hard constraint through the deadline
+   guard; misses reported, not refused; optional `outside_charging_price`;
+   the `comparable` flag. Away charging cannot meet a target that had to be
+   met before departure (V5, V6, V8).
+6. **Trip timing** (2026-10-07, changed): trip energy is withdrawn over
+   driving legs, by default half in the first away step and half in the
+   last, parked between; a one-step absence combines them; a trip file can
+   give legs, durations and charging windows; multi-day trips carry over
+   days and years. Driving never goes below `min_soc`, never borrows from
+   later charging, and its unserved remainder is reported. The intervals are
+   computed once. It is an approximation (V3, V6).
+7. **Smart charging** (2026-10-06): vehicle periods in `[vehicle]`;
+   `[smart_charging]` for the stationary battery only; `daily_persistence`
+   refused with a vehicle (V7).
+8. **Households** (2026-10-06): R0 without a system and with uncontrolled
+   charging; R1 with `reference_mode`, `"v1g"` by default; R2 the study;
+   all three run in App and paired in Monte Carlo (V8, V12).
+9. **Degradation** (2026-10-06): a second lifecycle on the real on-board
+   state of charge (V9).
+10. **Vehicle pack replacement** (2026-10-07, changed): the pack is replaced
+    at `eol_percentage` with the stationary pack's rules, the same policy in
+    R0, R1 and R2 and independent swap dates; replacement energy is explicit
+    in the on-board balance, also away; replacement is a study policy, not a
+    prediction (V9).
+11. **Costs and wear** (2026-10-07, changed): one `charger_cost`, the
+    installed premium over the reference charger, never counted twice; the
+    system NPV unchanged, with a household-adjusted NPV (R2 against R0) and
+    the V2H benefit (R2 against R1) beside it; wear
+    `W = P_2 − P_1 + H_1 − H_2` from replacement outlays at their swap
+    instants and pack-only terminal credits, each credit clipped and the
+    difference not, with the outlays-only difference also reported; the
+    household pays, and warranty, resale and downtime are excluded (V10).
+12. **Ledger** (2026-10-06): vehicle rows in the one ledger, schema 3.2
+    (V11).
+13. **Entry points** (2026-10-06): App and Monte Carlo; the optimizer
+    refuses `[vehicle]` (V12).
+14. **Target release** (2026-10-06): 0.8.0, after #419 (see
+    [Implementation plan and effort](#implementation-plan-and-effort)).
 
 ## Consequences
 
 - A household with a vehicle can be simulated in App with uncontrolled,
-  smart (V1G) or V2H charging, and its V2H benefit is reported against the
-  same household without V2H, including the vehicle's extra wear.
+  smart (V1G) or V2H charging, with driving and charging away from home,
+  and its V2H benefit is reported against the same household without V2H,
+  including the vehicle's extra wear valued through its replacements.
 - The no-system baseline buys the vehicle's charging too, so NPVs with a
-  vehicle compare like with like.
+  vehicle compare like with like. The system NPV keeps its meaning; a
+  labelled household-adjusted NPV adds the vehicle's wear and away
+  purchases.
 - Runs without `[vehicle]` keep every existing value bit for bit; the
   ledger schema moves to 3.2 with additive rows and the result format stays
   "1".
 - The stationary battery's dispatch does not change when a vehicle is
   added.
-- Vehicle-to-grid, a vehicle planner, vehicle replacement, charger power
-  reduction by the network operator and vehicle thermal management stay
-  outside BREOS.
+- A V2H run simulates three households; Monte Carlo pairs them per
+  trajectory.
+- Vehicle-to-grid, a vehicle planner, whole-vehicle replacement, warranty
+  and resale, charger power reduction by the network operator and vehicle
+  thermal management stay outside BREOS.
