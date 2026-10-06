@@ -33,7 +33,7 @@ systems for buildings and reports their energy flows, battery ageing,
 economics and emissions over the project lifetime.
 ::::
 
-```{figure} gallery/getting_started/images/sphx_glr_plot_01_first_home_001.png
+```{figure} _static/landing-energy-balance.png
 :alt: Monthly usable PV production, load, grid import and grid export for one year
 :align: center
 
@@ -142,6 +142,5 @@ User guide <user-guide/index>
 Models <modeling/index>
 API reference <api/index>
 changelog
-resources
 legal/load-profile-data
 ```

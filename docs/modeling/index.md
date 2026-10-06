@@ -77,4 +77,5 @@ supports this model choice?”.
 :hidden:
 
 validation
+../resources
 ```
