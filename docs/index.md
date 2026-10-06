@@ -33,11 +33,12 @@ systems for buildings and reports their energy flows, battery ageing,
 economics and emissions over the project lifetime.
 ::::
 
-BREOS is built for studies where the answer depends on more than the first
-year: whether a battery pays for itself once it has aged, which tariff suits a
-household, and how much the result moves with the weather. It brings its own
-example data, but every layer takes yours: weather files, load profiles, PV
-modules, degradation coefficients, costs and tariffs.
+BREOS is designed for multi-year PV and storage studies where long-term
+dynamics govern feasibility: multi-decade battery degradation, tariff
+optimization under time-of-use pricing, and performance sensitivity across
+historical weather years. It ships with calibrated presets and benchmarks,
+while allowing every layer to be replaced with your own data: weather files,
+load profiles, PV modules, degradation coefficients, costs, and tariffs.
 
 ## What BREOS does
 
