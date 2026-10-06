@@ -1,8 +1,10 @@
 # 0006 — Collective self-consumption: a community entry point beside App
 
-- **Status:** Proposed. No code yet; implementation is planned for 0.8.0,
-  once the maintainer accepts or amends the decisions below (#421).
-- **Date:** 2026-10-06
+- **Status:** Proposed, with the eleven decisions taken by the maintainer
+  on 2026-10-06 (see [Decisions](#decisions)). No code yet; implementation is
+  planned for 0.8.0, after the AC-coupled battery (#419) and vehicle-to-home
+  (#420) work (#421).
+- **Date:** 2026-10-06; decisions taken 2026-10-06
 
 ## Context
 
@@ -37,9 +39,12 @@ the coefficients do not give.
 - energy and money closed per interval and per year; Python and Numba agree
   where the kernel is used.
 
-This record answers each point or lists it as an open decision. It changes
-no code. Its options carry a recommendation; the maintainer's answers
-will replace the open decisions, as they did for ADR 0004.
+This record answers each point. It changes no code. The maintainer took
+its eleven decisions on 2026-10-06; the sections below follow them, and
+[Decisions](#decisions) lists them. Two of them changed the proposal: 0.8.0
+shares PV only, with no community battery (community storage is recorded
+for a later amendment in K10), and the work is implemented after #419 and
+#420.
 
 ## Current behaviour this record relies on
 
@@ -189,15 +194,19 @@ note's wording.
   community local; a study that needs separate weather per site is outside
   0.8.0.
 - **Sites.** A participant is a site with a load and, optionally, PV and a
-  battery behind its meter. A community asset is a site with PV and,
-  optionally, a battery, and no load of its own. Every site is simulated by
-  the existing single-site physics.
+  battery behind its meter. A community asset is a PV system with no load
+  and no battery. Every site is simulated by the existing single-site
+  physics.
+- **What is shared.** In 0.8.0 the community shares PV only: the assets'
+  output and, by default, the participants' own export. Batteries behind a
+  participant's meter work as in App. Community storage is deferred (K10;
+  decision 5).
 - **Settlement** is a calculation on the sites' 15-minute import and export,
   as the regimes above apply it. It moves no energy.
-- **Out of scope for 0.8.0:** hierarchical sharing, time-varying fixed
-  coefficients, a community battery charged from other installations'
-  shared energy, peer-to-peer trading, Monte Carlo and the optimizer for
-  communities. Each is a later amendment.
+- **Out of scope for 0.8.0** (decision 10): community storage (K10),
+  hierarchical sharing, time-varying fixed coefficients, peer-to-peer
+  trading, `revalue`, Monte Carlo and the optimizer for communities. Each
+  is a later amendment.
 
 ### K2. Entry point
 
@@ -205,7 +214,7 @@ Options:
 
 - (a) A new facade, `breos.Community`, in a new package `breos/community/`,
   with its own configuration and results, built on the single-site
-  projection (recommended).
+  projection. Decided 2026-10-06 (decision 1).
 - (b) A `[community]` table inside App's configuration.
 - (c) A post-processing function over finished App results.
 
@@ -213,8 +222,10 @@ Options:
 nothing in `breos/app.py`, `breos/app_config.py` or `breos/runners/app.py`
 changes, and `breos/__init__.py` only adds the export. (b) would change
 what an App result is (one site), its provenance and every key's meaning.
-(c) cannot model a community battery, whose dispatch needs the
-participants' demand while it runs.
+(c) could settle PV-only assets, but it has no configuration that keeps
+participant ids stable and the shared keys equal across sites, and no place
+for community storage, whose dispatch needs the participants' demand while
+it runs (K10).
 
 ```python
 community = breos.Community(config)
@@ -245,7 +256,6 @@ surplus_price = 0.04                  # per kWh of community surplus
 [[assets]]
 id = "school-roof"
 n_modules = 60
-battery_kwh = 20
 ownership = { apt-1 = 0.5, apt-2 = 0.3, apt-3 = 0.2 }
 [assets.costs]
 # App's cost keys for this site
@@ -266,6 +276,10 @@ tariff = { ... }                      # this participant's supplier tariff
   `resolution`, `projection_years`, `currency`, the discount rate and the
   escalators, `execution_backend`) are set once in `[community]` and refused
   in a site.
+- **Assets** take App's PV, inverter and cost keys only. A battery, a load
+  and `[smart_charging]` are refused on an asset in 0.8.0. App requires a
+  positive `annual_consumption_kwh`, so the community builds an asset's
+  zero load itself rather than resolving one through App.
 - **Identities.** `id` is required, unique across participants and assets,
   and matches `^[a-z0-9][a-z0-9_-]{0,63}$`. Results, the settlement ledger,
   ownership and provenance are keyed by it. Every community-wide sum runs in
@@ -277,8 +291,9 @@ tariff = { ... }                      # this participant's supplier tariff
   as ADR 0004 decided for the battery inverter price. Each takes a number or
   a price list by tariff period on a community schedule, in the shape of
   `import_prices`.
-- **Resolution.** Options: (a) require `"15min"` (recommended); (b) settle
-  hourly steps as an approximation. Every regime above settles 15-minute
+- **Resolution.** Decided 2026-10-06 (decision 2): (a). Options: (a)
+  require `"15min"`; (b) settle hourly steps as an approximation. Every
+  regime above settles 15-minute
   intervals, and a site's own flows inside an hour are not its quarter-hour
   balances: a participant can import in one quarter and export in the next,
   which an hourly balance nets. (a) follows ADR 0002 A3: an hourly community
@@ -311,20 +326,21 @@ surplus    = S - sum(u_i)          # community surplus, sold at surplus_price
   example one whose own battery covers its load, stays a receiver: its share
   is allocated to it and becomes its surplus, since only an injecting
   site's share moves. A site never imports and exports in one step, so
-  `x_i = 0` covers every importing participant. Options for coefficients that sum to less than 1: refuse
-  (recommended) or treat the remainder as surplus. Refusing avoids a rule
-  the regulation was not checked for.
+  `x_i = 0` covers every importing participant. Coefficients that sum to
+  anything but 1 are refused, rather than treating the remainder as
+  surplus: that would be a rule the regulation was not checked for.
 - **Proportional** coefficients follow each interval's metered import. With
   `S ≤ Σc` every participant uses all it is allocated; above it each
   participant's consumption is covered and the rest is surplus.
 - **No reallocation.** A participant's surplus `s_i` is not passed to
   another participant; it joins the community surplus (Article
-  34(1)(c)(ii)). Options: no reallocation (recommended), or a second pass
-  that redistributes `s_i` to participants with remaining demand. The second
-  pass would settle more energy than the Portuguese operator does, and §42b
-  does not prescribe it. A study that wants it uses proportional
-  allocation, which never leaves a participant surplus while demand
-  remains, or the later dynamic mode.
+  34(1)(c)(ii)). Decided 2026-10-06 (decision 3), with the fixed and
+  proportional modes above. The rejected option, a second pass that
+  redistributes `s_i` to participants with remaining demand, would settle
+  more energy than the Portuguese operator does, and §42b does not
+  prescribe it. A study that wants it uses proportional allocation, which
+  never leaves a participant surplus while demand remains, or the later
+  dynamic mode.
 - **Dynamic allocation** comes later, as an experimental mode, `allocation =
   "dynamic"`. It takes an allocation function or an ex-post allocation file
   per interval, and is checked against a plain NumPy reference
@@ -333,25 +349,21 @@ surplus    = S - sum(u_i)          # community surplus, sold at surplus_price
   interval arrays, in `breos/community/settlement.py`. It does not enter the
   dispatch kernel.
 
-### K5. Order of shared PV, the community battery and the batteries behind each meter
+### K5. Order of shared PV and the batteries behind each meter
 
 Each interval:
 
 ```text
 1. every participant site dispatches its own PV and battery for its own
    load, as an App site does                    -> c_i, x_i
-2. PV-only assets inject all their PV AC        -> injection
-3. the community battery's site dispatches against the virtual load
-   L = max(0, sum(c_i) - sum(x_i if pooled) - PV-only asset injection)
-                                                -> its injection
-4. settlement allocates S and books the surplus (K4)
+2. every asset injects all its PV AC            -> its PV_AC_Export
+3. settlement allocates S and books the surplus (K4)
 ```
 
-Options for the order between the participants' own batteries and the
-shared energy:
+Decided 2026-10-06 (decision 4): behind the meter first. The options were:
 
-- (a) Behind the meter first (recommended). Each participant's battery
-  serves its own load before any sharing, exactly as in a single-site run.
+- (a) Behind the meter first. Each participant's battery serves its own load
+  before any sharing, exactly as in a single-site run.
 - (b) Shared energy first: a participant's battery discharges only into the
   load the allocation leaves.
 
@@ -362,41 +374,18 @@ the reference without the community (K8) needs no second simulation. (b)
 models a controller with live allocation data, which no regime above
 provides; it is a possible later mode.
 
-**The community battery.** One asset may have a battery, at the asset's own
-connection. Its site runs the canonical step with `L` as its load: the
-participants' demand left after the participants' pooled export and the
-PV-only assets. The load is a control signal, not a physical load at the
-asset. The site's injection is then everything its meter exports:
-`PV_AC_To_Load + Battery_AC_To_Load + PV_AC_Export` of that run. The battery
-charges only from its own site's PV that `L` leaves, discharges toward `L`,
-and never charges from the grid: `[smart_charging]` is refused on an asset
-in 0.8.0. Options: one community battery (recommended for 0.8.0), several
-batteries sharing `L` by a rule, or a battery that is allocated shared
-energy as a receiving storage installation (Article 28(4) allows this in
-Portugal). The second and third need a sharing rule between stores and a
-virtual charging path; they are later amendments.
+**Assets.** An asset has no load and no battery, so it takes the vectorised
+PV-only path, and all its PV AC is export: its injection is the run's
+`PV_AC_Export`. An asset's meter imports nothing. No asset is priced through
+a tariff (`_tariff_weights`), which would give it a no-system baseline it
+does not have; its money comes only from the settlement and its own costs
+(K7).
 
-**Fixed coefficients and the battery.** Under fixed allocation part of the
-battery's injection can become surplus even when `L > 0`, because `L` is the
-community total and the allocation is per participant. The battery's
-dispatch is a controller assumption; the settlement applies the rule
-exactly, and the surplus shows the cost of a coefficient that does not match
-the demand.
-
-**What the asset's run means.** In the battery asset's dispatch run,
-`Houseload` is `L` and `Import_From_Grid` is the part of `L` the asset did
-not serve: the participants' remaining demand, which they buy from their
-suppliers, not an import at the asset. The asset's meter imports nothing,
-since it never grid-charges, so its settlement rows record 0 import. No
-asset is priced through a tariff (`_tariff_weights`): it would get an import
-cost and a no-system baseline for a virtual load. An asset's money comes
-only from the settlement and its own costs (K7).
-
-**Participants' own export.** Options: (a) pooled into `S` when
-`pool_participant_export = true`, the default (recommended); (b) never
-pooled, always sold under the participant's own tariff. Portugal counts a
-consumer installation's injection as energy for sharing (Article 28(3)); a
-§42b building shares one plant's production. The key covers both.
+**Participants' own export.** Decided 2026-10-06 (decision 6): (a). Options:
+(a) pooled into `S` when `pool_participant_export = true`, the default; (b)
+never pooled, always sold under the participant's own tariff. Portugal
+counts a consumer installation's injection as energy for sharing (Article
+28(3)); a §42b building shares one plant's production. The key covers both.
 
 ### K6. Settlement ledger
 
@@ -432,31 +421,31 @@ App's flows are (ADR 0003 E2, E3):
 - **Supplier.** `Supplier_Import` at the participant's own import prices,
   its own fixed charge, and its `Own_Export` at its own export prices. Its
   own tariff is resolved on the community index as App resolves one.
-- **Shared energy.** `Shared_Used × shared_energy_price` paid to the
-  injectors; `Shared_Used × shared_network_charge` paid out of the
+- **Shared energy.** Decided 2026-10-06 (decision 7): one price per kWh,
+  by period if needed. `Shared_Used × shared_energy_price` is paid to the
+  injectors; `Shared_Used × shared_network_charge` is paid out of the
   community. Both escalate at the community's `import_price_escalation`.
+  The other options were no price, the owners using the energy free in
+  proportion to ownership, and a discount on each participant's import
+  price. A price expresses the first with a price of 0 and owners who are
+  the users, and keeps money closed by construction; a discount ties the
+  community's price to each supplier's tariff, which the regulation does
+  not.
 - **Injection.** Each injector receives `Attributed_Shared_Used ×
   shared_energy_price + Attributed_Surplus × surplus_price`; the surplus
   price escalates at `sell_price_inflation`.
-- **Ownership.** An asset's CAPEX, O&M, replacements and its revenues are
-  split by its `ownership` table, whose shares are at least 0 and sum to 1
-  over participant ids, or by `ownership = "external"` for an asset a third
-  party owns, whose money then leaves the community. Options for the
-  shared-energy price: (a) one price per kWh, by period if needed, paid to
-  the injectors (recommended); (b) no price, the owners using the energy
-  free in proportion to ownership; (c) a discount on each participant's
-  import price. (a) expresses (b) with a price of 0 and owners who are the
-  users, and it keeps money closed by construction; (c) ties the community's
-  price to each supplier's tariff, which the regulation does not.
+- **Ownership.** Decided 2026-10-06 (decision 8). An asset's CAPEX, O&M and
+  revenues are split by its `ownership` table, whose shares are at least 0
+  and sum to 1 over participant ids, or by `ownership = "external"` for an
+  asset a third party owns, whose money then leaves the community.
 - **Participants' own equipment** is priced as App prices it, in that
   participant's account.
 - **Network charges.** One `shared_network_charge` for the community. In
   Portugal a study computes it from the ERSE access tariffs under Article
   212 of Decreto-Lei n.º 15/2022, with or without the CIEG exemption; for a
-  §42b building it is 0; under §42c the full network charges apply. Options:
-  one charge for the community (recommended), or one per participant for
-  communities that span voltage levels. Per-participant charges are a small
-  extension once a study needs them.
+  §42b building it is 0; under §42c the full network charges apply. One
+  charge for the community is decided; one per participant, for communities
+  that span voltage levels, is a small extension once a study needs it.
 
 **Money closure.** In every interval, what receivers pay for shared energy
 equals what injectors receive for it; network charges, supplier bills,
@@ -465,12 +454,12 @@ the community's boundary.
 
 ### K8. References and results
 
-- **Reference without the community.** Each participant alone: the same site
-  with the same equipment behind its meter, its own tariff, buying `c_i`
-  from its supplier and selling `x_i` under its own export prices, with no
-  share of any asset. By K5(a) its energy is the community run's, so only the
-  money differs. The community's reference is the sum of its participants'
-  references; the assets are not built.
+- **Reference without the community** (decision 9). Each participant alone:
+  the same site with the same equipment behind its meter, its own tariff,
+  buying `c_i` from its supplier and selling `x_i` under its own export
+  prices, with no share of any asset. By K5(a) its energy is the community
+  run's, so only the money differs. The community's reference is the sum of
+  its participants' references; the assets are not built.
 - **No-system baseline.** Each participant's whole load at its own
   `reference_tariff`, or at its tariff, as App's baseline (ADR 0002 A13).
 - **Per participant** the result has: energy (load, own PV, metered import
@@ -506,6 +495,41 @@ the community's boundary.
   by measured memory.
 - **Monte Carlo and the optimizer** are not part of 0.8.0 for communities.
 
+### K10. Deferred: community storage
+
+Decided 2026-10-06 (decision 5): 0.8.0 has no community storage. Three
+candidate models are recorded for a later amendment, without a choice
+between them:
+
+- **(A) A battery as a community producer.** A battery at an asset charges
+  from the community's surplus and serves the community's remaining demand;
+  its output is energy for sharing, allocated like PV. This is the model the
+  proposal drafted: the asset's site runs the canonical step against a
+  virtual load `L = max(0, Σ c_i − Σ pooled x_i − PV-only asset injection)`,
+  and its injection is `PV_AC_To_Load + Battery_AC_To_Load + PV_AC_Export`
+  of that run. That run's `Import_From_Grid` is the part of `L` it did not
+  serve, which the participants buy, not an import at the asset. The asset
+  dispatch path against `L` is what this model needs. Under fixed
+  coefficients part of its output can become surplus even when `L > 0`,
+  since `L` is a community total.
+- **(B) Virtual capacity shares.** Each household holds a share of a
+  battery as an account: its export is deposited and later withdrawn
+  against its import, within its share. Examples: MVV Energie's "Strombank"
+  research project in Mannheim (a 100 kWh battery from December 2014, with
+  14 households and four businesses, each seeing its own *Kontostand*;
+  checked in trade-press reports only), and Synergy and Western Power's
+  PowerBank trial in Meadow Springs, Western Australia (a 105 kW, 420 kWh
+  battery, 52 households, up to 8 kWh of virtual storage each for one
+  Australian dollar a day; checked in the Western Australian government's statement of
+  5 November 2018). Neither is a Portuguese or German ACC rule.
+- **(C) Storage as a receiving installation.** A storage installation is
+  allocated shared energy while it is not injecting, and its later injection
+  is energy for sharing. ERSE Regulamento n.º 815/2023 gives storage
+  installations both roles: their injection is energy for sharing (Article
+  28(3)), and they may be allocated shared energy in periods without net
+  injection (Article 28(4)). It needs a virtual charging path in the
+  settlement.
+
 ## Closure
 
 Per interval, to rounding:
@@ -519,8 +543,7 @@ Per interval, to rounding:
 5. Attribution: `Σ Attributed_Shared_Used = Σ u_i` and
    `Σ Attributed_Surplus = Community_Surplus`.
 6. Each site's dispatch ledger keeps every identity of
-   `tests/energy_conservation.py`; the community battery's site has `L` as
-   its `Houseload`.
+   `tests/energy_conservation.py`.
 7. Money: receivers' shared-energy payments equal injectors' shared-energy
    revenue; per participant, money with the community less money alone
    equals the sum of its settlement terms.
@@ -529,8 +552,8 @@ Per year, the same identities hold for the year's sums.
 
 ## Reference cases
 
-Three participants A, B and C; one 15-minute interval; Wh; no asset battery.
-All cases are computed by hand from K4.
+Three participants A, B and C; one 15-minute interval; Wh. All cases are
+computed by hand from K4.
 
 **S1 — proportional.** `S` = 6000, `c` = (3000, 1000, 4000). `k` = (0.375,
 0.125, 0.5), `a` = `u` = (2250, 750, 3000), `Supplier_Import` = (750, 250,
@@ -559,11 +582,11 @@ energy, all of it to the asset, the only injector; the asset also sells the
 2000 Wh surplus for `2.0 × 0.04 = 0.08`; `4.0 × 0.02 = 0.08` of network
 charges leaves the community.
 
-**S5 — the community battery's load.** Pooled participant export 500, PV-only
-asset injection 2000, `Σc` = 6000: the battery asset's `L` is 3500. Its
-injection is its site's `PV_AC_To_Load + Battery_AC_To_Load + PV_AC_Export`,
-whatever the battery does; the case checks identity 1 with the battery asset
-included, and that `L` never counts a participant's export twice.
+**S5 — nobody to receive.** Proportional allocation. A and B export 300
+and 200 (pooled), C neither imports nor exports, and the asset injects 2500,
+so `S` = 3000. The receivers are C alone (`x_C` = 0), whose import is 0, so
+the denominator is 0, every `k_i` is 0, and all 3000 is community surplus,
+attributed 2500 to the asset, 300 to A and 200 to B.
 
 **Invariants**, at 15-minute steps, Python and Numba:
 
@@ -591,17 +614,21 @@ included, and that `L` never counts a participant's export twice.
 - **Shared energy before the batteries behind each meter.** Deferred (K5).
 - **Hierarchical sharing.** Deferred: its detailed Portuguese rules follow a
   pilot, and it needs groups in the configuration.
+- **A community battery in 0.8.0.** Deferred by decision 5 (K10).
 
 ## Implementation plan and effort
 
-Five PRs, about 15 working days for one developer, plus review. A sixth,
+Five PRs, about 14.5 working days for one developer, plus review. A sixth,
 experimental PR adds dynamic allocation later. Once the work ships, this
 section is replaced by an implementation status, as in ADR 0002.
 
-The work does not depend on #419 or #420: assets and participants run
-today's single-site physics. A participant or asset with an AC-coupled
-battery or a vehicle becomes possible when those ship, through the site
-keys, with no change here.
+**Order in 0.8.0** (decision 11). The work is implemented after the
+AC-coupled battery (#419) and vehicle-to-home (#420) work. Its code does not
+call theirs, since assets and participants run the single-site physics,
+but the order means the reference results, the example configuration and
+the docs are computed on the final PV defaults (#417, #418, which #419 also
+waits for), and a participant's site keys already include AC coupling and a
+vehicle when the community ships.
 
 **Rollout gates.** No merged state exposes a community that cannot price
 itself: PR 1–3 add internal modules only, PR 4 adds money, and PR 5 is the
@@ -609,9 +636,9 @@ first that exports `breos.Community`.
 
 | PR | Scope | Effort | Main risk |
 |---|---|---|---|
-| 1 | `breos/community/settlement.py`: fixed and proportional allocation, receivers, participant and community surplus, attribution to injectors, the settlement frame and its version; closure helper; cases S1–S3; property tests (Q5, Q6). | 2.5 days | Floating sums that depend on order (Q4). |
-| 2 | Community configuration: `[community]`, `[[assets]]`, `[[participants]]`; ids; site keys through `resolve_app_config` with the shared keys refused; coefficients, ownership and prices validated; 15-minute requirement. | 2.5 days | Keys whose App meaning does not fit a site in a community. |
-| 3 | Community runner: participant sites, PV-only assets, the battery asset's virtual load; settlement year by year; per-site carry; Q2, Q3 and the parity scenario. | 4 days | Memory and time with many participants. |
+| 1 | `breos/community/settlement.py`: fixed and proportional allocation, receivers, participant and community surplus, attribution to injectors, the settlement frame and its version; closure helper; cases S1–S3 and S5; property tests (Q5, Q6). | 2.5 days | Floating sums that depend on order (Q4). |
+| 2 | Community configuration: `[community]`, `[[assets]]`, `[[participants]]`; ids; site keys through `resolve_app_config` with the shared keys refused; assets' battery, load and smart-charging keys refused; coefficients, ownership and prices validated; 15-minute requirement. | 2.5 days | Keys whose App meaning does not fit a site in a community. |
+| 3 | Community runner: participant sites and PV-only assets with their zero load; settlement year by year; per-site carry; Q2, Q3 and the parity scenario. | 3.5 days | Memory and time with many participants. |
 | 4 | Money: supplier bills, shared price, network charges, surplus revenue, ownership, external owners; the reference without the community and the no-system baseline; NPV per participant and for the community; money closure; case S4. | 3.5 days | Escalation and discounting kept identical to App's per participant. |
 | 5 | `breos.Community` facade, `result()` and `settlement()`, provenance, an example configuration, docs (a community guide, the settlement ledger), CHANGELOG; ADR implementation status. | 2.5 days | None significant. |
 | 6 (experimental, later) | Dynamic allocation with a plain NumPy reference. | 2–3 days | Defining the rule before an implementation. |
@@ -627,44 +654,50 @@ Risks across the work:
 - **Data.** Shared prices, network charges and surplus prices are user
   inputs.
 
-## Open decisions for the maintainer
+## Decisions
 
-1. **Entry point (K2):** `breos.Community` in `breos/community/`, App
-   untouched (proposed); or a table in App?
-2. **Resolution (K3):** 15-minute steps required, hourly refused (proposed);
-   or hourly as an approximation?
-3. **Allocation (K4):** fixed coefficients summing to 1, renormalised over
-   the receivers in each interval, and proportional to metered import; no
-   reallocation of participant surplus (proposed)?
-4. **Order (K5):** batteries behind each meter first, then sharing on
-   metered balances (proposed); or shared energy first?
-5. **Community battery (K5):** at most one, dispatched against the virtual
-   load `L`, charging only from its own site's PV (proposed)?
-6. **Participants' export (K5):** pooled by default, with a key to turn it
-   off (proposed); or never pooled?
-7. **Prices (K3, K7):** shared energy sold at one price per kWh (by period
-   if needed) paid to the injecting sites (proposed), rather than free use
-   by owners or a discount on each supplier's price; `shared_energy_price`,
-   `shared_network_charge` and `surplus_price` required with no default, 0
-   allowed; one network charge for the community (proposed)?
-8. **Ownership (K7):** shares over participants or an external owner, for
-   CAPEX, O&M, replacements and revenues (proposed)?
-9. **Reference (K8):** each participant alone with the same equipment and
-   tariff, plus the no-system baseline (proposed)?
-10. **Scope (K1, K9):** no Monte Carlo, optimizer, hierarchical sharing or
-    `revalue` for communities in 0.8.0 (proposed)?
-11. **Target release:** 0.8.0, in the order of the plan above.
+Taken by the maintainer on 2026-10-06. The body sections follow them.
+
+1. **Entry point:** `breos.Community` in `breos/community/`; App untouched
+   (K2).
+2. **Resolution:** 15-minute steps only; an hourly community run is refused
+   (K3).
+3. **Allocation:** fixed coefficients that sum to 1, renormalised over the
+   receivers in each interval, and coefficients proportional to metered
+   import; no reallocation of participant surplus; dynamic allocation later,
+   as an experimental mode (K4).
+4. **Order:** the batteries behind each meter first, then settlement on
+   metered balances (K5).
+5. **No community battery in 0.8.0.** 0.8.0 shares PV only: the assets'
+   output and the participants' pooled export. Batteries behind a
+   participant's meter still work. Three community storage models are
+   recorded for a later amendment (K10). Changed from the proposal, which
+   had one community battery.
+6. **Participants' export:** pooled by default; `pool_participant_export =
+   false` turns it off (K5).
+7. **Prices:** one shared-energy price per kWh, by period if needed, paid to
+   the injecting sites; `shared_energy_price`, `shared_network_charge` and
+   `surplus_price` required with no default, 0 allowed; one network charge
+   for the community (K3, K7).
+8. **Ownership:** shares over participants, or an external owner (K7).
+9. **References:** each participant alone with the same equipment and
+   tariff, plus the no-system baseline (K8).
+10. **Out of 0.8.0:** Monte Carlo, the optimizer, hierarchical sharing and
+    `revalue` for communities (K1, K9).
+11. **Release and order:** ships in 0.8.0, implemented after #419 and #420
+    (see [Implementation plan and effort](#implementation-plan-and-effort)).
+    Changed from the proposal, which had no order.
 
 ## Consequences
 
-- A community of households and shared PV, with an optional community
-  battery, can be simulated and settled per 15-minute interval with each
-  participant's own tariff, and every participant's benefit is reported
-  against the same household alone.
+- A community of households sharing PV, with or without batteries behind
+  their meters, can be simulated and settled per 15-minute interval with
+  each participant's own tariff, and every participant's benefit is
+  reported against the same household alone.
 - `breos.App` and its results are unchanged; the community is a second
   facade built on the same single-site physics.
 - The settlement ledger is a new frame with its own schema version; the
   dispatch ledger and the result format do not change.
-- Hierarchical and dynamic sharing, several community batteries, virtual
-  charging of storage, community Monte Carlo and optimization stay outside
-  0.8.0.
+- Community storage, hierarchical and dynamic sharing, community Monte
+  Carlo and optimization stay outside 0.8.0; K10 records the storage models
+  a later amendment chooses from.
