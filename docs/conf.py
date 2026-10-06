@@ -28,6 +28,7 @@ extensions = [
     "sphinx_copybutton",
     "sphinx_autodoc_typehints",
     "sphinx_gallery.gen_gallery",
+    "sphinxext.opengraph",
 ]
 
 # --- Source files -----------------------------------------------------------
@@ -132,6 +133,8 @@ html_theme_options = {
     "github_url": "https://github.com/Str4vinci/breos",
     "navbar_end": ["version-switcher", "theme-switcher", "navbar-icon-links"],
     "show_prev_next": False,
+    # Five sections in the top bar; the remaining root pages go under "More".
+    "header_links_before_dropdown": 5,
     "footer_start": ["copyright"],
     "footer_end": ["sphinx-version", "theme-version"],
     "switcher": {
@@ -144,6 +147,19 @@ html_theme_options = {
     "secondary_sidebar_items": ["page-toc", "edit-this-page"],
     "use_edit_page_button": True,
 }
+
+# --- Link previews ----------------------------------------------------------
+
+# Open Graph tags give a link shared on social media or in chat a title,
+# description and image. Read the Docs sets the canonical URL per version;
+# local builds point at stable.
+ogp_site_url = os.environ.get("READTHEDOCS_CANONICAL_URL", "https://breos.readthedocs.io/en/stable/")
+ogp_site_name = "BREOS"
+ogp_description_length = 200
+ogp_image = "_static/BREOS.png"
+ogp_image_alt = "BREOS logo"
+# A static image; no matplotlib-drawn card per page.
+ogp_social_cards = {"enable": False}
 
 html_context = {
     "github_user": "Str4vinci",

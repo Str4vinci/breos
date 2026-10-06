@@ -89,6 +89,7 @@ docs = [
     "sphinx-autodoc-typehints>=2.5",
     "matplotlib>=3.10.8",
     "sphinx-gallery>=0.19",
+    "sphinxext-opengraph>=0.10",
 ]
 
 [tool.pytest.ini_options]
