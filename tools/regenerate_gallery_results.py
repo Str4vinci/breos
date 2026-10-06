@@ -20,7 +20,9 @@ versions. Absolute local paths are replaced by repository-relative ones.
 Weather is the PVGIS TMYs committed under ``validation/data/weather``. The
 Monte Carlo case needs a multi-year history: it fetches Open-Meteo data
 (CC BY 4.0) at run time, or reads ``--mc-weather PATH``, and records the
-file's SHA-256 in the manifest. The history is not committed.
+file's SHA-256 in the manifest. The history is not committed. That case runs
+10 000 trajectories on ``--procs`` workers and stores only the per-run
+columns its page plots, gzipped.
 
 ``--check`` reruns the cases marked cheap into a temporary directory and
 compares every number with the stored one at a relative and absolute
@@ -42,6 +44,7 @@ import copy
 import datetime as dt
 import decimal
 import functools
+import gzip
 import hashlib
 import json
 import math
@@ -77,6 +80,12 @@ TMY_FILES = {
     "berlin": "berlin_tmy_2005_2023_pvgis-sarah3.csv.gz",
 }
 MC_HISTORY = {"location": "porto", "start": "2005-01-01", "end": "2024-12-31"}
+# The gallery's Monte Carlo study runs more trajectories than the example config's quick 100. Run i
+# draws from SeedSequence(seed).spawn(n)[i], so the first 100 runs are the config's own study.
+MC_RUNS = 10_000
+# The per-run columns the Monte Carlo page plots, and the decimals each is stored with; summary.json
+# keeps the full-precision statistics. Whole currency units are enough for a histogram.
+MC_RUN_COLUMNS = {"run": 0, "npv_savings": 0, "payback_year_interpolated": 2, "final_soh_pct": 2}
 DEPENDENCIES = ("numpy", "pandas", "pvlib", "scipy", "numba", "pymoo")
 
 # The first-year step columns a stored week keeps, in W (power) or as a fraction.
@@ -102,6 +111,14 @@ VOLATILE_KEYS = frozenset({"breos_version", "python", "numpy", "pandas", "pvlib"
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_text(path: Path) -> str:
+    """A stored result file as text, decompressed if it is gzipped."""
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            return handle.read()
+    return path.read_text(encoding="utf-8")
 
 
 def repo_relative(path: Path) -> str:
@@ -1131,6 +1148,7 @@ def montecarlo(ctx: Context) -> Output:
     config = ctx.config("configs/examples/montecarlo.toml")
     mc = dict(config.pop("montecarlo"))
     mc.pop("weather_file")
+    mc_config_runs = mc["n_runs"]
     history = _mc_history(ctx)
     history_name = f"weather/{history.name}"
     ctx.weather[history_name] = {
@@ -1138,6 +1156,7 @@ def montecarlo(ctx: Context) -> Output:
         "attribution": OPEN_METEO_ATTRIBUTION,
         "note": "fetched at regeneration time; not committed",
     }
+    mc.update(n_runs=MC_RUNS, n_procs=ctx.options.procs)
     settings = MonteCarloSettings(weather_file=str(history), **mc)
     with ctx.inside():
         study = run_montecarlo(config, settings)
@@ -1172,9 +1191,20 @@ def montecarlo(ctx: Context) -> Output:
         "tmy_file": TMY_FILES[MC_HISTORY["location"]],
         "tmy_result": scalars(deterministic),
     }
+    runs = study.runs[list(MC_RUN_COLUMNS)].round(MC_RUN_COLUMNS)
+    runs["run"] = runs["run"].astype(int)
+    runs["currency"] = study.runs.attrs["currency"]  # the column the plots read their labels from
+    # The share of runs that save less than the TMY run, from full-precision NPVs.
+    summary["tmy_npv_quantile"] = float((study.runs["npv_savings"] < deterministic["npv_savings"]).mean())
     return Output(
-        {"runs.csv": study.runs, "summary.json": summary, "weather_years.csv": weather_years},
-        {"history": {"location": MC_HISTORY["location"], "start": MC_HISTORY["start"], "end": MC_HISTORY["end"]}},
+        {"runs.csv.gz": runs, "summary.json": summary, "weather_years.csv": weather_years},
+        {
+            "history": {"location": MC_HISTORY["location"], "start": MC_HISTORY["start"], "end": MC_HISTORY["end"]},
+            "n_runs": MC_RUNS,
+            "n_procs": ctx.options.procs,
+            "example_config_n_runs": mc_config_runs,
+            "runs_columns": list(runs.columns),
+        },
     )
 
 
@@ -1260,7 +1290,9 @@ def write_case(entry: Case, output: Output, target: Path, ctx: Context, runtime_
             for column in frame.columns:
                 if frame[column].dtype == object:
                     frame[column] = frame[column].map(lambda item: sanitise(item, roots))
-            frame.to_csv(path, index=False)
+            # A fixed gzip mtime keeps the file, and so its SHA-256, the same for the same rows.
+            compression = {"method": "gzip", "mtime": 0} if name.endswith(".gz") else None
+            frame.to_csv(path, index=False, compression=compression)
         else:
             text = json.dumps(json_ready(sanitise(value, roots)), indent=1, ensure_ascii=False)
             path.write_text(text + "\n", encoding="utf-8")
@@ -1282,7 +1314,7 @@ def write_case(entry: Case, output: Output, target: Path, ctx: Context, runtime_
         "files": files,
     }
     (target / "manifest.json").write_text(json.dumps(manifest, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    leaked = [name for name in files if any(root in (target / name).read_text() for root in roots if root)]
+    leaked = [name for name in files if any(root in read_text(target / name) for root in roots if root)]
     if leaked:
         raise RuntimeError(f"{entry.name}: an absolute local path survived in {', '.join(leaked)}")
 
@@ -1437,7 +1469,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="With --check, accept one unit in the last written decimal place (results stored on another machine).",
     )
-    parser.add_argument("--procs", type=int, default=min(8, os.cpu_count() or 1), help="Optimizer worker processes.")
+    parser.add_argument(
+        "--procs", type=int, default=min(8, os.cpu_count() or 1), help="Optimizer and Monte Carlo worker processes."
+    )
     options = parser.parse_args(argv)
 
     if options.list:
