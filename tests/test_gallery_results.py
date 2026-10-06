@@ -77,7 +77,7 @@ def test_every_case_has_an_intact_manifest(name):
 def test_stored_results_hold_no_local_paths():
     for path in RESULTS.rglob("*"):
         if path.is_file():
-            text = path.read_text(encoding="utf-8")
+            text = TOOL.read_text(path)
             assert not re.search(r"(/home/|/Users/|/tmp/|[A-Za-z]:\\\\)", text), path
 
 
@@ -142,6 +142,29 @@ def test_check_reproduces_every_cheap_case(capsys):
     if not _same_stack(manifest):
         pytest.skip("the stored results were made with other numpy/pandas/pvlib/scipy versions")
     assert TOOL.main(["--check", "--cross-machine"]) == 0, capsys.readouterr().out
+
+
+def test_montecarlo_case_stores_every_run_compactly():
+    manifest = json.loads((RESULTS / "montecarlo" / "manifest.json").read_text(encoding="utf-8"))
+    runs = pd.read_csv(RESULTS / "montecarlo" / "runs.csv.gz")
+    assert list(runs.columns) == manifest["runs_columns"] == [*TOOL.MC_RUN_COLUMNS, "currency"]
+    assert len(runs) == manifest["n_runs"] == TOOL.MC_RUNS
+    assert runs["run"].tolist() == list(range(1, TOOL.MC_RUNS + 1))
+    assert set(runs["currency"]) == {manifest["currency"]}
+
+
+def test_gzipped_results_do_not_depend_on_when_they_were_written(tmp_path, monkeypatch):
+    frame = pd.DataFrame({"run": [0, 1], "npv_savings": [4511.0, 4194.0]})
+    output = TOOL.Output({"runs.csv.gz": frame})
+    entry = TOOL.Case("demo", "Demo", lambda ctx: output, cheap=True)
+    ctx = TOOL.Context(tmp_path / "work", None)
+    digests = []
+    for second in (0.0, 1e6):
+        monkeypatch.setattr(TOOL.time, "time", lambda second=second: second)
+        TOOL.write_case(entry, output, tmp_path / "out", ctx, 1.0)
+        digests.append(json.loads((tmp_path / "out" / "manifest.json").read_text())["files"]["runs.csv.gz"])
+    assert digests[0] == digests[1]
+    assert pd.read_csv(tmp_path / "out" / "runs.csv.gz").equals(frame)
 
 
 # The ageing case is not cheap, so --check never reaches it. It drives the
