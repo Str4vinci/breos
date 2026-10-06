@@ -208,19 +208,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   ([#417](https://github.com/Str4vinci/breos/issues/417)). DNI and DHI are
   sampled every minute, GHI is derived in each sample as
   DNI·max(cos(apparent zenith), 0) + DHI, and each quarter-hour is the mean
-  of its 15 samples, so GHI, DNI and DHI close in every step. Interval-mean
-  hours spread DNI and DHI in proportion to their clear-sky values and keep
-  both hourly means; instant samples interpolate the clear-sky ratio at
-  every minute, as `"clear_sky"` does. GHI is derived, so its energy follows
-  the input's own closure: on 2023 Open-Meteo years at the seven bundled
-  sites it is 0.3% to 0.4% above the input GHI. App, Monte Carlo and the
-  optimizer (`simulation.irradiance_resampling`) accept it, and weather
-  provenance gains `irradiance_quadrature`, with the derived GHI's
-  difference from the input. Resampling a year takes about 1.6 s instead of
-  0.2 s, and the year cache of a 20-year Monte Carlo study about 29 s
-  instead of 6 s, mostly for the one-minute solar positions. The
-  default stays `"auto"`, so results are unchanged and the result format
-  stays `"1"`.
+  of its 15 samples. Closure is exact in every sample; a quarter-hour's GHI
+  is its DHI plus the step mean of DNI·cos(zenith). Interval-mean hours
+  spread DNI and DHI in proportion to their clear-sky values and keep both
+  hourly means; instant samples interpolate the clear-sky ratio at every
+  minute, as `"clear_sky"` does. GHI is derived, so its energy follows the
+  input's own closure: on 2023 Open-Meteo years at the seven bundled sites
+  it is 0.3% to 0.4% above the input GHI. Missing or non-finite irradiance
+  is refused. App, Monte Carlo and the optimizer
+  (`simulation.irradiance_resampling`) accept it, and weather provenance
+  gains `irradiance_quadrature`, with the derived GHI's difference from the
+  input. Resampling a year takes about 1.6 s instead of 0.2 s, and the year
+  cache of a 20-year Monte Carlo study about 29 s instead of 6 s, mostly for
+  the one-minute solar positions. The default stays `"auto"`, so results
+  are unchanged and the result format stays `"1"`.
 
 ### Changed
 

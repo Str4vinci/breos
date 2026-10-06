@@ -418,8 +418,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             'Hourly-to-15-minute irradiance policy: `"auto"` conserves declared interval means and uses '
             '`"clear_sky"` otherwise. `"clear_sky_energy_conserving"` requires interval-mean weather metadata. '
             "Each component is conserved independently; no GHI/DNI/DHI closure is enforced. "
-            '`"quadrature"` averages one-minute DNI and DHI, conserving interval means, and derives GHI from '
-            "them, so the three components close in every step"
+            '`"quadrature"` derives GHI from DNI and DHI in every one-minute sample and averages the samples '
+            "into quarter-hours, conserving interval-mean DNI and DHI"
         ),
         summary="simulation.irradiance_resampling",
     ),

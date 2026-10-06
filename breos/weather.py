@@ -860,8 +860,10 @@ def _quadrature_irradiance(
     """Reconstruct DNI and DHI on a one-minute grid and derive GHI from them.
 
     Each quarter-hour is the mean of the 15 one-minute samples centred on its
-    representative time, and GHI = DNI·max(cos(apparent zenith), 0) + DHI in
-    every sample, so the quarter-hour means close exactly. An interval-mean
+    representative time. GHI = DNI·max(cos(apparent zenith), 0) + DHI holds in
+    every sample, so a quarter-hour's GHI is its DHI plus the mean of DNI·cos
+    over its samples; it does not equal its mean DNI times the cosine of any
+    single zenith. An interval-mean
     source hour spreads each component over its 60 samples in proportion to
     that component's clear-sky irradiance, which conserves the hour's DNI and
     DHI means; a positive hour without clear-sky support is spread evenly and
@@ -901,7 +903,7 @@ def _quadrature_irradiance(
             continue
         sample_clear_sky = clear_sky[component]
         if interval_mean:
-            hourly_values = pd.to_numeric(df_hourly[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            hourly_values = df_hourly[col].to_numpy(dtype=float)
             weights = sample_clear_sky.reshape(len(df_hourly), -1)
             support = weights.sum(axis=1)
             supported = support > 0.0
@@ -937,8 +939,9 @@ def _quadrature_irradiance(
     # mean for interval means, the quarter-hour centred on the sample time
     # for instant samples.
     ghi_column = find_irradiance_column(df_hourly.columns, "ghi")
-    source_ghi = pd.to_numeric(df_hourly[ghi_column], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    source_ghi = df_hourly[ghi_column].to_numpy(dtype=float)
     derived_ghi = ghi.reshape(len(df_hourly), 4).mean(axis=1) if interval_mean else ghi[::4]
+    # Without input GHI energy the fractions are undefined, not zero.
     energy = float(source_ghi.sum())
     record = {
         "sample_seconds": 60,
@@ -946,9 +949,9 @@ def _quadrature_irradiance(
         "derived_components": ["ghi"],
         "conserved_components": ["dni", "dhi"] if interval_mean else [],
         "ghi_reconciliation": {
-            "energy_change_fraction": float(derived_ghi.sum() / energy - 1.0) if energy > 0 else 0.0,
+            "energy_change_fraction": float(derived_ghi.sum() / energy - 1.0) if energy > 0 else None,
             "absolute_residual_energy_fraction": (
-                float(np.abs(derived_ghi - source_ghi).sum() / energy) if energy > 0 else 0.0
+                float(np.abs(derived_ghi - source_ghi).sum() / energy) if energy > 0 else None
             ),
         },
     }
@@ -991,10 +994,10 @@ def resample_to_15min(
             otherwise. "clear_sky_energy_conserving" explicitly requests
             conservation and requires interval-mean metadata. Components
             are independent: no irradiance closure is imposed.
-            "quadrature" averages one-minute samples of DNI and DHI and
-            derives GHI from them, so the components close in every step;
-            it conserves interval-mean DNI and DHI and needs coordinates and
-            all three components.
+            "quadrature" derives GHI from DNI and DHI in one-minute samples
+            and averages the samples into quarter-hours; it conserves
+            interval-mean DNI and DHI and needs coordinates and three finite
+            irradiance components.
         altitude: Site elevation in metres for the clear-sky model (optional;
             pvlib looks it up from the coordinates when omitted)
 
@@ -1078,6 +1081,13 @@ def resample_to_15min(
             raise ValueError(
                 "irradiance_resampling='quadrature' requires GHI, DNI and DHI columns; missing: " + ", ".join(missing)
             )
+        for col in irrad_col_map:
+            values = pd.to_numeric(df_hourly[col], errors="coerce").to_numpy(dtype=float)
+            if not np.isfinite(values).all():
+                raise ValueError(
+                    f"irradiance_resampling='quadrature' requires finite irradiance; column {col!r} has "
+                    f"{int(np.sum(~np.isfinite(values)))} missing or non-finite values"
+                )
         _require_regular_hourly_index(df_hourly, resolved_policy)
         quadrature_columns, quadrature_record = _quadrature_irradiance(
             df_hourly,

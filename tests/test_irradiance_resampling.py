@@ -311,15 +311,16 @@ def _minute_geometry(result, centre_offset):
     return cos_zenith, sky
 
 
-def test_quadrature_conserves_interval_mean_dni_and_dhi_and_closes():
+def test_quadrature_conserves_interval_mean_dni_and_dhi_and_closes_per_sample():
     source = _weather()
     source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 700]])
     result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
     means = result.to_numpy().reshape(-1, 4, 3).mean(axis=1)
     np.testing.assert_allclose(means[:, 1:], source[["dni", "dhi"]], rtol=1e-12)
 
-    # Each hour follows its clear-sky shape, and every step closes with the
-    # cosine of the apparent zenith averaged over its one-minute samples.
+    # Each hour follows its clear-sky shape. GHI closes in every one-minute
+    # sample, so a step's GHI is its DHI plus the mean of DNI·cos(zenith) over
+    # its samples, not its mean DNI times one cosine.
     cos_zenith, sky = _minute_geometry(result, pd.Timedelta(minutes=7.5))
     minutes = {}
     for component in ("dni", "dhi"):
@@ -433,3 +434,36 @@ def test_quadrature_leaves_other_columns_to_interpolation():
     conserving = resample_to_15min(source, **COORDINATES)
     assert list(quadrature.columns) == list(source.columns)
     pd.testing.assert_series_equal(quadrature.temp_air, conserving.temp_air)
+
+
+@pytest.mark.parametrize("basis", ["interval_mean", "instant"])
+@pytest.mark.parametrize("component", ["ghi", "dni", "dhi"])
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_quadrature_refuses_non_finite_irradiance(basis, component, bad):
+    source = _weather(basis)
+    source.loc[source.index[2], component] = bad
+    with pytest.raises(ValueError, match=f"quadrature.*finite irradiance.*'{component}' has 1 missing"):
+        resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+
+
+def test_quadrature_reconciliation_is_undefined_without_input_ghi():
+    source = _weather()
+    source[["ghi", "dni", "dhi"]] = [0.0, 400.0, 100.0]
+    result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+    assert result.ghi.sum() > 0
+    reconciliation = result.attrs[WEATHER_METADATA_KEY]["irradiance_quadrature"]["ghi_reconciliation"]
+    assert reconciliation == {"energy_change_fraction": None, "absolute_residual_energy_fraction": None}
+
+
+def test_quadrature_step_means_do_not_close_with_one_cosine():
+    # Porto, 20 March, a dawn quarter-hour: the step's GHI is its DHI plus the
+    # mean of DNI·cos(zenith) over the samples, which differs from its mean
+    # DNI times the sample-mean cosine.
+    index = pd.date_range("2025-03-20 06:00", periods=4, freq="h", tz="UTC")
+    source = pd.DataFrame({"ghi": 300.0, "dni": 400.0, "dhi": 100.0}, index=index)
+    source.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
+    result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+    cos_zenith, _ = _minute_geometry(result, pd.Timedelta(minutes=7.5))
+    step_cos = cos_zenith.reshape(-1, 15).mean(axis=1)
+    residual = np.abs(result.ghi - result.dni * step_cos - result.dhi)
+    assert residual.iloc[3] > 5.0
