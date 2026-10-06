@@ -26,6 +26,7 @@ from scipy.interpolate import Akima1DInterpolator
 
 from breos.utils import (
     _datetime_index_seconds,
+    find_irradiance_column,
     get_hours_per_step,
     irradiance_component,
     is_leap_year,
@@ -35,7 +36,7 @@ from breos.utils import (
 
 logger = logging.getLogger(__name__)
 
-IRRADIANCE_RESAMPLING_POLICIES = ("auto", "clear_sky", "clear_sky_energy_conserving")
+IRRADIANCE_RESAMPLING_POLICIES = ("auto", "clear_sky", "clear_sky_energy_conserving", "quadrature")
 
 
 def validate_irradiance_resampling(value: Any) -> str:
@@ -787,6 +788,173 @@ def fetch_weather_data(
     return hourly_dataframe
 
 
+def _require_regular_hourly_index(df_hourly: pd.DataFrame, policy: str) -> None:
+    if len(df_hourly.index) > 1:
+        intervals = df_hourly.index[1:] - df_hourly.index[:-1]
+        if not np.all(intervals == pd.Timedelta(hours=1)):
+            raise ValueError(f"irradiance_resampling={policy} requires a regular hourly index")
+
+
+def _clear_sky_ratio_interpolation(
+    x_original: np.ndarray,
+    y_original: np.ndarray,
+    source_clear_sky: np.ndarray,
+    x_target: np.ndarray,
+    target_clear_sky: np.ndarray,
+    *,
+    method: str,
+    epsilon: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Interpolate one component's clear-sky ratio between its source points.
+
+    Returns the reconstruction, before night is zeroed or overshoot clipped,
+    and the mask of target points the dawn/dusk linear fallback supplied.
+    """
+    k_hourly = np.clip(y_original / (source_clear_sky + epsilon), 0, None)
+    if method == "makima":
+        interp_k = Akima1DInterpolator(x_original, k_hourly, method="makima")
+    else:
+        from scipy.interpolate import interp1d
+
+        interp_k = interp1d(x_original, k_hourly, kind=method, fill_value="extrapolate")
+    k_target = interp_k(x_target)
+    # Makima does not extrapolate: points before the first or after the last
+    # source point hold the edge value.
+    before_first = x_target < x_original[0]
+    after_last = x_target > x_original[-1]
+    if method == "makima":
+        k_target[before_first] = k_hourly[0]
+        k_target[after_last] = k_hourly[-1]
+    reconstructed = k_target * (target_clear_sky + epsilon)
+    # Brackets are evaluated on representative times, including provider offsets.
+    right = np.clip(np.searchsorted(x_original, x_target, side="right"), 1, len(x_original) - 1)
+    left = right - 1
+    fallback = (source_clear_sky[left] <= epsilon) | (source_clear_sky[right] <= epsilon)
+    # Outside the source range use the edge point's support, not an
+    # unrelated neighbouring hour; np.interp holds that edge value.
+    fallback[before_first] = source_clear_sky[0] <= epsilon
+    fallback[after_last] = source_clear_sky[-1] <= epsilon
+    reconstructed[fallback] = np.interp(x_target[fallback], x_original, y_original)
+    return reconstructed, fallback
+
+
+_QUADRATURE_SAMPLES_PER_STEP = 15  # one-minute samples per quarter-hour
+_QUADRATURE_DARK_ZENITH = 95.0  # degrees; a step centred at a larger zenith is dark throughout
+
+
+def _quadrature_irradiance(
+    df_hourly: pd.DataFrame,
+    irrad_col_map: dict[Hashable, str],
+    site: Location,
+    source_offset: pd.Timedelta,
+    cs_hourly: pd.DataFrame,
+    representative_times: pd.DatetimeIndex,
+    step_zenith: np.ndarray,
+    *,
+    interval_mean: bool,
+    method: str,
+    epsilon: float,
+    fallback_counts: dict[str, int],
+    zero_support_counts: dict[str, int],
+) -> tuple[dict[Hashable, np.ndarray], dict[str, Any]]:
+    """Reconstruct DNI and DHI on a one-minute grid and derive GHI from them.
+
+    Each quarter-hour is the mean of the 15 one-minute samples centred on its
+    representative time, and GHI = DNI·max(cos(apparent zenith), 0) + DHI in
+    every sample, so the quarter-hour means close exactly. An interval-mean
+    source hour spreads each component over its 60 samples in proportion to
+    that component's clear-sky irradiance, which conserves the hour's DNI and
+    DHI means; a positive hour without clear-sky support is spread evenly and
+    counted. Instant samples interpolate the clear-sky ratio as ``"clear_sky"``
+    does, at each one-minute sample, and conserve nothing. Updates the
+    fallback and zero-support counts in place.
+
+    Returns:
+        Tuple of (quarter-hour values by column, ``irradiance_quadrature``
+        provenance record)
+    """
+    samples = _QUADRATURE_SAMPLES_PER_STEP
+    n_steps = len(representative_times)
+    sample_offsets = pd.to_timedelta(np.tile(np.arange(samples) - samples // 2, n_steps), unit="min")
+    sample_times = representative_times.repeat(samples) + sample_offsets
+    # The sun's zenith moves at most 0.25 degrees a minute, so no sample of a
+    # step whose centre is more than five degrees below the horizon is lit.
+    # Leaving those samples dark halves the cost of the solar position.
+    lit = np.repeat(step_zenith < _QUADRATURE_DARK_ZENITH, samples)
+    solar_position = site.get_solarposition(sample_times[lit])
+    lit_clear_sky = site.get_clearsky(sample_times[lit], solar_position=solar_position)
+    cos_zenith = np.zeros(len(sample_times))
+    cos_zenith[lit] = np.maximum(np.cos(np.deg2rad(solar_position["apparent_zenith"].to_numpy())), 0.0)
+    clear_sky = {}
+    for component in ("dni", "dhi"):
+        clear_sky[component] = np.zeros(len(sample_times))
+        clear_sky[component][lit] = lit_clear_sky[component].to_numpy(dtype=float)
+    x_source = _datetime_index_seconds(df_hourly.index + source_offset)
+    x_samples = _datetime_index_seconds(sample_times)
+
+    def step_means(values: np.ndarray) -> np.ndarray:
+        return values.reshape(n_steps, samples).mean(axis=1)
+
+    sampled: dict[Hashable, np.ndarray] = {}
+    for col, component in irrad_col_map.items():
+        if component == "ghi":
+            continue
+        sample_clear_sky = clear_sky[component]
+        if interval_mean:
+            hourly_values = pd.to_numeric(df_hourly[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            weights = sample_clear_sky.reshape(len(df_hourly), -1)
+            support = weights.sum(axis=1)
+            supported = support > 0.0
+            values = np.repeat(hourly_values[:, None], weights.shape[1], axis=1)
+            values[supported] *= weights[supported] * (weights.shape[1] / support[supported, None])
+            zero_support_counts[component] += int(np.sum((~supported) & (hourly_values > 0.0)))
+            sampled[col] = values.reshape(-1)
+        else:
+            values, fallback = _clear_sky_ratio_interpolation(
+                x_source,
+                df_hourly[col].to_numpy(dtype=float),
+                cs_hourly[component].to_numpy(dtype=float),
+                x_samples,
+                sample_clear_sky,
+                method=method,
+                epsilon=epsilon,
+            )
+            daylight_fallback = fallback & (sample_clear_sky > 0.0)
+            fallback_counts[component] += int(np.sum(daylight_fallback.reshape(n_steps, samples).any(axis=1)))
+            values[sample_clear_sky <= 0.0] = 0.0
+            sampled[col] = values
+        sampled[col] = np.clip(sampled[col], 0.0, None)
+
+    columns = {col: step_means(values) for col, values in sampled.items()}
+    dni = sampled[find_irradiance_column(sampled, "dni")]
+    dhi = sampled[find_irradiance_column(sampled, "dhi")]
+    ghi = step_means(dni * cos_zenith + dhi)
+    ghi_columns = [col for col, component in irrad_col_map.items() if component == "ghi"]
+    for col in ghi_columns:
+        columns[col] = ghi
+
+    # Compare the derived GHI with the input at the source steps: an hour's
+    # mean for interval means, the quarter-hour centred on the sample time
+    # for instant samples.
+    ghi_column = find_irradiance_column(df_hourly.columns, "ghi")
+    source_ghi = pd.to_numeric(df_hourly[ghi_column], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    derived_ghi = ghi.reshape(len(df_hourly), 4).mean(axis=1) if interval_mean else ghi[::4]
+    energy = float(source_ghi.sum())
+    record = {
+        "sample_seconds": 60,
+        "samples_per_step": samples,
+        "derived_components": ["ghi"],
+        "conserved_components": ["dni", "dhi"] if interval_mean else [],
+        "ghi_reconciliation": {
+            "energy_change_fraction": float(derived_ghi.sum() / energy - 1.0) if energy > 0 else 0.0,
+            "absolute_residual_energy_fraction": (
+                float(np.abs(derived_ghi - source_ghi).sum() / energy) if energy > 0 else 0.0
+            ),
+        },
+    }
+    return columns, record
+
+
 def resample_to_15min(
     df_hourly: pd.DataFrame,
     method: str = "makima",
@@ -823,6 +991,10 @@ def resample_to_15min(
             otherwise. "clear_sky_energy_conserving" explicitly requests
             conservation and requires interval-mean metadata. Components
             are independent: no irradiance closure is imposed.
+            "quadrature" averages one-minute samples of DNI and DHI and
+            derives GHI from them, so the components close in every step;
+            it conserves interval-mean DNI and DHI and needs coordinates and
+            all three components.
         altitude: Site elevation in metres for the clear-sky model (optional;
             pvlib looks it up from the coordinates when omitted)
 
@@ -888,9 +1060,6 @@ def resample_to_15min(
     epsilon = 5.0  # Regularise ratios; low clear-sky support uses direct linear interpolation.
     fallback_counts = dict.fromkeys(irrad_col_map.values(), 0)
     zero_support_counts = dict.fromkeys(irrad_col_map.values(), 0)
-    # Brackets are evaluated on representative times, including provider offsets.
-    right = np.clip(np.searchsorted(x_original, x_target, side="right"), 1, len(x_original) - 1)
-    left = right - 1
 
     if use_clearsky:
         site = Location(latitude, longitude, altitude=altitude)
@@ -899,36 +1068,53 @@ def resample_to_15min(
         solar_position_15min = site.get_solarposition(target_index + target_offset)
         cs_15min = site.get_clearsky(target_index + target_offset, solar_position=solar_position_15min)
 
+    quadrature_columns: dict[Hashable, np.ndarray] = {}
+    quadrature_record: dict[str, Any] = {}
+    if resolved_policy == "quadrature":
+        if not use_clearsky:
+            raise ValueError("irradiance_resampling='quadrature' requires latitude and longitude")
+        missing = [component for component in ("ghi", "dni", "dhi") if component not in irrad_col_map.values()]
+        if missing:
+            raise ValueError(
+                "irradiance_resampling='quadrature' requires GHI, DNI and DHI columns; missing: " + ", ".join(missing)
+            )
+        _require_regular_hourly_index(df_hourly, resolved_policy)
+        quadrature_columns, quadrature_record = _quadrature_irradiance(
+            df_hourly,
+            irrad_col_map,
+            site,
+            source_offset,
+            cs_hourly,
+            target_index + target_offset,
+            solar_position_15min["zenith"].to_numpy(dtype=float),
+            interval_mean=time_basis == "interval_mean",
+            method=method,
+            epsilon=epsilon,
+            fallback_counts=fallback_counts,
+            zero_support_counts=zero_support_counts,
+        )
+
     # Get numeric columns only
     numeric_df = df_hourly.select_dtypes(include=[np.number])
 
     for col in numeric_df.columns:
         y_original = numeric_df[col].values
 
-        if use_clearsky and col in irrad_col_map:
+        if col in quadrature_columns:
+            df_15min[col] = quadrature_columns[col]
+        elif use_clearsky and col in irrad_col_map:
             # Clear-sky scaling: interpolate clearness index, not raw irradiance
             cs_comp = irrad_col_map[col]
-            k_hourly = np.clip(y_original / (cs_hourly[cs_comp].values + epsilon), 0, None)
-
-            if method == "makima":
-                interp_k = Akima1DInterpolator(x_original, k_hourly, method="makima")
-            else:
-                from scipy.interpolate import interp1d
-
-                interp_k = interp1d(x_original, k_hourly, kind=method, fill_value="extrapolate")
-            k_15min = interp_k(x_target)
-            if method == "makima":
-                k_15min[before_first] = k_hourly[0]
-                k_15min[after_last] = k_hourly[-1]
             clear_sky = cs_15min[cs_comp].to_numpy(dtype=float)
-            reconstructed = k_15min * (clear_sky + epsilon)
-            source_clear_sky = cs_hourly[cs_comp].to_numpy(dtype=float)
-            fallback = (source_clear_sky[left] <= epsilon) | (source_clear_sky[right] <= epsilon)
-            # Outside the source range use the edge point's support, not an
-            # unrelated neighbouring hour; np.interp holds that edge value.
-            fallback[before_first] = source_clear_sky[0] <= epsilon
-            fallback[after_last] = source_clear_sky[-1] <= epsilon
-            reconstructed[fallback] = np.interp(x_target[fallback], x_original, y_original)
+            reconstructed, fallback = _clear_sky_ratio_interpolation(
+                x_original,
+                y_original,
+                cs_hourly[cs_comp].to_numpy(dtype=float),
+                x_target,
+                clear_sky,
+                method=method,
+                epsilon=epsilon,
+            )
             # Count only the quarter-hours the fallback supplies; night ones are zeroed next.
             fallback_counts[cs_comp] += int(np.sum(fallback & (clear_sky > 0.0)))
             reconstructed[clear_sky <= 0.0] = 0.0
@@ -978,10 +1164,7 @@ def resample_to_15min(
 
     closure_before = closure_diagnostic()
     if resolved_policy == "clear_sky_energy_conserving" and irrad_col_map:
-        if len(df_hourly.index) > 1:
-            intervals = df_hourly.index[1:] - df_hourly.index[:-1]
-            if not np.all(intervals == pd.Timedelta(hours=1)):
-                raise ValueError("irradiance_resampling=clear_sky_energy_conserving requires a regular hourly index")
+        _require_regular_hourly_index(df_hourly, resolved_policy)
         expected_rows = len(df_hourly) * 4
         if len(df_15min) != expected_rows:
             raise ValueError(
@@ -1007,13 +1190,17 @@ def resample_to_15min(
             "irradiance_resampling": requested_policy,
             "irradiance_resampling_resolved": resolved_policy,
             "irradiance_resampling_method": method,
-            "irradiance_resampling_reconstruction": "clear_sky_ratio" if use_clearsky else "direct",
+            "irradiance_resampling_reconstruction": (
+                "one_minute_quadrature" if quadrature_columns else "clear_sky_ratio" if use_clearsky else "direct"
+            ),
             "irradiance_resampling_fallback_counts": fallback_counts,
             "irradiance_resampling_zero_support_counts": zero_support_counts,
         }
     )
     if closure_before is not None:
         weather_metadata["irradiance_closure"] = {"before": closure_before, "after": closure_diagnostic()}
+    if quadrature_record:
+        weather_metadata["irradiance_quadrature"] = quadrature_record
     df_15min.attrs[WEATHER_METADATA_KEY] = weather_metadata
 
     return df_15min
