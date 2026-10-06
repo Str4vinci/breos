@@ -67,8 +67,14 @@ official sources, and redistribution boundaries.
 
 ## Reading model documentation
 
-The [guides](../getting-started/index.md) explain how to run a study. The
+The [user guide](../user-guide/index.md) explains how to run a study. The
 [API reference](../api/index.md) documents callable Python interfaces. Pages
 in this section instead answer questions such as “what physical boundary is
 being modeled?”, “which assumptions affect this result?”, and “what evidence
 supports this model choice?”.
+
+```{toctree}
+:hidden:
+
+validation
+```

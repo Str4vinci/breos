@@ -1,5 +1,6 @@
 ---
 sd_hide_title: true
+og:description: "Open-source Python library that simulates rooftop PV and battery systems for buildings: energy flows, battery ageing, economics and emissions over the project lifetime."
 ---
 
 # BREOS
@@ -27,11 +28,21 @@ Building Renewable Energy Optimization Software
 ::::
 
 ::::{div} sd-text-center sd-py-3
-A Python library for PV and battery energy-system simulation and
-optimization, designed for research and engineering applications.
+BREOS is an open-source Python library that simulates rooftop PV and battery
+systems for buildings and reports their energy flows, battery ageing,
+economics and emissions over the project lifetime.
 ::::
 
-## Quick example
+```{figure} gallery/getting_started/images/sphx_glr_plot_01_first_home_001.png
+:alt: Monthly usable PV production, load, grid import and grid export for one year
+:align: center
+
+Monthly energy balance in the first year of a 10-module system with a 5 kWh
+battery in Porto, from the
+[first case example](gallery/getting_started/plot_01_first_home.rst).
+```
+
+## Install and run
 
 ```bash
 pip install breos
@@ -51,82 +62,58 @@ app = breos.App({
 app.simulate()
 result = app.result()
 
-print(f"Grid independence: {result['grid_independence_pct']:.1f}%")
+print(f"Grid independence: {result['grid_independence_pct']:.1f} %")
 print(f"Payback: {result['payback_year']} years")
-print(f"NPV savings: {result['npv_savings']:,.0f} EUR")
+print(f"NPV savings: {result['npv_savings']:.0f} EUR")
 ```
 
-`result` is a plain JSON-serializable dict — no pandas types leak out.
+`result` is a plain JSON-serializable dict. The same study runs from a TOML
+file with `breos run --config config.toml`; the
+[quickstart](getting-started/quickstart.md) shows both.
 
-## Start with a task
+## Documentation
 
-::::{grid} 1 2 2 4
+::::{grid} 1 2 3 3
 :gutter: 3
 
-:::{grid-item-card} Run your first simulation
-:link: getting-started/quickstart
-:link-type: doc
-
-Verify the install, run a small PV + battery study, and inspect its headline
-results.
-:::
-
-:::{grid-item-card} Configure a study
-:link: getting-started/configuration
-:link-type: doc
-
-Choose the location, PV layout, battery, economics, emissions, and model
-options.
-:::
-
-:::{grid-item-card} Bring your own data
-:link: getting-started/inputs
-:link-type: doc
-
-Use project weather, load profiles, component data, and financial assumptions.
-:::
-
-:::{grid-item-card} Understand the result
-:link: getting-started/interpreting-results
-:link-type: doc
-
-Read the energy, financial, emissions, degradation, and provenance fields.
-:::
-
-::::
-
-## Browse the documentation
-
-::::{grid} 1 2 2 4
-:gutter: 3
-
-:::{grid-item-card} Guides
+:::{grid-item-card} Get started
 :link: getting-started/index
 :link-type: doc
 
-Task-oriented guides for common systems, inputs, configuration, and
-troubleshooting.
+Install BREOS, run the quickstart, and gather the weather, load, component
+and cost inputs a study needs.
 :::
 
-:::{grid-item-card} Case examples
+:::{grid-item-card} Examples
 :link: gallery/index
 :link-type: doc
 
-Question-led reports of stored runs, with their configurations and figures.
+Stored runs that answer one question each, with their configurations and
+figures.
 :::
 
-:::{grid-item-card} Models and assumptions
+:::{grid-item-card} User guide
+:link: user-guide/index
+:link-type: doc
+
+Configuration, optimization, Monte Carlo, reading the results, and short
+how-to guides.
+:::
+
+:::{grid-item-card} Models
 :link: modeling/index
 :link-type: doc
 
-Physical boundaries, model choices, data sources, and degradation methods.
+Physical boundaries, model choices, data sources, degradation methods and
+external validation.
 :::
 
-:::{grid-item-card} Python API
+:::{grid-item-card} API reference
 :link: api/index
 :link-type: doc
 
-The stable `breos.App` facade and lower-level functions organized by domain.
+The `breos.App` facade, the lower-level functions by domain, and every
+configuration key.
 :::
 
 ::::
@@ -148,43 +135,13 @@ rather than on this user-documentation site.
 
 ```{toctree}
 :hidden:
-:caption: Learn BREOS
 
-getting-started/index
-getting-started/installation
-getting-started/quickstart
-getting-started/troubleshooting
-getting-started/inputs
-gallery/index
-how-to/index
-getting-started/optimization
-getting-started/monte-carlo
-getting-started/configuration
-getting-started/config-reference
-getting-started/options
-getting-started/interpreting-results
-```
-
-```{toctree}
-:hidden:
-:caption: Models and data
-
-modeling/index
-modeling/validation
+Get started <getting-started/index>
+Examples <gallery/index>
+User guide <user-guide/index>
+Models <modeling/index>
+API reference <api/index>
+changelog
 resources
 legal/load-profile-data
-```
-
-```{toctree}
-:hidden:
-:caption: Reference
-
-api/index
-```
-
-```{toctree}
-:hidden:
-:caption: Project
-
-changelog
 ```

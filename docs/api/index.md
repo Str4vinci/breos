@@ -114,6 +114,14 @@ fronts.
 helpers and utilities) that remain importable but are not part of the narrow
 top-level release surface.
 
+## Configuration reference
+
+The [configuration key reference](../getting-started/config-reference.md)
+lists every key an `App` config accepts, with its default, CLI flag and allowed
+values. [Packaged options](../getting-started/options.md) lists the bundled
+locations, modules, cost presets, emissions factors and load profiles those
+keys can name.
+
 ```{toctree}
 :hidden:
 
@@ -130,4 +138,11 @@ optimization
 montecarlo
 plotting
 appendix
+```
+
+```{toctree}
+:hidden:
+
+/getting-started/config-reference
+/getting-started/options
 ```
