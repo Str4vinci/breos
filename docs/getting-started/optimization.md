@@ -126,8 +126,9 @@ print(result.details["evaluation_counts"])
 
 The table has the columns of the front, then one column per constraint:
 `Constraint_Budget`, `Constraint_Area` and, with `enforce_zeb`,
-`Constraint_ZEB`. Each is the design's value minus its limit, so zero or
-less meets the limit. `Feasible` is true when the design meets every limit,
+`Constraint_ZEB`: CAPEX minus `budget`, module frame area minus
+`max_area_m2`, and 1 minus the projected ZEB ratio. Zero or less meets the
+limit. `Feasible` is true when the design meets every limit,
 and `Evaluations` counts how often the search asked for the design. Use the
 table to build a front over every design the search tried, or to see how
 much of the design space it covered.

@@ -144,7 +144,8 @@ table's, then `Constraint_Budget` (CAPEX minus `budget`), `Constraint_Area`
 (module frame area minus `max_area_m2`) and, with `enforce_zeb`,
 `Constraint_ZEB` (1 minus the projected ZEB ratio); a value of zero or less
 meets the limit. `Feasible` is true when every constraint is met, and
-`Evaluations` is the number of times NSGA-II asked for the design.
+`Evaluations` is the number of times NSGA-II asked for the design. Like the
+Pareto table, it records the run's currency in `attrs["currency"]`.
 `details["evaluation_counts"]` holds `evaluations` (pymoo's evaluation count),
 `simulations` (the projections run) and `distinct_designs`.
 

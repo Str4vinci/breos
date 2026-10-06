@@ -823,3 +823,64 @@ def test_parallel_search_scores_and_reports_the_designs_of_a_serial_search(synth
     pd.testing.assert_frame_equal(serial.details["evaluated"], parallel.details["evaluated"])
     pd.testing.assert_frame_equal(serial.details["pareto"], parallel.details["pareto"])
     assert serial.details["evaluation_counts"] == parallel.details["evaluation_counts"]
+
+    # The public Pareto columns, in their order and with their types, written
+    # out rather than built by the code under test (as on 567df2a).
+    pareto = serial.details["pareto"]
+    assert list(pareto.columns) == [
+        "Modules",
+        "Battery_kWh",
+        "Tilt",
+        "Azimuth",
+        "Layout",
+        "Grid_Independence_%",
+        "NPV",
+        "Objective_Grid_Independence_%",
+        "Objective_NPV",
+        "Projected_Final_SOH_%",
+        "Projected_First_End_Of_Life_Action",
+        "Projected_First_End_Of_Life_Reason",
+        "Projected_First_End_Of_Life_SOH_%",
+        "Projected_First_End_Of_Life_Years",
+        "Projected_Grid_Independence_%",
+        "Projected_Grid_Independence_FinalYear_%",
+        "Projected_Grid_Independence_Mean_%",
+        "Projected_Grid_Independence_Min_%",
+        "Projected_Grid_Independence_Year1_%",
+        "Projected_Initial_Cost",
+        "Projected_Inverter_Loss_Year1_kWh",
+        "Projected_LCOE_per_kWh",
+        "Projected_NPV",
+        "Projected_PV_DC_Curtailed_Year1_kWh",
+        "Projected_PV_DC_FinalYear_kWh",
+        "Projected_PV_DC_Year1_kWh",
+        "Projected_PV_Production_FinalYear_kWh",
+        "Projected_PV_Production_Year1_kWh",
+        "Projected_Payback_Year",
+        "Projected_Payback_Year_Interpolated",
+        "Projected_Replacement_Cost_T0_Prices",
+        "Projected_Total_Replacements",
+        "Projected_ZEB_Ratio",
+        "Projected_ZEB_Ratio_FinalYear",
+        "Projected_ZEB_Ratio_Mean",
+        "Projected_ZEB_Ratio_Min",
+        "Projected_ZEB_Ratio_Year1",
+        "ZEB_Ratio",
+    ]
+    assert pareto["Modules"].dtype == np.int64 and pareto["Azimuth"].dtype == np.int64
+    assert (pareto["Grid_Independence_%"] == pareto["Projected_Grid_Independence_%"]).all()
+    assert (pareto["NPV"] == pareto["Projected_NPV"]).all()
+    assert (pareto["ZEB_Ratio"] == pareto["Projected_ZEB_Ratio"]).all()
+
+
+def test_evaluated_designs_record_the_currency_of_the_search(monkeypatch):
+    # Like the front, the evaluated table names its currency, so a plot of it
+    # labels money in it and refuses another.
+    from breos.plotting import plot_pareto_front
+
+    result, _, _ = _stubbed_search(monkeypatch, cached=True)
+    evaluated = result.details["evaluated"]
+
+    assert evaluated.attrs["currency"] == result.details["provenance"]["currency"] == "EUR"
+    with pytest.raises(ValueError, match="records its currency as 'EUR'"):
+        plot_pareto_front(evaluated, currency="USD")

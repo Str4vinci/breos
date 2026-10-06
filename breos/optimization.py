@@ -1526,6 +1526,7 @@ def optimize_system_multi_objective(
         "battery_replacement_treatment": dict(problem.battery_replacement_treatment),
     }
     pareto.attrs["currency"] = provenance["currency"]
+    evaluated.attrs["currency"] = provenance["currency"]
     return OptimizationResult(
         optimal_value=float("nan"),
         objective_value=float("nan"),

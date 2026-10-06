@@ -209,7 +209,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   scored, with the Pareto table's columns, the constraint values
   `Constraint_Budget`, `Constraint_Area` and, with `enforce_zeb`,
   `Constraint_ZEB` (zero or less meets the limit), `Feasible`, and
-  `Evaluations`, the number of times the search asked for the design.
+  `Evaluations`, the number of times the search asked for the design, and
+  records its currency in `attrs` as the front does.
   `details["evaluation_counts"]` gives the `evaluations`, `simulations` and
   `distinct_designs` of the search. Counting evaluations or building a front
   over every evaluated design no longer needs the private
