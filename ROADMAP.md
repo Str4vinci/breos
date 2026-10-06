@@ -35,21 +35,54 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete list, and
 [design/architecture/tariffs-and-smart-charging.md](design/architecture/tariffs-and-smart-charging.md)
 for the tariff and smart-charging design.
 
+## 0.7.1
+
+0.7.1 adds the library features that tariff and battery studies need. Runs that
+set none of the new keys give the same results as 0.7.0.
+
+- Currency selection: a top-level `currency` key takes any ISO 4217 code.
+  BREOS does not convert, so a run in another currency than EUR sets its own
+  costs.
+- `weather_file` names the App's weather file directly.
+- East–West layouts in the optimizer search space.
+- An annual network credit capped at the household's own network charges.
+- Daily-target planner options: `overlap_policy = "hold_target"`, an optional
+  battery-wear cost, and planning at the start of each charging window.
+- Battery replacement control in App: replacements can be turned off or
+  skipped near the end of the project, and a battery at end of life can be
+  retired so the project finishes PV-only. Results list the battery's state
+  at the end of each project year.
+- `App.revalue` re-prices a greedy battery run on another tariff schedule
+  without simulating again.
+- Monte Carlo and optimizer workers no longer oversubscribe the CPU.
+
+See [CHANGELOG.md](CHANGELOG.md) for the complete list.
+
 ## Next releases
 
-- **0.7.1** — study tooling: scripted, reproducible study workflows on the
-  public API, such as paired Monte Carlo comparisons across designs and
-  tariffs, and reusable revaluation scenarios. A general capability that these
-  workflows need goes into the library itself.
-- **0.8** — 15-minute irradiance from hourly data by quadrature
-  reconstruction, with GHI derived from DNI and DHI. The `solar_position`
-  default changes from `"interval-start"` to `"weather"`, which reads the
-  representative time of each step from the weather metadata. Both change
-  results and will ship with an upgrade note. AC-coupled batteries are
-  planned as accepted in ADR 0004. BLAST degradation under Monte Carlo is a
-  candidate.
+- **0.8** — the 0.8.0 milestone on GitHub.
+  - 15-minute irradiance from hourly data by quadrature reconstruction, with
+    GHI derived from DNI and DHI (#417).
+  - The `solar_position` default changes from `"interval-start"` to
+    `"weather"`, which reads the representative time of each step from the
+    weather metadata (#418). This and the quadrature change both change
+    results and ship with one upgrade note, before the AC-coupled reference
+    cases are computed.
+  - AC-coupled batteries as accepted in ADR 0004 (#419).
+  - Vehicle-to-home (V2H), on top of the AC-coupled model (#420). An ADR
+    comes first.
+  - Collective self-consumption (ACC): several households sharing generation,
+    with a community entry point beside App (#421). An ADR comes first.
+  - An optimizer cache of scored designs that returns every evaluated
+    candidate (#416), and refetched PVWatts references so the PVWatts band
+    test runs again (#422).
+- **0.9** — candidate: battery replacement decided on economics, not only on
+  a fixed state-of-health threshold (#403).
 - **1.0** — flip to the recommended model defaults with a documented upgrade
   note.
+
+Not yet scheduled: switching the system's tariff from a given project year
+(#402), and BLAST degradation under Monte Carlo.
 
 ## Model accuracy and validation
 
@@ -68,18 +101,23 @@ for the tariff and smart-charging design.
 
 ## Economics
 
-- More currencies, and non-EU cost presets.
+- Cost presets in currencies other than EUR, and non-EU cost presets. Since
+  0.7.1 a run can use any currency, but only with costs it sets itself.
 - Economic sensitivity analysis on top of `App.revalue`: switching values and
   economic uncertainty in Monte Carlo.
-- Broader price-aware dispatch strategies.
+- Price-aware dispatch strategies beyond the 0.7 fixed-target and daily
+  persistence modes.
+- A tariff switch from a given project year (#402).
 
 ## Battery
 
 - Per-chemistry aging for NMC and NCA in the native model, alongside LFP.
-- BLAST under Monte Carlo (candidate for 0.8).
+- BLAST under Monte Carlo (not scheduled).
 - AC-coupled batteries: a battery with its own inverter on the AC bus,
-  beside the DC-coupled hybrid model, planned for 0.8. See
+  beside the DC-coupled hybrid model, planned for 0.8 (#419). See
   [design/adr/0004-ac-coupled-batteries.md](design/adr/0004-ac-coupled-batteries.md).
+- Replacement decided on economics, not only on a fixed threshold (#403,
+  candidate for 0.9).
 
 ## Performance and portability
 
@@ -91,6 +129,8 @@ for the tariff and smart-charging design.
 ## Onboarding and tooling
 
 - Multi-config parameter sweeps and parallel batch runs.
+- Paired Monte Carlo comparisons across designs and tariffs on the same
+  sampled weather and demand.
 - An offline `breos demo` command using clearly labeled synthetic inputs.
 - A named LoadProfileGenerator adapter, beside the `custom` CSV path.
 
@@ -99,9 +139,11 @@ for the tariff and smart-charging design.
 These stay as they are, but each needs a stated boundary before results lean
 on it.
 
-- Replacement thresholds are study decisions. Keep 70% as a documented
-  default, but make replacement-disabled sensitivity reachable from the
-  stable facade; the lower-level projected path already supports it.
+- Replacement thresholds are study decisions. 70% stays the documented
+  default. Since 0.7.1 App and Monte Carlo can turn replacement off
+  (`battery_enable_replacement`), so the replacement-disabled sensitivity is
+  reachable from the stable facade; results that depend on the threshold
+  should report it.
 - Battery temperature needs an unambiguous meaning. An explicit 40 C becomes
   27.4 C under the default indoor transformation, so ambient, enclosure and
   measured cell temperatures should not share one indistinguishable input
@@ -154,8 +196,8 @@ for and against, not designs.
 - **Profile-complementarity metric.** Correlation-style diagnostics over two
   or more normalized load profiles, to say whether building-to-building
   transfer could pay before any transfer is modeled. Needs no simulation and
-  no dispatch change, and gates whether multi-building work is worth starting.
-  The multi-building dispatch model itself is out of scope for core.
+  no dispatch change. Collective self-consumption (#421) is now planned for
+  0.8, and this metric would help say for which buildings it is worth running.
 
 - **Export-limited and islanded operation.** Every dispatch path assumes an
   unconstrained bidirectional connection: surplus sold, deficit imported
