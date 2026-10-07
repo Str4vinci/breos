@@ -15,7 +15,32 @@ BREOS fits its parameters locally from catalogue or datasheet values with
 does not automatically import SAM/CEC component tables; those remain useful
 model documentation and comparison data.
 
-## Production
+## Specified inverter data
+
+`breos.equipment.InverterSpec` stores an inverter's AC nameplate and optional
+datasheet limits with validation. Unpublished limits remain `None`. Product
+identities, certification evidence and prices belong to the caller's catalog.
+
+```python
+from breos import App
+from breos.equipment import InverterSpec
+
+inverter = InverterSpec(nominal_power_w=4000, inverter_efficiency=0.975)
+app = App({"location": "porto", "n_modules": 12,
+           "annual_consumption_kwh": 4000, **inverter.as_app_config()})
+```
+
+The adapter supplies the AC rating in kW, clears the sizing ratio, and supplies
+efficiency only when known. The aggregate simulation consumes those values;
+the stored DC/MPPT limits do not enable topology validation or per-MPPT
+simulation. Unknown efficiency leaves the engine's existing assumption in place.
+
+```{eval-rst}
+.. autoclass:: breos.equipment.InverterSpec
+   :members:
+```
+
+## Production functions
 
 ```{eval-rst}
 .. autosummary::

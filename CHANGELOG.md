@@ -4,6 +4,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- `breos.equipment.InverterSpec` stores a specified inverter's validated AC
+  nameplate and optional datasheet limits. Its `as_app_config()` adapter supplies
+  the rating and known efficiency to App, keeping catalog identity, prices and
+  certification outside BREOS. DC/MPPT limits are metadata, not string-aware
+  validation or simulation.
+
 ## [0.7.0] - 2026-10-02
 
 0.7.0 adds time-of-use tariffs and grid charging, makes the results
