@@ -11,14 +11,20 @@ the rules enforced for administrators too:
 - Require pull requests before merging, and dismiss stale approvals when new
   commits are pushed.
 - Require the four `test (3.11)` to `test (3.14)` checks of the `Tests`
-  workflow. Each runs lint, format and type checks, the test suite, the
-  installed-wheel release artifact check and the docs build.
+  workflow. Each runs the test suite; `test (3.12)` also runs the lint,
+  format and type checks, the installed-wheel release artifact check and the
+  docs build. On a documentation-only PR the other three versions skip their
+  steps and pass.
 - Require conversation resolution before merging.
 - Block force pushes and branch deletion.
 
 `main` also requires branches to be up to date before merging. `develop` does
 not (since 2026-10-01), so two PRs that pass alone can still break together;
 the `Tests` run on every push to `develop` checks each merged tree.
+
+Under Settings → Actions → General, workflows from fork PRs need approval
+for all outside collaborators, not only first-time contributors. Read the
+diff before approving a run.
 
 Use `main` only for stable releases. Release tags are created on `main` after
 the release commit has passed the same checks.
@@ -95,6 +101,10 @@ entry.
 The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
 3.14 on every PR and push, together with a `floors` job on the lowest declared
 dependency versions and a `no-numba` job without the optional Numba backend.
+Draft PRs run nothing until they are marked ready for review. A PR that
+changes only documentation (`docs/`, `design/`, `maintainers/`, the top-level
+Markdown files and `CITATION.cff`) runs the suite, checks and docs build on
+Python 3.12 alone.
 macOS and Windows run a focused public-entrypoint smoke suite and the backend
 bit-identity check on PRs into and pushes to `main` and `release/**`, nightly,
 and on demand. The slow tests and a separate `coverage-report` job run

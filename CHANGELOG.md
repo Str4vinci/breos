@@ -206,6 +206,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- CI runs less on PRs that cannot need it. Draft PRs run nothing until they
+  are marked ready for review. A PR that changes only documentation runs the
+  test suite, checks and docs build on Python 3.12 alone, and skips the other
+  versions, `floors` and `no-numba`. The lint, format and type checks, the
+  release artifact check and the docs build run once, on 3.12, instead of on
+  all four versions.
 - A change to `[reference_tariff]` no longer invalidates the App input cache
   or the Monte Carlo year cache: it prices only the household load.
 - Tariff period classification finds each step's day type and season once
