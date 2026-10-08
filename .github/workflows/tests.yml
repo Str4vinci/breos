@@ -10,8 +10,10 @@ on:
   # Deliberately unfiltered: a `branches` filter here matches the *base* of the
   # pull request, so a PR stacked on another feature branch would get no run at
   # all until it was retargeted at develop, which is the point where a failure
-  # is most expensive to discover.
+  # is most expensive to discover. Draft PRs run nothing; marking one ready
+  # for review starts the run.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   # Slow endurance/multi-year tests run nightly, on demand, and as a release
   # gate; the coverage report is published on the same triggers.
   schedule:
@@ -29,9 +31,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    # Every other job needs this one, so a draft PR, which skips it, runs
+    # nothing. `code` is false only for a PR that touches documentation alone;
+    # every other event tests everything.
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          # The PR's merge commit and its parents: the first parent is the
+          # base branch tip, so the diff is exactly what the PR changes.
+          fetch-depth: 2
+
+      - name: Classify the changed files
+        id: classify
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          printf '%s\n' "$changed"
+          # Documentation: docs/, design/, maintainers/, and the top-level
+          # Markdown files and CITATION.cff. Anything else counts as code.
+          if printf '%s\n' "$changed" | grep -qvE '^(docs/|design/|maintainers/|[^/]+\.md$|CITATION\.cff$)'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Documentation-only change."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     # The default fast suite runs on pushes and PRs (including release/**),
     # not on the scheduled/dispatch slow runs.
+    needs: changes
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
@@ -42,37 +80,56 @@ jobs:
 
     env:
       UV_PYTHON: ${{ matrix.python-version }}
+      # 3.12 alone also runs lint, format and type checks (mypy is pinned to
+      # python_version 3.11 in pyproject), the release artifact check, and
+      # the docs build: they give the same answer on every version.
+      PRIMARY: ${{ matrix.python-version == '3.12' }}
+      # A documentation-only PR still runs the suite on 3.12, since several
+      # tests read docs/ and the README quickstart. The other versions skip
+      # their steps rather than the job: the four test (3.x) checks are
+      # required, and a job skipped by its `if` never reports them by name.
+      RUN_SUITE: ${{ needs.changes.outputs.code == 'true' || matrix.python-version == '3.12' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_SUITE == 'true'
 
       - name: Install uv
+        if: env.RUN_SUITE == 'true'
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       - name: Set up Python
+        if: env.RUN_SUITE == 'true'
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
+        if: env.RUN_SUITE == 'true'
         run: uv sync --extra dev --extra docs
 
       - name: Lint
+        if: env.PRIMARY == 'true'
         run: uv run ruff check breos/ tests/ tools/
 
       - name: Check formatting
+        if: env.PRIMARY == 'true'
         run: uv run ruff format --check breos/ tests/ tools/
 
       - name: Type check
+        if: env.PRIMARY == 'true'
         run: uv run mypy breos
 
       - name: Run tests
+        if: env.RUN_SUITE == 'true'
         # Slow tests are deselected by default (pyproject addopts: -m "not slow").
         # -n auto spreads the suite over the runner's cores (pytest-xdist).
         run: uv run pytest tests/ -v -n auto
 
       - name: Verify release artifacts
+        if: env.PRIMARY == 'true'
         run: uv run python tools/verify_release_artifacts.py
 
       - name: Build docs
+        if: env.PRIMARY == 'true'
         env:
           BREOS_DOCS_OFFLINE: "1"
         run: uv run --extra docs sphinx-build -W -b html docs docs/_build/html
@@ -84,6 +141,7 @@ jobs:
     # demand, and at the release gates (pushes to main and release/**, and PRs
     # into them) rather than on every PR commit or develop merge. A
     # platform-only break on develop surfaces within a day.
+    needs: changes
     if: >-
       (github.event_name == 'push' && github.ref != 'refs/heads/develop') ||
       github.event_name == 'schedule' ||
@@ -129,8 +187,11 @@ jobs:
     # The declared dependency floors (numpy 2.0, pandas 2.3.3, pvlib 0.14,
     # scipy 1.14) on the oldest supported Python. The lock pins much newer
     # releases, so without this job a floor could break unnoticed (#150 was
-    # a pandas-version bug).
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    # a pandas-version bug). Documentation-only PRs skip it.
+    needs: changes
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
 
     env:
@@ -159,7 +220,11 @@ jobs:
     # Numba is an optional extra, and importing BREOS must not need it. The
     # dev extra installs it, so remove it and run the whole suite: backend
     # tests skip, and everything else runs on the Python path.
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    # Documentation-only PRs skip it.
+    needs: changes
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
 
     env:
@@ -186,6 +251,7 @@ jobs:
   slow-tests:
     # Long-running endurance tests on Python 3.12. Release pushes and PRs run
     # this gate automatically; other branches rely on the nightly/manual runs.
+    needs: changes
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
@@ -218,6 +284,7 @@ jobs:
     # suite makes it several times slower, which is why it stays off the
     # per-PR path. If diff coverage matters later, add a check scoped to the
     # changed lines rather than restoring this to the matrix.
+    needs: changes
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
