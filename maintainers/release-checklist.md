@@ -289,3 +289,4 @@ Rationale:
   whole project unless a stable lower-level engine API is intentionally exposed.
 - `model` should refer to specific algorithms or component models, not the full
   project.
+
