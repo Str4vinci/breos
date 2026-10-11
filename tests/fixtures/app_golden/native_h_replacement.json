@@ -350,6 +350,7 @@
   "provenance.resolved_config.discount_rate": 0.03,
   "provenance.resolved_config.dual_axis_max_tilt": 90.0,
   "provenance.resolved_config.electrical_environment": null,
+  "provenance.resolved_config.electrical_fidelity": "aggregate",
   "provenance.resolved_config.emissions_country": "PT",
   "provenance.resolved_config.enable_resistance_fade": false,
   "provenance.resolved_config.execution_backend": "python",
@@ -549,7 +550,7 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "653e9e4c3aedbc75cdfd67ccd3f5ab55a837a2dd",
+  "breos_commit": "6561862dafaf2487bd971fb4eb3ec9d195a1c880",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",

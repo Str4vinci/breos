@@ -48,6 +48,7 @@ is a `breos run` option that overrides the config file.
 | `discount_rate` | `0.03` | `--discount-rate` | Nominal discount rate for NPV |
 | `dual_axis_max_tilt` | `90.0` | — | Maximum panel tilt for dual-axis tracking (degrees) |
 | `electrical_environment` | `None` | — | Design temperatures and mounting for the string check; see [`[electrical_environment]`](#electrical_environment). Set with `inverters` and `pv_strings` |
+| `electrical_fidelity` | `"aggregate"` | — | How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT input's voltage range and current limit. `"string"` needs `inverters`, `pv_strings` and `electrical_environment`, one inverter, and a wiring without structural errors |
 | `emissions_country` | `None` | `--emissions-country` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...); see [Packaged options](options.md#emissions-factors) |
 | `enable_resistance_fade` | `False` | — | Grow the battery's internal resistance as it ages (Naumann), which lowers its charge and discharge efficiencies. Native engine only: it cannot be combined with `degradation_engine = "blast"` |
 | `execution_backend` | `"python"` | `--execution-backend` | Within-day dispatch implementation. `"python"` is the numerical reference; `"numba"` is an optional compiled path that reproduces it bit for bit and needs `pip install "breos[fast]"`. One of `"python"`, `"numba"` |

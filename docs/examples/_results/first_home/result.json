@@ -960,6 +960,7 @@
    "inverters": null,
    "pv_strings": null,
    "electrical_environment": null,
+   "electrical_fidelity": "aggregate",
    "start_date": "2023-01-01",
    "tariff": null,
    "reference_tariff": null,

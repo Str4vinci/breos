@@ -269,6 +269,10 @@ def _build_pv_loss_waterfall(
         _waterfall_stage("temperature", "Cell temperature", module_dc, effective_dc),
         _waterfall_stage("pvwatts_static", "Static PVWatts losses", dc_after_static, module_dc),
     ]
+    if pv_breakdown.mppt_limit_loss is not None:
+        # String-level energy: each MPPT input's voltage range and current limit.
+        after_limits = dc_after_static - _series_energy_kwh(pv_breakdown.mppt_limit_loss, freq)
+        stages.append(_waterfall_stage("mppt_limits", "MPPT voltage and current limits", after_limits, dc_after_static))
 
     battery_begin = float(first_year_results_df["Battery_Energy_Beginning"].iloc[0]) / 1000.0
     battery_end = float(first_year_results_df["Battery_Energy_End"].iloc[-1]) / 1000.0

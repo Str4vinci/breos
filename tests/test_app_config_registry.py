@@ -85,6 +85,7 @@ EXPECTED_DEFAULTS = {
     "inverters": None,
     "pv_strings": None,
     "electrical_environment": None,
+    "electrical_fidelity": "aggregate",
 }
 
 # Every App flag of ``breos run``, in the order ``--help`` lists them: the

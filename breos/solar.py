@@ -160,6 +160,24 @@ def resolve_pvwatts_losses(
 
 
 @dataclass(frozen=True)
+class ModuleOperatingPoint:
+    """One module's single-diode parameters and maximum power point at each step.
+
+    The five parameters are those of :func:`pvlib.pvsystem.calcparams_cec`, in
+    A, ohm and V; ``v_mp`` and ``i_mp`` are the maximum power point in V and A.
+    Every array is indexed like the production series.
+    """
+
+    photocurrent: np.ndarray
+    saturation_current: np.ndarray
+    resistance_series: np.ndarray
+    resistance_shunt: np.ndarray
+    n_ns_vth: np.ndarray
+    v_mp: np.ndarray
+    i_mp: np.ndarray
+
+
+@dataclass(frozen=True)
 class PVProductionBreakdown:
     """Intermediate PV model stages for loss-waterfall reporting.
 
@@ -183,6 +201,12 @@ class PVProductionBreakdown:
     pvwatts_combined_pct: float
     age_degradation_pct: float
     age_degradation_loss: pd.Series
+    # One array's module operating point; None on a sum of arrays.
+    module_operating: Optional[ModuleOperatingPoint] = None
+    # DC lost to MPPT voltage and current limits with string-level energy
+    # (``electrical_fidelity = "string"``), already taken out of
+    # ``dc_after_losses``; None otherwise.
+    mppt_limit_loss: Optional[pd.Series] = None
 
 
 @dataclass(frozen=True)
@@ -443,8 +467,11 @@ def _module_dc_before_losses(
     n_modules: int,
     times: pd.DatetimeIndex,
     name: str,
-) -> pd.Series:
-    """Run the CEC single-diode model before system-level PVWatts losses."""
+) -> tuple[pd.Series, ModuleOperatingPoint]:
+    """Run the CEC single-diode model before system-level PVWatts losses.
+
+    Returns the array's DC power and one module's operating point.
+    """
     I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust = _get_cec_params(pv_params)
 
     with warnings.catch_warnings():
@@ -454,8 +481,23 @@ def _module_dc_before_losses(
         )
         mpp = pvlib.pvsystem.max_power_point(*cec, method="newton")
 
-    p_mp = mpp["p_mp"] if isinstance(mpp, dict) else mpp.p_mp
-    return pd.Series(np.asarray(p_mp) * n_modules, index=times, name=name)
+    def column(key: str) -> np.ndarray:
+        return np.asarray(mpp[key] if isinstance(mpp, dict) else getattr(mpp, key), dtype=float)
+
+    shape = np.shape(column("p_mp"))
+    photocurrent, saturation_current, resistance_series, resistance_shunt, n_ns_vth = (
+        np.broadcast_to(np.asarray(value, dtype=float), shape) for value in cec
+    )
+    operating = ModuleOperatingPoint(
+        photocurrent=photocurrent,
+        saturation_current=saturation_current,
+        resistance_series=resistance_series,
+        resistance_shunt=resistance_shunt,
+        n_ns_vth=n_ns_vth,
+        v_mp=column("v_mp"),
+        i_mp=column("i_mp"),
+    )
+    return pd.Series(column("p_mp") * n_modules, index=times, name=name), operating
 
 
 def _apply_pvwatts_loss_series(
@@ -587,7 +629,7 @@ def _build_pv_production_breakdown(
         pv_params=pv_params,
         model_options=model_options,
     )
-    module_dc = _module_dc_before_losses(
+    module_dc, module_operating = _module_dc_before_losses(
         detail.effective_irradiance,
         detail.temp_cell,
         pv_params,
@@ -645,6 +687,7 @@ def _build_pv_production_breakdown(
         pvwatts_combined_pct=loss_info["combined_pct"],
         age_degradation_pct=age_pct,
         age_degradation_loss=(dc_after_static - dc_after_losses).rename("age_degradation_loss_W"),
+        module_operating=module_operating,
     )
 
 
@@ -1219,42 +1262,18 @@ def _sum_pv_breakdowns(breakdowns: list[PVProductionBreakdown]) -> PVProductionB
     )
 
 
-def calculate_multi_array_production_breakdown(
+def _array_breakdowns(
     weather_data: pd.DataFrame,
     location: Location,
     arrays: List[Dict[str, Any]],
-    freq: str = "h",
-    degradation_rate: float = 0.0,
-    current_year: Optional[int] = None,
-    start_year: Optional[int] = None,
-    loss_overrides: Optional[Dict[str, float]] = None,
-    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
-    albedo: Optional[float] = None,
-    surface_type: Optional[str] = None,
-    model_perez: str = DEFAULT_PEREZ_MODEL,
-    solar_position: str = DEFAULT_SOLAR_POSITION,
-    iam_model: str = DEFAULT_IAM_MODEL,
-    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
-    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
-    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
-    gcr: float = 0.35,
-    pvrow_height: Optional[float] = None,
-    pvrow_pitch: Optional[float] = None,
-) -> PVProductionBreakdown:
-    """Calculate combined DC production breakdown from multiple PV arrays.
-
-    Each array is either fixed-tilt or tracking. Mixed configurations are supported.
-    An array with ``modules = 0`` contributes nothing, and a negative module
-    count raises ``ValueError``. When every array is empty, the result is zero
-    on the same time grid a non-empty array would use.
-
-    Module age is counted at the start of ``current_year``: ``current_year -
-    start_year`` full years of compound ``degradation_rate``, and none in the
-    installation year. See :func:`calculate_multi_array_production` for the
-    parameters.
-    """
-    defaults = _model_option_kwargs(locals())
-
+    freq: str,
+    degradation_rate: float,
+    current_year: Optional[int],
+    start_year: Optional[int],
+    loss_overrides: Optional[Dict[str, float]],
+    defaults: Dict[str, Any],
+) -> list[PVProductionBreakdown]:
+    """One breakdown per array with modules, in order; empty arrays are skipped."""
     breakdowns: list[PVProductionBreakdown] = []
 
     for i, arr in enumerate(arrays):
@@ -1321,6 +1340,48 @@ def calculate_multi_array_production_breakdown(
 
         breakdowns.append(breakdown)
 
+    return breakdowns
+
+
+def calculate_multi_array_production_breakdown(
+    weather_data: pd.DataFrame,
+    location: Location,
+    arrays: List[Dict[str, Any]],
+    freq: str = "h",
+    degradation_rate: float = 0.0,
+    current_year: Optional[int] = None,
+    start_year: Optional[int] = None,
+    loss_overrides: Optional[Dict[str, float]] = None,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
+    albedo: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    model_perez: str = DEFAULT_PEREZ_MODEL,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
+    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
+    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
+) -> PVProductionBreakdown:
+    """Calculate combined DC production breakdown from multiple PV arrays.
+
+    Each array is either fixed-tilt or tracking. Mixed configurations are supported.
+    An array with ``modules = 0`` contributes nothing, and a negative module
+    count raises ``ValueError``. When every array is empty, the result is zero
+    on the same time grid a non-empty array would use.
+
+    Module age is counted at the start of ``current_year``: ``current_year -
+    start_year`` full years of compound ``degradation_rate``, and none in the
+    installation year. See :func:`calculate_multi_array_production` for the
+    parameters.
+    """
+    defaults = _model_option_kwargs(locals())
+    breakdowns = _array_breakdowns(
+        weather_data, location, arrays, freq, degradation_rate, current_year, start_year, loss_overrides, defaults
+    )
+
     if not breakdowns:
         # The same grid a non-empty array is computed on, so an empty system
         # lines up with the rest of the run.
@@ -1348,6 +1409,44 @@ def calculate_multi_array_production_breakdown(
     total = _sum_pv_breakdowns(breakdowns)
 
     return total
+
+
+def calculate_array_breakdowns(
+    weather_data: pd.DataFrame,
+    location: Location,
+    arrays: List[Dict[str, Any]],
+    freq: str = "h",
+    degradation_rate: float = 0.0,
+    current_year: Optional[int] = None,
+    start_year: Optional[int] = None,
+    loss_overrides: Optional[Dict[str, float]] = None,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
+    albedo: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    model_perez: str = DEFAULT_PEREZ_MODEL,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
+    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
+    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
+) -> list[PVProductionBreakdown]:
+    """Calculate one DC production breakdown per PV array, in the order given.
+
+    Takes the parameters of :func:`calculate_multi_array_production_breakdown`
+    and returns its per-array terms instead of their sum, each with its module
+    operating point. Every array must have at least one module, so the result
+    lines up with ``arrays``.
+    """
+    defaults = _model_option_kwargs(locals())
+    for i, arr in enumerate(arrays):
+        if arr.get("modules", 0) < 1:
+            raise ValueError(f"Array {i + 1}: modules must be at least 1, got {arr.get('modules', 0)}")
+    return _array_breakdowns(
+        weather_data, location, arrays, freq, degradation_rate, current_year, start_year, loss_overrides, defaults
+    )
 
 
 def calculate_multi_array_production(

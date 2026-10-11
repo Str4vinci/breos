@@ -6,7 +6,7 @@ import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar, cast
@@ -15,10 +15,13 @@ import pandas as pd
 from pvlib.location import Location
 
 from breos.app_config import ResolvedAppConfig, SimulationPeriod, resolve_app_config
+from breos.electrical import string_limited_dc
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs
 from breos.solar import (
     PVProductionBreakdown,
+    _sum_pv_breakdowns,
+    calculate_array_breakdowns,
     calculate_multi_array_production_breakdown,
     calculate_pv_production_breakdown,
     calculate_pv_production_tracking_breakdown,
@@ -444,6 +447,23 @@ def build_pv_production_breakdown(
     loss_overrides = cfg["pv_loss_overrides"]
     model_kwargs = configured_pv_model_kwargs(cfg)
 
+    electrical = resolved.electrical
+    if electrical is not None and electrical.fidelity == "string":
+        if resolved.pv_arrays:
+            arrays = calculate_array_breakdowns(
+                weather_data=weather,
+                location=location,
+                arrays=resolved.pv_arrays,
+                freq=freq,
+                loss_overrides=loss_overrides,
+                **model_kwargs,
+            )
+        else:
+            arrays = [_single_array_breakdown(cfg, resolved, weather, location, model_kwargs)]
+        dc, mppt_loss = string_limited_dc(electrical, arrays)
+        total = _sum_pv_breakdowns(arrays) if len(arrays) > 1 else arrays[0]
+        return replace(total, dc_after_losses=dc, mppt_limit_loss=mppt_loss, module_operating=None)
+
     if resolved.pv_arrays:
         return calculate_multi_array_production_breakdown(
             weather_data=weather,
@@ -453,6 +473,19 @@ def build_pv_production_breakdown(
             loss_overrides=loss_overrides,
             **model_kwargs,
         )
+    return _single_array_breakdown(cfg, resolved, weather, location, model_kwargs)
+
+
+def _single_array_breakdown(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    weather: pd.DataFrame,
+    location: Location,
+    model_kwargs: dict[str, Any],
+) -> PVProductionBreakdown:
+    """The breakdown of a system configured without ``pv_arrays``."""
+    freq = cfg["resolution"]
+    loss_overrides = cfg["pv_loss_overrides"]
 
     if resolved.tracking == "fixed":
         breakdown = calculate_pv_production_breakdown(

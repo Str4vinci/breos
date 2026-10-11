@@ -593,11 +593,33 @@ the AC rating is the sum of `nominal_power_w`. When every inverter sets
 unpublished Vmp coefficient from `T_Pmax_pct - T_Isc_pct`, and reports a
 missing module voltage rating.
 
-The check does not change simulated energy. Energy is still modelled for the
-system as a whole, as `electrical.fidelity = "aggregate"` in the result says,
-and a design that fails the check still simulates, as a diagnostic. See
+By default the check does not change simulated energy: energy is modelled for
+the system as a whole, as `electrical.fidelity = "aggregate"` in the result
+says, and a design that fails the check still simulates, as a diagnostic. See
 [Electrical check](interpreting-results.md#electrical-check) for the result
 and {py:func}`breos.electrical.check_topology` for the rules.
+
+### String-level energy
+
+`electrical_fidelity = "string"` makes energy depend on the wiring. Each MPPT
+input runs its strings at their maximum power point when that point lies inside
+the MPPT voltage range and under the input's operating-current limit. Otherwise
+it moves along the strings' IV curve, from the module's single-diode model, to
+the best point both limits allow. The DC this costs appears as the
+`mppt_limits` stage of the [PV loss waterfall](interpreting-results.md#pv-loss-waterfall),
+and where no limit binds the result equals the aggregate run.
+
+String-level energy needs one inverter, the MPPT voltage range, each used
+input's `max_input_current_a`, and a wiring without structural errors (every
+reference resolves, every module is strung once, and parallel strings match).
+It refuses to run otherwise rather than fall back to the aggregate model. Hard
+limits such as an overvoltage do not stop it; they remain errors in the check.
+
+The static PVWatts losses, including `mismatch` between modules, still apply:
+they scale each string's current before the limits. Later years reuse the
+first year's limited production scaled by module degradation, so a limit that
+binds in year 1 is assumed to bind as much later. Start-up voltage, partial
+shading of single modules, bypass diodes and cable losses are not modelled.
 
 ## Sky-diffusion (transposition) model
 

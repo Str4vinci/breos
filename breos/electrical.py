@@ -28,6 +28,10 @@ from dataclasses import asdict, dataclass
 from numbers import Integral, Real
 from typing import Any, Literal
 
+import numpy as np
+import pandas as pd
+import pvlib
+
 from breos.equipment import InverterSpec
 from breos.pv_modules import PVModuleParams
 
@@ -455,19 +459,163 @@ class ElectricalSetup:
     strings: tuple[PVString, ...]
     environment: ElectricalEnvironment
     check: TopologyCheck
+    # "aggregate", or "string" for energy per MPPT input.
+    fidelity: str = "aggregate"
 
 
 def electrical_result(setup: ElectricalSetup | None) -> dict[str, Any]:
     """The ``electrical`` block of an App result.
 
-    ``fidelity`` says how energy was modelled. It is ``"aggregate"`` in every
-    run for now: the check does not yet make energy depend on the strings.
-    Without a topology, ``status`` is ``"not_evaluated"``.
+    ``fidelity`` says how energy was modelled: ``"aggregate"`` for the system
+    as a whole, or ``"string"`` when each MPPT input's voltage range and current
+    limit applied. Without a topology, ``status`` is ``"not_evaluated"``.
     """
     if setup is None:
         return {"fidelity": "aggregate", "status": "not_evaluated", "findings": []}
     return {
-        "fidelity": "aggregate",
+        "fidelity": setup.fidelity,
         "status": setup.check.status,
         "findings": [asdict(finding) for finding in setup.check.findings],
     }
+
+
+# Findings that leave the string model without a definite wiring.
+_STRUCTURAL_CODES = frozenset(
+    {
+        "no_inverters",
+        "no_strings",
+        "unknown_array",
+        "unknown_inverter",
+        "unknown_mppt",
+        "unconnected_modules",
+        "array_overcommitted",
+        "parallel_strings_mismatch",
+    }
+)
+
+
+def string_model_problems(setup: ElectricalSetup) -> list[str]:
+    """Why the string energy model cannot run for this setup; empty when it can.
+
+    The model needs one inverter, a wiring with no structural error, and the
+    MPPT voltage range and each used input's operating-current limit. Other
+    errors, such as an overvoltage, do not stop it: their energy is a
+    diagnostic, as in aggregate mode.
+    """
+    problems = []
+    if len(setup.inverters) != 1:
+        problems.append(f"it models one inverter; {len(setup.inverters)} are configured")
+    structural = sorted({f.code for f in setup.check.findings if f.code in _STRUCTURAL_CODES})
+    if structural:
+        problems.append("the wiring has " + ", ".join(structural))
+    if setup.inverters:
+        inverter = setup.inverters[0]
+        for name in ("min_mppt_voltage_v", "max_mppt_voltage_v"):
+            if getattr(inverter, name) is None:
+                problems.append(f"inverter 0 has no {name}")
+        if inverter.mppts is None:
+            problems.append("inverter 0 has no mppts")
+        else:
+            used = sorted({s.mppt for s in setup.strings if s.inverter == 0 and s.mppt < len(inverter.mppts)})
+            for index in used:
+                if inverter.mppts[index].max_input_current_a is None:
+                    problems.append(f"MPPT {index} of inverter 0 has no max_input_current_a")
+    return problems
+
+
+def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd.Series, pd.Series]:
+    """DC power after each MPPT input's voltage range and current limit, in W.
+
+    ``arrays`` holds one :class:`~breos.solar.PVProductionBreakdown` per PV
+    array, in order, each with its module operating point. Each input runs its
+    strings at their maximum power point when that point is inside the MPPT
+    voltage range and below the input's operating-current limit. Otherwise it
+    moves along the strings' IV curve to the best point that respects both: the
+    nearest end of the range, or the voltage at which the current falls to the
+    limit. Static losses act as a scaling of the current, so the unconstrained
+    power equals the aggregate model's.
+
+    Returns the limited DC and the DC the limits cost. Where no limit binds,
+    the DC is the aggregate model's, bit for bit.
+    """
+    problems = string_model_problems(setup)
+    if problems:
+        raise ValueError("String-level energy cannot run: " + "; ".join(problems))
+    inverter = setup.inverters[0]
+    assert inverter.mppts is not None and inverter.min_mppt_voltage_v is not None
+    assert inverter.max_mppt_voltage_v is not None
+
+    index = arrays[0].dc_after_losses.index
+    loss = np.zeros(len(index))
+    by_input: dict[int, list[PVString]] = defaultdict(list)
+    for string in setup.strings:
+        by_input[string.mppt].append(string)
+    for mppt_index, members in by_input.items():
+        current_limit = inverter.mppts[mppt_index].max_input_current_a
+        assert current_limit is not None
+        breakdown = arrays[members[0].array]
+        loss += _input_limit_loss(
+            breakdown,
+            members[0].modules,
+            sum(s.parallel for s in members),
+            inverter.min_mppt_voltage_v,
+            inverter.max_mppt_voltage_v,
+            current_limit,
+        )
+    total = sum((b.dc_after_losses for b in arrays[1:]), arrays[0].dc_after_losses)
+    loss_series = pd.Series(loss, index=index, name="mppt_limit_loss_W")
+    return (total - loss_series).rename("dc_power_W"), loss_series
+
+
+def _input_limit_loss(
+    breakdown: Any, modules: int, parallel: int, v_min: float, v_max: float, current_limit: float
+) -> np.ndarray:
+    """DC one input loses to its voltage range and current limit, in W at each step."""
+    operating = breakdown.module_operating
+    if operating is None:
+        raise ValueError("String-level energy needs each array's module operating point")
+    module_dc = np.asarray(breakdown.module_dc, dtype=float)
+    dc = np.asarray(breakdown.dc_after_losses, dtype=float)
+    # Static losses scale the array's current; per module of the array.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        factor = np.where(module_dc > 0, dc / module_dc, 0.0)
+    current_scale = factor * parallel
+    v_mp = np.nan_to_num(operating.v_mp)
+    i_mp = np.nan_to_num(operating.i_mp)
+    unconstrained = modules * v_mp * current_scale * i_mp
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        module_current_limit = np.where(current_scale > 0, current_limit / current_scale, np.inf)
+    lower_v, upper_v = v_min / modules, v_max / modules
+    producing = unconstrained > 0
+    limited = producing & ((v_mp < lower_v) | (v_mp > upper_v) | (i_mp > module_current_limit))
+    result = np.zeros(len(dc))
+    if not limited.any():
+        return result
+
+    params = [np.asarray(p)[limited] for p in _diode_params(operating)]
+    v_at_limit = np.zeros(int(limited.sum()))
+    binding = np.isfinite(module_current_limit[limited]) & (module_current_limit[limited] < params[0])
+    if binding.any():
+        v_at_limit[binding] = np.nan_to_num(
+            pvlib.pvsystem.v_from_i(module_current_limit[limited][binding], *[p[binding] for p in params])
+        ).clip(min=0.0)
+    lower = np.maximum(lower_v, v_at_limit)
+    voltage = np.clip(v_mp[limited], lower, upper_v)
+    current = np.clip(np.nan_to_num(pvlib.pvsystem.i_from_v(voltage, *params)), 0.0, None)
+    # Range and limit cannot both hold: the inverter sits at the top of the
+    # range and holds the current at its limit.
+    current = np.where(lower > upper_v, np.minimum(current, module_current_limit[limited]), current)
+    limited_power = modules * voltage * current_scale[limited] * current
+    result[limited] = np.clip(unconstrained[limited] - limited_power, 0.0, None)
+    return result
+
+
+def _diode_params(operating: Any) -> tuple[np.ndarray, ...]:
+    return (
+        operating.photocurrent,
+        operating.saturation_current,
+        operating.resistance_series,
+        operating.resistance_shunt,
+        operating.n_ns_vth,
+    )

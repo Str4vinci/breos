@@ -228,6 +228,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   still modelled for the system as a whole; a failing design still simulates.
   Every result carries the block, with `status = "not_evaluated"` and no
   findings when no topology is configured.
+- `electrical_fidelity = "string"` makes energy depend on the wiring of one
+  inverter: each MPPT input moves along its strings' single-diode IV curve to
+  the best point its voltage range and operating-current limit allow. The DC
+  this costs is the new `mppt_limits` stage of the PV loss waterfall, and a
+  design inside every limit gives the aggregate result. It refuses to run, rather
+  than fall back, without one inverter, the limits it needs, or a sound wiring.
+  `breos.solar.calculate_array_breakdowns` returns the per-array breakdowns,
+  which now carry each module's operating point.
 - `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
   only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
   coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.

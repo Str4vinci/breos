@@ -43,6 +43,7 @@ from breos.electrical import (
     ElectricalSetup,
     PVString,
     check_topology,
+    string_model_problems,
 )
 from breos.emissions import EmissionsParams
 from breos.equipment import InverterSpec, MpptSpec
@@ -700,6 +701,16 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "[`[electrical_environment]`](#electrical_environment). Set with `inverters` and `pv_strings`"
         ),
         summary="inverter.electrical_environment",
+    ),
+    "electrical_fidelity": AppConfigField(
+        default="aggregate",
+        normalizer=_lower,
+        doc=(
+            'How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT '
+            'input\'s voltage range and current limit. `"string"` needs `inverters`, `pv_strings` and '
+            "`electrical_environment`, one inverter, and a wiring without structural errors"
+        ),
+        summary="inverter.electrical_fidelity",
     ),
     "start_date": AppConfigField(
         default="2023-01-01",
@@ -1596,6 +1607,10 @@ def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
     _validate_smart_charging(cfg, tariff_spec)
     _validate_reachable_gcr(cfg, has_arrays)
     _electrical_inputs(cfg)
+    if cfg["electrical_fidelity"] not in ("aggregate", "string"):
+        raise ValueError(f"'electrical_fidelity' must be 'aggregate' or 'string', got {cfg['electrical_fidelity']!r}")
+    if cfg["electrical_fidelity"] == "string" and cfg.get("inverters") is None:
+        raise ValueError("electrical_fidelity = 'string' needs 'inverters', 'pv_strings' and 'electrical_environment'")
     return tariff_spec
 
 
@@ -3045,4 +3060,15 @@ def _resolve_electrical(
         return None
     inverters, strings, environment = inputs
     arrays = [(get_module(arr["module"]), arr["modules"]) for arr in pv_arrays] or [(pv_params, n_modules)]
-    return ElectricalSetup(inverters, strings, environment, check_topology(arrays, inverters, strings, environment))
+    setup = ElectricalSetup(
+        inverters,
+        strings,
+        environment,
+        check_topology(arrays, inverters, strings, environment),
+        fidelity=cfg["electrical_fidelity"],
+    )
+    if setup.fidelity == "string":
+        problems = string_model_problems(setup)
+        if problems:
+            raise ValueError("electrical_fidelity = 'string' cannot run: " + "; ".join(problems))
+    return setup

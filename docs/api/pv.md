@@ -96,6 +96,10 @@ check.status, [finding.code for finding in check.findings]
 .. autoclass:: breos.electrical.ElectricalFinding
    :members:
 
+.. autofunction:: breos.electrical.string_limited_dc
+
+.. autofunction:: breos.electrical.string_model_problems
+
 .. autodata:: breos.electrical.MOUNTING_TEMPERATURE_RISE_C
 
 .. autodata:: breos.electrical.BIFACIAL_REAR_IRRADIANCE_RATIO

@@ -1,7 +1,7 @@
 # 0007 — String topology and electrical checks
 
-- **Status:** Proposed. D1–D6 are implemented on this branch; D7 is the next
-  increment and has no code.
+- **Status:** Proposed. D1–D7 are implemented, D7 for one inverter; several
+  inverters are the next step.
 - **Date:** 2026-10-11
 
 ## Context
@@ -131,7 +131,7 @@ coefficient is the sum of the Vmp and Imp coefficients. A published `T_Vmp_pct`
 wins. The module's maximum system voltage has no such derivation, and a check
 without it reports `missing` while still applying the inverter's limit.
 
-### D5. App reports the check; energy stays aggregate
+### D5. App reports the check; energy stays aggregate by default
 
 App takes `inverters`, `pv_strings` and `electrical_environment` together, or
 none of them. With them:
@@ -150,10 +150,10 @@ none of them. With them:
 
 Every result carries the block. Without a topology it is
 `{"fidelity": "aggregate", "status": "not_evaluated", "findings": []}`, so a
-reader can always tell whether a check ran. In this increment `fidelity` is
-always `"aggregate"`: with or without a topology, energy comes from the
-array-level model and one AC rating. A run with a topology gives the same
-numbers as the equivalent `inverter_ac_rating_kw` run, and a test pins that.
+reader can always tell whether a check ran. `fidelity` is `"aggregate"` unless
+D7's string mode is asked for: energy then comes from the array-level model and
+one AC rating, and a run with a topology gives the same numbers as the
+equivalent `inverter_ac_rating_kw` run. A test pins that.
 
 These are added fields, so the result format stays `"1"`.
 
@@ -163,27 +163,44 @@ These are added fields, so the result format stays `"1"`.
 and has no App dependency. Layout tools can call it on every edit without a
 simulation, and App calls the same function, so the two can never disagree.
 
-### D7. Next increment: energy per MPPT (not implemented)
+### D7. Energy per MPPT input, opt-in
 
-`fidelity = "string"` will make energy depend on the strings:
+`electrical_fidelity = "string"` makes energy depend on the strings. The
+default stays `"aggregate"`, so a topology alone changes no number.
 
-1. Evaluate each array's single-diode model at every step for `v_mp` and
-   `i_mp`, as it already does for power, and keep them.
-2. Per input: the string voltage is `modules × v_mp`, and the current is the
-   sum over its strings of `parallel × i_mp`, after the irradiance-type losses
-   (soiling, shading) that act on current. Outside the MPPT range, operate at
-   the nearest bound on the IV curve. Above the operating current, limit the
-   current.
-3. Per inverter: sum its inputs' DC and clip at its own AC rating, with its own
-   efficiency. Each inverter's AC output is then added; inputs share their
-   inverter's rating, with no fixed per-input AC cap.
-4. String mode replaces the flat PVWatts `mismatch` loss, which stands in for
-   what the string model computes, so it is not counted twice.
+1. Each array's single-diode model keeps, at every step, the five parameters
+   and the maximum power point of one module
+   (`PVProductionBreakdown.module_operating`).
+2. The static PVWatts losses scale the current. Per array and step, the factor
+   is the DC after losses over the module DC, so an input's unconstrained power
+   equals the aggregate model's.
+3. Per input, the strings run at their maximum power point when it lies inside
+   the MPPT voltage range and the current is under the operating limit.
+   Otherwise the inverter moves along the IV curve to the best point that
+   respects both: the voltage at the current limit or the nearer end of the
+   range. When the two cannot both hold, it sits at the top of the range at the
+   current limit. A brute-force search of the IV curve pins this.
+4. The lost DC is `mppt_limit_loss`, a waterfall stage after the static losses.
+   Where no limit binds the DC is the aggregate model's, bit for bit.
 
-Several inverters with a battery need the converter topology of ADR 0004
-(#419), which decides which inverter the battery shares, so string mode with a
-battery waits for it. Partial shading, bypass diodes and cable losses are
-separate increments.
+The PVWatts `mismatch` loss stays. It stands for differences between modules
+in a string, which a model of identical modules does not produce, so the string
+model adds to it rather than replacing it.
+
+The model runs for one inverter, whose rating, part-load curve and battery
+coupling are the existing aggregate ones. For several inverters, each would need
+its own AC clipping and, with a battery, the converter topology of ADR 0004
+(#419). Until then, string mode refuses them. It also refuses a wiring with
+structural errors and an input without the limits it needs, rather than fall
+back to the aggregate model. A design that breaks a hard limit but is wired
+definitely, such as one with an overvoltage, still gets string energy as a
+diagnostic.
+
+Later years scale the first year's limited DC by module degradation, as the
+aggregate model does. A limit that binds in year 1 is assumed to bind as much
+later, which slightly understates later years when it binds on current. The
+start-up voltage, partial shading of single modules, bypass diodes and cable
+losses are separate increments.
 
 ## Consequences
 

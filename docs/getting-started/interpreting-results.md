@@ -270,7 +270,7 @@ and `tracking`, plus the resolved tracker geometry for a tracking array.
 
 | Key | Meaning |
 |---|---|
-| `fidelity` | How energy was modelled. `"aggregate"`: the array's DC output feeds one AC rating, whatever the string topology |
+| `fidelity` | How energy was modelled. `"aggregate"`: the array's DC output feeds one AC rating, whatever the string topology. `"string"`: each MPPT input's voltage range and current limit applied (see [String-level energy](configuration.md#string-level-energy)) |
 | `status` | `"not_evaluated"` without a [string topology](configuration.md#string-topology-checks); otherwise `"fail"` on any error, `"incomplete"` on missing data, `"warning"` on any warning, else `"pass"` |
 | `findings` | One record per finding, in a stable order |
 
