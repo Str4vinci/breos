@@ -1,5 +1,6 @@
 """A product's nameplate is shared by its catalog and aggregate simulation."""
 
+import math
 from dataclasses import FrozenInstanceError, asdict
 
 import pytest
@@ -42,6 +43,33 @@ def test_asymmetric_inputs_keep_their_own_limits_in_datasheet_order():
     assert hash(spec) == hash(InverterSpec(**{**asdict(spec), "mppts": spec.mppts}))
 
 
+def test_unbounded_limits_differ_from_unknown_ones():
+    spec = InverterSpec(
+        nominal_power_w=4000,
+        max_dc_voltage_v=math.inf,
+        max_mppt_voltage_v=math.inf,
+        min_mppt_voltage_v=0,
+        startup_voltage_v=0,
+        mppts=(MpptSpec(max_input_current_a=math.inf, max_short_circuit_current_a=math.inf),),
+    )
+    assert spec.max_dc_voltage_v == math.inf
+    assert spec.min_mppt_voltage_v == 0
+    assert InverterSpec(nominal_power_w=4000).max_dc_voltage_v is None
+
+
+def test_catalog_mappings_become_mppt_specs():
+    spec = InverterSpec(
+        nominal_power_w=3000,
+        mppts=[{"max_input_current_a": 12.5, "max_short_circuit_current_a": 18, "max_strings": 1}] * 2,
+    )
+    assert spec.mppts == (MpptSpec(12.5, 18, 1),) * 2
+    assert InverterSpec(**asdict(spec)) == spec
+    with pytest.raises(ValueError, match="max_strings"):
+        InverterSpec(nominal_power_w=3000, mppts=[{"max_strings": 0}])
+    with pytest.raises(TypeError):
+        InverterSpec(nominal_power_w=3000, mppts=[{"strings": 1}])
+
+
 def test_an_input_count_can_be_known_before_its_limits():
     spec = InverterSpec(nominal_power_w=4000, mppts=(MpptSpec(),) * 2)
     assert spec.mppts is not None and len(spec.mppts) == 2
@@ -51,16 +79,18 @@ def test_an_input_count_can_be_known_before_its_limits():
     "field,value",
     [
         (field, value)
-        for field in (
-            "nominal_power_w",
-            "max_dc_voltage_v",
-            "max_dc_power_w",
-            "startup_voltage_v",
-            "min_mppt_voltage_v",
-            "max_mppt_voltage_v",
-            "isc_comparison_factor",
-        )
+        for field in ("nominal_power_w", "isc_comparison_factor")
         for value in (True, 0, -1, float("nan"), float("inf"), "600")
+    ]
+    + [
+        (field, value)
+        for field in ("max_dc_voltage_v", "max_dc_power_w", "max_mppt_voltage_v")
+        for value in (True, 0, -1, float("nan"), "600")
+    ]
+    + [
+        (field, value)
+        for field in ("min_mppt_voltage_v", "startup_voltage_v")
+        for value in (True, -1, float("nan"), float("inf"), "600")
     ]
     + [
         ("inverter_efficiency", 1.01),
@@ -69,7 +99,7 @@ def test_an_input_count_can_be_known_before_its_limits():
         ("isc_comparison_factor", 0.9),
         ("is_hybrid", 1),
         ("mppts", ()),
-        ("mppts", [{"max_strings": 2}]),
+        ("mppts", [3]),
         ("mppts", MpptSpec()),
     ],
 )
@@ -83,7 +113,7 @@ def test_invalid_datasheet_values_are_refused(field, value):
     [
         (field, value)
         for field in ("max_input_current_a", "max_short_circuit_current_a")
-        for value in (True, 0, -1, float("nan"), float("inf"), "16")
+        for value in (True, 0, -1, float("nan"), "16")
     ]
     + [("max_strings", 0), ("max_strings", 1.5), ("max_strings", False)],
 )
@@ -121,8 +151,6 @@ def test_startup_can_be_below_the_mppt_window_and_specs_round_trip():
         mppts=(MpptSpec(max_input_current_a=13, max_short_circuit_current_a=20, max_strings=1),),
         isc_comparison_factor=1.25,
     )
-    fields = asdict(spec)
-    fields["mppts"] = tuple(MpptSpec(**m) for m in fields["mppts"])
-    assert InverterSpec(**fields) == spec
+    assert InverterSpec(**asdict(spec)) == spec
     with pytest.raises(FrozenInstanceError):
         spec.nominal_power_w = 5000

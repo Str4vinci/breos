@@ -208,6 +208,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `breos.equipment.MpptSpec` with its own current and string limits, so
   asymmetric inputs keep their published values, and
   `isc_comparison_factor` records the manufacturer's Isc comparison rule.
+  `None` marks an unknown value, while `math.inf` for an upper limit or 0 for
+  a lower limit marks a limit the inverter does not have.
   `InverterSpec.as_app_config()` supplies the rating and known efficiency to
   App, keeping catalog identity, prices and certification outside BREOS.
   DC/MPPT limits are metadata, not string-aware validation or simulation.

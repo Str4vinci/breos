@@ -26,7 +26,10 @@ datasheet order as `MpptSpec` entries, each with its own operating current,
 short-circuit current and string limits, so inverters with asymmetric inputs
 keep their published values. `isc_comparison_factor` records the multiplier the
 manufacturer applies to array Isc before comparing it with an input's
-short-circuit rating, such as 1.25.
+short-circuit rating, such as 1.25. `None` means a value is unknown. An upper
+limit of `math.inf` or a lower limit of 0 states that the inverter has none, so
+unbounded and unpublished limits stay distinct. `mppts` also accepts mappings of
+`MpptSpec` fields, so catalog JSON loads without conversion.
 
 ```python
 from breos import App
