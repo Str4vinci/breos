@@ -76,10 +76,16 @@ class PVModuleParams:
     # Appended after all pre-0.5 fields to preserve positional construction.
     bifaciality: Optional[float] = None  # Metadata: rear/front maximum-power ratio (inert by itself)
     NOCT: Optional[float] = None  # Metadata: nominal operating cell temperature (°C), required by noct-sam
+    # Electrical-check metadata, read only by breos.electrical; the energy
+    # models never use them.
+    T_Vmp_pct: Optional[float] = None  # %/°C - Vmp temperature coefficient
+    Max_System_Voltage: Optional[float] = None  # V - IEC maximum system voltage rating
 
     _POSITIVE_FIELDS = frozenset({"Mpp", "Vmp", "Imp", "Voc", "Isc"})
     _STC_POINT_FIELDS = ("Mpp", "Vmp", "Imp")
-    _FINITE_FIELDS = frozenset({"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct", "alpha_sc_abs", "beta_voc_abs", "gamma_pmp"})
+    _FINITE_FIELDS = frozenset(
+        {"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct", "alpha_sc_abs", "beta_voc_abs", "gamma_pmp", "T_Vmp_pct"}
+    )
     _MPP_RELATIVE_TOLERANCE = 0.02
 
     # Set per instance once __post_init__ has checked the STC point.
@@ -99,6 +105,8 @@ class PVModuleParams:
                 raise ValueError("N_Cells must be a positive integer")
         elif name == "Module_Efficiency" and value is not None:
             self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
+        elif name == "Max_System_Voltage" and value is not None:
+            self._validate_number(name, value, minimum=0.0, minimum_strict=True)
         elif name == "NOCT" and value is not None:
             self._validate_number(name, value, minimum=0.0, maximum=100.0, minimum_strict=True)
         elif name == "bifaciality" and value is not None:
@@ -167,6 +175,20 @@ class PVModuleParams:
         if self.gamma_pmp is not None:
             return float(self.gamma_pmp)
         return float(self.T_Pmax_pct)
+
+    @property
+    def T_Vmp_pct_effective(self) -> float:
+        """Vmp temperature coefficient in %/°C: ``T_Vmp_pct`` if set, else derived.
+
+        Datasheets rarely publish it. Since ``Pmp = Vmp * Imp``, to first order
+        the power coefficient is the sum of the Vmp and Imp coefficients, and
+        with the Imp coefficient taken as the Isc one the Vmp coefficient is
+        ``T_Pmax_pct - T_Isc_pct``. Using ``T_Pmax_pct`` alone would understate
+        how far Vmp moves with temperature.
+        """
+        if self.T_Vmp_pct is not None:
+            return float(self.T_Vmp_pct)
+        return float(self.T_Pmax_pct - self.T_Isc_pct)
 
     def __post_init__(self) -> None:
         self._validate_stc_point(self.Mpp, self.Vmp, self.Imp)
