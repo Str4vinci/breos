@@ -7,7 +7,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Added
 
 - `breos.equipment.InverterSpec` stores a specified inverter's validated AC
-  nameplate and optional datasheet limits. Its `as_app_config()` adapter supplies
+  nameplate and optional datasheet limits. Each MPPT input is a
+  `breos.equipment.MpptSpec` with its own current and string limits, so
+  asymmetric inputs keep their published values, and
+  `isc_comparison_factor` records the manufacturer's Isc comparison rule.
+  `InverterSpec.as_app_config()` supplies
   the rating and known efficiency to App, keeping catalog identity, prices and
   certification outside BREOS. DC/MPPT limits are metadata, not string-aware
   validation or simulation.
