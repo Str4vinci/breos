@@ -274,17 +274,43 @@ and `tracking`, plus the resolved tracker geometry for a tracking array.
 | `status` | `"not_evaluated"` without a [string topology](configuration.md#string-topology-checks); otherwise `"fail"` on any error, `"incomplete"` on missing data, `"warning"` on any warning, else `"pass"` |
 | `findings` | One record per finding, in a stable order |
 
-Each finding has `code`, `severity`, `message`, `value` and `limit` (in the
-unit the message names), and `inverter`, `mppt`, `string`, `array` and
-`field`, which are `null` where they do not apply. `string` is the position of
-the `pv_strings` entry; `field` names the datasheet value a `missing` finding
-needs. Severities:
+Each finding has `code`, `severity` and `message`; `value` and `limit` in
+`unit`; `limit_field`, the datasheet value the limit came from; and the
+location fields `inverter`, `mppt`, `string` and `array`. `string` is the
+position of the `pv_strings` entry. `field` names the datasheet value a
+`missing` finding needs. A field that does not apply is `null`. Severities:
 
 | Severity | Meaning |
 |---|---|
-| `error` | A hard limit is broken or the wiring is inconsistent. The design is not buildable as declared |
-| `warning` | An operating limit is exceeded. The inverter holds its limit and loses some energy |
+| `error` | A hard limit is broken (voltage, short-circuit current, string count, maximum generator power) or the wiring is inconsistent. The design is not buildable as declared |
+| `warning` | An operating or yield limit is exceeded. The equipment is safe, but it loses energy or may not restart on the hottest days |
 | `missing` | A datasheet value the check needs is unknown, so that check did not run |
+
+The codes, their severities and units are fixed, and
+{py:data}`breos.electrical.FINDING_CODES` holds the same table. A later release
+may add codes.
+
+| Code | Severity | Unit | `limit_field` | Located by |
+|---|---|---|---|---|
+| `no_inverters` | error | | | |
+| `no_strings` | error | | | |
+| `unknown_array` | error | | | inverter, mppt, string, array |
+| `unknown_inverter` | error | | | inverter, mppt, string, array |
+| `unknown_mppt` | error | | | inverter, mppt, string, array |
+| `unconnected_modules` | error | count | | array |
+| `array_overcommitted` | error | count | `modules` | array |
+| `cold_voc_above_limit` | error | V | `max_dc_voltage_v` or `Max_System_Voltage`; one finding per ceiling exceeded | inverter, mppt, string, array |
+| `hot_voc_below_startup` | warning | V | `startup_voltage_v` | inverter, mppt, string, array |
+| `hot_vmp_below_mppt_min` | warning | V | `min_mppt_voltage_v` | inverter, mppt, string, array |
+| `vmp_above_mppt_max` | warning | V | `max_mppt_voltage_v` | inverter, mppt, string, array |
+| `parallel_strings_mismatch` | error | | | inverter, mppt |
+| `too_many_strings` | error | count | `max_strings` | inverter, mppt |
+| `isc_above_mppt_limit` | error | A | `max_short_circuit_current_a` | inverter, mppt |
+| `imp_above_mppt_limit` | warning | A | `max_input_current_a` | inverter, mppt |
+| `dc_power_above_max` | error | W | `max_dc_power_w` | inverter |
+| `dc_power_above_recommended` | warning | W | `recommended_dc_power_w` | inverter |
+| `dc_ac_ratio_outside_range` | warning | ratio | | inverter |
+| `missing_value` | missing | | | the owner of `field`: inverter, inverter and mppt, or array |
 
 A design with `status = "fail"` is still simulated, so its numbers can explain
 why it loses against a buildable one. They do not describe a system that can be

@@ -96,6 +96,12 @@ check.status, [finding.code for finding in check.findings]
 .. autoclass:: breos.electrical.ElectricalFinding
    :members:
 
+.. autoclass:: breos.electrical.FindingKind
+   :members:
+
+.. autodata:: breos.electrical.FINDING_CODES
+   :no-value:
+
 .. autofunction:: breos.electrical.string_limited_dc
 
 .. autofunction:: breos.electrical.string_model_problems

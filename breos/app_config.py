@@ -1387,14 +1387,15 @@ INVERTER_TABLE = TableSpec(
         ),
         "is_hybrid": "Whether the inverter also connects a battery; metadata",
         "max_dc_voltage_v": "Maximum DC input voltage (V), or `inf` for none",
-        "max_dc_power_w": "Maximum or recommended PV input power (W), or `inf` for none",
+        "max_dc_power_w": "Maximum PV generator power the manufacturer permits (W), or `inf` for none",
+        "recommended_dc_power_w": "Recommended PV generator power (W), or `inf` for none",
         "min_mppt_voltage_v": "Lower end of the MPPT voltage range (V), or 0 for none",
         "max_mppt_voltage_v": "Upper end of the MPPT voltage range (V), or `inf` for none",
         "startup_voltage_v": "Start-up voltage (V), or 0 for none",
         "mppts": "One table per MPPT input, in datasheet order; see [`mppts`](#mppts)",
         "isc_comparison_factor": (
-            "Multiplier the manufacturer applies to array Isc before comparing it with an input's short-circuit "
-            "rating, at least 1; 1 when unset"
+            "Multiplier the manufacturer applies to the array's STC Isc before comparing it with an input's "
+            "short-circuit rating, at least 1; 1 where Isc is compared as it is. Unset is reported as missing"
         ),
     },
 )
@@ -1427,10 +1428,18 @@ ELECTRICAL_ENVIRONMENT_TABLE = TableSpec(
     keys=dict.fromkeys((f.name for f in fields(ElectricalEnvironment)), anything),
     required=frozenset({"min_design_temp_c", "max_ambient_temp_c"}),
     docs={
-        "min_design_temp_c": "Coldest design ambient (°C), such as the ASHRAE 99.6 % extreme minimum",
+        "min_design_temp_c": (
+            "Extreme annual minimum ambient (°C) on the basis the jurisdiction or manufacturer requires; cold Voc "
+            "is taken at it"
+        ),
         "max_ambient_temp_c": "Hottest design ambient (°C)",
+        "hot_cell_temp_c": "Hottest cell temperature (°C), instead of `max_ambient_temp_c` plus the mounting rise",
+        "cold_operating_cell_temp_c": (
+            "Coldest cell temperature while producing (°C), instead of `min_design_temp_c` plus the mounting rise"
+        ),
+        "bifacial_rear_irradiance_w_m2": "Rear irradiance behind 1000 W/m² front for a bifacial design Isc; 135",
         "mounting": (
-            "Module mounting, which sets the cell temperature rise: "
+            "Module mounting, which sets the screening cell temperature rise: "
             + ", ".join(f'`"{key}"` ({rise:g} °C)' for key, rise in MOUNTING_TEMPERATURE_RISE_C.items())
             + '; `"tilted_rack"` by default'
         ),
@@ -1440,8 +1449,25 @@ ELECTRICAL_ENVIRONMENT_TABLE = TableSpec(
 _ELECTRICAL_KEYS = ("inverters", "pv_strings", "electrical_environment")
 
 
+# Upper limits that may be unbounded. JSON has no infinity, so "inf" states it.
+_UNBOUNDED_FIELDS = frozenset(
+    {
+        "max_dc_voltage_v",
+        "max_dc_power_w",
+        "max_mppt_voltage_v",
+        "recommended_dc_power_w",
+        "max_input_current_a",
+        "max_short_circuit_current_a",
+    }
+)
+
+
 def _built(cls: Callable[..., Any], table: dict[str, Any], where: str) -> Any:
     """Construct a dataclass from a checked table, naming the table in a refusal."""
+    table = {
+        key: math.inf if key in _UNBOUNDED_FIELDS and isinstance(value, str) and value.lower() == "inf" else value
+        for key, value in table.items()
+    }
     try:
         return cls(**table)
     except (TypeError, ValueError) as exc:

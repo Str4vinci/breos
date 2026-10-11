@@ -35,6 +35,7 @@ FRONIUS_GEN24_6 = {
     "min_mppt_voltage_v": 80,
     "max_mppt_voltage_v": 800,
     "startup_voltage_v": 80,
+    "isc_comparison_factor": 1.0,
     "mppts": [
         {"max_input_current_a": 25, "max_short_circuit_current_a": 40, "max_strings": 2},
         {"max_input_current_a": 12.5, "max_short_circuit_current_a": 20, "max_strings": 1},
@@ -47,13 +48,15 @@ HUAWEI_4KTL = {
     "nominal_power_w": 4000,
     "inverter_efficiency": 0.984,
     "max_dc_voltage_v": 600,
-    "max_dc_power_w": 6000,
+    "recommended_dc_power_w": 6000,
     "min_mppt_voltage_v": 90,
     "max_mppt_voltage_v": 560,
     "startup_voltage_v": 100,
+    "isc_comparison_factor": 1.0,
     "mppts": [{"max_input_current_a": 12.5, "max_short_circuit_current_a": 18, "max_strings": 1}] * 2,
 }
 
+# The Isc comparison basis was not transcribed; 1 states a direct comparison for these tests.
 PORTO = {"min_design_temp_c": -5, "max_ambient_temp_c": 40}
 
 
@@ -169,6 +172,8 @@ def test_a_failing_topology_still_simulates_as_a_diagnostic(east_west, _patch_we
         "string": None,
         "array": None,
         "field": None,
+        "unit": "count",
+        "limit_field": "max_strings",
     }
 
 
@@ -202,3 +207,16 @@ def test_toml_can_state_an_unbounded_limit(east_west):
 def test_malformed_equipment_and_topology_are_refused(east_west, change, message):
     with pytest.raises((TypeError, ValueError), match=re.escape(message)):
         resolve_app_config({**east_west, **change})
+
+
+def test_json_states_an_unbounded_limit_as_text_and_results_stay_strict_json(east_west, _patch_weather):
+    import json
+
+    east_west["inverters"] = [{**FRONIUS_GEN24_6, "max_dc_voltage_v": "inf"}]
+    resolved = resolve_app_config(east_west)
+    assert resolved.electrical.inverters[0].max_dc_voltage_v == math.inf
+    app = App(east_west)
+    app.simulate()
+    result = app.result()
+    json.dumps(result, allow_nan=False)
+    assert result["provenance"]["resolved_config"]["inverters"][0]["max_dc_voltage_v"] == "inf"

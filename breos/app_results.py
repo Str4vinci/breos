@@ -260,6 +260,17 @@ def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = Non
     return rows
 
 
+def _infinity_as_text(value: Any) -> Any:
+    """Replace infinite floats by "inf" or "-inf", recursively."""
+    if isinstance(value, float) and math.isinf(value):
+        return "inf" if value > 0 else "-inf"
+    if isinstance(value, Mapping):
+        return {key: _infinity_as_text(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_infinity_as_text(item) for item in value]
+    return value
+
+
 def _provenance(
     resolved: ResolvedAppConfig,
     artifacts: SimulationArtifacts,
@@ -280,7 +291,8 @@ def _provenance(
         "pv_module": cfg["pv_module"] or resolved.pv_module_key,
     }
     # Round-trip through JSON to guarantee only public, serializable scalar types.
-    normalized_cfg = json.loads(json.dumps(normalized_cfg, default=str))
+    # An unbounded equipment limit is written "inf", as JSON has no infinity.
+    normalized_cfg = json.loads(json.dumps(_infinity_as_text(normalized_cfg), default=str))
     weather = json.loads(json.dumps(artifacts.weather_metadata, default=str))
     weather.setdefault("latitude", resolved.lat)
     weather.setdefault("longitude", resolved.lon)

@@ -1,24 +1,30 @@
 """Check a declared PV string topology against module and inverter datasheet limits.
 
 The check is pure: it reads datasheet values, design temperatures and a topology
-and returns structured findings. It does not change the topology, propose one,
-or affect simulated energy. Severities separate three kinds of finding:
+and returns structured findings. It does not change the topology or propose
+one. Severities separate three kinds of finding (:data:`FINDING_CODES` lists
+every code):
 
-- ``error``: a hard limit is broken (overvoltage, short-circuit current, a
-  string too short to track or start, a wiring inconsistency). The design is
-  not buildable as declared.
-- ``warning``: an operating limit is exceeded. The inverter holds its limit and
-  some energy is lost, but the design is safe.
+- ``error``: a hard limit is broken (voltage rating, short-circuit current,
+  string count, maximum generator power) or the wiring is inconsistent. The
+  design is not buildable as declared.
+- ``warning``: an operating or yield limit is exceeded. The equipment is safe,
+  but it loses energy or may not restart on the hottest days.
 - ``missing``: a datasheet value the check needs is unknown, so that check
   could not run. A missing value is never replaced by a default.
 
-Temperatures follow the usual string-sizing rules. Cold Voc uses the coldest
-design ambient, when no irradiance warms the cell. Hot Vmp, hot Voc and the
-design Isc use the hottest ambient plus a mounting-dependent rise. The upper MPPT
-check reads Vmp at the cold operating cell, the coldest ambient plus the same
-rise, because the module is producing only when irradiance warms it. Vmp moves
-with ``PVModuleParams.T_Vmp_pct_effective``, which derives the coefficient from
-the power and current ones when the datasheet does not publish it.
+Temperatures follow the usual string-sizing rules. Cold Voc uses the extreme
+annual minimum ambient, before appreciable solar heating. Hot Vmp, hot Voc and
+the hot-cell Isc use the hottest ambient plus a mounting-dependent screening
+rise, and the upper MPPT check reads Vmp at the cold operating cell, the
+coldest ambient plus the same rise; a caller may state both cell temperatures
+instead. Voc and Isc move with the coefficients the energy model uses
+(``beta_voc`` and ``alpha_sc``, which honour absolute overrides), and Vmp with
+``PVModuleParams.T_Vmp_pct_effective``, which derives the coefficient when the
+datasheet does not publish it.
+
+:func:`string_limited_dc` is the energy side: it applies each MPPT input's
+voltage range and current limit to the production of the wired strings.
 """
 
 import math
@@ -36,11 +42,14 @@ from breos.equipment import InverterSpec
 from breos.pv_modules import PVModuleParams
 
 #: Cell temperature above ambient at full irradiance, by mounting, in °C.
-#: Industry rules of thumb: flush-mounted modules run hottest.
+#: Screening values from common string-sizing practice; they do not bound
+#: every mounting and wind condition. State ``hot_cell_temp_c`` and
+#: ``cold_operating_cell_temp_c`` to override them.
 MOUNTING_TEMPERATURE_RISE_C = {"flush": 30.0, "tilted_rack": 25.0, "ground_mount": 20.0}
 
-#: Rear over front irradiance for a bifacial module's design Isc: 135 W/m²
-#: behind 1000 W/m², the bifacial nameplate irradiance of IEC TS 60904-1-2.
+#: Default rear irradiance for a bifacial module's design Isc, as a fraction of
+#: 1000 W/m² front: 135 W/m², the bifacial nameplate irradiance of IEC TS
+#: 60904-1-2. ``ElectricalEnvironment.bifacial_rear_irradiance_w_m2`` overrides it.
 BIFACIAL_REAR_IRRADIANCE_RATIO = 0.135
 
 Severity = Literal["error", "warning", "missing"]
@@ -51,42 +60,104 @@ _TOLERANCE = 1e-9
 
 
 @dataclass(frozen=True)
-class ElectricalEnvironment:
-    """Site design temperatures in °C and the module mounting.
+class FindingKind:
+    """The fixed contract of one finding code.
 
-    ``min_design_temp_c`` is the coldest design ambient (for example the
-    ASHRAE 99.6 % extreme minimum) and ``max_ambient_temp_c`` the hottest.
-    ``mounting`` is a key of :data:`MOUNTING_TEMPERATURE_RISE_C`.
+    ``unit`` is the unit of ``value`` and ``limit`` (``"V"``, ``"A"``, ``"W"``,
+    ``"count"`` or ``"ratio"``), or None when the finding has neither.
+    ``located_by`` lists the location fields the finding sets; the others are
+    None.
+    """
+
+    severity: Severity
+    unit: str | None
+    located_by: tuple[str, ...]
+
+
+_STRING = ("inverter", "mppt", "string", "array")
+_INPUT = ("inverter", "mppt")
+
+#: Every finding code with its severity, unit and location fields. Codes and
+#: severities are stable; a new code may be added in a later release.
+FINDING_CODES: dict[str, FindingKind] = {
+    "no_inverters": FindingKind("error", None, ()),
+    "no_strings": FindingKind("error", None, ()),
+    "unknown_array": FindingKind("error", None, _STRING),
+    "unknown_inverter": FindingKind("error", None, _STRING),
+    "unknown_mppt": FindingKind("error", None, _STRING),
+    "unconnected_modules": FindingKind("error", "count", ("array",)),
+    "array_overcommitted": FindingKind("error", "count", ("array",)),
+    "cold_voc_above_limit": FindingKind("error", "V", _STRING),
+    "hot_voc_below_startup": FindingKind("warning", "V", _STRING),
+    "hot_vmp_below_mppt_min": FindingKind("warning", "V", _STRING),
+    "vmp_above_mppt_max": FindingKind("warning", "V", _STRING),
+    "parallel_strings_mismatch": FindingKind("error", None, _INPUT),
+    "too_many_strings": FindingKind("error", "count", _INPUT),
+    "isc_above_mppt_limit": FindingKind("error", "A", _INPUT),
+    "imp_above_mppt_limit": FindingKind("warning", "A", _INPUT),
+    "dc_power_above_max": FindingKind("error", "W", ("inverter",)),
+    "dc_power_above_recommended": FindingKind("warning", "W", ("inverter",)),
+    "dc_ac_ratio_outside_range": FindingKind("warning", "ratio", ("inverter",)),
+    "missing_value": FindingKind("missing", None, ()),
+}
+
+
+@dataclass(frozen=True)
+class ElectricalEnvironment:
+    """Site design temperatures in °C, the module mounting and bifacial design irradiance.
+
+    ``min_design_temp_c`` is the extreme annual minimum ambient the design must
+    withstand, from the basis the jurisdiction or manufacturer requires;
+    ``max_ambient_temp_c`` is the hottest design ambient. ``mounting`` is a key
+    of :data:`MOUNTING_TEMPERATURE_RISE_C`, whose rise gives the hot and cold
+    operating cell temperatures unless ``hot_cell_temp_c`` or
+    ``cold_operating_cell_temp_c`` states them. ``bifacial_rear_irradiance_w_m2``
+    is the rear irradiance behind 1000 W/m² front for a bifacial design Isc.
     """
 
     min_design_temp_c: float
     max_ambient_temp_c: float
     mounting: str = "tilted_rack"
+    hot_cell_temp_c: float | None = None
+    cold_operating_cell_temp_c: float | None = None
+    bifacial_rear_irradiance_w_m2: float = 1000.0 * BIFACIAL_REAR_IRRADIANCE_RATIO
 
     def __post_init__(self) -> None:
-        for name in ("min_design_temp_c", "max_ambient_temp_c"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
-                raise ValueError(f"{name} must be a finite number")
+        for name in ("min_design_temp_c", "max_ambient_temp_c", "bifacial_rear_irradiance_w_m2"):
+            _finite(name, getattr(self, name))
+        for name in ("hot_cell_temp_c", "cold_operating_cell_temp_c"):
+            if getattr(self, name) is not None:
+                _finite(name, getattr(self, name))
         if self.min_design_temp_c >= self.max_ambient_temp_c:
             raise ValueError("min_design_temp_c must be below max_ambient_temp_c")
         if self.mounting not in MOUNTING_TEMPERATURE_RISE_C:
             raise ValueError(f"mounting must be one of {sorted(MOUNTING_TEMPERATURE_RISE_C)}, got {self.mounting!r}")
+        if self.bifacial_rear_irradiance_w_m2 < 0:
+            raise ValueError("bifacial_rear_irradiance_w_m2 must be at least 0")
 
     @property
     def cold_cell_c(self) -> float:
-        """Cell temperature for cold Voc: the cold ambient, without irradiance."""
+        """Cell temperature for cold Voc: the cold ambient, before appreciable solar heating."""
         return float(self.min_design_temp_c)
 
     @property
     def cold_operating_cell_c(self) -> float:
         """Coldest cell temperature while producing, for the upper MPPT check."""
+        if self.cold_operating_cell_temp_c is not None:
+            return float(self.cold_operating_cell_temp_c)
         return float(self.min_design_temp_c + MOUNTING_TEMPERATURE_RISE_C[self.mounting])
 
     @property
     def hot_cell_c(self) -> float:
-        """Hottest cell temperature, for hot Vmp, hot Voc and the design Isc."""
+        """Hottest cell temperature, for hot Vmp, hot Voc and the hot-cell Isc."""
+        if self.hot_cell_temp_c is not None:
+            return float(self.hot_cell_temp_c)
         return float(self.max_ambient_temp_c + MOUNTING_TEMPERATURE_RISE_C[self.mounting])
+
+
+def _finite(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
 
 
 @dataclass(frozen=True)
@@ -94,9 +165,9 @@ class PVString:
     """``parallel`` identical series strings on one MPPT input.
 
     Each string holds ``modules`` modules in series, all from PV array
-    ``array``, and connects to input ``mppt`` of inverter ``inverter``. The
-    three references are 0-based positions in the arrays, the inverters and
-    that inverter's ``mppts``.
+    ``array``, and connects to input ``mppt`` of inverter ``inverter``. An input
+    is an independent tracker. The three references are 0-based positions in
+    the arrays, the inverters and that inverter's ``mppts``.
     """
 
     inverter: int
@@ -115,12 +186,13 @@ class PVString:
 
 @dataclass(frozen=True)
 class ElectricalFinding:
-    """One result of a topology check.
+    """One result of a topology check; :data:`FINDING_CODES` describes each ``code``.
 
-    ``value`` and ``limit`` are in the unit the message names (V, A, W or a
-    count). ``inverter``, ``mppt``, ``string`` and ``array`` locate the finding
-    as 0-based positions; ``string`` indexes the declared strings. ``field``
-    names the datasheet value a ``missing`` finding needs.
+    ``value`` and ``limit`` are in ``unit``. ``inverter``, ``mppt``,
+    ``string`` and ``array`` locate the finding as 0-based positions; ``string``
+    indexes the declared strings. ``limit_field`` names the datasheet value the
+    limit came from, and ``field`` the datasheet value a ``missing`` finding
+    needs.
     """
 
     code: str
@@ -133,6 +205,8 @@ class ElectricalFinding:
     string: int | None = None
     array: int | None = None
     field: str | None = None
+    unit: str | None = None
+    limit_field: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,14 +226,28 @@ class TopologyCheck:
         return "warning" if "warning" in severities else "pass"
 
 
-def _at(stc_value: float, coefficient_pct_per_c: float, cell_c: float) -> float:
-    return stc_value * (1.0 + (cell_c - _STC_C) * coefficient_pct_per_c / 100.0)
+def _voc(module: PVModuleParams, cell_c: float) -> float:
+    """Module Voc at ``cell_c``, with the coefficient the energy model uses."""
+    return float(module.Voc + module.beta_voc * (cell_c - _STC_C))
 
 
-def _design_isc(module: PVModuleParams, environment: ElectricalEnvironment) -> float:
+def _vmp(module: PVModuleParams, cell_c: float) -> float:
+    return float(module.Vmp * (1.0 + (cell_c - _STC_C) * module.T_Vmp_pct_effective / 100.0))
+
+
+def _rear_gain(module: PVModuleParams, environment: ElectricalEnvironment) -> float:
+    return 1.0 + (module.bifaciality or 0.0) * environment.bifacial_rear_irradiance_w_m2 / 1000.0
+
+
+def _isc_stc(module: PVModuleParams, environment: ElectricalEnvironment) -> float:
+    """STC Isc plus the rear gain of a bifacial module."""
+    return float(module.Isc * _rear_gain(module, environment))
+
+
+def _isc_hot(module: PVModuleParams, environment: ElectricalEnvironment) -> float:
     """Hot-cell Isc, never below STC, plus the rear gain of a bifacial module."""
-    isc_hot = max(module.Isc, _at(module.Isc, module.T_Isc_pct, environment.hot_cell_c))
-    return isc_hot * (1.0 + (module.bifaciality or 0.0) * BIFACIAL_REAR_IRRADIANCE_RATIO)
+    isc_hot = max(module.Isc, module.Isc + module.alpha_sc * (environment.hot_cell_c - _STC_C))
+    return float(isc_hot * _rear_gain(module, environment))
 
 
 class _Findings:
@@ -167,8 +255,9 @@ class _Findings:
         self.items: list[ElectricalFinding] = []
         self._missing: set[tuple[str, int | None, int | None, int | None]] = set()
 
-    def add(self, code: str, severity: Severity, message: str, **where: float | int | str | None) -> None:
-        self.items.append(ElectricalFinding(code, severity, message, **where))  # type: ignore[arg-type]
+    def add(self, code: str, message: str, **where: Any) -> None:
+        kind = FINDING_CODES[code]
+        self.items.append(ElectricalFinding(code, kind.severity, message, unit=kind.unit, **where))
 
     def missing(
         self, field: str, owner: str, *, inverter: int | None = None, mppt: int | None = None, array: int | None = None
@@ -178,7 +267,6 @@ class _Findings:
             self._missing.add(key)
             self.add(
                 "missing_value",
-                "missing",
                 f"{owner} has no {field}; the checks that need it did not run.",
                 inverter=inverter,
                 mppt=mppt,
@@ -202,30 +290,25 @@ def check_topology(
     more modules strung than it has, is an error. Exclude a module by lowering
     its array's count. ``dc_ac_ratio_range`` optionally warns when an
     inverter's connected STC power over its AC nameplate falls outside
-    ``(low, high)``.
+    ``(low, high)``. :data:`FINDING_CODES` lists every finding.
     """
     found = _Findings()
     if not inverters:
-        found.add("no_inverters", "error", "No inverter is declared.")
+        found.add("no_inverters", "No inverter is declared.")
     if not strings:
-        found.add("no_strings", "error", "No string is declared.")
+        found.add("no_strings", "No string is declared.")
 
     strung = [0] * len(arrays)
     on_input: dict[tuple[int, int], list[int]] = defaultdict(list)
     for index, string in enumerate(strings):
         where = {"inverter": string.inverter, "mppt": string.mppt, "string": index, "array": string.array}
         if string.array >= len(arrays):
-            found.add(
-                "unknown_array", "error", f"String {index} names array {string.array}, which does not exist.", **where
-            )
+            found.add("unknown_array", f"String {index} names array {string.array}, which does not exist.", **where)
             continue
         strung[string.array] += string.modules * string.parallel
         if string.inverter >= len(inverters):
             found.add(
-                "unknown_inverter",
-                "error",
-                f"String {index} names inverter {string.inverter}, which does not exist.",
-                **where,
+                "unknown_inverter", f"String {index} names inverter {string.inverter}, which does not exist.", **where
             )
             continue
         inverter = inverters[string.inverter]
@@ -234,10 +317,7 @@ def check_topology(
         elif string.mppt >= len(inverter.mppts):
             found.add(
                 "unknown_mppt",
-                "error",
                 f"String {index} uses MPPT {string.mppt}, but inverter {string.inverter} has {len(inverter.mppts)}.",
-                value=string.mppt,
-                limit=len(inverter.mppts) - 1,
                 **where,
             )
             continue
@@ -249,7 +329,6 @@ def check_topology(
         if strung[index] < count:
             found.add(
                 "unconnected_modules",
-                "error",
                 f"Array {index} has {count - strung[index]} of its {count} modules in no string; "
                 "lower its module count to exclude them.",
                 value=count - strung[index],
@@ -259,11 +338,11 @@ def check_topology(
         elif strung[index] > count:
             found.add(
                 "array_overcommitted",
-                "error",
                 f"Strings take {strung[index]} modules from array {index}, which has {count}.",
                 value=strung[index],
                 limit=count,
                 array=index,
+                limit_field="modules",
             )
 
     for (inverter_index, mppt_index), members in on_input.items():
@@ -285,68 +364,70 @@ def _check_string(
     where = {"inverter": string.inverter, "mppt": string.mppt, "string": index, "array": string.array}
     n = string.modules
 
-    ceilings = []
-    if inverter.max_dc_voltage_v is None:
-        found.missing("max_dc_voltage_v", f"Inverter {string.inverter}", inverter=string.inverter)
-    else:
-        ceilings.append(inverter.max_dc_voltage_v)
-    if module.Max_System_Voltage is None:
-        found.missing("Max_System_Voltage", f"The module of array {string.array}", array=string.array)
-    else:
-        ceilings.append(module.Max_System_Voltage)
-    voc_cold = n * _at(module.Voc, module.T_Voc_pct, environment.cold_cell_c)
-    if ceilings and voc_cold > min(ceilings) + _TOLERANCE:
-        found.add(
-            "cold_voc_above_limit",
-            "error",
-            f"String {index}: cold Voc is {voc_cold:.1f} V, above the {min(ceilings):.1f} V DC limit.",
-            value=voc_cold,
-            limit=min(ceilings),
-            **where,
-        )
+    voc_cold = n * _voc(module, environment.cold_cell_c)
+    ceilings = (
+        ("max_dc_voltage_v", inverter.max_dc_voltage_v, f"Inverter {string.inverter}", {"inverter": string.inverter}),
+        (
+            "Max_System_Voltage",
+            module.Max_System_Voltage,
+            f"The module of array {string.array}",
+            {"array": string.array},
+        ),
+    )
+    for field, ceiling, owner, missing_where in ceilings:
+        if ceiling is None:
+            found.missing(field, owner, **missing_where)
+        elif voc_cold > ceiling + _TOLERANCE:
+            found.add(
+                "cold_voc_above_limit",
+                f"String {index}: cold Voc is {voc_cold:.1f} V, above the {ceiling:.1f} V {field}.",
+                value=voc_cold,
+                limit=ceiling,
+                limit_field=field,
+                **where,
+            )
 
     if inverter.startup_voltage_v is None:
         found.missing("startup_voltage_v", f"Inverter {string.inverter}", inverter=string.inverter)
     else:
-        voc_hot = n * _at(module.Voc, module.T_Voc_pct, environment.hot_cell_c)
+        voc_hot = n * _voc(module, environment.hot_cell_c)
         if voc_hot < inverter.startup_voltage_v - _TOLERANCE:
             found.add(
                 "hot_voc_below_startup",
-                "error",
                 f"String {index}: hot-cell Voc is {voc_hot:.1f} V, below the {inverter.startup_voltage_v:.1f} V "
-                "startup voltage, so the inverter cannot restart on the hottest days.",
+                "start-up voltage, so the inverter may not restart on the hottest days.",
                 value=voc_hot,
                 limit=inverter.startup_voltage_v,
+                limit_field="startup_voltage_v",
                 **where,
             )
 
-    vmp_coefficient = module.T_Vmp_pct_effective
     if inverter.min_mppt_voltage_v is None:
         found.missing("min_mppt_voltage_v", f"Inverter {string.inverter}", inverter=string.inverter)
     else:
-        vmp_hot = n * _at(module.Vmp, vmp_coefficient, environment.hot_cell_c)
+        vmp_hot = n * _vmp(module, environment.hot_cell_c)
         if vmp_hot < inverter.min_mppt_voltage_v - _TOLERANCE:
             found.add(
                 "hot_vmp_below_mppt_min",
-                "error",
                 f"String {index}: hot-cell Vmp is {vmp_hot:.1f} V, below the {inverter.min_mppt_voltage_v:.1f} V "
-                "MPPT minimum, so tracking drops out on the hottest days.",
+                "MPPT minimum; on the hottest days the inverter works off the maximum power point and loses yield.",
                 value=vmp_hot,
                 limit=inverter.min_mppt_voltage_v,
+                limit_field="min_mppt_voltage_v",
                 **where,
             )
     if inverter.max_mppt_voltage_v is None:
         found.missing("max_mppt_voltage_v", f"Inverter {string.inverter}", inverter=string.inverter)
     else:
-        vmp_cold = n * _at(module.Vmp, vmp_coefficient, environment.cold_operating_cell_c)
+        vmp_cold = n * _vmp(module, environment.cold_operating_cell_c)
         if vmp_cold > inverter.max_mppt_voltage_v + _TOLERANCE:
             found.add(
                 "vmp_above_mppt_max",
-                "warning",
                 f"String {index}: Vmp at the cold operating cell is {vmp_cold:.1f} V, above the "
                 f"{inverter.max_mppt_voltage_v:.1f} V MPPT maximum; the inverter limits its voltage and loses yield.",
                 value=vmp_cold,
                 limit=inverter.max_mppt_voltage_v,
+                limit_field="max_mppt_voltage_v",
                 **where,
             )
 
@@ -370,7 +451,6 @@ def _check_mppt(
     if len({(string.array, string.modules) for string in members}) > 1:
         found.add(
             "parallel_strings_mismatch",
-            "error",
             f"{owner}: parallel strings must have the same length and come from the same array.",
             **where,
         )
@@ -380,24 +460,32 @@ def _check_mppt(
     elif parallel > spec.max_strings:
         found.add(
             "too_many_strings",
-            "error",
             f"{owner} has {parallel} strings, above its limit of {spec.max_strings}.",
             value=parallel,
             limit=spec.max_strings,
+            limit_field="max_strings",
             **where,
         )
 
-    factor = inverter.isc_comparison_factor or 1.0
-    isc = factor * sum(string.parallel * _design_isc(arrays[string.array][0], environment) for string in members)
+    # The manufacturer's comparison factor applies to STC Isc; the hot-cell
+    # Isc is the physical maximum. The input must take the larger of the two.
+    factor = inverter.isc_comparison_factor
+    if factor is None:
+        found.missing("isc_comparison_factor", f"Inverter {inverter_index}", inverter=inverter_index)
+    isc = 0.0
+    for string in members:
+        module = arrays[string.array][0]
+        by_rule = (factor or 0.0) * _isc_stc(module, environment)
+        isc += string.parallel * max(by_rule, _isc_hot(module, environment))
     if spec.max_short_circuit_current_a is None:
         found.missing("max_short_circuit_current_a", owner, **where)
     elif isc > spec.max_short_circuit_current_a + _TOLERANCE:
         found.add(
             "isc_above_mppt_limit",
-            "error",
             f"{owner}: design Isc is {isc:.2f} A, above its {spec.max_short_circuit_current_a:.2f} A rating.",
             value=isc,
             limit=spec.max_short_circuit_current_a,
+            limit_field="max_short_circuit_current_a",
             **where,
         )
 
@@ -407,11 +495,11 @@ def _check_mppt(
     elif imp > spec.max_input_current_a + _TOLERANCE:
         found.add(
             "imp_above_mppt_limit",
-            "warning",
             f"{owner}: operating current is {imp:.2f} A, above its {spec.max_input_current_a:.2f} A input limit; "
             "the inverter limits its current and loses yield near peak production.",
             value=imp,
             limit=spec.max_input_current_a,
+            limit_field="max_input_current_a",
             **where,
         )
 
@@ -431,10 +519,21 @@ def _check_inverter(
     if inverter.max_dc_power_w is not None and stc_w > inverter.max_dc_power_w + _TOLERANCE:
         found.add(
             "dc_power_above_max",
-            "warning",
-            f"Inverter {index}: {stc_w:.0f} W of modules at STC exceeds its {inverter.max_dc_power_w:.0f} W DC input.",
+            f"Inverter {index}: {stc_w:.0f} W of modules at STC exceeds its {inverter.max_dc_power_w:.0f} W "
+            "maximum PV generator power.",
             value=stc_w,
             limit=inverter.max_dc_power_w,
+            limit_field="max_dc_power_w",
+            inverter=index,
+        )
+    if inverter.recommended_dc_power_w is not None and stc_w > inverter.recommended_dc_power_w + _TOLERANCE:
+        found.add(
+            "dc_power_above_recommended",
+            f"Inverter {index}: {stc_w:.0f} W of modules at STC exceeds its recommended "
+            f"{inverter.recommended_dc_power_w:.0f} W.",
+            value=stc_w,
+            limit=inverter.recommended_dc_power_w,
+            limit_field="recommended_dc_power_w",
             inverter=index,
         )
     if dc_ac_ratio_range is not None:
@@ -443,7 +542,6 @@ def _check_inverter(
         if not low - _TOLERANCE <= ratio <= high + _TOLERANCE:
             found.add(
                 "dc_ac_ratio_outside_range",
-                "warning",
                 f"Inverter {index}: DC/AC ratio is {ratio:.2f}, outside {low:.2f} to {high:.2f}.",
                 value=ratio,
                 limit=low if ratio < low else high,
@@ -532,8 +630,10 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd
     voltage range and below the input's operating-current limit. Otherwise it
     moves along the strings' IV curve to the best point that respects both: the
     nearest end of the range, or the voltage at which the current falls to the
-    limit. Static losses act as a scaling of the current, so the unconstrained
-    power equals the aggregate model's.
+    limit. When no point of the curve respects both, the input delivers
+    nothing. Static losses scale the current, except availability, which
+    applies after the limits, so the unconstrained power equals the aggregate
+    model's.
 
     Returns the limited DC and the DC the limits cost. Where no limit binds,
     the DC is the aggregate model's, bit for bit.
@@ -576,9 +676,11 @@ def _input_limit_loss(
         raise ValueError("String-level energy needs each array's module operating point")
     module_dc = np.asarray(breakdown.module_dc, dtype=float)
     dc = np.asarray(breakdown.dc_after_losses, dtype=float)
-    # Static losses scale the array's current; per module of the array.
+    # Availability is time out of service, not less current while running, so
+    # it applies after the limits; every other static loss scales the current.
+    in_service = 1.0 - float(breakdown.pvwatts_components_pct.get("availability", 0.0)) / 100.0
     with np.errstate(divide="ignore", invalid="ignore"):
-        factor = np.where(module_dc > 0, dc / module_dc, 0.0)
+        factor = np.where((module_dc > 0) & (in_service > 0), dc / module_dc / in_service, 0.0)
     current_scale = factor * parallel
     v_mp = np.nan_to_num(operating.v_mp)
     i_mp = np.nan_to_num(operating.i_mp)
@@ -603,11 +705,11 @@ def _input_limit_loss(
     lower = np.maximum(lower_v, v_at_limit)
     voltage = np.clip(v_mp[limited], lower, upper_v)
     current = np.clip(np.nan_to_num(pvlib.pvsystem.i_from_v(voltage, *params)), 0.0, None)
-    # Range and limit cannot both hold: the inverter sits at the top of the
-    # range and holds the current at its limit.
-    current = np.where(lower > upper_v, np.minimum(current, module_current_limit[limited]), current)
+    # No point of the curve is inside the range and under the current limit:
+    # the input has no usable operating point and delivers nothing.
+    current = np.where(lower > upper_v, 0.0, current)
     limited_power = modules * voltage * current_scale[limited] * current
-    result[limited] = np.clip(unconstrained[limited] - limited_power, 0.0, None)
+    result[limited] = np.clip(unconstrained[limited] - limited_power, 0.0, None) * in_service
     return result
 
 

@@ -38,9 +38,14 @@ and the start-up voltage. These voltage limits apply to every input. `mppts`
 lists the inputs in datasheet order. Each `MpptSpec` has its own operating
 current, short-circuit current and string count, because asymmetric inverters
 publish different limits per input. A Fronius Symo GEN24 6.0, for example, has
-25 A and 12.5 A inputs. `isc_comparison_factor` is the multiplier the
-manufacturer applies to array Isc before comparing it with an input's rating:
-some require 1.25 × Isc, others compare Isc as it is.
+25 A and 12.5 A inputs. An input is an independent tracker.
+`isc_comparison_factor` is the multiplier the manufacturer applies to the
+array's STC Isc before comparing it with an input's rating: some require
+1.25 × Isc, others compare Isc as it is and are given 1. Omitted, it is
+reported missing like any other unknown value. `max_dc_power_w` is the maximum
+PV generator power the manufacturer permits; `recommended_dc_power_w` is its
+recommendation. Datasheets publish one or the other, so neither is reported
+missing when omitted.
 
 Three states are kept apart:
 
@@ -51,11 +56,14 @@ Three states are kept apart:
 | A number | The published limit |
 
 JSON has no infinity: JavaScript writes `Infinity` as `null`, which here
-means unknown. So "no limit" cannot cross a JSON boundary as a number. Equipment
-without limits, such as an idealised inverter in an early design, should not be
-sent as a topology at all: the caller leaves the three keys out and sizes the
-inverter by `inverter_ac_rating_kw` or the loading ratio. TOML states `inf`
-directly, and the Python API takes `math.inf`.
+means unknown. So "no limit" crosses a JSON boundary as the string `"inf"`,
+which the configuration accepts for every upper limit, and the result's
+provenance writes an unbounded limit the same way, so results stay strict
+JSON. TOML states `inf` directly, and the Python API takes `math.inf`.
+Equipment that is idealised altogether, such as a placeholder inverter in an
+early design, is better sent without a topology: the caller leaves the three
+keys out and sizes the inverter by `inverter_ac_rating_kw` or the loading
+ratio.
 
 ### D2. Topology is counted, not placed
 
@@ -85,50 +93,71 @@ cost unless the caller says it is there.
 
 Temperatures follow the usual string-sizing rules. The cell rises above ambient
 by a mounting-dependent amount (`MOUNTING_TEMPERATURE_RISE_C`: flush 30 °C,
-tilted rack 25 °C, ground mount 20 °C).
+tilted rack 25 °C, ground mount 20 °C). These are screening values, not bounds:
+an insulated roof at zero wind runs hotter. A caller with a thermal study or
+local rules states `hot_cell_temp_c` and `cold_operating_cell_temp_c` instead.
+`min_design_temp_c` is the extreme annual minimum on the jurisdiction's or
+manufacturer's basis, not a heating-design percentile, which is warmer and
+would clear strings that are too long.
 
 | Check | Temperature | Severity |
 |---|---|---|
-| `modules × Voc` ≤ min(inverter max DC, module rating) | Coldest ambient (no irradiance) | error |
-| `modules × Voc` ≥ start-up voltage | Hottest cell | error |
-| `modules × Vmp` ≥ MPPT minimum | Hottest cell | error |
+| `modules × Voc` ≤ inverter max DC, and ≤ module rating (one finding per ceiling) | Extreme minimum ambient, before appreciable solar heating | error |
+| `modules × Voc` ≥ start-up voltage | Hottest cell | warning |
+| `modules × Vmp` ≥ MPPT minimum | Hottest cell | warning |
 | `modules × Vmp` ≤ MPPT maximum | Coldest operating cell (cold ambient + rise) | warning |
 | Strings on an input ≤ its `max_strings` | — | error |
 | Strings on an input share one array and one length | — | error |
-| Σ design Isc × `isc_comparison_factor` ≤ input short-circuit rating | Hottest cell | error |
+| Σ max(factor × STC Isc, hot-cell Isc), with bifacial rear gain ≤ input short-circuit rating | STC and hottest cell | error |
 | Σ Imp ≤ input operating current | STC | warning |
-| Strung STC power ≤ `max_dc_power_w` | — | warning |
+| Strung STC power ≤ `max_dc_power_w` | — | error |
+| Strung STC power ≤ `recommended_dc_power_w` | — | warning |
 | DC/AC ratio inside a caller's range (optional) | — | warning |
 
 Start-up is checked at the hottest cell, not at STC, because the inverter must
-also restart after a midday trip, when Voc is lowest. The upper MPPT check reads
-the coldest *operating* cell because at the coldest ambient there is no
-irradiance and the module is not producing. This matches PVsyst's `TOperMin` of
-20 °C at the default −5 °C, tilted rack.
+also restart after a midday trip, when Voc is lowest. A string below the start-up
+voltage or below the MPPT minimum is a yield and availability problem, not
+damage: the inverter works off the maximum power point or waits to start. Both
+are warnings, so `fail` means a hard limit or a wiring inconsistency only.
+D7 models the low-voltage case as lost energy. The upper MPPT check reads the
+coldest *operating* cell, the usual winter operating temperature; PVsyst's
+`TOperMin` is 20 °C, which the default −5 °C, tilted rack gives. A cold, sunny
+morning can be colder, which a caller states with
+`cold_operating_cell_temp_c`.
 
-Design Isc is the hot-cell Isc, never below STC, times
-`1 + bifaciality × 0.135`. 0.135 is 135 W/m² behind 1000 W/m², the bifacial
-nameplate irradiance of IEC TS 60904-1-2. The flat 1.25 often seen here is the
-NEC conductor factor, which belongs to cable sizing, not to the inverter's
-limit.
+The short-circuit check takes the larger of two currents per string. The
+manufacturer's rule multiplies the STC Isc by `isc_comparison_factor`; the
+physical maximum is the hot-cell Isc, never below STC. Both include the bifacial
+rear gain, `1 + bifaciality × bifacial_rear_irradiance_w_m2 / 1000`. The
+default 135 W/m² is the bifacial nameplate irradiance of IEC TS 60904-1-2; a
+site with more rear irradiance states it. Voc and Isc move with the coefficients
+the energy model uses, `beta_voc` and `alpha_sc`, which honour absolute
+overrides.
 
 Severities:
 
 - `error`: a hard limit or the wiring is broken, and the design is not
   buildable as declared.
-- `warning`: an operating limit is exceeded. The inverter holds its limit and
-  loses some energy, but the design is safe.
+- `warning`: an operating or yield limit is exceeded. The equipment is safe, but
+  it loses energy or may not restart on the hottest days.
 - `missing`: a value the check needs is unknown, so that check did not run.
 
 The status is `fail` on any error, then `incomplete` on any missing value, then
 `warning`, then `pass`.
 
+Every finding carries `unit` (`"V"`, `"A"`, `"W"`, `"count"` or `"ratio"`) and
+`limit_field`, the datasheet value its limit came from, so a client never reads
+units or limits from the message. `breos.electrical.FINDING_CODES` publishes each
+code's severity, unit and location fields. Codes and severities are stable; a
+later release may add codes.
+
 A missing value is never replaced by a default. The one exception is a derived
 value, which is not a default. Datasheets rarely publish the Vmp temperature
-coefficient, so `PVModuleParams.T_Vmp_pct_effective` derives it as
-`T_Pmax_pct − T_Isc_pct`: to first order, since `Pmp = Vmp × Imp`, the power
-coefficient is the sum of the Vmp and Imp coefficients. A published `T_Vmp_pct`
-wins. The module's maximum system voltage has no such derivation, and a check
+coefficient, so `PVModuleParams.T_Vmp_pct_effective` derives it as the power
+coefficient minus the Isc one, from `gamma_pmp_effective` and `alpha_sc`: to
+first order, since `Pmp = Vmp × Imp`, the power coefficient is the sum of the
+Vmp and Imp coefficients. It is an estimate for crystalline silicon, so a
+published `T_Vmp_pct` wins and is preferred near a sizing boundary. The module's maximum system voltage has no such derivation, and a check
 without it reports `missing` while still applying the inverter's limit.
 
 ### D5. App reports the check; energy stays aggregate by default
@@ -173,13 +202,16 @@ default stays `"aggregate"`, so a topology alone changes no number.
    (`PVProductionBreakdown.module_operating`).
 2. The static PVWatts losses scale the current. Per array and step, the factor
    is the DC after losses over the module DC, so an input's unconstrained power
-   equals the aggregate model's.
+   equals the aggregate model's. Availability is the exception: it is time out
+   of service, not less current while running, so it applies after the limits
+   and cannot hide a current limit.
 3. Per input, the strings run at their maximum power point when it lies inside
    the MPPT voltage range and the current is under the operating limit.
    Otherwise the inverter moves along the IV curve to the best point that
    respects both: the voltage at the current limit or the nearer end of the
-   range. When the two cannot both hold, it sits at the top of the range at the
-   current limit. A brute-force search of the IV curve pins this.
+   range. When no point of the curve satisfies both, the input has no usable
+   operating point and delivers nothing for that step. A brute-force search of
+   the IV curve pins this, including the empty case.
 4. The lost DC is `mppt_limit_loss`, a waterfall stage after the static losses.
    Where no limit binds the DC is the aggregate model's, bit for bit.
 
@@ -201,6 +233,19 @@ aggregate model does. A limit that binds in year 1 is assumed to bind as much
 later, which slightly understates later years when it binds on current. The
 start-up voltage, partial shading of single modules, bypass diodes and cable
 losses are separate increments.
+
+### Open items
+
+These are additive and do not change a field above:
+
+- Whole-inverter limits, such as a total short-circuit current across inputs
+  (a Fronius Verto has 50 A per tracker and 150 A in total), physical inputs
+  with their own limits, connector counts apart from permitted parallel
+  strings, and per-tracker power limits.
+- Parallel strings from separate arrays that are electrically equivalent (same
+  module, length and orientation) are refused today because the check keys on
+  the array. Telling them apart needs each array's orientation in the check.
+- Per-array mounting and cell temperatures.
 
 ## Consequences
 

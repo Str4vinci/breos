@@ -203,6 +203,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   adds the budget violation, in money, to the area and ZEB violations
   unscaled, so infeasible candidates can rank differently. Runs that set no
   `currency` are bit-identical, and the result format stays `"1"`.
+- `breos.equipment.InverterSpec` separates `max_dc_power_w`, the maximum PV
+  generator power, from `recommended_dc_power_w`. Upper limits may be given as
+  `"inf"` in a configuration, and an unbounded limit is written `"inf"` in the
+  result's provenance, so results stay strict JSON.
 - `breos.equipment.InverterSpec` stores a specified inverter's validated AC
   nameplate and optional datasheet limits. Each MPPT input is a
   `breos.equipment.MpptSpec` with its own current and string limits, so
@@ -218,9 +222,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Voc against the inverter and module voltage ratings, hot-cell Vmp and Voc
   against the MPPT minimum and start-up voltage, Vmp against the MPPT maximum,
   design Isc and operating current per input, string counts, parallel-string
-  matching, and that every module is strung exactly once. Findings are
-  errors, warnings or missing datasheet values; a missing value is never
-  replaced by a default.
+  matching, generator power, and that every module is strung exactly once.
+  Findings are errors (hard limits and wiring), warnings (yield and operating
+  limits) or missing datasheet values; a missing value is never replaced by a
+  default. Each finding carries its `unit` and the `limit_field` it was checked
+  against, and `breos.electrical.FINDING_CODES` publishes the codes. Callers may
+  state cell temperatures and the bifacial rear irradiance instead of the
+  screening defaults.
 - App takes `inverters`, `pv_strings` and `electrical_environment` together.
   The inverters' nameplates replace `inverter_loading_ratio` and
   `inverter_ac_rating_kw`, and the result gains an `electrical` block with the

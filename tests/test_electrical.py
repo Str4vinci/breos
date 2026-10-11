@@ -47,17 +47,18 @@ JINKO_440 = PVModuleParams(
 
 # Huawei SUN2000-4KTL-L1, European datasheet, PDF page 2:
 # https://solar.huawei.com/admin/asset/v1/pro/view/fc2bdc8911d8462dbc1a88dae66314cc.pdf
-# max_dc_power_w is the recommended PV input power.
+# 6000 W is the recommended PV input power, not a maximum.
 HUAWEI_4KTL = InverterSpec(
     nominal_power_w=4000,
     inverter_efficiency=0.984,
     is_hybrid=True,
     max_dc_voltage_v=600,
-    max_dc_power_w=6000,
+    recommended_dc_power_w=6000,
     min_mppt_voltage_v=90,
     max_mppt_voltage_v=560,
     startup_voltage_v=100,
     mppts=(MpptSpec(12.5, 18, 1),) * 2,
+    isc_comparison_factor=1.0,
 )
 
 # Fronius Symo GEN24 6.0, technical data, retrieved 2026-10-11:
@@ -76,8 +77,10 @@ FRONIUS_GEN24_6 = InverterSpec(
     max_mppt_voltage_v=800,
     startup_voltage_v=80,
     mppts=(MpptSpec(25, 40, 2), MpptSpec(12.5, 20, 1)),
+    isc_comparison_factor=1.0,
 )
 
+# The Isc comparison basis was not transcribed; 1 states a direct comparison for these tests.
 PORTO = ElectricalEnvironment(min_design_temp_c=-5, max_ambient_temp_c=40)
 
 
@@ -99,7 +102,7 @@ def test_a_buildable_design_passes():
         PORTO,
         dc_ac_ratio_range=(0.8, 2.5),
     )
-    assert codes(check) == ["dc_power_above_max"]
+    assert codes(check) == ["dc_power_above_recommended"]
     assert check.status == "warning"
 
 
@@ -137,8 +140,11 @@ def test_a_colder_site_shortens_the_safe_string():
 
 
 def test_short_strings_cannot_track_or_restart_on_the_hottest_days():
+    # Yield and restart problems, not damage: warnings.
     check = check_topology([(TRINA_450, 2)], [HUAWEI_4KTL], [PVString(0, 0, 0, 2)], PORTO)
-    assert codes(check, "error") == ["hot_vmp_below_mppt_min", "hot_voc_below_startup"]
+    assert codes(check) == ["hot_vmp_below_mppt_min", "hot_voc_below_startup"]
+    assert check.status == "warning"
+    assert {f.limit_field for f in check.findings} == {"min_mppt_voltage_v", "startup_voltage_v"}
     assert check_topology([(TRINA_450, 3)], [HUAWEI_4KTL], [PVString(0, 0, 0, 3)], PORTO).findings == ()
 
 
@@ -171,8 +177,13 @@ def test_design_isc_uses_the_hot_cell_and_the_manufacturer_factor():
     finding = next(
         f for f in check_topology(arrays, [strict], strings, PORTO).findings if f.code == "isc_above_mppt_limit"
     )
-    assert finding.value == pytest.approx(1.5 * 2 * hot_isc)
-    assert finding.limit == 40
+    # The factor applies to STC Isc: 1.5 * 13.8 A is above the hot-cell 14.05 A.
+    assert finding.value == pytest.approx(1.5 * 2 * 13.8)
+    assert (finding.limit, finding.unit, finding.limit_field) == (40, "A", "max_short_circuit_current_a")
+    # With a factor of 1 the hot-cell Isc is the larger.
+    plain = check_topology(arrays, [replace(FRONIUS_GEN24_6, isc_comparison_factor=1.0)], strings, PORTO)
+    assert "isc_above_mppt_limit" not in codes(plain)
+    assert hot_isc > 13.8
 
 
 def test_a_bifacial_module_adds_rear_current():
@@ -190,8 +201,8 @@ def test_a_bifacial_module_adds_rear_current():
 
 
 def test_parallel_strings_on_one_input_must_match():
-    arrays = [(TRINA_450, 21), (JINKO_440, 10)]
-    lengths = check_topology(arrays[:1], [FRONIUS_GEN24_6], [PVString(0, 0, 0, 10), PVString(0, 0, 0, 11)], PORTO)
+    arrays = [(TRINA_450, 17)]
+    lengths = check_topology(arrays, [FRONIUS_GEN24_6], [PVString(0, 0, 0, 8), PVString(0, 0, 0, 9)], PORTO)
     assert codes(lengths, "error") == ["parallel_strings_mismatch"]
     faces = check_topology(
         [(TRINA_450, 10), (TRINA_450, 10)], [FRONIUS_GEN24_6], [PVString(0, 0, 0, 10), PVString(0, 0, 1, 10)], PORTO
@@ -254,6 +265,7 @@ def test_unbounded_limits_never_trigger():
         min_mppt_voltage_v=0,
         startup_voltage_v=0,
         mppts=(MpptSpec(math.inf, math.inf, 10),),
+        isc_comparison_factor=1.0,
     )
     check = check_topology([(TRINA_450, 1)], [ideal], [PVString(0, 0, 0, 1)], PORTO)
     assert check.status == "pass"
@@ -293,3 +305,97 @@ def test_invalid_environments_are_refused(kwargs):
 def test_invalid_strings_are_refused(kwargs):
     with pytest.raises(ValueError):
         PVString(**kwargs)
+
+
+def test_coefficient_overrides_drive_the_check_as_they_drive_energy():
+    # An absolute Voc coefficient of -0.30 V/°C: 10 * (52.9 + 0.30 * 30) = 619 V at -5 °C.
+    module = replace(TRINA_450, beta_voc_abs=-0.30)
+    check = check_topology([(module, 10)], [HUAWEI_4KTL], [PVString(0, 0, 0, 10)], PORTO)
+    finding = next(f for f in check.findings if f.code == "cold_voc_above_limit")
+    assert finding.value == pytest.approx(619.0)
+    assert check.status == "fail"
+    # alpha_sc_abs raises the hot-cell Isc: 10.74 + 0.02 * 40.
+    hot = replace(TRINA_450, alpha_sc_abs=0.02)
+    two = check_topology(
+        [(hot, 6)], [replace(HUAWEI_4KTL, mppts=(MpptSpec(20, 23, 2),))], [PVString(0, 0, 0, 3, parallel=2)], PORTO
+    )
+    assert next(f for f in two.findings if f.code == "isc_above_mppt_limit").value == pytest.approx(2 * 11.54)
+    # The derived Vmp coefficient follows the overrides too.
+    assert replace(TRINA_450, gamma_pmp=-0.35).T_Vmp_pct_effective == pytest.approx(-0.35 - 0.04)
+
+
+def test_each_exceeded_voltage_ceiling_is_reported_with_its_source():
+    module = replace(TRINA_450, Max_System_Voltage=550)
+    check = check_topology([(module, 10)], [HUAWEI_4KTL], [PVString(0, 0, 0, 10)], PORTO)
+    assert codes(check, "error") == ["cold_voc_above_limit"]
+    module = replace(TRINA_450, Max_System_Voltage=500)
+    check = check_topology([(module, 11)], [HUAWEI_4KTL], [PVString(0, 0, 0, 11)], PORTO)
+    found = sorted((f.limit_field, f.limit, f.unit) for f in check.findings if f.code == "cold_voc_above_limit")
+    assert found == [("Max_System_Voltage", 500, "V"), ("max_dc_voltage_v", 600, "V")]
+
+
+def test_an_unstated_isc_comparison_is_missing_and_the_hot_cell_isc_still_applies():
+    unstated = replace(FRONIUS_GEN24_6, isc_comparison_factor=None)
+    check = check_topology([(TRINA_450, 7)], [unstated], [PVString(0, 0, 0, 7)], PORTO)
+    assert [(f.code, f.field) for f in check.findings] == [("missing_value", "isc_comparison_factor")]
+    over = check_topology(
+        [(JINKO_440, 6)], [replace(unstated, mppts=(MpptSpec(25, 28, 2),))], [PVString(0, 0, 0, 3, parallel=2)], PORTO
+    )
+    assert "isc_above_mppt_limit" in codes(over, "error")
+
+
+def test_maximum_and_recommended_generator_power_differ():
+    strings = [PVString(0, 0, 0, 10), PVString(0, 1, 0, 10)]
+    hard = replace(HUAWEI_4KTL, recommended_dc_power_w=None, max_dc_power_w=6000)
+    check = check_topology([(TRINA_450, 20)], [hard], strings, PORTO)
+    assert codes(check, "error") == ["dc_power_above_max"]
+    with pytest.raises(ValueError, match="recommended_dc_power_w"):
+        replace(HUAWEI_4KTL, max_dc_power_w=5000)
+
+
+def test_stated_cell_temperatures_replace_the_screening_rises():
+    # 3 modules: 113.9 V hot Vmp at the 65 °C screening cell, 106 V at 88 °C.
+    floor = replace(HUAWEI_4KTL, min_mppt_voltage_v=110)
+    strings = [PVString(0, 0, 0, 3)]
+    assert "hot_vmp_below_mppt_min" not in codes(check_topology([(TRINA_450, 3)], [floor], strings, PORTO))
+    hot = ElectricalEnvironment(min_design_temp_c=-5, max_ambient_temp_c=40, hot_cell_temp_c=88)
+    finding = next(f for f in check_topology([(TRINA_450, 3)], [floor], strings, hot).findings)
+    assert (finding.code, finding.value) == ("hot_vmp_below_mppt_min", pytest.approx(3 * 44.6 * (1 - 63 * 0.0033)))
+    cold = ElectricalEnvironment(-5, 40, cold_operating_cell_temp_c=-5)
+    assert ElectricalEnvironment(-5, 40).cold_operating_cell_c == 20
+    assert cold.cold_operating_cell_c == -5
+
+
+def test_every_finding_follows_the_published_catalogue():
+    from breos.electrical import FINDING_CODES
+
+    scenarios = [
+        check_topology([(TRINA_450, 22)], [HUAWEI_4KTL], [PVString(0, 0, 0, 11), PVString(0, 2, 0, 11)], PORTO),
+        check_topology([(TRINA_450, 2)], [HUAWEI_4KTL], [PVString(0, 0, 0, 2)], PORTO),
+        check_topology([(JINKO_440, 14)], [FRONIUS_GEN24_6], [PVString(0, 1, 0, 7, parallel=2)], PORTO),
+        check_topology([(TRINA_450, 10)], [InverterSpec(nominal_power_w=4000)], [PVString(0, 0, 0, 10)], PORTO),
+    ]
+    seen = set()
+    for check in scenarios:
+        for finding in check.findings:
+            kind = FINDING_CODES[finding.code]
+            assert (finding.severity, finding.unit) == (kind.severity, kind.unit)
+            for name in ("inverter", "mppt", "string", "array"):
+                if name not in kind.located_by:
+                    assert getattr(finding, name) is None or finding.code == "missing_value"
+            seen.add(finding.code)
+    assert len(seen) >= 8
+
+
+def test_the_documented_catalogue_matches_the_code():
+    from pathlib import Path
+
+    from breos.electrical import FINDING_CODES
+
+    text = (Path(__file__).parents[1] / "docs" / "getting-started" / "interpreting-results.md").read_text()
+    rows = {}
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) == 5 and cells[0].startswith("`") and cells[0].strip("`") in FINDING_CODES:
+            rows[cells[0].strip("`")] = (cells[1], cells[2] or None)
+    assert rows == {code: (kind.severity, kind.unit) for code, kind in FINDING_CODES.items()}

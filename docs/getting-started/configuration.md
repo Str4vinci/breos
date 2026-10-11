@@ -581,9 +581,23 @@ Without `pv_arrays`, the single array is `array = 0`.
 
 A datasheet value you omit is unknown, and the check reports it rather than
 assuming one. A limit the equipment does not have is `inf` for an upper limit
-(TOML's `inf`, or `math.inf` in Python) and 0 for a lower limit. JSON has no
-infinity, so a JSON caller that cannot state "no limit" should leave the
-topology keys out and size the inverter with `inverter_ac_rating_kw`.
+and 0 for a lower limit: TOML's `inf`, `math.inf` in Python, or the string
+`"inf"` in JSON, which has no infinity. The result's provenance writes it as
+`"inf"`, so results stay strict JSON.
+
+`max_dc_power_w` is the maximum PV generator power the manufacturer permits,
+and exceeding it is an error; `recommended_dc_power_w` is guidance, and
+exceeding it is a warning. Neither is reported missing when omitted, as many
+datasheets publish only one. `isc_comparison_factor` is the multiplier the
+manufacturer applies to the array's STC short-circuit current, such as 1.25;
+give 1 where the manufacturer compares Isc as it is. Omitted, it is reported
+missing, and the hot-cell Isc alone is compared.
+
+`min_design_temp_c` is the extreme annual minimum ambient on the basis your
+jurisdiction or the manufacturer requires, not a heating-design percentile:
+cold Voc is taken at it, before appreciable solar heating. The mounting rises
+are screening values. Where a thermal study or local practice gives other cell
+temperatures, state `hot_cell_temp_c` and `cold_operating_cell_temp_c`.
 
 The inverters replace `inverter_loading_ratio` and `inverter_ac_rating_kw`:
 the AC rating is the sum of `nominal_power_w`. When every inverter sets
@@ -615,8 +629,11 @@ reference resolves, every module is strung once, and parallel strings match).
 It refuses to run otherwise rather than fall back to the aggregate model. Hard
 limits such as an overvoltage do not stop it; they remain errors in the check.
 
-The static PVWatts losses, including `mismatch` between modules, still apply:
-they scale each string's current before the limits. Later years reuse the
+When no point of the IV curve is both inside the range and under the current
+limit, the input delivers nothing for that step. The static PVWatts losses,
+including `mismatch` between modules, still apply: they scale each string's
+current before the limits, except `availability`, which is time out of service
+and applies after them. Later years reuse the
 first year's limited production scaled by module degradation, so a limit that
 binds in year 1 is assumed to bind as much later. Start-up voltage, partial
 shading of single modules, bypass diodes and cable losses are not modelled.

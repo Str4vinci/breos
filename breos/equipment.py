@@ -45,8 +45,11 @@ class InverterSpec:
     of ``math.inf`` or a lower limit of 0 means the inverter has none.
     ``isc_comparison_factor`` is
     the multiplier the manufacturer applies to array Isc before comparing it
-    with an input's short-circuit rating, such as 1.25. No prices, product
-    identities, certifications or sizing presets live here.
+    with an input's STC short-circuit current, such as 1.25; give 1 where the
+    manufacturer compares Isc as it is. ``max_dc_power_w`` is the maximum PV
+    generator power the manufacturer permits, and ``recommended_dc_power_w``
+    its recommended PV power. No prices, product identities, certifications
+    or sizing presets live here.
     """
 
     nominal_power_w: float
@@ -59,6 +62,7 @@ class InverterSpec:
     startup_voltage_v: float | None = None
     mppts: tuple[MpptSpec, ...] | None = None
     isc_comparison_factor: float | None = None
+    recommended_dc_power_w: float | None = None
 
     def __post_init__(self) -> None:
         _positive("nominal_power_w", self.nominal_power_w)
@@ -66,7 +70,7 @@ class InverterSpec:
             value = getattr(self, name)
             if value is not None:
                 _positive(name, value)
-        for name in ("max_dc_voltage_v", "max_dc_power_w", "max_mppt_voltage_v"):
+        for name in ("max_dc_voltage_v", "max_dc_power_w", "max_mppt_voltage_v", "recommended_dc_power_w"):
             value = getattr(self, name)
             if value is not None:
                 _upper_limit(name, value)
@@ -93,6 +97,7 @@ class InverterSpec:
             ("min_mppt_voltage_v", "max_dc_voltage_v"),
             ("max_mppt_voltage_v", "max_dc_voltage_v"),
             ("startup_voltage_v", "max_dc_voltage_v"),
+            ("recommended_dc_power_w", "max_dc_power_w"),
         ):
             _ordered(self, lower, upper)
 

@@ -182,13 +182,16 @@ class PVModuleParams:
 
         Datasheets rarely publish it. Since ``Pmp = Vmp * Imp``, to first order
         the power coefficient is the sum of the Vmp and Imp coefficients, and
-        with the Imp coefficient taken as the Isc one the Vmp coefficient is
-        ``T_Pmax_pct - T_Isc_pct``. Using ``T_Pmax_pct`` alone would understate
-        how far Vmp moves with temperature.
+        with the Imp coefficient taken as the Isc one the Vmp coefficient is the
+        power coefficient minus the Isc one, ``gamma_pmp_effective - 100 *
+        alpha_sc / Isc``, which honours ``gamma_pmp`` and ``alpha_sc_abs``.
+        Using the power coefficient alone would understate how far Vmp moves
+        with temperature. The derived value is an estimate for crystalline
+        silicon; prefer a published coefficient near a sizing boundary.
         """
         if self.T_Vmp_pct is not None:
             return float(self.T_Vmp_pct)
-        return float(self.T_Pmax_pct - self.T_Isc_pct)
+        return float(self.gamma_pmp_effective - 100.0 * self.alpha_sc / self.Isc)
 
     def __post_init__(self) -> None:
         self._validate_stc_point(self.Mpp, self.Vmp, self.Imp)

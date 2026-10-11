@@ -59,12 +59,14 @@ FRONIUS_GEN24_6 = {
     "min_mppt_voltage_v": 80,
     "max_mppt_voltage_v": 800,
     "startup_voltage_v": 80,
+    "isc_comparison_factor": 1.0,
     "mppts": [
         {"max_input_current_a": 25, "max_short_circuit_current_a": 40, "max_strings": 2},
         {"max_input_current_a": 12.5, "max_short_circuit_current_a": 20, "max_strings": 1},
     ],
 }
 
+# The Isc comparison basis was not transcribed; 1 states a direct comparison for these tests.
 PORTO = {"min_design_temp_c": -5, "max_ambient_temp_c": 40}
 
 
@@ -216,7 +218,8 @@ def test_the_operating_point_is_the_best_one_the_limits_allow(v_min, v_max, curr
         grid = np.linspace(v_min, v_max, 200001)
         current = factor * np.clip(pvlib.pvsystem.i_from_v(grid / modules, *params), 0, None)
         allowed = current <= current_limit + 1e-9
-        best = float((grid * current)[allowed].max()) if allowed.any() else float(v_max * current_limit)
+        # No feasible point: the input delivers nothing.
+        best = float((grid * current)[allowed].max()) if allowed.any() else 0.0
         unconstrained = factor * modules * op.v_mp[step] * op.i_mp[step]
         assert dc.iloc[step] == pytest.approx(min(best, unconstrained), rel=1e-4, abs=1e-3)
         assert loss.iloc[step] == pytest.approx(unconstrained - dc.iloc[step], rel=1e-6, abs=1e-6)
@@ -264,3 +267,34 @@ def test_a_failing_but_wired_design_still_gets_string_energy(modules):
 
 def test_aggregate_runs_keep_no_operating_point_in_the_result_path(modules):
     assert replace(resolve_app_config(EAST_WEST).electrical).fidelity == "aggregate"
+
+
+def test_no_feasible_operating_point_delivers_nothing():
+    # 7 modules at 1000 W/m2 and 45 °C carry 9.56 A at 250 V; 8 A needs 312 V.
+    breakdown = _breakdown(TRINA_450, 7, [1000.0], [45.0], 0.9)
+    inverter = InverterSpec(nominal_power_w=6000, min_mppt_voltage_v=80, max_mppt_voltage_v=250, mppts=(MpptSpec(8.0),))
+    strings = (PVString(0, 0, 0, 7),)
+    environment = ElectricalEnvironment(-5, 40)
+    setup = ElectricalSetup(
+        (inverter,), strings, environment, check_topology([(TRINA_450, 7)], [inverter], strings, environment)
+    )
+    dc, loss = string_limited_dc(setup, [breakdown])
+    assert dc.iloc[0] == pytest.approx(0.0, abs=1e-6)
+    assert loss.iloc[0] == pytest.approx(breakdown.dc_after_losses.iloc[0])
+
+
+def test_availability_does_not_lower_the_current_against_the_limit():
+    # At STC, 7 Trina modules carry 10.09 A against a 9.9 A limit. A 3 %
+    # availability loss is time out of service and must not hide the limit.
+    inverter = InverterSpec(nominal_power_w=6000, min_mppt_voltage_v=80, max_mppt_voltage_v=800, mppts=(MpptSpec(9.9),))
+    strings = (PVString(0, 0, 0, 7),)
+    environment = ElectricalEnvironment(-5, 40)
+    setup = ElectricalSetup(
+        (inverter,), strings, environment, check_topology([(TRINA_450, 7)], [inverter], strings, environment)
+    )
+    full = _breakdown(TRINA_450, 7, [1000.0], [25.0], 1.0)
+    in_service = replace(_breakdown(TRINA_450, 7, [1000.0], [25.0], 0.97), pvwatts_components_pct={"availability": 3.0})
+    _, loss_full = string_limited_dc(setup, [full])
+    _, loss_available = string_limited_dc(setup, [in_service])
+    assert loss_full.iloc[0] > 0
+    assert loss_available.iloc[0] == pytest.approx(0.97 * loss_full.iloc[0])
