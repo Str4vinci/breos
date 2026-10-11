@@ -47,6 +47,7 @@ is a `breos run` option that overrides the config file.
 | `diffuse_iam` | `"none"` | `--diffuse-iam` | Whether the incidence-angle modifier also applies to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated selected IAM model (Marion 2017); the default applies IAM to beam only, a known ~0.5-1% overestimate. One of `"none"`, `"marion"` |
 | `discount_rate` | `0.03` | `--discount-rate` | Nominal discount rate for NPV |
 | `dual_axis_max_tilt` | `90.0` | — | Maximum panel tilt for dual-axis tracking (degrees) |
+| `electrical_environment` | `None` | — | Design temperatures and mounting for the string check; see [`[electrical_environment]`](#electrical_environment). Set with `inverters` and `pv_strings` |
 | `emissions_country` | `None` | `--emissions-country` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...); see [Packaged options](options.md#emissions-factors) |
 | `enable_resistance_fade` | `False` | — | Grow the battery's internal resistance as it ages (Naumann), which lowers its charge and discharge efficiencies. Native engine only: it cannot be combined with `degradation_engine = "blast"` |
 | `execution_backend` | `"python"` | `--execution-backend` | Within-day dispatch implementation. `"python"` is the numerical reference; `"numba"` is an optional compiled path that reproduces it bit for bit and needs `pip install "breos[fast]"`. One of `"python"`, `"numba"` |
@@ -59,6 +60,7 @@ is a `breos run` option that overrides the config file.
 | `inverter_ac_rating_kw` | `None` | `--inverter-ac-rating-kw` | Absolute inverter AC rating in kW, instead of `inverter_loading_ratio`: it clips production and CAPEX prices it. Not with `inverter_loading_ratio` |
 | `inverter_efficiency` | `0.96` | `--inverter-efficiency` | Nominal inverter efficiency used by the PVWatts part-load curve |
 | `inverter_loading_ratio` | `1.25` | `--inverter-loading-ratio` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production and that CAPEX prices. Not with `inverter_ac_rating_kw` |
+| `inverters` | `None` | — | Specified inverters, checked with `pv_strings` against `electrical_environment`; see [`[[inverters]]`](#inverters). Their summed `nominal_power_w` replaces `inverter_loading_ratio` and `inverter_ac_rating_kw`. Set with `pv_strings` and `electrical_environment` |
 | `irradiance_resampling` | `"auto"` | `--irradiance-resampling` | Hourly-to-15-minute irradiance policy: `"auto"` conserves declared interval means and uses `"clear_sky"` otherwise. `"clear_sky_energy_conserving"` requires interval-mean weather metadata. Each component is conserved independently; no GHI/DNI/DHI closure is enforced. One of `"auto"`, `"clear_sky"`, `"clear_sky_energy_conserving"` |
 | `load_profile` | `"demandlib_h0"` | `--load-profile` | Load profile key; see [Load profiles](configuration.md#load-profiles) and [Packaged options](options.md#load-profiles) |
 | `load_profile_column` | `None` | `--load-profile-column` | For `load_profile = "custom"` only: the CSV column holding the load, if the file has several. Refused for any other profile |
@@ -76,6 +78,7 @@ is a `breos run` option that overrides the config file.
 | `pv_degradation_rate` | `0.005` | `--pv-degradation-rate` | Annual PV degradation rate, compounded and counted from the start of each year, so year 1 has none; see [Module aging](../api/pv.md#module-aging) |
 | `pv_loss_overrides` | `None` | — | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
 | `pv_module` | `None` | `--pv-module` | Module key from the built-in catalogue. `None` uses the catalogue's first entry, `Suntech_STP550S_STC` |
+| `pv_strings` | `None` | — | String topology: which modules of which array connect to which inverter input; see [`[[pv_strings]]`](#pv_strings). Set with `inverters` and `electrical_environment` |
 | `pvrow_height` | `None` | `--pvrow-height` | Height of the PV row center above ground; required by `"infinite_sheds"`, in the same unit as `pvrow_pitch` |
 | `pvrow_pitch` | `None` | `--pvrow-pitch` | Distance between adjacent PV rows; required by `"infinite_sheds"`, in the same unit as `pvrow_height` |
 | `reference_tariff` | *unset* | — | What the household would pay without the system: an import price, by period or flat, and a fixed charge, independent of the system's `[tariff]`. Unset, the no-system baseline is priced at the system's own prices; see [`[reference_tariff]`](#reference_tariff) and [No-system reference tariff](configuration.md#no-system-reference-tariff) |
@@ -156,6 +159,55 @@ One entry per array, as `[[pv_arrays]]` in TOML. `modules` is required; an array
 | `tilt` |  | `tilt` for this array; inherits the top-level value |
 | `tracking` |  | `tracking` for this array; inherits the top-level value |
 | `transposition_model` |  | `transposition_model` for this array; inherits the top-level value |
+
+## inverters
+
+One entry per specified inverter, as `[[inverters]]` in TOML. `None` or an omitted key means a datasheet value is unknown; the string check then reports it instead of assuming one. Set with `pv_strings` and `electrical_environment`. See [String topology checks](configuration.md#string-topology-checks).
+
+| Key | Required | Description |
+|---|---|---|
+| `nominal_power_w` | yes | AC nameplate (W) |
+| `inverter_efficiency` |  | Efficiency fraction. When every inverter sets it, their nameplate-weighted mean replaces `inverter_efficiency` |
+| `is_hybrid` |  | Whether the inverter also connects a battery; metadata |
+| `isc_comparison_factor` |  | Multiplier the manufacturer applies to array Isc before comparing it with an input's short-circuit rating, at least 1; 1 when unset |
+| `max_dc_power_w` |  | Maximum or recommended PV input power (W), or `inf` for none |
+| `max_dc_voltage_v` |  | Maximum DC input voltage (V), or `inf` for none |
+| `max_mppt_voltage_v` |  | Upper end of the MPPT voltage range (V), or `inf` for none |
+| `min_mppt_voltage_v` |  | Lower end of the MPPT voltage range (V), or 0 for none |
+| `mppts` |  | One table per MPPT input, in datasheet order; see [`mppts`](#mppts) |
+| `startup_voltage_v` |  | Start-up voltage (V), or 0 for none |
+
+## mppts
+
+One entry per MPPT input of an inverter, in datasheet order, as `[[inverters.mppts]]` in TOML. Inputs with different limits each list their own.
+
+| Key | Required | Description |
+|---|---|---|
+| `max_input_current_a` |  | Maximum operating input current (A), or `inf` for none |
+| `max_short_circuit_current_a` |  | Maximum array short-circuit current (A), or `inf` for none |
+| `max_strings` |  | Strings the input takes in parallel |
+
+## pv_strings
+
+One entry per group of identical strings on one input, as `[[pv_strings]]` in TOML. Every module of every array must be in exactly one string. Entries on the same input are counted together.
+
+| Key | Required | Description |
+|---|---|---|
+| `array` | yes | 0-based position of the array in `pv_arrays`; 0 without `pv_arrays` |
+| `inverter` | yes | 0-based position of the inverter in `inverters` |
+| `modules` | yes | Modules in series in each string |
+| `mppt` | yes | 0-based position of the input in that inverter's `mppts` |
+| `parallel` |  | Identical strings in parallel on the input; 1 by default |
+
+## electrical_environment
+
+Design temperatures for the string check, as `[electrical_environment]` in TOML.
+
+| Key | Required | Description |
+|---|---|---|
+| `max_ambient_temp_c` | yes | Hottest design ambient (°C) |
+| `min_design_temp_c` | yes | Coldest design ambient (°C), such as the ASHRAE 99.6 % extreme minimum |
+| `mounting` |  | Module mounting, which sets the cell temperature rise: `"flush"` (30 °C), `"tilted_rack"` (25 °C), `"ground_mount"` (20 °C); `"tilted_rack"` by default |
 
 ## tariff
 

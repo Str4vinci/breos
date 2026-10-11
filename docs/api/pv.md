@@ -60,6 +60,47 @@ simulation. Unknown efficiency leaves the engine's existing assumption in place.
    :members:
 ```
 
+## String topology checks
+
+{py:func}`breos.electrical.check_topology` checks declared strings against
+module and inverter datasheet limits at the site's design temperatures and
+returns structured findings. App runs it when the configuration sets
+`inverters`, `pv_strings` and `electrical_environment`; see
+[String topology checks](../getting-started/configuration.md#string-topology-checks).
+
+```python
+from breos.electrical import ElectricalEnvironment, PVString, check_topology
+from breos.pv_modules import get_module
+
+check = check_topology(
+    arrays=[(get_module("MyModule_450W"), 10)],
+    inverters=[inverter],
+    strings=[PVString(inverter=0, mppt=0, array=0, modules=10)],
+    environment=ElectricalEnvironment(min_design_temp_c=-5, max_ambient_temp_c=40),
+)
+check.status, [finding.code for finding in check.findings]
+```
+
+```{eval-rst}
+.. autofunction:: breos.electrical.check_topology
+
+.. autoclass:: breos.electrical.PVString
+   :members:
+
+.. autoclass:: breos.electrical.ElectricalEnvironment
+   :members:
+
+.. autoclass:: breos.electrical.TopologyCheck
+   :members:
+
+.. autoclass:: breos.electrical.ElectricalFinding
+   :members:
+
+.. autodata:: breos.electrical.MOUNTING_TEMPERATURE_RISE_C
+
+.. autodata:: breos.electrical.BIFACIAL_REAR_IRRADIANCE_RATIO
+```
+
 ## Production functions
 
 ```{eval-rst}

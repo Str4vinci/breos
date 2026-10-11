@@ -1,7 +1,9 @@
 # String Inverter Sizing Design Note
 
-**Status:** Proposed. Only Phase 1, aggregate inverter clipping, is
-implemented.
+**Status:** Phase 1, aggregate inverter clipping, is implemented. Phase 2,
+electrical feasibility checks, is implemented as ADR 0007, which supersedes
+this note's Phase 2 details and scopes Phase 3 as its D7. Phases 3 and 4 remain
+proposals.
 
 BREOS currently simulates PV production at the array level: a system has a
 module count, module model, tilt, azimuth, optional tracking, and an inverter

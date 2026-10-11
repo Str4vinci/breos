@@ -213,6 +213,24 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `InverterSpec.as_app_config()` supplies the rating and known efficiency to
   App, keeping catalog identity, prices and certification outside BREOS.
   DC/MPPT limits are metadata, not string-aware validation or simulation.
+- `breos.electrical.check_topology` checks a declared string topology against
+  module and inverter datasheet limits at the site's design temperatures: cold
+  Voc against the inverter and module voltage ratings, hot-cell Vmp and Voc
+  against the MPPT minimum and start-up voltage, Vmp against the MPPT maximum,
+  design Isc and operating current per input, string counts, parallel-string
+  matching, and that every module is strung exactly once. Findings are
+  errors, warnings or missing datasheet values; a missing value is never
+  replaced by a default.
+- App takes `inverters`, `pv_strings` and `electrical_environment` together.
+  The inverters' nameplates replace `inverter_loading_ratio` and
+  `inverter_ac_rating_kw`, and the result gains an `electrical` block with the
+  energy model's `fidelity`, the check's `status` and its `findings`. Energy is
+  still modelled for the system as a whole; a failing design still simulates.
+  Every result carries the block, with `status = "not_evaluated"` and no
+  findings when no topology is configured.
+- `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
+  only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
+  coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.
 
 ### Changed
 

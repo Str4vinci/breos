@@ -30,10 +30,14 @@ from breos.app_config import (  # noqa: E402
     ANNUAL_NETWORK_CREDIT_TABLE,
     APP_CONFIG_FIELDS,
     COSTS_TABLE,
+    ELECTRICAL_ENVIRONMENT_TABLE,
     INDOOR_MODEL_TABLE,
+    INVERTER_TABLE,
+    MPPT_TABLE,
     NESTED_TABLE_SPECS,
     PERIOD_TABLE,
     PV_ARRAY_TABLE,
+    PV_STRING_TABLE,
     REFERENCE_TARIFF_TABLE,
     SMART_CHARGING_TABLE,
     TARIFF_TABLE,
@@ -83,6 +87,30 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         PV_ARRAY_TABLE,
         "One entry per array, as `[[pv_arrays]]` in TOML. `modules` is required; an array inherits each other "
         "key it omits from the top level. See [Multi-array PV systems](configuration.md#multi-array-pv-systems).",
+    ),
+    (
+        "inverters",
+        INVERTER_TABLE,
+        "One entry per specified inverter, as `[[inverters]]` in TOML. `None` or an omitted key means a datasheet "
+        "value is unknown; the string check then reports it instead of assuming one. Set with `pv_strings` and "
+        "`electrical_environment`. See [String topology checks](configuration.md#string-topology-checks).",
+    ),
+    (
+        "mppts",
+        MPPT_TABLE,
+        "One entry per MPPT input of an inverter, in datasheet order, as `[[inverters.mppts]]` in TOML. Inputs "
+        "with different limits each list their own.",
+    ),
+    (
+        "pv_strings",
+        PV_STRING_TABLE,
+        "One entry per group of identical strings on one input, as `[[pv_strings]]` in TOML. Every module of every "
+        "array must be in exactly one string. Entries on the same input are counted together.",
+    ),
+    (
+        "electrical_environment",
+        ELECTRICAL_ENVIRONMENT_TABLE,
+        "Design temperatures for the string check, as `[electrical_environment]` in TOML.",
     ),
     (
         "tariff",

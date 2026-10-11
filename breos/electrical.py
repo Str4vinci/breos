@@ -24,9 +24,9 @@ the power and current ones when the datasheet does not publish it.
 import math
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from numbers import Integral, Real
-from typing import Literal
+from typing import Any, Literal
 
 from breos.equipment import InverterSpec
 from breos.pv_modules import PVModuleParams
@@ -445,3 +445,29 @@ def _check_inverter(
                 limit=low if ratio < low else high,
                 inverter=index,
             )
+
+
+@dataclass(frozen=True)
+class ElectricalSetup:
+    """The specified equipment, topology and site of an App run, with its check."""
+
+    inverters: tuple[InverterSpec, ...]
+    strings: tuple[PVString, ...]
+    environment: ElectricalEnvironment
+    check: TopologyCheck
+
+
+def electrical_result(setup: ElectricalSetup | None) -> dict[str, Any]:
+    """The ``electrical`` block of an App result.
+
+    ``fidelity`` says how energy was modelled. It is ``"aggregate"`` in every
+    run for now: the check does not yet make energy depend on the strings.
+    Without a topology, ``status`` is ``"not_evaluated"``.
+    """
+    if setup is None:
+        return {"fidelity": "aggregate", "status": "not_evaluated", "findings": []}
+    return {
+        "fidelity": "aggregate",
+        "status": setup.check.status,
+        "findings": [asdict(finding) for finding in setup.check.findings],
+    }

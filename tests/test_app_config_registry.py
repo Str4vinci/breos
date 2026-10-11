@@ -82,6 +82,9 @@ EXPECTED_DEFAULTS = {
     "om_escalation": None,
     "replacement_cost_learning": 0.0,
     "inverter_ac_rating_kw": None,
+    "inverters": None,
+    "pv_strings": None,
+    "electrical_environment": None,
 }
 
 # Every App flag of ``breos run``, in the order ``--help`` lists them: the

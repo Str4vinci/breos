@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import date, datetime
 from numbers import Real
 from pathlib import Path
@@ -37,7 +37,15 @@ from breos.economics import (
     default_amount_cost_keys,
     replacement_event_cost,
 )
+from breos.electrical import (
+    MOUNTING_TEMPERATURE_RISE_C,
+    ElectricalEnvironment,
+    ElectricalSetup,
+    PVString,
+    check_topology,
+)
 from breos.emissions import EmissionsParams
+from breos.equipment import InverterSpec, MpptSpec
 from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
 from breos.inverter import inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
@@ -668,6 +676,31 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         ),
         summary="inverter.ac_rating_kw",
     ),
+    "inverters": AppConfigField(
+        default=None,
+        doc=(
+            "Specified inverters, checked with `pv_strings` against `electrical_environment`; see "
+            "[`[[inverters]]`](#inverters). Their summed `nominal_power_w` replaces `inverter_loading_ratio` and "
+            "`inverter_ac_rating_kw`. Set with `pv_strings` and `electrical_environment`"
+        ),
+        summary="inverter.specs",
+    ),
+    "pv_strings": AppConfigField(
+        default=None,
+        doc=(
+            "String topology: which modules of which array connect to which inverter input; see "
+            "[`[[pv_strings]]`](#pv_strings). Set with `inverters` and `electrical_environment`"
+        ),
+        summary="inverter.strings",
+    ),
+    "electrical_environment": AppConfigField(
+        default=None,
+        doc=(
+            "Design temperatures and mounting for the string check; see "
+            "[`[electrical_environment]`](#electrical_environment). Set with `inverters` and `pv_strings`"
+        ),
+        summary="inverter.electrical_environment",
+    ),
     "start_date": AppConfigField(
         default="2023-01-01",
         cli_flags=("--start-date",),
@@ -1200,6 +1233,9 @@ class ResolvedAppConfig:
     # The configured [reference_tariff], or None: the no-system baseline is
     # then priced at the system's own prices.
     reference_tariff: ReferenceTariffSpec | None = None
+    # The specified inverters, strings and site with their check, or None
+    # without a string topology.
+    electrical: ElectricalSetup | None = None
 
 
 def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -1328,6 +1364,131 @@ PV_ARRAY_TABLE = TableSpec(
 )
 
 
+INVERTER_TABLE = TableSpec(
+    "inverters[i]",
+    keys=dict.fromkeys((f.name for f in fields(InverterSpec)), anything),
+    required=frozenset({"nominal_power_w"}),
+    docs={
+        "nominal_power_w": "AC nameplate (W)",
+        "inverter_efficiency": (
+            "Efficiency fraction. When every inverter sets it, their nameplate-weighted mean replaces "
+            "`inverter_efficiency`"
+        ),
+        "is_hybrid": "Whether the inverter also connects a battery; metadata",
+        "max_dc_voltage_v": "Maximum DC input voltage (V), or `inf` for none",
+        "max_dc_power_w": "Maximum or recommended PV input power (W), or `inf` for none",
+        "min_mppt_voltage_v": "Lower end of the MPPT voltage range (V), or 0 for none",
+        "max_mppt_voltage_v": "Upper end of the MPPT voltage range (V), or `inf` for none",
+        "startup_voltage_v": "Start-up voltage (V), or 0 for none",
+        "mppts": "One table per MPPT input, in datasheet order; see [`mppts`](#mppts)",
+        "isc_comparison_factor": (
+            "Multiplier the manufacturer applies to array Isc before comparing it with an input's short-circuit "
+            "rating, at least 1; 1 when unset"
+        ),
+    },
+)
+
+MPPT_TABLE = TableSpec(
+    "inverters[i].mppts[j]",
+    keys=dict.fromkeys((f.name for f in fields(MpptSpec)), anything),
+    docs={
+        "max_input_current_a": "Maximum operating input current (A), or `inf` for none",
+        "max_short_circuit_current_a": "Maximum array short-circuit current (A), or `inf` for none",
+        "max_strings": "Strings the input takes in parallel",
+    },
+)
+
+PV_STRING_TABLE = TableSpec(
+    "pv_strings[i]",
+    keys=dict.fromkeys((f.name for f in fields(PVString)), anything),
+    required=frozenset({"inverter", "mppt", "array", "modules"}),
+    docs={
+        "inverter": "0-based position of the inverter in `inverters`",
+        "mppt": "0-based position of the input in that inverter's `mppts`",
+        "array": "0-based position of the array in `pv_arrays`; 0 without `pv_arrays`",
+        "modules": "Modules in series in each string",
+        "parallel": "Identical strings in parallel on the input; 1 by default",
+    },
+)
+
+ELECTRICAL_ENVIRONMENT_TABLE = TableSpec(
+    "electrical_environment",
+    keys=dict.fromkeys((f.name for f in fields(ElectricalEnvironment)), anything),
+    required=frozenset({"min_design_temp_c", "max_ambient_temp_c"}),
+    docs={
+        "min_design_temp_c": "Coldest design ambient (°C), such as the ASHRAE 99.6 % extreme minimum",
+        "max_ambient_temp_c": "Hottest design ambient (°C)",
+        "mounting": (
+            "Module mounting, which sets the cell temperature rise: "
+            + ", ".join(f'`"{key}"` ({rise:g} °C)' for key, rise in MOUNTING_TEMPERATURE_RISE_C.items())
+            + '; `"tilted_rack"` by default'
+        ),
+    },
+)
+
+_ELECTRICAL_KEYS = ("inverters", "pv_strings", "electrical_environment")
+
+
+def _built(cls: Callable[..., Any], table: dict[str, Any], where: str) -> Any:
+    """Construct a dataclass from a checked table, naming the table in a refusal."""
+    try:
+        return cls(**table)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"'{where}': {exc}") from exc
+
+
+def _electrical_inputs(
+    cfg: Mapping[str, Any],
+) -> tuple[tuple[InverterSpec, ...], tuple[PVString, ...], ElectricalEnvironment] | None:
+    """Validate the three string-topology keys and build their objects, or None when unset."""
+    present = [key for key in _ELECTRICAL_KEYS if cfg.get(key) is not None]
+    if not present:
+        return None
+    if len(present) < len(_ELECTRICAL_KEYS):
+        missing = ", ".join(f"'{key}'" for key in _ELECTRICAL_KEYS if key not in present)
+        raise ValueError(f"'inverters', 'pv_strings' and 'electrical_environment' go together; set {missing}")
+    for key in ("inverters", "pv_strings"):
+        if not isinstance(cfg[key], (list, tuple)):
+            raise TypeError(f"'{key}' must be a list of tables")
+    if not cfg["inverters"]:
+        raise ValueError("'inverters' needs at least one inverter")
+    inverters = []
+    for i, entry in enumerate(cfg["inverters"]):
+        table = INVERTER_TABLE.validate(entry, f"inverters[{i}]")
+        if table.get("mppts") is not None:
+            if not isinstance(table["mppts"], (list, tuple)):
+                raise TypeError(f"'inverters[{i}].mppts' must be a list of tables")
+            table["mppts"] = tuple(
+                _built(MpptSpec, MPPT_TABLE.validate(mppt, f"inverters[{i}].mppts[{j}]"), f"inverters[{i}].mppts[{j}]")
+                for j, mppt in enumerate(table["mppts"])
+            )
+        inverters.append(_built(InverterSpec, table, f"inverters[{i}]"))
+    strings = tuple(
+        _built(PVString, PV_STRING_TABLE.validate(entry, f"pv_strings[{i}]"), f"pv_strings[{i}]")
+        for i, entry in enumerate(cfg["pv_strings"])
+    )
+    environment = _built(
+        ElectricalEnvironment,
+        ELECTRICAL_ENVIRONMENT_TABLE.validate(cfg["electrical_environment"]),
+        "electrical_environment",
+    )
+    return tuple(inverters), strings, environment
+
+
+def _check_electrical_sizing(config: Mapping[str, Any]) -> None:
+    """Specified inverters size the AC side; refuse the keys that would size it twice."""
+    if config.get("inverters") is None:
+        return
+    for key in ("inverter_ac_rating_kw", "inverter_loading_ratio"):
+        if config.get(key) is not None:
+            raise ValueError(f"'inverters' sets the AC rating from their nameplates; remove '{key}'")
+    entries = config["inverters"] if isinstance(config["inverters"], (list, tuple)) else ()
+    if config.get("inverter_efficiency") is not None and any(
+        isinstance(entry, Mapping) and entry.get("inverter_efficiency") is not None for entry in entries
+    ):
+        raise ValueError("'inverters' set their own efficiency; remove 'inverter_efficiency'")
+
+
 def _validate_tracker_settings(settings: dict[str, Any], where: str = "") -> None:
     """Validate the tracker keys shared by the top level and arrays.
 
@@ -1434,6 +1595,7 @@ def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
     _validate_period(cfg)
     _validate_smart_charging(cfg, tariff_spec)
     _validate_reachable_gcr(cfg, has_arrays)
+    _electrical_inputs(cfg)
     return tariff_spec
 
 
@@ -2077,6 +2239,7 @@ NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
     "terminal_value": TERMINAL_VALUE_TABLE,
     "smart_charging": SMART_CHARGING_TABLE,
     "period": PERIOD_TABLE,
+    "electrical_environment": ELECTRICAL_ENVIRONMENT_TABLE,
 }
 
 
@@ -2291,7 +2454,7 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
     if cfg["inverter_ac_rating_kw"] is not None:
         if _finite_real(cfg["inverter_ac_rating_kw"], "inverter_ac_rating_kw") <= 0:
             raise ValueError("'inverter_ac_rating_kw' must be > 0")
-    elif _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
+    elif cfg.get("inverters") is None and _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
         raise ValueError("'inverter_loading_ratio' must be > 0")
 
 
@@ -2807,9 +2970,10 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     """Merge, validate, and resolve App configuration."""
     normalized = normalize_config_keys(config)
     _check_one_inverter_sizing(normalized)
+    _check_electrical_sizing(normalized)
     cfg = merge_defaults(normalized)
-    if cfg["inverter_ac_rating_kw"] is not None:
-        # The absolute rating replaces the ratio, so the ratio is reported unset.
+    if cfg["inverter_ac_rating_kw"] is not None or cfg["inverters"] is not None:
+        # An absolute rating replaces the ratio, so the ratio is reported unset.
         cfg["inverter_loading_ratio"] = None
     _normalise_config_values(cfg)
     tariff = validate_config(cfg)
@@ -2826,6 +2990,16 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     # into a fresh dict rather than mutating the merged config in place.
     cfg = {**cfg, "n_modules": n_modules}
     cost_params = resolve_costs(cfg)
+    electrical = _resolve_electrical(cfg, pv_arrays, pv_params, n_modules)
+    if electrical is not None:
+        cfg["inverter_ac_rating_kw"] = sum(inverter.nominal_power_w for inverter in electrical.inverters) / 1000
+        rated = [(i.nominal_power_w, i.inverter_efficiency) for i in electrical.inverters]
+        known = [(power, efficiency) for power, efficiency in rated if efficiency is not None]
+        if len(known) == len(rated):
+            # The nameplate-weighted mean, as the aggregate model has one inverter.
+            cfg["inverter_efficiency"] = sum(p * e for p, e in known) / sum(p for p, _ in known)
+        elif known:
+            raise ValueError("Give every entry of 'inverters' an inverter_efficiency, or none")
     ac_capacity_w: float | None
     if cfg["inverter_ac_rating_kw"] is not None:
         ac_capacity_w = float(cfg["inverter_ac_rating_kw"]) * 1000
@@ -2858,4 +3032,17 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         period=resolve_period(cfg, timezone),
         reference_tariff=resolve_reference_tariff_spec(cfg, timezone, currency),
         currency=currency,
+        electrical=electrical,
     )
+
+
+def _resolve_electrical(
+    cfg: Mapping[str, Any], pv_arrays: list[dict[str, Any]], pv_params: PVModuleParams, n_modules: int
+) -> ElectricalSetup | None:
+    """Check the configured string topology against the resolved arrays, or None without one."""
+    inputs = _electrical_inputs(cfg)
+    if inputs is None:
+        return None
+    inverters, strings, environment = inputs
+    arrays = [(get_module(arr["module"]), arr["modules"]) for arr in pv_arrays] or [(pv_params, n_modules)]
+    return ElectricalSetup(inverters, strings, environment, check_topology(arrays, inverters, strings, environment))

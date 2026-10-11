@@ -13,6 +13,7 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig
 from breos.battery import LEDGER_SCHEMA_VERSION, resistance_to_efficiency
 from breos.economics import projection_rates_record
+from breos.electrical import electrical_result
 from breos.execution import config_has_battery
 from breos.projection import build_battery_config
 from breos.result_schema import RESULT_SCHEMA_VERSION
@@ -437,6 +438,7 @@ def build_result(
         # Copied, so editing a result cannot reach the stored run that
         # App.revalue prices again.
         "pv_loss_waterfall": deepcopy(artifacts.pv_loss_waterfall),
+        "electrical": electrical_result(resolved.electrical),
         "provenance": _provenance(resolved, artifacts, input_repairs),
         "degradation": deepcopy(artifacts.degradation_summary),
     }

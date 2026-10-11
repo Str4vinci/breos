@@ -903,6 +903,11 @@
    }
   }
  },
+ "electrical": {
+  "fidelity": "aggregate",
+  "status": "not_evaluated",
+  "findings": []
+ },
  "provenance": {
   "breos_version": "0.7.0",
   "ledger_schema_version": "3.0",
@@ -952,6 +957,9 @@
    "inverter_efficiency": 0.96,
    "inverter_loading_ratio": 1.25,
    "inverter_ac_rating_kw": null,
+   "inverters": null,
+   "pv_strings": null,
+   "electrical_environment": null,
    "start_date": "2023-01-01",
    "tariff": null,
    "reference_tariff": null,

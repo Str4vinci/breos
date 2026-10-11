@@ -35,6 +35,7 @@ flag. For the step-by-step flows of the first year, use
 | `financial` | Yearly financial projection rows (year 0 = investment) |
 | `yearly` | Per-year breakdown of production, load, imports, exports |
 | `pv_loss_waterfall` | Year 1 PV loss waterfall from the irradiance reference through the static PVWatts losses, with inverter and dispatch blocks beside it (see [PV loss waterfall](#pv-loss-waterfall)) |
+| `electrical` | How energy was modelled and the result of the string topology check (see [Electrical check](#electrical-check)) |
 | `degradation` | Battery degradation engine, model, initial and final state of health and replacement events |
 | `smart_charging` | Present with [smart charging](configuration.md#smart-charging): grid charging, delivery by origin and stored energy by origin |
 | `pv_arrays` | Present with `pv_arrays` (see [Multi-array systems](#multi-array-systems)) |
@@ -262,6 +263,32 @@ boundary receive no credit.
 When `pv_arrays` is set, the result also contains a `pv_arrays` list with
 each array's resolved configuration: `modules`, `module`, `tilt`, `azimuth`,
 and `tracking`, plus the resolved tracker geometry for a tracking array.
+
+## Electrical check
+
+`electrical` is in every result:
+
+| Key | Meaning |
+|---|---|
+| `fidelity` | How energy was modelled. `"aggregate"`: the array's DC output feeds one AC rating, whatever the string topology |
+| `status` | `"not_evaluated"` without a [string topology](configuration.md#string-topology-checks); otherwise `"fail"` on any error, `"incomplete"` on missing data, `"warning"` on any warning, else `"pass"` |
+| `findings` | One record per finding, in a stable order |
+
+Each finding has `code`, `severity`, `message`, `value` and `limit` (in the
+unit the message names), and `inverter`, `mppt`, `string`, `array` and
+`field`, which are `null` where they do not apply. `string` is the position of
+the `pv_strings` entry; `field` names the datasheet value a `missing` finding
+needs. Severities:
+
+| Severity | Meaning |
+|---|---|
+| `error` | A hard limit is broken or the wiring is inconsistent. The design is not buildable as declared |
+| `warning` | An operating limit is exceeded. The inverter holds its limit and loses some energy |
+| `missing` | A datasheet value the check needs is unknown, so that check did not run |
+
+A design with `status = "fail"` is still simulated, so its numbers can explain
+why it loses against a buildable one. They do not describe a system that can be
+built.
 
 ## PV loss waterfall
 

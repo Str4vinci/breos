@@ -517,6 +517,88 @@ unless the array sets `tracking = "fixed"`. An array entry accepts only the
 keys named in this section and the sky, ground, and bifacial keys; any other
 key, such as a misspelled `tlt`, is rejected.
 
+## String topology checks
+
+With specified inverters and a string topology, BREOS checks whether the
+design is electrically buildable: string voltages against the inverter and
+module ratings at the site's design temperatures, and currents and string
+counts against each MPPT input. Three keys go together:
+
+```toml
+[[pv_arrays]]
+modules = 7
+module = "MyModule_450W"
+tilt = 20
+azimuth = 90
+
+[[pv_arrays]]
+modules = 7
+module = "MyModule_450W"
+tilt = 20
+azimuth = 270
+
+[[inverters]]
+nominal_power_w = 6000
+inverter_efficiency = 0.982
+max_dc_voltage_v = 1000
+min_mppt_voltage_v = 80
+max_mppt_voltage_v = 800
+startup_voltage_v = 80
+
+[[inverters.mppts]]
+max_input_current_a = 25
+max_short_circuit_current_a = 40
+max_strings = 2
+
+[[inverters.mppts]]
+max_input_current_a = 12.5
+max_short_circuit_current_a = 20
+max_strings = 1
+
+[[pv_strings]]
+inverter = 0
+mppt = 0
+array = 0
+modules = 7
+
+[[pv_strings]]
+inverter = 0
+mppt = 1
+array = 1
+modules = 7
+
+[electrical_environment]
+min_design_temp_c = -5
+max_ambient_temp_c = 40
+mounting = "tilted_rack"
+```
+
+`inverter`, `mppt` and `array` are 0-based positions. Each `pv_strings`
+entry is `parallel` identical strings (1 by default) of `modules` modules in
+series, all from one array, on one input. Every module of every array must be
+in exactly one string; to leave modules out, lower the array's `modules`.
+Without `pv_arrays`, the single array is `array = 0`.
+
+A datasheet value you omit is unknown, and the check reports it rather than
+assuming one. A limit the equipment does not have is `inf` for an upper limit
+(TOML's `inf`, or `math.inf` in Python) and 0 for a lower limit. JSON has no
+infinity, so a JSON caller that cannot state "no limit" should leave the
+topology keys out and size the inverter with `inverter_ac_rating_kw`.
+
+The inverters replace `inverter_loading_ratio` and `inverter_ac_rating_kw`:
+the AC rating is the sum of `nominal_power_w`. When every inverter sets
+`inverter_efficiency`, their nameplate-weighted mean replaces the top-level
+`inverter_efficiency`. Modules may set `T_Vmp_pct` and `Max_System_Voltage`
+(see {py:class}`~breos.pv_modules.PVModuleParams`). The check derives an
+unpublished Vmp coefficient from `T_Pmax_pct - T_Isc_pct`, and reports a
+missing module voltage rating.
+
+The check does not change simulated energy. Energy is still modelled for the
+system as a whole, as `electrical.fidelity = "aggregate"` in the result says,
+and a design that fails the check still simulates, as a diagnostic. See
+[Electrical check](interpreting-results.md#electrical-check) for the result
+and {py:func}`breos.electrical.check_topology` for the rules.
+
 ## Sky-diffusion (transposition) model
 
 To compute plane-of-array (POA) irradiance, BREOS transposes the horizontal

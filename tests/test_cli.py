@@ -768,7 +768,7 @@ annual_consumption_kwh = 3500
     error = capsys.readouterr().err
     assert "Unknown sweep key 'location.foo'" in error
     assert (
-        "Dotted keys are supported only under 'battery_indoor_model', 'costs', 'period', 'reference_tariff', "
+        "Dotted keys are supported only under 'battery_indoor_model', 'costs', 'electrical_environment', 'period', 'reference_tariff', "
         "'smart_charging', 'tariff'" in error
     )
 
