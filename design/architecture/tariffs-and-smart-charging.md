@@ -64,7 +64,9 @@ guides and in the [Tariffs API reference](../../docs/api/tariffs.md).
    inline, optionally with calendar-month seasons (a quarter is a season of
    three months) that switch rules and prices by month.
 2. **Prices** for import and export per period, or per season and period,
-   plus a daily fixed charge, in one currency. 0.7.0 supports EUR only.
+   plus a daily fixed charge, in one currency, an ISO 4217 code. 0.7.0
+   supported EUR only; 0.7.1 accepts any code, and the run's currency
+   (ADR 0003 E13) must match it.
 3. A **resolved tariff** is both of these aligned to one simulation index. It
    holds the period labels, the price arrays, the civil-day boundaries and
    separate schedule and price hashes.
@@ -113,7 +115,7 @@ instructions reproduce greedy dispatch bit for bit.
 | `disabled` (or no table) | Greedy self-consumption | Yes | Yes | Yes |
 | `fixed_target` | Grid-charges toward `target_usable_fraction` in `charge_periods`; discharges in `discharge_periods` | Yes | Yes | Yes |
 | `discharge_only` | Discharges only in `discharge_periods`; never grid-charges | Yes | Yes | Yes |
-| `daily_persistence` (experimental) | Plans one target per civil day from the last complete observed day (A12) | Yes | Refused | Refused |
+| `daily_persistence` (experimental) | Plans one target per civil day from the last complete observed day (A12), or per charge window from its start (A19) | Yes | Refused | Refused |
 
 The amendments to ADR 0002 settle these conventions:
 
@@ -127,10 +129,13 @@ The amendments to ADR 0002 settle these conventions:
   discharge counts as self-consumption. Avoided emissions use net exchange,
   so grid energy that the battery time-shifts earns no credit (A8, A10).
 - Charge and discharge periods are disjoint by default. With
-  `overlap_policy = "hold_target"` (`fixed_target` only), a period in both
-  sets holds the target as the discharge floor (A14).
-- Controllers decide at configured-timezone civil-day boundaries.
-  Degradation windows stay positional (A11).
+  `overlap_policy = "hold_target"` (`fixed_target` and `daily_persistence`),
+  a period in both sets holds the target as the discharge floor (A14). Under
+  `daily_persistence` and the daily-target oracle the floor follows each
+  day's target (A18).
+- Controllers decide at configured-timezone civil-day boundaries, and may
+  also decide on steps they mark inside a day, such as charge-window starts.
+  Degradation windows stay positional (A11, A19).
 - Normal runs carry stored energy, origins and degradation state from one
   project year to the next (`physical_carry`).
 
@@ -161,14 +166,27 @@ through the production App run (`tools/oracles/replay.py`) before it reports
 a cost. The two tools answer different questions and are not
 interchangeable:
 
-- `tools/oracles/daily_target_dp.py` is an **opportunity benchmark**. It
-  plans the first project year with perfect foresight, with one grid-charge
-  target per civil day from a grid of usable fractions. It holds state of
-  health and efficiencies at the year's opening values and keeps the
-  configured instruction layout. The result is the best schedule within that
-  policy class under the planner's model. It is not a bound and not a
-  lifetime result: other policies can do better, and the replayed cost
-  under production physics differs from the plan as health moves.
+- `tools/oracles/daily_target_dp.py` gives **perfect-information daily
+  targets** on a grid. It plans a project year with perfect foresight, with
+  one grid-charge target per civil day from a grid of usable fractions
+  (`--target-levels`) and a grid of stored energy (`--soc-states`). It
+  holds state of health and efficiencies at the year's opening values and
+  keeps the configured instruction layout. By default it plans the first
+  year, and every year replays that plan. With `--planning yearly` (ADR
+  0002 A16) it plans each year as the year begins: on that year's degraded
+  PV, load and temperature, and at the stored energy, health and
+  efficiencies that the production replay of the earlier years reached. The
+  report records the planning mode and each year's inputs, opening state,
+  plan and replayed cost. `--wear-cost-per-kwh` gives every solve the
+  planner's wear weight (ADR 0002 A17, default 0); the report records it
+  and each plan's wear cost apart from its stage cost.
+  `--decision-boundary charge_window_start` plans one target per charge
+  window instead of per civil day (A19). The result is the
+  best schedule within that policy class under the planner's model. It is
+  not a bound, and not a bound on lifetime NPV: other policies can do
+  better, the replayed cost under production physics differs from the plan
+  as health moves, and a year's choice ignores what its cycling costs later
+  years.
 - `tools/oracles/lp_bound.py` is a **conditional lower bound** on the first
   project year's import cost less export revenue, without the fixed charge.
   The linear program relaxes the dispatch rules. The bound holds only for a
@@ -179,7 +197,7 @@ interchangeable:
   checks each reported run against the bound and reports `bound_is_strict`.
   Outside this scope it claims nothing.
 
-Neither tool gives a forecast, a deployable controller or a lifetime NPV.
+Neither tool gives a forecast, a deployable controller or a bound on lifetime NPV.
 
 ## Outside 0.7.0
 

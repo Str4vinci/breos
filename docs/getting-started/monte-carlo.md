@@ -103,6 +103,8 @@ Start with `--runs 10` to check that the config resolves, then raise it.
 `--n-procs` runs trajectories in parallel processes. On Linux this usually
 cuts wall-clock time; on macOS and Windows the start-up cost of each process
 can outweigh it.
+Each worker runs NumPy's BLAS library on one thread, so workers do not compete
+for the same cores; the calling process keeps its own thread settings.
 
 ## What you get back
 
@@ -113,7 +115,8 @@ auditable later. Both names follow the `--output` path unless
 `--provenance-output` sets another. The provenance and the
 `--json` output carry `result_schema_version` and `currency`, the currency of
 every money column (see
-[Interpreting results](interpreting-results.md#currency-and-result-format)).
+[Interpreting results](interpreting-results.md#currency-and-result-format)),
+and each CSV has a `currency` column.
 
 `--collect-yearly` adds `monte_carlo_results_yearly.csv`, with one row per run
 and projection year, carrying the energy, degradation, and discounted-cost

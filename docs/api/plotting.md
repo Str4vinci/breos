@@ -60,9 +60,9 @@ plot_breakeven_comparison(results, ["PV only", "PV + 5 kWh", "PV + 10 kWh"], "pl
 
 Each payback line is labelled with its year. Scenarios that share a
 no-system cost share one baseline, named "No system" when all of them share
-it. An App result records its currency; a cost projection read back from CSV
-does not, so pass `currency=` to label it, or its amounts show no currency
-code.
+it. An App result records its currency, and so does a cost projection CSV
+that BREOS wrote, in its `currency` column; for another table, pass
+`currency=` to label it, or its amounts show no currency code.
 
 ```{eval-rst}
 .. autosummary::
@@ -112,10 +112,11 @@ difference, and a metric with a negative value such as a loss in
 `npv_savings`, use a diverging colour scale centred on zero, unless `vmin`
 or `vmax` is given.
 
-Sweep CSVs do not record their currency. Pass `currency="EUR"` (or another
-code) to label their money; without it, money labels name no currency, such
-as "NPV savings". A DataFrame can record it in `attrs["currency"]`, as the
-optimizer's `details["pareto"]` frame does.
+A sweep CSV records its currency in a `currency` column, which labels its
+money. A DataFrame can record it in `attrs["currency"]`, as the optimizer's
+`details["pareto"]` frame does. For a table that records neither, pass
+`currency="EUR"` (or another code); without it, money labels name no
+currency, such as "NPV savings".
 
 ```{eval-rst}
 .. autosummary::

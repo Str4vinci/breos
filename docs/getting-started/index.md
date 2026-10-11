@@ -1,12 +1,10 @@
-# Guides
+# Get started
 
-Start with the installation check and quickstart, then browse by the task you
-are trying to complete. The guides use the `breos.App` facade and the same
-configuration keys accepted by the command-line interface.
+Install BREOS, run the quickstart, and collect the inputs a study needs. The
+pages use the `breos.App` facade and the same configuration keys the
+command-line interface accepts.
 
-## First run
-
-::::{grid} 1 2 2 3
+::::{grid} 1 2 2 2
 :gutter: 3
 
 :::{grid-item-card} Install BREOS
@@ -24,6 +22,14 @@ entry point without network access.
 Run a small PV + battery simulation from TOML, Python, or the command line.
 :::
 
+:::{grid-item-card} Required inputs
+:link: inputs
+:link-type: doc
+
+Identify the project weather, load, components, costs, and emissions data you
+need for a defensible result.
+:::
+
 :::{grid-item-card} Troubleshooting
 :link: troubleshooting
 :link-type: doc
@@ -34,88 +40,21 @@ problems.
 
 ::::
 
-## Build a study
+## Next steps
 
-::::{grid} 1 2 2 3
-:gutter: 3
+- The [examples](../gallery/index.rst) are stored runs that answer common
+  questions: what a battery adds, east-west roofs, tariffs, battery
+  replacement, Monte Carlo and the optimizer front.
+- The [user guide](../user-guide/index.md) covers configuration,
+  optimization, Monte Carlo, reading the results, and short how-to guides.
+- The [models](../modeling/index.md) pages state the physical boundaries,
+  model choices and data sources to check before drawing conclusions.
 
-:::{grid-item-card} Required inputs
-:link: inputs
-:link-type: doc
+```{toctree}
+:hidden:
 
-Identify the project weather, load, components, costs, and emissions data you
-need for a defensible result.
-:::
-
-:::{grid-item-card} Case examples
-:link: ../gallery/index
-:link-type: doc
-
-Stored runs that answer common questions: what a battery adds, east-west
-roofs, tariffs, battery replacement, Monte Carlo and the optimizer front.
-:::
-
-:::{grid-item-card} How-to guides
-:link: ../how-to/index
-:link-type: doc
-
-Configurations to copy for custom coordinates, your own PV module, partial
-years, sweeps, 15-minute runs, external load profiles and offline weather.
-:::
-
-:::{grid-item-card} Optimization
-:link: optimization
-:link-type: doc
-
-Search for a design instead of specifying one: NSGA-II sizing, projected-lifetime
-objectives, and detailed evaluation of a chosen candidate.
-:::
-
-:::{grid-item-card} Monte Carlo
-:link: monte-carlo
-:link-type: doc
-
-Resample weather years and demand to get outcome distributions rather than one
-number, with reproducible seeds and provenance.
-:::
-
-:::{grid-item-card} Configuration
-:link: configuration
-:link-type: doc
-
-Understand every `App` config area, its defaults, and its validation rules.
-:::
-
-:::{grid-item-card} Configuration key reference
-:link: config-reference
-:link-type: doc
-
-Look up every config key and nested-table key, with its default, CLI flag and
-allowed values.
-:::
-
-:::{grid-item-card} Packaged options
-:link: options
-:link-type: doc
-
-Browse the bundled locations, modules, costs, emissions factors, and load
-profiles.
-:::
-
-:::{grid-item-card} Interpreting results
-:link: interpreting-results
-:link-type: doc
-
-Read headline KPIs and the yearly, monthly, financial, degradation, and
-provenance blocks.
-:::
-
-:::{grid-item-card} Models and assumptions
-:link: ../modeling/index
-:link-type: doc
-
-Understand physical boundaries, model choices, validation policy, and data
-sources before drawing conclusions.
-:::
-
-::::
+installation
+quickstart
+inputs
+troubleshooting
+```

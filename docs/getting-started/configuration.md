@@ -175,6 +175,157 @@ optimizer records it in `battery_replacement_treatment`. A direct
 caller that splits one horizon across several calls must keep
 `allow_terminal_replacement=True` on every span except the last.
 
+### Minimum service time of a replacement
+
+`battery_allow_terminal_replacement` covers only the last day. A pack that
+reaches end of life on day 100 of the last project year is still bought at
+full price and serves only the rest of that year.
+`battery_replacement_min_remaining_years` sets the fewest project years a
+replacement must have left to serve:
+
+```toml
+projection_years = 20
+battery_replacement_min_remaining_years = 1.0  # no pack bought in the last year
+```
+
+- A replacement is skipped when less than this time is left from the swap
+  to the end of the project. The time is counted as
+  `Replacement_Time_Years` books a swap: each project year is one simulated
+  year, and the swap happens at the end of the step that closes the
+  degradation period where the pack reaches end of life. With 20 years and
+  `1.0`, a pack that reaches end of life at 19.3 years is not replaced. A
+  swap with exactly the minimum left, such as one at the close of year 19,
+  still happens.
+- The comparison is made in simulation steps: the steps left in the project
+  against the minimum times the steps in one year. A minimum such as
+  `0.25`, `0.5` or `1.0` is a whole number of steps, so its boundary is
+  exact.
+- A skipped pack stays installed. It keeps ageing below its end-of-life
+  threshold until the end of the project, and the result reports its state
+  of health, cycles, resistance and stored energy. No replacement, replaced
+  capacity or replacement cost is recorded for it.
+- The default `0` replaces at every end of life, as before. Any positive
+  value also skips the final period's replacement, so
+  `battery_allow_terminal_replacement` matters only when this key is `0`.
+- A `[period]` window is one project year, so the minimum is a fraction of
+  the window.
+
+Monte Carlo applies the key to each trajectory, measured to the end of that
+trajectory's years. The optimizer takes it as `[battery]
+replacement_min_remaining_years` and records it in
+`battery_replacement_treatment`. The resolved value is in
+`provenance.resolved_config`. A direct
+{py:class}`~breos.battery.BatteryConfig` call treats its own span as the
+last project year; set `replacement_years_after_span` to the number of
+project years that follow it.
+
+Every end-of-life crossing is reported with what was done and why: a skipped
+swap shows as `"kept"` (or `"retired"`, below) with the reason
+`"min_remaining_years"` or `"terminal_period"`. See
+[End-of-life events](interpreting-results.md#end-of-life-events).
+
+### Retiring the battery instead of keeping it
+
+A skipped replacement keeps the old battery in service by default: it goes on
+charging and discharging below its threshold until the end of the project.
+That is not always better than no battery. Under smart charging, for
+example, grid charging whose conversion and round-trip losses exceed the
+tariff saving loses money every day the battery runs.
+`battery_skipped_replacement_action` chooses what happens instead:
+
+```toml
+projection_years = 20
+battery_replacement_min_remaining_years = 1.0
+battery_skipped_replacement_action = "retire"  # "keep" is the default
+```
+
+- `"keep"` (the default) is the behaviour described above, until the
+  pack's state of health reaches 0: a pack with no capacity left is retired
+  then, as `"retire"` retires one, with an end-of-life event of the reason
+  `"zero_health"`.
+- `"retire"` switches the battery off at the crossing, the instant the
+  skipped replacement would have been booked at. The step that closes the
+  degradation period was dispatched as usual. From the next step the battery
+  neither charges nor discharges, from PV or from the grid, and the system
+  runs exactly as a PV-only system with the same inverter: PV serves the
+  load first, the rest is exported, and the grid covers what PV does not.
+  Smart-charging instructions, the daily controller and its plans still run
+  and are recorded, but they no longer move any energy.
+- The energy stored at that instant leaves the system with the retired
+  pack: it is reported in `Battery_Replacement_Energy_Removed` (and the year
+  rows' `Replacement_Energy_Removed_kWh`) with its PV and grid origins, and
+  nothing is added. The pack's open rainflow half cycles are counted, as for
+  a replaced pack.
+- The investment and every cash flow up to the crossing are unchanged. No
+  replacement is bought or priced, and the fixed charge and O&M continue as
+  before: BREOS has no separate battery O&M line to stop.
+- The retired pack stays installed at zero charge and keeps its reported
+  state of health. The aging model still runs on it, at zero charge and
+  with no cycles; at zero charge both engines give little or no further
+  fade. Like a kept pack, it is at or below
+  its threshold, so an enabled `[terminal_value]` credits it nothing.
+- The key acts only on a crossing whose replacement is skipped, so with the
+  defaults (`battery_enable_replacement = true`,
+  `battery_replacement_min_remaining_years = 0`,
+  `battery_allow_terminal_replacement = true`) it changes nothing. To retire
+  at the first end of life and never replace, set
+  `battery_enable_replacement = false` (below).
+
+Monte Carlo applies the key to each trajectory and the optimizer takes it as
+`[battery] skipped_replacement_action`; both record it as they record the
+minimum service time, and an enabled `[terminal_value]` lists it in its
+`replacement_policy`. A retired battery stays off in every later projection
+year. A direct {py:class}`~breos.battery.BatteryConfig` call takes
+`skipped_replacement_action`. A span continued from a retired span's
+degradation state stays retired; `battery_retired=True` says so explicitly.
+
+### Running without replacement
+
+`battery_enable_replacement = false` never replaces the battery. One pack then
+serves the whole projection, which is how to follow its state of health past
+the end-of-life threshold:
+
+```toml
+projection_years = 20
+battery_enable_replacement = false
+battery_skipped_replacement_action = "keep"  # or "retire"
+```
+
+- The pack reaches end of life where it would with replacement on, at the
+  first degradation period that closes at or below `battery_eol_percentage`.
+  Only the swap is skipped, and the crossing is reported as an end-of-life
+  event with the reason `"replacement_disabled"`.
+- With `"keep"` (the default) the pack stays in service to the end of the
+  project. Nothing is frozen or restored: the aging model keeps running, the
+  state of health keeps falling below the threshold, and the SOC window
+  shrinks with it. With `enable_resistance_fade` the efficiencies keep
+  falling too. No replacement is bought or priced. If the state of health
+  reaches 0, the pack is retired at that degradation period's close, as
+  with `"retire"`, and the event's reason is `"zero_health"`.
+- With `"retire"` the pack is switched off at that first crossing, as
+  described above, and the project finishes PV-only.
+- Every crossing is skipped already, so `battery_replacement_min_remaining_years`
+  and `battery_allow_terminal_replacement` change nothing more. The event's
+  reason stays `"replacement_disabled"` when they would also have skipped it.
+- A kept pack ends at or below its threshold, so an enabled
+  `[terminal_value]` credits it nothing. A pack that never reaches the
+  threshold is credited as with replacement on.
+- A state of health far below the usual end-of-life thresholds lies outside
+  the ageing data the models were fitted to. Treat it as a model projection,
+  not as a measured behaviour.
+
+`battery_degradation_history` in the result lists the pack's state at the
+end of every project year; see
+[Degradation history](interpreting-results.md#degradation-history). The
+gallery page {doc}`/gallery/battery/plot_07_ageing` follows one pack this
+way under several degradation models. Monte
+Carlo applies the key to each trajectory, and the optimizer takes it as
+`[battery] enable_replacement` and records it in
+`battery_replacement_treatment`. The resolved value is in
+`provenance.resolved_config`, and an enabled `[terminal_value]` lists it in
+its `replacement_policy`. A direct {py:class}`~breos.battery.BatteryConfig`
+call takes `enable_replacement`.
+
 ## Discovering available options
 
 Use the CLI to list packaged option keys:
@@ -463,6 +614,61 @@ For full control, build a {py:class}`~breos.economics.CostParams` and
 {py:class}`~breos.emissions.EmissionsParams` yourself and call the lower-level
 functions documented in the [Cost and emissions API](../api/cost-analysis.md).
 
+## Currency
+
+A run has one currency, an ISO 4217 code such as `EUR`, `USD` or `GBP`. Every
+money input is read in it and every money output is reported in it. BREOS
+does not convert between currencies and does not check whether prices are
+realistic; it checks that every amount is labelled with the run's currency.
+
+The run's currency is the top-level `currency` key, else the `[tariff]`
+`currency`, else `EUR`. The bundled cost presets and the
+{py:class}`~breos.economics.CostParams` defaults are in EUR, so a run in
+another currency gives its own costs:
+
+```toml
+currency = "USD"
+
+[costs]
+electricity_cost = 0.18
+electricity_sold_cost = 0.05
+daily_power_cost = 0.40
+module_cost_per_w = 0.30
+inverter_cost_per_kw_hybrid = 150
+inverter_cost_per_kw_simple = 80
+storage_cost_per_kwh = 450
+installation_cost_per_module = 300
+installation_cost_battery = 600
+other_cost_per_module = 40
+maintenance_cost_per_panel = 12
+```
+
+- A cost preset in another currency than the run's is an error. BREOS never
+  relabels a EUR preset as another currency.
+- In a run whose currency is not EUR, every cost the run prices with whose
+  default is not zero must be set under `[costs]`. The error names the keys
+  that are missing. A PV-only run does not need the battery costs, and a run
+  with a `[tariff]` does not need the flat prices, which the tariff replaces.
+  Defaults of zero, such as `land_cost`, are zero in any currency and need
+  not be set.
+- `[tariff]` and `[reference_tariff]` state their `currency`, which must be
+  the run's. A smart-charging `wear_cost_per_kwh` is in the run's currency.
+- Results record the currency in `provenance.currency`. The sweep CSV, the
+  Monte Carlo CSVs and a written cost projection have a `currency` column,
+  and plots label money with it.
+- The optimizer takes the same top-level `currency` key. Its
+  `constraints.budget` defaults to 10000 EUR, so a run in another currency
+  sets it; see [Optimization](optimization.md).
+- `App.revalue` can move a run to another currency, but only with every
+  money input restated in it, because it changes a table only in the keys
+  you give. Restate each non-zero key the run set under `[costs]`, and each
+  non-zero `import_prices`, `export_prices`, `fixed_charge_per_day` and
+  `annual_network_credit` amount of a `[tariff]` or `[reference_tariff]` the
+  run keeps, or set it to None to remove it; a new `currency` label alone is
+  refused. The cost preset must be removed or one in the new currency. A
+  run with a non-zero smart-charging `wear_cost_per_kwh` cannot change
+  currency this way; build a new App.
+
 ## Time-of-use tariffs
 
 A `[tariff]` table prices energy by period instead of at one flat rate. It
@@ -496,8 +702,9 @@ fixed_charge_per_day = 0.25              # optional, default 0
   instead of the standard/DST seasons. Its rules then select a season by
   name, and each price list may give a table of period prices for every
   season. See [Month seasons](../api/tariffs.md#month-seasons).
-- `currency` must be `"EUR"`, the only currency BREOS accepts so far, and
-  the currency of the cost presets. BREOS does not convert.
+- `currency` is the ISO 4217 code of the prices. It sets the run's currency
+  unless the top-level `currency` key does, which it must then equal. BREOS
+  does not convert; see [Currency](#currency).
 - Holidays of a custom schedule are optional and explicit. The
   `[tariff.custom_schedule.holidays]` table needs `day_type`, the day type
   holidays follow, and `dates`, which maps each covered year to its dates;
@@ -513,7 +720,7 @@ fixed_charge_per_day = 0.25              # optional, default 0
 - A tariff replaces the flat `costs.electricity_cost`,
   `costs.electricity_sold_cost` and `costs.daily_power_cost`, so setting
   those as well is an error. CAPEX, O&M and replacement costs still come from
-  the cost preset, in the same currency.
+  the cost preset or `[costs]`, in the same currency.
 - Without [`[smart_charging]`](#smart-charging) the dispatch does not
   change: the battery still maximises self-consumption, and the tariff
   changes only what the energy costs. Each year row records its import
@@ -569,8 +776,9 @@ stored energy are excluded.
 
 Only the pack present at the end is valued. Every replacement outlay
 remains, and replacement policy is unchanged. If
-`battery_allow_terminal_replacement = false` skips the final swap, the old
-pack remains and earns zero at or below threshold. Enabled PV-only and
+`battery_allow_terminal_replacement = false` or
+`battery_replacement_min_remaining_years` skips a late swap, the old pack
+remains and earns zero at or below threshold. Enabled PV-only and
 zero-capacity runs explicitly report zero. A partial `[period]` run keeps
 all lifetime credit fields null.
 
@@ -621,7 +829,7 @@ fixed_charge_per_day = 0.30              # required; use 0 for no fixed charge
   within that season. Bundled, DST-season and flat references take prices
   per period only. See [month seasons](../api/tariffs.md#month-seasons).
 - The reference can be set with or without a `[tariff]`. Its `currency` must
-  be the result's currency: the `[tariff]` currency, or EUR with flat prices.
+  be the run's currency: `currency`, else the `[tariff]` currency, else EUR.
   BREOS does not convert.
 - The reference never changes the dispatch, and the costs with the system do
   not change. Every project year replays the start-year calendar, as the
@@ -642,6 +850,57 @@ keys](interpreting-results.md#year-1-money-keys). BREOS does not choose the
 cheapest offer the household could have had: to compare candidates, run each
 one as the reference.
 
+## Annual network credit
+
+Some network tariffs reduce a household's network charges by an annual
+amount that cannot exceed what the household paid for the network that
+year. Stromnetz Berlin's §14a EnWG Modul 1 is one: 146.58 EUR a year, gross,
+capped at the connection's network charges. A household with PV and storage
+imports less, so the cap can bind and it receives less than the same
+household without the system. An `annual_network_credit` table under
+`[tariff]` gives the system household its credit:
+
+```toml
+[tariff.annual_network_credit]
+amount_per_year = 146.58           # the annual reduction
+network_fixed_per_year = 39.70     # network part of the fixed charge
+network_import_prices = { low = 0.0311, standard = 0.0888, high = 0.1659 }
+```
+
+- The household's eligible network charges for a year are its grid import
+  times the network price of each step, plus `network_fixed_per_year`. Its
+  credit is `amount_per_year`, capped at those charges.
+- The network values are the network parts of the tariff's own prices, with
+  the same taxes. They set the cap and are never added to the bill: the
+  import cost and the fixed charge do not change. A period's network price
+  may not exceed its import price, and `network_fixed_per_year` may not
+  exceed 365 days of `fixed_charge_per_day`.
+- `network_import_prices` has the shape of `import_prices`: by period, or by
+  month season and period, with `all` as the fallback. All three keys are
+  required; an explicit 0 is valid.
+- The household without the system gets its own credit, capped at its own
+  network charges on the whole load. Without a `[reference_tariff]` it is the
+  `[tariff]` table. With one, it is
+  `[reference_tariff.annual_network_credit]`, and without that table the
+  household has no credit. A reference without a schedule takes
+  `network_import_prices = { all = <price> }`.
+- Each credit escalates with its household's import prices and lowers that
+  household's yearly cost before NPV and payback. LCOE leaves it out, as it
+  leaves out the other tariff outcomes.
+- A simulated year gets the annual amounts in full, also a leap year. A
+  `[period]` window of `d` civil days gets `d / 365` of them, or `d / 366`
+  in a leap year.
+- The credit never changes the dispatch. `App.revalue` re-prices a credit
+  that is added, changed or removed without simulating again, also under
+  `daily_persistence`. Monte Carlo caps each trajectory at its own import
+  and load, and the projected optimizer's NPV objective includes both
+  credits.
+- This is not a billing engine: metering, control-box and other connection
+  charges are not modelled.
+
+Results then carry each household's eligible network charges and credit;
+see [Year-1 money keys](interpreting-results.md#year-1-money-keys).
+
 ## Smart charging
 
 A `[smart_charging]` table sets when the battery may discharge and when the
@@ -657,7 +916,7 @@ charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
 grid_charge_efficiency = 0.95       # required: AC-to-DC conversion of the grid-charging path
 grid_import_limit_w = 5000          # optional: grid charging keeps total import below this
-overlap_policy = "reject"           # default; "hold_target" permits overlap in fixed_target
+overlap_policy = "reject"           # default; "hold_target" permits overlap
 ```
 
 - In a charge period the grid may charge the battery toward
@@ -669,12 +928,15 @@ overlap_policy = "reject"           # default; "hold_target" permits overlap in 
   shrinks with temperature and state of health, and the target moves with it.
 - The period names must exist in the tariff's schedule, and the two lists
   must not share a period under the default `overlap_policy = "reject"`.
-  With `overlap_policy = "hold_target"` (`fixed_target` only), the grid target
-  is also the discharge floor on steps in both lists: above it the battery
-  may discharge down to it; below it the grid may charge up to it. It never
-  charges and discharges in the same step. Both bounds move together with
-  temperature and health. PV may still charge above the target. Steps in
-  only one list keep their usual behavior.
+  With `overlap_policy = "hold_target"` (`fixed_target` and
+  `daily_persistence`), the grid target is also the discharge floor on steps
+  in both lists: above it the battery may discharge down to it; below it the
+  grid may charge up to it. It never charges and discharges in the same
+  step. Both bounds move together with temperature and health. PV may still
+  charge above the target. Steps in only one list keep their usual behavior.
+  The floor holds the energy up to the target, not all the stored energy:
+  to keep the battery from discharging in a period at all, leave that period
+  out of `discharge_periods`.
 - `grid_charge_efficiency` has no default, because the inverter model has no
   AC-to-DC path to derive one from. Stored energy then also passes through
   the battery's own charge efficiency.
@@ -703,9 +965,8 @@ To allow discharge in every period while retaining an off-peak target, use
 `charge_periods = ["off_peak"]`, list every tariff period in
 `discharge_periods`, and set `overlap_policy = "hold_target"`.
 `disabled` and `discharge_only` refuse `hold_target` because they have no grid
-target. `daily_persistence` also refuses it: its planner replaces charge
-targets while keeping reserves fixed, so planning and production replay
-cannot hold the same target.
+target. `daily_persistence` accepts it; see
+[Daily persistence](#daily-persistence-experimental).
 
 Monte Carlo applies the same instructions to every trajectory, and projected
 optimization to every candidate design with a battery; both record the same
@@ -749,10 +1010,12 @@ charge_periods = ["off_peak"]
 discharge_periods = ["peak"]
 grid_charge_efficiency = 0.95       # required, as for fixed_target
 grid_import_limit_w = 5000          # optional
-# Optional planner settings (integers), shown at their defaults:
+# Optional planner settings, shown at their defaults:
 forecast_horizon_days = 2           # days the planner looks ahead, today included
 target_levels = 11                  # candidate targets 0, 0.1, ..., 1 of the usable window
 soc_states = 21                     # stored-energy grid points of the planner
+wear_cost_per_kwh = 0               # planning weight per kWh the battery discharges
+decision_boundary = "civil_day"     # or "charge_window_start"
 ```
 
 At each local midnight in the tariff's timezone the mode:
@@ -769,10 +1032,15 @@ At each local midnight in the tariff's timezone the mode:
    the next day again from what actually happened.
 
 The table takes the same `charge_periods`, `discharge_periods`,
-`grid_charge_efficiency` and `grid_import_limit_w` as `fixed_target`, and
-refuses `target_usable_fraction`, since the planner chooses it. The planner
-settings are integers (not booleans or `2.0`); `fixed_target` and `disabled`
-refuse them. `target_levels = 1` is valid and selects the sole target 0.
+`grid_charge_efficiency`, `grid_import_limit_w` and `overlap_policy` as
+`fixed_target`, and refuses `target_usable_fraction`, since the planner
+chooses it.
+`forecast_horizon_days`, `target_levels` and `soc_states` are integers (not
+booleans or `2.0`), `wear_cost_per_kwh` is a number of at least 0 (see
+"Wear cost in the planner" below), and `decision_boundary` is `"civil_day"`
+or `"charge_window_start"` (see "Deciding at the start of each charge
+window" below); `fixed_target`,
+`discharge_only` and `disabled` refuse every planner setting. `target_levels = 1` is valid and selects the sole target 0.
 The run starts with no complete day to repeat, so until one
 complete local day has been observed it sets no grid target
 (`warm_start_policy = "no_grid_until_one_complete_local_day"`); PV charging
@@ -792,6 +1060,31 @@ its window as free. It is not an instruction: the simulated battery still
 carries its stored energy, origins and degradation from year to year
 (`terminal_convention = "physical_carry"`).
 
+To discharge in every period while the planner still chooses an off-peak
+target, list every tariff period in `discharge_periods` and set
+`overlap_policy = "hold_target"`:
+
+```toml
+charge_periods = ["off_peak"]
+discharge_periods = ["off_peak", "peak"]
+overlap_policy = "hold_target"
+```
+
+On a step in both lists, the day's planned target is also the discharge
+floor, as under `fixed_target`: above it the battery may discharge down to
+it; below it the grid may charge up to it. The planner tries every candidate
+target with its own floor, so the instructions it executes are the ones it
+planned with. On a day with no grid target, which is every warm-start day,
+such a step has no floor, and the battery may discharge to
+`battery_min_soc` there.
+
+The target changes from day to day. A shared period that crosses midnight
+holds the previous day's target before midnight and the new day's after it,
+so when the new target is lower the battery may discharge, in that same
+period, grid energy it bought the evening before. The planner counts that
+cost when it chooses the targets. Deciding at the start of each charge
+window, below, avoids this split.
+
 Keep these modelling assumptions in mind when reading the results:
 
 - The forecast is naive persistence, not a weather or load forecast.
@@ -801,6 +1094,7 @@ Keep these modelling assumptions in mind when reading the results:
   window differ.
 - State of health and efficiencies stay fixed inside each short solve; the
   simulation still ages the battery every day.
+- The planner weighs no battery ageing unless `wear_cost_per_kwh` is set.
 
 `provenance.smart_charging` of such a run records `experimental = true`, the
 controller and planner versions, the effective planner settings, the
@@ -817,6 +1111,79 @@ The planner simulates each candidate target with the same dispatch step as
 the run, several hundred times a day, so the mode is much slower than
 `fixed_target`. Use `execution_backend = "numba"` (the `breos[fast]` extra); the Python
 backend at 15 minutes gives a warning.
+
+#### Wear cost in the planner
+
+Without a wear cost the planner charges from the grid whenever the price
+spread pays for the conversion and battery losses, however little it saves.
+`wear_cost_per_kwh` adds a price, in the tariff's currency, for each kWh of
+DC energy the battery discharges (`Battery_Discharge_DC`) to the cost each
+daily solve minimises. Grid energy is then bought only when the spread also
+pays for the cycling it causes. The default is 0, which gives the same
+results as a table without the key.
+
+It is a planning weight, not a degradation model. It changes only which
+targets the planner picks. It does not enter the import cost, the export
+revenue or the NPV, and the battery still ages and is replaced as the
+degradation model gives. The weight applies to all discharge, including
+PV-charged energy, because a target the planner raises adds cycling
+whatever the energy's origin. Charged energy that the battery still holds
+at the end of the planning window carries no wear cost; the terminal value
+prices it as energy only.
+
+BREOS does not compute a value for you. One simple estimate is the price of
+a replacement pack divided by the energy the battery can discharge before it
+reaches end of life:
+
+```text
+wear_cost_per_kwh = replacement pack price / usable discharge throughput to end of life
+                  = 2500 / 20 000 = 0.125 per kWh
+```
+
+Here the throughput is taken from a warranty, or from the expected cycles to
+end of life times the average usable energy per cycle. This counts all of the
+pack's ageing against cycling. Part of it is calendar ageing, which happens
+whether the battery cycles or not, so a lower value can be argued. Compare
+runs at several values rather than reading one as exact.
+`provenance.smart_charging.wear_cost_per_kwh` records the value a run used.
+
+#### Deciding at the start of each charge window
+
+By default the planner decides at local midnight, so an off-peak window
+that crosses midnight, such as Bi-hourly 22:00–08:00, is split between two
+days' targets. With
+
+```toml
+decision_boundary = "charge_window_start"
+```
+
+the planner decides one target at the start of each charge window instead,
+and the target holds until the next window starts:
+
+- A charge window is a run of consecutive steps whose period is in
+  `charge_periods`. Adjacent charge periods form one window, a day can have
+  several windows, and a window can cross midnight or last a whole weekend:
+  under the 2026 weekly cycle, off-peak from Saturday 22:00 to Monday 07:00
+  is one window with one target.
+- The decision sees the battery's state at the window start and only the
+  data observed before it. Its forecast repeats the local day before the
+  decision: today's observed hours, and the rest from the last complete
+  day.
+- Each planning stage is one window. The planner looks ahead over the
+  windows that start within `forecast_horizon_days` days.
+- Under `overlap_policy = "hold_target"` the floor is the window's one
+  target for the whole window, across midnight.
+- A window that starts before one complete local day has been observed
+  gets no grid target, and holds none until the next window.
+- At least one tariff period must be outside `charge_periods`, or a window
+  would never end.
+
+`provenance.smart_charging.decision_boundary` records the boundary; under
+`charge_window_start` the controller and planner versions are `"2"`. The
+daily-target oracle takes the same choice as `--decision-boundary`, so a
+perfect-information replay stays comparable with the controller. The oracle
+plans one project year at a time, so it still splits the night that crosses
+the year seam between two targets; the controller does not.
 
 ## Load profiles
 

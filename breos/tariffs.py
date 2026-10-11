@@ -18,7 +18,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from numbers import Real
 from types import MappingProxyType
@@ -30,8 +30,25 @@ import pandas as pd
 
 from breos.resources import load_config_json
 
-SUPPORTED_CURRENCIES = frozenset({"EUR"})
-# The bundled cost catalogue's currency, and the currency of a run without a tariff.
+# The active ISO 4217 currency codes, without fund codes, precious metals and
+# the testing and no-currency codes. BREOS checks that money is labelled with
+# one of them and that a run labels all its money alike; it never converts.
+# Source: iso_4217.json of iso-codes 4.20.1 (178 codes), checked 2026-10-04,
+# less 23 codes: the funds BOV CHE CHW CLF COU MXV USN UYI UYW, the metals XAG
+# XAU XPD XPT, the units XBA XBB XBC XBD XDR XSU XUA XAD, and XTS and XXX.
+SUPPORTED_CURRENCIES = frozenset(
+    """
+    AED AFN ALL AMD AOA ARS AUD AWG AZN BAM BBD BDT BHD BIF BMD BND BOB BRL BSD BTN BWP BYN BZD CAD CDF
+    CHF CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ
+    GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP
+    LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR NZD OMR
+    PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SOS SRD SSP STN SVC
+    SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD UYU UZS VED VES VND VUV WST XAF XCD XCG XOF
+    XPF YER ZAR ZMW ZWG
+    """.split()
+)
+# The currency of the bundled cost catalogue and of the CostParams defaults,
+# and of a run that selects no other.
 DEFAULT_CURRENCY = "EUR"
 BOUNDARY_POLICIES = frozenset({"strict"})
 SCHEDULE_CYCLES = frozenset({"flat", "daily", "weekly", "custom"})
@@ -43,12 +60,21 @@ _DAY_TYPES = ("weekday", "saturday", "sunday")
 _DST_SEASONS = ("standard", "dst")
 # Names a month season cannot take: the rule wildcard and the DST seasons.
 _RESERVED_SEASON_NAMES = frozenset({"all", *_DST_SEASONS})
+_EPOCH_DATE = date(1970, 1, 1)
 
 
 def _nonempty_text(value: object, where: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise TypeError(f"'{where}' must be a non-empty string")
     return value.strip()
+
+
+def check_currency(value: object, where: str) -> str:
+    """An ISO 4217 currency code, in upper case; ``"usd"`` gives ``"USD"``."""
+    code = _nonempty_text(value, where).upper()
+    if code not in SUPPORTED_CURRENCIES:
+        raise ValueError(f"'{where}' must be an ISO 4217 currency code such as EUR, USD or GBP; got {value!r}")
+    return code
 
 
 def _period_name(value: object, where: str) -> str:
@@ -174,13 +200,10 @@ class TariffPrices:
     source_url: str | None = None
     effective_from: date | None = None
     effective_to: date | None = None
+    annual_network_credit: AnnualNetworkCredit | None = None
 
     def __post_init__(self) -> None:
-        currency = _nonempty_text(self.currency, "prices.currency").upper()
-        if currency not in SUPPORTED_CURRENCIES:
-            allowed = ", ".join(sorted(SUPPORTED_CURRENCIES))
-            raise ValueError(f"Unsupported tariff currency {currency!r}. Available: {allowed}")
-        object.__setattr__(self, "currency", currency)
+        object.__setattr__(self, "currency", check_currency(self.currency, "prices.currency"))
 
         object.__setattr__(self, "import_prices", self._freeze_prices(self.import_prices, "import_prices"))
         object.__setattr__(self, "export_prices", self._freeze_prices(self.export_prices, "export_prices"))
@@ -194,6 +217,11 @@ class TariffPrices:
         if self.source_url is not None:
             object.__setattr__(self, "source_url", _nonempty_text(self.source_url, "prices.source_url"))
         _date_range(self.effective_from, self.effective_to, "prices")
+        credit = self.annual_network_credit
+        if credit is not None:
+            if not isinstance(credit, AnnualNetworkCredit):
+                raise TypeError("'prices.annual_network_credit' must be an AnnualNetworkCredit")
+            credit.check_parts_of(self)
 
     @staticmethod
     def _freeze_prices(values: PriceList, name: str) -> PriceList:
@@ -245,7 +273,96 @@ class TariffPrices:
             self.source_url,
             self.effective_from,
             self.effective_to,
+            self.annual_network_credit,
         )
+
+
+def _effective_price(values: PriceList, season: str | None, period: str) -> float | None:
+    """The price a season and period would pay under a price list, or None when it gives none."""
+    table: Mapping[str, Any] = values
+    if _is_seasonal(values):
+        if season is None or season not in values:
+            return None
+        table = cast(Mapping[str, Any], values[season])
+    if period in table:
+        return float(table[period])
+    return float(table["all"]) if "all" in table else None
+
+
+@dataclass(frozen=True)
+class AnnualNetworkCredit:
+    """An annual reduction of a household's network charges, capped at what it paid (ADR 0002 A15).
+
+    The App's ``[tariff.annual_network_credit]``, or the same table under
+    ``[reference_tariff]``. ``network_import_prices`` is the network part of
+    each import price per kWh and ``network_fixed_per_year`` the network part
+    of the fixed charge, both gross, as the tariff's own prices are. They are
+    parts of prices the tariff already sets: they are never added to the
+    bill, and only set the cap. A year's credit is ``min(amount_per_year ×
+    f, eligible)``, where the eligible network charges are the year's grid
+    import times the network price plus ``network_fixed_per_year × f``, and
+    ``f`` is the share of the year billed: 1 for a simulated year, ``d / D``
+    for a window of ``d`` civil days in a year of ``D``.
+    """
+
+    amount_per_year: float
+    network_fixed_per_year: float
+    network_import_prices: PriceList
+
+    def __post_init__(self) -> None:
+        for name in ("amount_per_year", "network_fixed_per_year"):
+            object.__setattr__(self, name, _nonnegative_price(getattr(self, name), f"annual_network_credit.{name}"))
+        object.__setattr__(
+            self,
+            "network_import_prices",
+            TariffPrices._freeze_prices(self.network_import_prices, "annual_network_credit.network_import_prices"),
+        )
+
+    def check_parts_of(self, prices: TariffPrices) -> None:
+        """Refuse network parts larger than the prices they are part of: the network price of every
+        period at most its import price, and the network fixed amount at most 365 days of the fixed charge.
+        """
+        network, imports = self.network_import_prices, prices.import_prices
+        seasons: Sequence[str | None] = (None,)
+        for values in (network, imports):
+            if _is_seasonal(values):
+                seasons = sorted(values)
+        periods = {"all"}
+        for values in (network, imports):
+            tables = values.values() if _is_seasonal(values) else [values]
+            for table in tables:
+                periods.update(cast(Mapping[str, Any], table))
+        for season in seasons:
+            for period in sorted(periods):
+                part, whole = _effective_price(network, season, period), _effective_price(imports, season, period)
+                if part is not None and whole is not None and part > whole:
+                    where = f"{season}.{period}" if season is not None else period
+                    raise ValueError(
+                        f"'annual_network_credit.network_import_prices' gives {where} a network price of {part}, "
+                        f"more than its import price of {whole}. The network price is the network part of the "
+                        "import price, with the same taxes, so it cannot exceed it."
+                    )
+        annual_fixed = prices.fixed_charge_per_day * 365
+        if self.network_fixed_per_year > annual_fixed * (1 + 1e-12):
+            raise ValueError(
+                f"'annual_network_credit.network_fixed_per_year' is {self.network_fixed_per_year}, more than 365 "
+                f"days of the fixed charge ({annual_fixed}). It is the network part of the fixed charge, so it "
+                "cannot exceed it."
+            )
+
+    def record(self) -> dict[str, Any]:
+        """A JSON-safe record of the credit, for provenance."""
+        return {
+            "amount_per_year": self.amount_per_year,
+            "network_fixed_per_year": self.network_fixed_per_year,
+            "network_import_prices": thaw_prices(self.network_import_prices),
+            "cap": "min(amount_per_year * f, grid_import * network_import_price + network_fixed_per_year * f)",
+            "year_fraction": "1 for a simulated year; civil days / days of the year for a [period] window",
+        }
+
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+        """Rebuild immutable price maps in worker processes."""
+        return type(self), (self.amount_per_year, self.network_fixed_per_year, thaw_prices(self.network_import_prices))
 
 
 @dataclass(frozen=True)
@@ -278,6 +395,9 @@ class ResolvedTariff:
     price_hash: str
     season_labels: tuple[str, ...] | None = None
     seasons: MonthSeasons | None = None
+    # With an annual network credit, each step's network price per kWh, the
+    # network part of its import price (ADR 0002 A15); None without one.
+    network_price_per_kwh: tuple[float, ...] | None = None
 
     @property
     def n_days(self) -> int:
@@ -735,11 +855,10 @@ def _validate_schedule_resolution(
     if len(index) < 2:
         return
     utc_nanoseconds = _utc_nanoseconds(index)
-    deltas = utc_nanoseconds[1:] - utc_nanoseconds[:-1]
-    unique_deltas = set(int(delta) for delta in deltas)
+    unique_deltas = np.unique(utc_nanoseconds[1:] - utc_nanoseconds[:-1])
     if len(unique_deltas) != 1:
         raise ValueError("Tariff classification requires a regular simulation index")
-    cadence_ns = unique_deltas.pop()
+    cadence_ns = int(unique_deltas[0])
     minute_ns = 60 * 1_000_000_000
     if cadence_ns % minute_ns:
         raise ValueError("Tariff classification requires a whole-minute simulation resolution")
@@ -796,11 +915,16 @@ def _season(timestamp: pd.Timestamp) -> str:
 def _validate_study_date(
     schedule: TariffSchedule, index: pd.DatetimeIndex, study_date: date | None, timezone: str
 ) -> None:
-    local_dates = index.tz_convert(timezone).date
     if study_date is not None and not isinstance(study_date, date):
         raise TypeError("'study_date' must be a date when configured")
-    references = (study_date,) if study_date is not None else tuple(local_dates)
-    if not references:
+    if study_date is not None:
+        references: tuple[date, ...] = (study_date,)
+    elif len(index):
+        # The window is one range, so the earliest and latest civil dates decide.
+        wall_ns = cast(Any, index.tz_convert(timezone).tz_localize(None).as_unit("ns")).asi8
+        civil_days = np.floor_divide(wall_ns, 24 * 60 * 60 * 1_000_000_000)
+        references = tuple(_EPOCH_DATE + timedelta(days=int(day)) for day in (civil_days.min(), civil_days.max()))
+    else:
         return
 
     outside_window = any(
@@ -887,6 +1011,14 @@ def classify_tariff_seasons(
     return _classify(index, definition, timezone=timezone, study_date=study_date, boundary_policy=boundary_policy)[1]
 
 
+# Recent classifications, by schedule, zone, study date, boundary policy and
+# instants. A run classifies its tariff and its reference tariff on one index,
+# and App.revalue classifies both again with new prices, so most calls repeat
+# one of the last few. Only a classification that passed every check is kept.
+_CLASSIFICATIONS: dict[tuple[Any, ...], tuple[tuple[str, ...], tuple[str, ...]]] = {}
+_CLASSIFICATIONS_KEPT = 8
+
+
 def _classify(
     index: pd.DatetimeIndex,
     schedule: str | ScheduleDefinition,
@@ -902,8 +1034,28 @@ def _classify(
         raise ValueError(f"'boundary_policy' must be one of: {allowed}")
 
     definition = _as_definition(schedule)
+    zone = _check_timezone(definition.schedule, timezone)
+    if study_date is not None and not isinstance(study_date, date):
+        # Classify uncached, so the study date fails where it always has.
+        return _classify_steps(resolved_index, definition, zone, study_date)
+    # Classification depends only on these and the index's instants, not on
+    # the index's own timezone.
+    utc_index = resolved_index.tz_convert("UTC")
+    key = (definition, zone, study_date, boundary_policy, utc_index.unit, cast(Any, utc_index).asi8.tobytes())
+    cached = _CLASSIFICATIONS.get(key)
+    if cached is None:
+        cached = _classify_steps(resolved_index, definition, zone, study_date)
+        while len(_CLASSIFICATIONS) >= _CLASSIFICATIONS_KEPT:
+            _CLASSIFICATIONS.pop(next(iter(_CLASSIFICATIONS)), None)
+        _CLASSIFICATIONS[key] = cached
+    return cached
+
+
+def _classify_steps(
+    resolved_index: pd.DatetimeIndex, definition: ScheduleDefinition, zone: str, study_date: date | None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Check the index against the schedule, then label each step with its period and season."""
     metadata = definition.schedule
-    zone = _check_timezone(metadata, timezone)
     local_index = resolved_index.tz_convert(zone)
     # The clock changes that matter are those in the years the index touches.
     touched_years = range(local_index[0].year, local_index[-1].year + 1) if len(local_index) else ()
@@ -920,16 +1072,53 @@ def _classify(
     covered = {int(year) for year, count in zip(years, counts, strict=True) if count * step_hours >= 24}
     holiday_dates = _holiday_dates(metadata.identifier, holidays, covered)
     holiday_day_type = holidays.day_type if holidays is not None else "sunday"
-    labels: list[str] = []
-    seasons: list[str] = []
-    for timestamp in local_index:
-        season = definition.season_of(timestamp)
-        rule = definition.rule_for(_day_type(timestamp, holiday_dates, holiday_day_type), season)
-        minute = timestamp.hour * 60 + timestamp.minute
-        label = next(period for start, end, period in rule.intervals if start <= minute < end)
-        labels.append(label)
-        seasons.append(season)
-    return tuple(labels), tuple(seasons)
+    if not len(local_index):
+        return (), ()
+
+    # The day type and season are fixed within a run of steps on one civil
+    # date and one UTC offset: they are found once per run, on its first
+    # step, and the period then follows from each step's minute of the day.
+    utc_ns = _utc_nanoseconds(resolved_index)
+    wall_ns = cast(Any, local_index.tz_localize(None).as_unit("ns")).asi8
+    day_ns = 24 * 60 * 60 * 1_000_000_000
+    civil_days = np.floor_divide(wall_ns, day_ns)
+    minutes = (wall_ns - civil_days * day_ns) // (60 * 1_000_000_000)
+    offsets = wall_ns - utc_ns
+    changes = (civil_days[1:] != civil_days[:-1]) | (offsets[1:] != offsets[:-1])
+    run_starts = np.concatenate(([0], np.flatnonzero(changes) + 1))
+    run_ends = np.append(run_starts[1:], len(local_index))
+
+    season_names = definition.season_names
+    rules: list[ScheduleRule] = []
+    rule_positions: dict[tuple[str, str], int] = {}
+    step_rules = np.empty(len(local_index), dtype=np.intp)
+    step_seasons = np.empty(len(local_index), dtype=np.intp)
+    for start, end in zip(run_starts.tolist(), run_ends.tolist(), strict=True):
+        day_type = _day_type(local_index[start], holiday_dates, holiday_day_type)
+        run_seasons = [definition.season_of(local_index[start])]
+        if end - start > 1 and definition.season_of(local_index[end - 1]) != run_seasons[0]:
+            # DST can start or end without a change of offset (Lisbon, 31 March
+            # 1996): such a run takes its season step by step.
+            run_seasons = [definition.season_of(local_index[position]) for position in range(start, end)]
+        for position, season in enumerate(run_seasons, start=start):
+            key = (day_type, season)
+            if key not in rule_positions:
+                rule_positions[key] = len(rules)
+                rules.append(definition.rule_for(day_type, season))
+            stop = end if len(run_seasons) == 1 else position + 1
+            step_rules[position:stop] = rule_positions[key]
+            step_seasons[position:stop] = season_names.index(season)
+
+    periods = definition.schedule.periods
+    step_periods = np.empty(len(local_index), dtype=np.intp)
+    for position, rule in enumerate(rules):
+        in_rule = step_rules == position
+        starts = np.array([start for start, _end, _period in rule.intervals])
+        codes = np.array([periods.index(period) for _start, _end, period in rule.intervals])
+        step_periods[in_rule] = codes[np.searchsorted(starts, minutes[in_rule], side="right") - 1]
+    labels = np.array(periods, dtype=object)[step_periods]
+    seasons = np.array(season_names, dtype=object)[step_seasons]
+    return tuple(labels.tolist()), tuple(seasons.tolist())
 
 
 def validate_season_prices(definition: ScheduleDefinition, prices: Mapping[str, Mapping[str, Any]], where: str) -> None:
@@ -989,7 +1178,7 @@ def resolve_named_tariff(
     definition = _as_definition(schedule)
     # Validate every season against its rules before retaining only schedule metadata.
     # The simulation window may omit a season or some of its periods.
-    for name, values in (("import_prices", prices.import_prices), ("export_prices", prices.export_prices)):
+    for name, values in _price_lists(prices):
         if _is_seasonal(values):
             validate_season_prices(definition, cast(Mapping[str, Mapping[str, float]], values), f"prices.{name}")
     labels, seasons = _classify(
@@ -1036,9 +1225,22 @@ def _validate_index(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return index.copy()
 
 
+def _price_lists(prices: TariffPrices) -> list[tuple[str, PriceList]]:
+    """Each price list of ``prices`` by name, the network prices of an annual network credit last."""
+    lists: list[tuple[str, PriceList]] = [
+        ("import_prices", prices.import_prices),
+        ("export_prices", prices.export_prices),
+    ]
+    if prices.annual_network_credit is not None:
+        lists.append(
+            ("annual_network_credit.network_import_prices", prices.annual_network_credit.network_import_prices)
+        )
+    return lists
+
+
 def _validate_price_periods(schedule: TariffSchedule, prices: TariffPrices, seasons: MonthSeasons | None) -> None:
     allowed = {*schedule.periods, "all"}
-    for name, values in (("import_prices", prices.import_prices), ("export_prices", prices.export_prices)):
+    for name, values in _price_lists(prices):
         tables: Mapping[str, Mapping[str, Any]] = {"": values}
         if _is_seasonal(values):
             if seasons is None:
@@ -1149,6 +1351,13 @@ def resolve_tariff(
     _validate_price_periods(schedule, prices, seasons)
     import_values = _prices_for_labels(labels, prices.import_prices, "import price", step_seasons)
     export_values = _prices_for_labels(labels, prices.export_prices, "export price", step_seasons)
+    network_values = (
+        _prices_for_labels(
+            labels, prices.annual_network_credit.network_import_prices, "network import price", step_seasons
+        )
+        if prices.annual_network_credit is not None
+        else None
+    )
     code_by_period = {period: code for code, period in enumerate(schedule.periods)}
     codes = tuple(code_by_period[label] for label in labels)
 
@@ -1165,19 +1374,26 @@ def resolve_tariff(
         # schedule keeps the hash it had before seasons existed.
         schedule_payload["season_labels"] = step_seasons
     schedule_hash = _canonical_hash(schedule_payload)
-    price_hash = _canonical_hash(
-        {
-            "currency": prices.currency,
-            "identifier": prices.identifier,
-            "version": prices.version,
-            "source_url": prices.source_url,
-            "import_prices": thaw_prices(prices.import_prices),
-            "export_prices": thaw_prices(prices.export_prices),
-            "fixed_charge_per_day": prices.fixed_charge_per_day,
-            "effective_from": prices.effective_from.isoformat() if prices.effective_from else None,
-            "effective_to": prices.effective_to.isoformat() if prices.effective_to else None,
+    price_payload: dict[str, Any] = {
+        "currency": prices.currency,
+        "identifier": prices.identifier,
+        "version": prices.version,
+        "source_url": prices.source_url,
+        "import_prices": thaw_prices(prices.import_prices),
+        "export_prices": thaw_prices(prices.export_prices),
+        "fixed_charge_per_day": prices.fixed_charge_per_day,
+        "effective_from": prices.effective_from.isoformat() if prices.effective_from else None,
+        "effective_to": prices.effective_to.isoformat() if prices.effective_to else None,
+    }
+    if prices.annual_network_credit is not None:
+        # Only prices with a credit hash it, so every other tariff keeps its hash.
+        credit = prices.annual_network_credit
+        price_payload["annual_network_credit"] = {
+            "amount_per_year": credit.amount_per_year,
+            "network_fixed_per_year": credit.network_fixed_per_year,
+            "network_import_prices": thaw_prices(credit.network_import_prices),
         }
-    )
+    price_hash = _canonical_hash(price_payload)
 
     return ResolvedTariff(
         index=resolved_index,
@@ -1194,6 +1410,7 @@ def resolve_tariff(
         price_hash=price_hash,
         season_labels=step_seasons,
         seasons=seasons,
+        network_price_per_kwh=network_values,
     )
 
 
@@ -1283,9 +1500,21 @@ class ReferenceTariffSpec:
         )
 
 
-def result_currency(tariff: TariffSpec | ResolvedTariff | None) -> str:
-    """The currency a run's money is in: its tariff's, or the cost catalogue's without one."""
-    return tariff.prices.currency if tariff is not None else DEFAULT_CURRENCY
+def run_currency(configured: str | None, tariff_currency: str | None) -> str:
+    """The currency a run's money is in: ``configured``, else its tariff's, else :data:`DEFAULT_CURRENCY`.
+
+    ``configured`` is the run's ``currency`` key and ``tariff_currency`` its
+    ``[tariff]`` currency, both checked, or None. BREOS does not convert, so
+    a tariff priced in another currency raises.
+    """
+    if configured is None:
+        return tariff_currency or DEFAULT_CURRENCY
+    if tariff_currency is not None and tariff_currency != configured:
+        raise ValueError(
+            f"'tariff.currency' is {tariff_currency}, but 'currency' is {configured}. BREOS does not convert "
+            f"currencies: give the tariff prices in {configured}."
+        )
+    return configured
 
 
 def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[str, Any]:
@@ -1316,6 +1545,9 @@ def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[s
     if resolved.seasons is not None:
         # The month partition; only a schedule with month seasons has one.
         record["seasons"] = resolved.seasons.as_dict()
+    if prices.annual_network_credit is not None:
+        # Only a tariff with an annual network credit records one (ADR 0002 A15).
+        record["annual_network_credit"] = prices.annual_network_credit.record()
     return record
 
 

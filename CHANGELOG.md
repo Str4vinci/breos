@@ -6,15 +6,273 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- `weather_file` names the App's weather file directly
+  ([#394](https://github.com/Str4vinci/breos/issues/394)). The App reads that
+  CSV (or `.csv.gz`), whatever its name and for any location, instead of
+  scanning `weather/` or fetching from PVGIS; `breos run` takes
+  `--weather-file`. A relative path is taken from the working directory, as
+  for the other path keys. The file must exist when the App is built and hold
+  at most one year of weather. `provenance.weather` records its absolute
+  `path` and `sha256`, and `provenance.resolved_config.weather_file` the path
+  as given. It cannot be combined with `weather_source`, and Monte Carlo,
+  which samples `[montecarlo].weather_file`, refuses it.
+  `breos.weather.read_weather_csv` reads one such file with its provenance.
+  Without the key every result is unchanged.
+- The optimizer can search East–West roofs (#384). `[mode] layouts =
+  ["single", "east_west"]` adds a layout gene; an East–West design puts
+  floor(n / 2) modules at azimuth 90 and the rest at 270, at
+  `east_west_tilt_deg` (10° by default), and gives the same floats as the
+  App's `[[pv_arrays]]` run of the same two arrays. Area, budget and
+  inverter sizing count every module. The Pareto table and
+  `evaluate_projected_design` metrics gain a `Layout` column, and
+  `evaluate_projected_design` takes `layout="east_west"`. The default,
+  `layouts = ["single"]`, gives the same results as before.
+- An annual network credit capped at the household's own network charges
+  (#375, ADR 0002 A15). `[tariff.annual_network_credit]` gives the system
+  household an annual amount, capped at its grid import times the network
+  part of each import price plus a network fixed amount, both given gross as
+  parts of the tariff's own prices and never added to the bill. The household
+  without the system gets its own credit on its whole load, from the same
+  table or from `[reference_tariff.annual_network_credit]`. Each credit
+  escalates with its household's import prices and is booked in that
+  household's yearly cost before NPV and payback. App, Monte Carlo, the
+  projected optimizer and `App.revalue` (without simulating again) apply it.
+  New result fields, present only with the table:
+  `network_charge_year1_prices`, `network_credit_year1_prices`,
+  `no_system_network_charge_year1_prices`,
+  `no_system_network_credit_year1_prices`, the `network_charge`,
+  `network_credit`, `no_system_network_charge` and `no_system_network_credit`
+  fields of each `financial` row, the matching year-row and cost-projection
+  columns, and `annual_network_credit` in `provenance.tariff` and
+  `provenance.reference_tariff`. Without the table every result is unchanged.
+- A projection takes dispatch instructions per project year: one set for
+  every year as before, one set per year, or a year planner that chooses
+  each year's set from the state the year opens in (ADR 0002 A16). This is
+  for validation tools, through `run_app_simulation(instructions=)`; App
+  configuration is unchanged.
+- `tools/oracles/daily_target_dp.py --planning yearly` replans the
+  perfect-information daily targets at each project year's opening state
+  of health, efficiency and stored energy, and records each year's inputs
+  and plan. It is not a bound on lifetime NPV.
+- `[smart_charging] wear_cost_per_kwh` (`daily_persistence` only) adds a
+  battery-wear weight to the daily-target planner: a price per kWh of DC
+  energy the battery discharges, added to the cost each daily solve
+  minimises ([#381](https://github.com/Str4vinci/breos/issues/381), ADR 0002
+  A17). The planner then grid-charges only when the price spread also pays
+  for the cycling. It is a planning weight, not a degradation model: it does
+  not enter the import cost, export revenue or NPV, and ageing still comes
+  from the degradation model. The default 0 gives results bit-identical to
+  0.7.0. `provenance.smart_charging` records the value, and the shared
+  solver takes it as a `wear_cost_per_kwh` argument for its other callers.
+- `[smart_charging] mode = "daily_persistence"` accepts
+  `overlap_policy = "hold_target"`
+  ([#398](https://github.com/Str4vinci/breos/issues/398), ADR 0002 A18), so
+  the planner can run Always dispatch with off-peak charging: discharge in
+  every period, grid-charge off-peak, and hold each day's planned target as
+  the off-peak discharge floor. On a step in both period lists the reserve
+  now follows each day's target in every candidate the shared daily-target
+  solver evaluates and in the day it executes; on a day with no grid target,
+  such as the warm-start day, there is no floor there (reserve 0). The
+  daily-target oracle (`tools/oracles/daily_target_dp.py`, first-year and
+  yearly planning) plans and replays `hold_target` configurations on the
+  same rule; before, a day target above the configured one failed. Runs
+  without `hold_target` are bit-identical, and the dispatch kernel is
+  unchanged.
+- `tools/oracles/daily_target_dp.py --wear-cost-per-kwh` gives the same
+  wear weight to every solve of the perfect-information daily targets, in
+  both planning modes, and `run_daily_target_oracle` takes it as
+  `wear_cost_per_kwh`. The summary records the setting and each plan's
+  `wear_cost` apart from its stage cost. The default 0 gives the same plans
+  and costs as before.
+- `battery_replacement_min_remaining_years` (App and Monte Carlo), the
+  optimizer's `[battery] replacement_min_remaining_years` and
+  `BatteryConfig.replacement_min_remaining_years` skip a battery
+  replacement that would leave the new pack less than that many project
+  years to serve ([#400](https://github.com/Str4vinci/breos/issues/400),
+  ADR 0003 E11). The time left runs from the swap, as
+  `Replacement_Time_Years` books it, to the end of the project, so each
+  projection year counts the years after it
+  (`BatteryConfig.replacement_years_after_span`). A skipped pack keeps
+  ageing below its end-of-life threshold and is reported as it is. Any
+  positive value also skips the final-period swap that
+  `battery_allow_terminal_replacement = false` skips. The value is recorded
+  in `provenance.resolved_config`, the optimizer's
+  `battery_replacement_treatment` and the `[terminal_value]`
+  `replacement_policy`. The default 0 gives results bit-identical to 0.7.0.
+- Battery end-of-life events (ADR 0003 E11). App results list every
+  crossing of the end-of-life threshold in `battery_end_of_life_events`,
+  each with its project `year`, `time_years`, `date`, `action`
+  (`"replaced"` or `"kept"`), `reason` and `soh_pct`, and repeat the first
+  in `battery_first_end_of_life_years`, `_action`, `_reason` and
+  `_soh_pct`. Monte Carlo runs report `first_end_of_life_*` and the
+  projected optimizer `Projected_First_End_Of_Life_*`.
+  `SimulationSummary.end_of_life_events` holds the span's
+  `breos.battery.EndOfLifeEvent` records, and the detailed degradation
+  frame's `attrs["end_of_life_events"]` the same as JSON-safe dicts.
+  Existing fields are unchanged.
+- `battery_skipped_replacement_action = "retire"` (App and Monte Carlo),
+  the optimizer's `[battery] skipped_replacement_action` and
+  `BatteryConfig.skipped_replacement_action` switch off a battery whose
+  end-of-life replacement `battery_replacement_min_remaining_years` or
+  `battery_allow_terminal_replacement` skips
+  ([#404](https://github.com/Str4vinci/breos/issues/404), ADR 0003 E12).
+  From the crossing the battery neither charges nor discharges, whatever
+  the smart-charging instructions say, and the project finishes as a
+  PV-only system; the stored energy leaves with the pack. Earlier cash flows
+  and the investment are unchanged and no replacement is priced. The event
+  is reported with action `"retired"`, and a retired battery stays off in
+  later projection years and in a span continued from its degradation
+  state (or `simulate_energy_balance(battery_retired=True)`).
+  The default `"keep"` gives results bit-identical to 0.7.0.
+- `battery_enable_replacement` (App and Monte Carlo), the App name of the
+  optimizer's `[battery] enable_replacement` and
+  `BatteryConfig.enable_replacement`
+  ([#377](https://github.com/Str4vinci/breos/issues/377)). `false` never
+  replaces the battery: one pack serves the whole projection and keeps
+  ageing below its end-of-life threshold, or is retired at its first
+  crossing with `battery_skipped_replacement_action = "retire"`. The
+  crossing is an end-of-life event with the reason `"replacement_disabled"`.
+  The value is recorded in `provenance.resolved_config`, the
+  `[terminal_value]` `replacement_policy` (which recorded `true` before)
+  and the optimizer's `battery_replacement_treatment`. The default `true`
+  gives results bit-identical to 0.7.0.
+- The example gallery gains an ageing page
+  ([#378](https://github.com/Str4vinci/breos/issues/378)): one battery
+  followed for 20 years with replacement off and the PV array held at its
+  first-year output, under the native v1 and v2 field fits and three BLAST
+  cell models, compared once under an identical imposed stress history and
+  once in full simulations whose fade feeds back into the dispatch. It also
+  counts the days each BLAST model's input leaves its tested range.
+  `tools/regenerate_gallery_results.py ageing` stores it.
+- App results with a battery list its state at the end of each project
+  year in `battery_degradation_history`
+  ([#377](https://github.com/Str4vinci/breos/issues/377)): whether the
+  pack is in service, state of health, capacity and usable capacity,
+  replacements, charge and discharge throughput, the year's and the
+  installed pack's full equivalent cycles, mean state of charge and mean
+  cell temperature over the steps the pack served, the native engine's
+  cycle and calendar loss, and, with `enable_resistance_fade`, resistance
+  growth and round-trip efficiency. A quantity the degradation model does
+  not supply is None, not 0: BLAST has no cycle and calendar split, and a
+  retired pack keeps its last state with `in_service` false and no means
+  in the years after. The history's `soh_pct` is rounded as
+  `yearly[].soh_pct` is. Year rows gain `Battery_In_Service_Hours` and
+  `Battery_Cell_Temperature_Mean_C`, both None without a battery;
+  `Battery_Cell_Temperature_Mean_C` is also None in a year that starts with
+  the pack retired. `SimulationSummary.in_service_t_cell_sum` holds the cell
+  temperature summed over the steps the pack served when the span retired
+  it, and `breos.battery.retiring_step` the step whose end retires it.
+  Existing fields are unchanged.
+- `[smart_charging] decision_boundary = "charge_window_start"`, a
+  `daily_persistence` planner setting
+  ([#406](https://github.com/Str4vinci/breos/issues/406), ADR 0002 A19),
+  decides one grid-charge target at the start of each charge window and
+  holds it until the next window starts, instead of one per civil day at
+  midnight. A window is a run of consecutive charge-period steps, so a
+  22:00–08:00 off-peak window, or an off-peak weekend, has one target, and
+  under `hold_target` one floor. The decision sees the battery at the window
+  start and only earlier observations; its forecast repeats the local day
+  before it, and each planning stage is one window. The daily-target solver
+  (`DailyTargetProblem.from_tariff`) and the oracle (`--decision-boundary`)
+  take the same boundary; the oracle plans one project year at a time, so it
+  still cuts the window that crosses the year seam into a short last stage
+  and a first stage of the next year. `provenance.smart_charging` records
+  `decision_boundary` for every `daily_persistence` run; the new mode
+  reports controller and planner version `"2"`. The default `"civil_day"`
+  is bit-identical to before, and the dispatch kernel is unchanged.
+- Currency selection for flat-price and time-of-use runs (#376, ADR 0003
+  E13). A top-level `currency` key (CLI `--currency`, and the optimizer's
+  top level) takes an ISO 4217 code; unset, the run takes the `[tariff]`
+  currency, else EUR as before. `[tariff]` and `[reference_tariff]` accept
+  any ISO 4217 code and must match the run. BREOS does not convert and never
+  relabels EUR amounts: a cost preset in another currency is refused, and a
+  run in another currency than EUR must set under `[costs]` every cost it
+  prices with whose default is not zero (the error names them), and in the
+  optimizer `constraints.budget`. `provenance.currency` records the result;
+  the sweep CSV, the Monte Carlo runs and yearly CSVs and a written cost
+  projection gain a `currency` column, which plots read for their labels;
+  `breos validate-config` prints the resolved currency; each bundled cost
+  preset records its `currency`, which `breos list cost-presets` reports;
+  and `App.revalue` accepts `currency` when the change restates every
+  non-zero amount the run set in `[costs]`, `[tariff]` and
+  `[reference_tariff]`, and refuses it under a non-zero `wear_cost_per_kwh`.
+  Scaling every money input by k scales every money output by k and leaves
+  energy, ageing and payback years unchanged, and in the optimizer the NPV
+  ranking of the evaluated designs and their budget feasibility, which the
+  tests check. The NSGA-II search can still differ between currencies: pymoo
+  adds the budget violation, in money, to the area and ZEB violations
+  unscaled, so infeasible candidates can rank differently. Runs that set no
+  `currency` are bit-identical, and the result format stays `"1"`.
 - `breos.equipment.InverterSpec` stores a specified inverter's validated AC
   nameplate and optional datasheet limits. Each MPPT input is a
   `breos.equipment.MpptSpec` with its own current and string limits, so
   asymmetric inputs keep their published values, and
   `isc_comparison_factor` records the manufacturer's Isc comparison rule.
-  `InverterSpec.as_app_config()` supplies
-  the rating and known efficiency to App, keeping catalog identity, prices and
-  certification outside BREOS. DC/MPPT limits are metadata, not string-aware
-  validation or simulation.
+  `InverterSpec.as_app_config()` supplies the rating and known efficiency to
+  App, keeping catalog identity, prices and certification outside BREOS.
+  DC/MPPT limits are metadata, not string-aware validation or simulation.
+
+### Changed
+
+- CI runs less on PRs that cannot need it. Draft PRs run nothing until they
+  are marked ready for review. A PR that changes only documentation runs the
+  test suite, checks and docs build on Python 3.12 alone, and skips the other
+  versions, `floors` and `no-numba`. The lint, format and type checks, the
+  release artifact check and the docs build run once, on 3.12, instead of on
+  all four versions.
+- A change to `[reference_tariff]` no longer invalidates the App input cache
+  or the Monte Carlo year cache: it prices only the household load.
+- Tariff period classification finds each step's day type and season once
+  per civil day and its period with array lookups: a 15-minute year takes
+  about 12 ms instead of about 95 ms. The last few classifications are kept,
+  so a `[reference_tariff]` on the run's schedule and `App.revalue` at new
+  prices do not classify again. The labels are the same as before (#392).
+- `App.revalue` prices a run without smart charging on a tariff added, or on
+  a different schedule, from the stored step flows instead of simulating
+  again, and records `method = "repriced_by_step"` in
+  `provenance.revaluation`. The result has the same floats as a new run. To
+  allow this, such a run keeps each year's grid import and export step by
+  step in memory: about 11 MB for 20 years at 15-minute resolution. Runs
+  with smart charging still simulate again (#393).
+- `breos.tariffs.result_currency` is replaced by `run_currency(configured,
+  tariff_currency)`, which also reads the `currency` key, and
+  `resolve_reference_tariff_spec` takes the run's currency instead of the
+  system tariff (#376).
+
+### Fixed
+
+- Monte Carlo and optimizer workers no longer oversubscribe the CPU at
+  15-minute resolution (#382). Each worker process limits its BLAS and
+  OpenMP pools to one thread; the parent process keeps its own. On a
+  20-thread machine, a 15-minute study of 8 runs × 20 years on 10 workers
+  went from 6.0 s, slower than the 4.5 s serial run, to 1.0 s. The tariff
+  sums also run on one BLAS thread for their duration, in the parent too,
+  so a 15-minute result no longer depends on the core count and is the same
+  for every `n_procs`. On a multi-core machine this can move a 15-minute
+  money total in its last digit; hourly results do not change.
+  `threadpoolctl` (3.5.0 or newer) becomes a dependency.
+- `App.revalue` reads hyphens and underscores in key names as the same key,
+  as `App` does. A change spelled with hyphens, such as
+  `{"costs": {"module-cost-per-w": None}}`, used to leave the old
+  `module_cost_per_w` in place without an error; it now changes or removes
+  that key. Results with underscore spellings do not change.
+- A battery kept below its end-of-life threshold whose state of health
+  reaches 0 is retired at the close of that degradation period
+  ([#413](https://github.com/Str4vinci/breos/issues/413), ADR 0003 E12).
+  Before, it stayed in service at zero capacity: the history reported it in
+  service, and a BLAST pack restored below 0 at the next project year moved
+  energy it did not hold, with stored energy down to −360 Wh and per-step
+  `Battery_SOH` down to −72 %. Now it follows the retire path: an
+  end-of-life event with action `"retired"` and reason `"zero_health"`
+  after the `"kept"` one, `in_service` false from that year, and PV-only
+  flows after it. A BLAST state restored below 0 starts at 0. On the BLAST
+  `lmo_gr_nissanleaf_66ah_2nd` cell at a fixed 60 °C with replacement off,
+  8 years, `npv_savings` moves from −3190.67 to −3190.85 and a later year's
+  grid import by up to 0.3 kWh; for `nmc111_gr_sanyo_2ah` it is unchanged
+  to the cent. The year the pack reaches 0 reports its `mean_soc_pct` over
+  the steps it served (32.65 % instead of 30.33 % for the second case).
+  Runs whose pack never reaches zero health, every default run among them,
+  are bit-identical.
 
 ## [0.7.0] - 2026-10-02
 

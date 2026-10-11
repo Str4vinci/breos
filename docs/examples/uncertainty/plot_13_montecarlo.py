@@ -4,7 +4,9 @@ Monte Carlo analysis of weather and demand
 
 A single run on a typical meteorological year (TMY) gives one outcome.
 ``breos montecarlo`` shows how it varies with historical weather and with
-demand above or below plan: it runs many 20-year trajectories.
+demand above or below plan: it runs many 20-year trajectories. The
+configuration below runs 100 of them; the results on this page come from
+the same study at 10 000 trajectories.
 For each project year it draws a historical weather year at random, and for
 each trajectory it scales the demand by a random factor.
 
@@ -39,7 +41,7 @@ from breos.plotting import (
 )
 
 case = load_case("montecarlo")
-runs = case.csv("runs.csv")
+runs = case.csv("runs.csv.gz")
 stored = case.json("summary.json")
 summary, settings, tmy = stored["summary"], stored["settings"], stored["tmy_result"]
 weather_years = case.csv("weather_years.csv")
@@ -51,7 +53,7 @@ case.stamp()
 # sphinx_gallery_start_ignore
 npv = summary["npv_savings"]
 say(
-    f"{settings['n_runs']} trajectories of {settings['years_per_run']} years, drawing from "
+    f"{number(settings['n_runs'])} trajectories of {settings['years_per_run']} years, drawing from "
     f"{len(stored['available_years'])} complete weather years ({stored['available_years'][0]}–"
     f"{stored['available_years'][-1]}), with demand scaled by a {settings['load_distribution']} factor of standard "
     f"deviation {(settings['load_uncertainty']) * 100:.0f} % and seed {settings['seed']}.",
@@ -61,7 +63,7 @@ say(
     + (
         "above every Monte Carlo run."
         if tmy["npv_savings"] > npv["max"]
-        else f"which sits at the {((runs['npv_savings'] < tmy['npv_savings']).mean()) * 100:.0f} % quantile of the runs."
+        else f"which sits at the {stored['tmy_npv_quantile'] * 100:.0f} % quantile of the runs."
     ),
 )
 # sphinx_gallery_end_ignore

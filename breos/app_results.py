@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any, cast
 
 import pandas as pd
 
 from breos.app_config import ResolvedAppConfig
-from breos.battery import LEDGER_SCHEMA_VERSION
+from breos.battery import LEDGER_SCHEMA_VERSION, resistance_to_efficiency
 from breos.economics import projection_rates_record
 from breos.execution import config_has_battery
+from breos.projection import build_battery_config
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.runners.app import CO2_COLUMNS, SimulationArtifacts
 from breos.smart_charging import PLANNER_MODES
-from breos.tariffs import result_currency
 from breos.utils import get_hours_per_step, local_datetime_index, package_version
 
 
@@ -102,6 +103,129 @@ def financial_to_dicts(cost_proj: pd.DataFrame, total_initial_cost: float) -> li
                 "replacement_time_years": (
                     round(float(row["Replacement_Time_Years"]), 4) if pd.notna(row["Replacement_Time_Years"]) else None
                 ),
+                # A household with an annual network credit: its eligible
+                # network charges (the cap basis) and the credit, escalated
+                # and not discounted (ADR 0002 A15).
+                **{
+                    name: round(float(row[column]), 2)
+                    for name, column in _NETWORK_CREDIT_FIELDS.items()
+                    if column in row.index
+                },
+            }
+        )
+    return rows
+
+
+# The financial-row fields of an annual network credit, by cost-projection column.
+_NETWORK_CREDIT_FIELDS = {
+    "network_charge": "Cost_Network_Charge",
+    "network_credit": "Cost_Network_Credit",
+    "no_system_network_charge": "Cost_No_Sys_Network_Charge",
+    "no_system_network_credit": "Cost_No_Sys_Network_Credit",
+}
+# The year-1 fields of an annual network credit, by year-row column.
+_NETWORK_CREDIT_YEAR1_FIELDS = {
+    "network_charge_year1_prices": "Network_Charge",
+    "network_credit_year1_prices": "Network_Credit",
+    "no_system_network_charge_year1_prices": "Baseline_Network_Charge",
+    "no_system_network_credit_year1_prices": "Baseline_Network_Credit",
+}
+
+
+def end_of_life_fields(events: Sequence[Mapping[str, Any]], soh_digits: int) -> dict[str, Any]:
+    """The result fields of a battery's end-of-life crossings (ADR 0003 E11).
+
+    ``battery_end_of_life_events`` lists every crossing, and a kept pack's
+    retirement at zero health (reason ``"zero_health"``), in project order:
+    its project ``year``, ``time_years`` from commissioning (the instant a
+    replacement is booked at), ``date``, the ``action`` taken, the
+    ``reason`` for it and the ``soh_pct`` at the crossing. The
+    ``battery_first_end_of_life_*`` fields repeat the first crossing, or are
+    None without one, so a sweep CSV keeps them.
+    """
+    rows = [
+        {
+            **event,
+            "time_years": round(float(event["time_years"]), 4),
+            "soh_pct": round(float(event["soh_pct"]), soh_digits),
+        }
+        for event in events
+    ]
+    first: Mapping[str, Any] = rows[0] if rows else {}
+    return {
+        "battery_end_of_life_events": rows,
+        "battery_first_end_of_life_years": first.get("time_years"),
+        "battery_first_end_of_life_action": first.get("action"),
+        "battery_first_end_of_life_reason": first.get("reason"),
+        "battery_first_end_of_life_soh_pct": first.get("soh_pct"),
+    }
+
+
+def degradation_history_to_dicts(
+    yearly_df: pd.DataFrame,
+    events: Sequence[Mapping[str, Any]],
+    resolved: ResolvedAppConfig,
+    soh_digits: int,
+) -> list[dict[str, Any]]:
+    """The battery's state at the end of each project year, and the year's use and stress.
+
+    The state (``soh_pct``, capacities, ``cumulative_fec`` and the loss
+    split) belongs to the pack installed at the year's end, so it restarts
+    after a replacement; the year's own figures (``replacements``,
+    throughput, ``fec``) cover every pack that served in it, and its means
+    the steps a pack served. A retired pack is out of service from the year
+    it is retired in and keeps its last state; a year it never serves has no
+    means. A quantity the degradation model does not supply is None, never
+    0: the cycle and calendar split comes from the native engine only, and
+    the resistance growth and round-trip efficiency from the native engine
+    with ``enable_resistance_fade``.
+    """
+    retired_year = next((event["year"] for event in events if event["action"] == "retired"), None)
+    cfg = resolved.cfg
+    native = cfg["degradation_engine"] == "native"
+    resistance = native and bool(cfg.get("enable_resistance_fade", False))
+    battery = build_battery_config(cfg, resolved, initial_soh=100.0)
+    window = battery.max_soc - battery.min_soc
+    rows = []
+    for _, row in yearly_df.iterrows():
+        soh = float(row["Battery_SOH_%"])
+        capacity_kwh = cfg["battery_kwh"] * soh / 100.0
+        # The efficiencies the dispatch applies at the pack's resistance.
+        charge, discharge = resistance_to_efficiency(
+            float(row["Battery_Resistance_Growth"]), battery.charge_efficiency, battery.discharge_efficiency
+        )
+        hours = float(row["Battery_In_Service_Hours"])
+        # A retired pack holds no charge, so the mean over every step, scaled
+        # to the hours served, is the mean over the steps it served.
+        mean_soc = (
+            float(row["Battery_SOC_Absolute_Mean_%"]) * (float(row["Simulated_Hours"]) / hours) if hours else None
+        )
+        mean_temperature = row["Battery_Cell_Temperature_Mean_C"]
+        rows.append(
+            {
+                "year": int(row["Year"]),
+                "in_service": retired_year is None or int(row["Year"]) < retired_year,
+                # Rounded as yearly[].soh_pct is, so the two lists agree.
+                "soh_pct": round(round(soh, 2), soh_digits),
+                "capacity_kwh": round(capacity_kwh, 3),
+                "usable_capacity_kwh": round(capacity_kwh * window, 3),
+                "replacements": int(row["Replacements"]),
+                "charge_throughput_kwh": round(float(row["Battery_Charge_Throughput_kWh"]), 2),
+                "discharge_throughput_kwh": round(float(row["Battery_Discharge_Throughput_kWh"]), 2),
+                "fec": round(float(row["Battery_Annual_FEC"]), 2),
+                "cumulative_fec": round(float(row["Battery_Cumulative_FEC"]), 2),
+                "mean_soc_pct": round(mean_soc, 2) if mean_soc is not None else None,
+                "mean_cell_temperature_c": round(float(mean_temperature), 2) if pd.notna(mean_temperature) else None,
+                "cycle_loss_pct": (
+                    round(float(row["Battery_Cumulative_Cycle_Degradation"]) * 100.0, soh_digits) if native else None
+                ),
+                "calendar_loss_pct": (
+                    round(float(row["Battery_Cumulative_Calendar_Degradation"]) * 100.0, soh_digits) if native else None
+                ),
+                "resistance_growth_pct": (
+                    round(float(row["Battery_Resistance_Growth"]) * 100.0, 2) if resistance else None
+                ),
+                "round_trip_efficiency": round(charge * discharge, 4) if resistance else None,
             }
         )
     return rows
@@ -163,7 +287,7 @@ def _provenance(
         "breos_version": package_version(),
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         # Every money field is in this currency; BREOS does not convert.
-        "currency": result_currency(resolved.tariff),
+        "currency": resolved.currency,
         "resolved_config": normalized_cfg,
         "weather": weather,
         "load_profile": json.loads(json.dumps(artifacts.load_profile_metadata, default=str)),
@@ -330,6 +454,11 @@ def build_result(
             "no_system_fixed_charge_year1_prices": _round2(year1["Baseline_Fixed_Charge"]),
         }
     )
+    # Only a household with an annual network credit reports it, so other
+    # results are unchanged.
+    result.update(
+        {name: _round2(year1[column]) for name, column in _NETWORK_CREDIT_YEAR1_FIELDS.items() if column in year1.index}
+    )
 
     if resolved.pv_arrays:
         result["pv_arrays"] = [dict(arr) for arr in resolved.pv_arrays]
@@ -351,6 +480,10 @@ def build_result(
         )
         result["battery_replacement_cost_npv"] = (
             round(float(cost_projection.attrs["replacement_cost_npv"]), 2) if cost_projection is not None else None
+        )
+        result.update(end_of_life_fields(artifacts.end_of_life_events, soh_digits))
+        result["battery_degradation_history"] = degradation_history_to_dicts(
+            artifacts.yearly_df, artifacts.end_of_life_events, resolved, soh_digits
         )
         if cfg["degradation_engine"] == "blast":
             for row in result["yearly"]:

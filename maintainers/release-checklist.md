@@ -11,14 +11,20 @@ the rules enforced for administrators too:
 - Require pull requests before merging, and dismiss stale approvals when new
   commits are pushed.
 - Require the four `test (3.11)` to `test (3.14)` checks of the `Tests`
-  workflow. Each runs lint, format and type checks, the test suite, the
-  installed-wheel release artifact check and the docs build.
+  workflow. Each runs the test suite; `test (3.12)` also runs the lint,
+  format and type checks, the installed-wheel release artifact check and the
+  docs build. On a documentation-only PR the other three versions skip their
+  steps and pass.
 - Require conversation resolution before merging.
 - Block force pushes and branch deletion.
 
 `main` also requires branches to be up to date before merging. `develop` does
 not (since 2026-10-01), so two PRs that pass alone can still break together;
 the `Tests` run on every push to `develop` checks each merged tree.
+
+Under Settings → Actions → General, workflows from fork PRs need approval
+for all outside collaborators, not only first-time contributors. Read the
+diff before approving a run.
 
 Use `main` only for stable releases. Release tags are created on `main` after
 the release commit has passed the same checks.
@@ -95,6 +101,10 @@ entry.
 The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
 3.14 on every PR and push, together with a `floors` job on the lowest declared
 dependency versions and a `no-numba` job without the optional Numba backend.
+Draft PRs run nothing until they are marked ready for review. A PR that
+changes only documentation (`docs/`, `design/`, `maintainers/`, the top-level
+Markdown files and `CITATION.cff`) runs the suite, checks and docs build on
+Python 3.12 alone.
 macOS and Windows run a focused public-entrypoint smoke suite and the backend
 bit-identity check on PRs into and pushes to `main` and `release/**`, nightly,
 and on demand. The slow tests and a separate `coverage-report` job run
@@ -184,23 +194,31 @@ Release flow:
 1. Merge the release PR into `main` after all gates pass.
 2. Optionally trigger the `Publish` workflow manually (`workflow_dispatch`) on
    `main` to dry-run the upload against TestPyPI, then verify the release installs
-   into a throwaway environment. TestPyPI serves `breos` itself; the runtime
-   dependencies still come from PyPI:
+   into a throwaway environment. Download only the BREOS wheel from TestPyPI
+   and install that file, so every runtime dependency comes from PyPI:
 
    ```
+   rm -rf /tmp/breos-testpypi-dist
+   uvx pip download --no-deps --only-binary :all: \
+     --index-url https://test.pypi.org/simple/ \
+     --dest /tmp/breos-testpypi-dist breos==X.Y.Z
    uv venv --clear /tmp/breos-testpypi
    VIRTUAL_ENV=/tmp/breos-testpypi uv pip install \
-     --index https://test.pypi.org/simple/ \
-     breos==X.Y.Z
+     /tmp/breos-testpypi-dist/breos-X.Y.Z-py3-none-any.whl
    VIRTUAL_ENV=/tmp/breos-testpypi uv pip show breos
    VIRTUAL_ENV=/tmp/breos-testpypi uv pip check
+   cd /tmp && /tmp/breos-testpypi/bin/python -c "import breos; print(breos.__version__)"
+   /tmp/breos-testpypi/bin/breos run --location porto --n-modules 10 \
+     --annual-consumption-kwh 4000 --dry-run
    ```
 
-   `--index` gives TestPyPI priority while leaving PyPI as uv's default,
-   lower-priority index for dependencies that are absent from TestPyPI. Keep
-   uv's default `first-index` strategy: if an unexpected TestPyPI package
-   shadows a dependency, investigate it rather than enabling an `unsafe-*`
-   index strategy.
+   The import runs from `/tmp` so it loads the installed wheel, not the source
+   checkout, and the dry run is the quickstart's offline installation check.
+   Do not list TestPyPI as an index for `uv pip install`: TestPyPI hosts a
+   `numpy` project, and uv's default `first-index` strategy then takes `numpy`
+   only from TestPyPI, where no release satisfies `numpy>=2.0`. Do not work
+   around it with an `unsafe-*` index strategy either; it lets any TestPyPI
+   upload stand in for a dependency.
 3. Tag the release commit on `main` with an annotated tag
    (`git tag -a vX.Y.Z -m "BREOS X.Y.Z" && git push origin vX.Y.Z`). The
    workflow refuses tags whose commit is not on `main`, then publishes to

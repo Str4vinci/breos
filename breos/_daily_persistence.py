@@ -13,12 +13,35 @@ civil day while the App runs. Each day it:
    energy, state of health and resistance-adjusted efficiencies;
 3. solves it and executes the first day's target only.
 
+The optional ``wear_cost_per_kwh`` (ADR 0002 A17) adds a planning weight per
+kWh of DC energy the battery discharges to each solve's cost. It moves only
+the targets the planner picks; the run's money and ageing come from the
+dispatch and the degradation model as before.
+
+With ``overlap_policy = "hold_target"`` (ADR 0002 A18) a period may be both a
+charge and a discharge period. On its steps the day's target is also the
+discharge floor, in every candidate the planner evaluates and in the day it
+executes: :func:`~breos._daily_targets.daily_target_instructions` places both.
+
 Until one complete local day has been observed there is nothing to repeat,
 so the day runs with no grid target: PV charging and the discharge gate
-still apply. The planner prices energy that ends its window below the day's
-starting energy (``preserve_start_energy``); that is a planning penalty, not
-a dispatch instruction, and the live battery carries its physical state from
-year to year as every App run does.
+still apply, and a period that both charges and discharges has no floor
+(reserve 0), as on a target-0 day. The planner prices energy that ends its
+window below the day's starting energy (``preserve_start_energy``); that is
+a planning penalty, not a dispatch instruction, and the live battery carries
+its physical state from year to year as every App run does.
+
+With ``decision_boundary = "charge_window_start"`` (ADR 0002 A19) the
+controller decides at the start of each charge window instead, a window
+being a run of consecutive charge steps, and holds that target until the
+next window starts, across midnight and through a weekend-long window. The
+decision sees the battery's state at the window start, and its forecast
+repeats the local day before it: each wall-clock slot's most recent
+observation, from the current day so far and the last complete local day.
+Each planning stage is one window, from its start to the next window's
+start, over the windows that start within ``forecast_horizon_days`` days.
+Until a complete local day has been observed a window starts with no grid
+target, and holds none until the next window.
 
 The controller runs through the private civil-day seam in
 :mod:`breos._controller`: it sees no current or future PV, load or
@@ -29,13 +52,27 @@ remains the only simulation of the battery.
 from __future__ import annotations
 
 import bisect
+import math
 from dataclasses import dataclass
 from typing import Any, Sequence, cast
 
 import numpy as np
 
-from breos._controller import ControllerDayDecision, ControllerDayInput, ObservedCivilDay, SlotKey
-from breos._daily_targets import DailyTargetProblem, daily_target_instructions, solve_daily_targets
+from breos._controller import (
+    ControllerDayDecision,
+    ControllerDayInput,
+    KnownTariffHorizon,
+    ObservedCivilDay,
+    PendingObservedCivilDay,
+    SlotKey,
+)
+from breos._daily_targets import (
+    DailyTargetProblem,
+    charge_window_day_starts,
+    charge_window_starts,
+    daily_target_instructions,
+    solve_daily_targets,
+)
 from breos._dispatch import lfp_capacity_factor
 from breos.battery import BatteryConfig
 from breos.dispatch_instructions import DispatchInstructions
@@ -50,8 +87,17 @@ PLANNER_VERSION = "1"
 FORECAST_POLICY = "repeat_previous_complete_local_day"
 WARM_START_POLICY = "no_grid_until_one_complete_local_day"
 PLANNER_TERMINAL_POLICY = "preserve_start_energy"
+# The same, deciding at charge-window starts (ADR 0002 A19). The civil-day
+# policy keeps its own identifiers.
+WINDOW_POLICY = {
+    "controller_version": "2",
+    "planner_version": "2",
+    "forecast_policy": "repeat_local_day_before_decision",
+    "warm_start_policy": "no_grid_until_a_window_after_one_complete_local_day",
+}
 # The candidate targets' placeholder on the layout: any finite value marks a
-# charge step; the planner replaces it with each day's target.
+# charge step; the planner replaces it with each day's target, and with it
+# the held floor of a step that also discharges.
 _CHARGE_STEP = 1.0
 
 
@@ -123,8 +169,11 @@ class DailyPersistenceController:
     efficiency and import limit fix the instruction layout, and its planner
     settings the solve. ``hours_per_step`` is the simulation's step and
     ``execution_backend`` the backend the planner's day transitions run on,
-    the simulation's own. It keeps no policy state: every decision follows
-    from the day's input.
+    the simulation's own. Under ``civil_day`` it keeps no policy state:
+    every decision follows from the day's input. Under
+    ``charge_window_start`` the policy state is the target in force (None for
+    none), carried across midnights and the A2 year seam until the next
+    window starts.
     """
 
     spec: SmartChargingSpec
@@ -144,29 +193,40 @@ class DailyPersistenceController:
         return cls(spec, get_hours_per_step(freq), execution_backend)
 
     @property
+    def windowed(self) -> bool:
+        """Whether targets are decided at charge-window starts (A19), not civil midnights."""
+        return self.spec.decision_boundary == "charge_window_start"
+
+    @property
     def tariff_horizon_days(self) -> int:
         horizon = self.spec.forecast_horizon_days
         assert horizon is not None
-        return horizon
+        # A window decision needs the rest of its own day, the planning days,
+        # and the last planned window's run to the next window start.
+        return horizon + 2 if self.windowed else horizon
+
+    def decision_starts(self, tariff: ResolvedTariff) -> np.ndarray | None:
+        """The charge-window starts of ``tariff``'s calendar, or None when deciding civil days.
+
+        The first step follows the calendar's last, as an A2 replay continues it.
+        """
+        if not self.windowed:
+            return None
+        charge = np.isin(np.asarray(tariff.period_labels, dtype=object), self.spec.charge_periods)
+        return charge_window_starts(charge, previous_charge=bool(len(charge) and charge[-1]))
 
     def decide_day(self, day: ControllerDayInput, policy_state: object | None) -> ControllerDayDecision:
+        if self.windowed:
+            return self._decide_window(day, policy_state)
         horizon = day.tariff
         count = day.decision_step_count
         layout = period_layout(self.spec, horizon.period_labels, _CHARGE_STEP)
         observed = day.last_complete_observed_day
         if observed is None:
-            # Warm start: no complete day to repeat yet, so no grid target.
-            today = _slice(layout, count)
-            return ControllerDayDecision(
-                DispatchInstructions(
-                    discharge_allowed=today.discharge_allowed,
-                    reserve_fraction=today.reserve_fraction,
-                    grid_target_fraction=np.full(count, np.nan),
-                    grid_charge_efficiency=today.grid_charge_efficiency,
-                    grid_import_limit_w=today.grid_import_limit_w,
-                ),
-                policy_state,
-            )
+            # Warm start: no complete day to repeat yet, so no grid target,
+            # and no held floor on a period that both charges and discharges.
+            today = daily_target_instructions(_slice(layout, count), (0, count), [np.nan])
+            return ControllerDayDecision(today, policy_state)
 
         pv, load, temperature = persistence_forecast(observed, horizon.slot_keys)
         battery = BatteryConfig(**cast("dict[str, Any]", dict(day.battery_config)))
@@ -193,15 +253,135 @@ class DailyPersistenceController:
             terminal_energy_wh=preserve_start_energy(battery, state.energy_wh, state.soh_fraction, temperature),
             free_terminal=False,
             execution_backend=self.execution_backend,
+            wear_cost_per_kwh=self._wear_cost(),
         )
         # Only today's target is executed; tomorrow is planned again.
         today = daily_target_instructions(_slice(layout, count), (0, count), plan.targets[:1])
         return ControllerDayDecision(today, policy_state)
 
+    def _decide_window(self, day: ControllerDayInput, policy_state: object | None) -> ControllerDayDecision:
+        """One target per charge window, decided at its start and held until the next starts.
+
+        ``policy_state`` is the target in force, None for none. Every step of
+        the decision span takes one target: a later window start in the span
+        is decided again by the session, which overwrites the rest.
+        """
+        horizon = day.tariff
+        count = day.decision_step_count
+        layout = period_layout(self.spec, horizon.period_labels, _CHARGE_STEP)
+        held = math.nan if policy_state is None else float(cast(float, policy_state))
+        if not day.decision_start:
+            today = daily_target_instructions(_slice(layout, count), (0, count), [held])
+            return ControllerDayDecision(today, policy_state)
+        observed = observed_day_before(day.last_complete_observed_day, day.observed_today)
+        if observed is None:
+            target = math.nan
+        else:
+            end, day_starts = window_plan_span(horizon, layout, self.tariff_horizon_days - 2)
+            pv, load, temperature = persistence_forecast(observed, horizon.slot_keys[:end])
+            battery = BatteryConfig(**cast("dict[str, Any]", dict(day.battery_config)))
+            state = day.battery_state
+            problem = DailyTargetProblem(
+                pv_dc_w=pv,
+                load_w=load,
+                temperature_c=temperature,
+                import_price_per_kwh=np.asarray(horizon.import_price_per_kwh[:end], dtype=np.float64),
+                export_price_per_kwh=np.asarray(horizon.export_price_per_kwh[:end], dtype=np.float64),
+                day_starts=day_starts,
+                instructions=_slice(layout, end),
+                battery_config=battery,
+                hours_per_step=self.hours_per_step,
+                soh_fraction=state.soh_fraction,
+                eff_charge=state.charge_efficiency,
+                eff_discharge=state.discharge_efficiency,
+            )
+            plan = solve_daily_targets(
+                problem,
+                initial_energy_wh=state.energy_wh,
+                target_levels=self._setting("target_levels"),
+                soc_states=self._setting("soc_states"),
+                terminal_energy_wh=preserve_start_energy(battery, state.energy_wh, state.soh_fraction, temperature),
+                free_terminal=False,
+                execution_backend=self.execution_backend,
+                wear_cost_per_kwh=self._wear_cost(),
+            )
+            target = float(plan.targets[0])
+        today = daily_target_instructions(_slice(layout, count), (0, count), [target])
+        return ControllerDayDecision(today, None if math.isnan(target) else target)
+
     def _setting(self, name: str) -> int:
         value = getattr(self.spec, name)
         assert isinstance(value, int)
         return value
+
+    def _wear_cost(self) -> float:
+        value = self.spec.wear_cost_per_kwh
+        assert isinstance(value, float)
+        return value
+
+
+def observed_day_before(
+    last_complete: ObservedCivilDay | None, today: PendingObservedCivilDay | None
+) -> ObservedCivilDay | None:
+    """The local day before a decision: each slot's most recent observation (A19).
+
+    The current day's observed slots replace the last complete day's slots
+    at the same wall time and fold, and add any it lacks. When the last
+    complete day is the day before, this is the 24 hours (23 or 25 across a
+    DST change) that end at the decision. None until one complete day has
+    been observed. A slot the last complete day lacks is appended after its
+    slots, so the result is not in local-slot order: it is read by slot key
+    only, as :func:`persistence_forecast` does.
+    """
+    if last_complete is None:
+        return None
+    if today is None or today.captured_slots == 0:
+        return last_complete
+    keys = list(last_complete.slot_keys)
+    series = [list(last_complete.pv_dc_w), list(last_complete.load_w), list(last_complete.temperature_c)]
+    index = {key: position for position, key in enumerate(keys)}
+    for key, *values in zip(today.slot_keys, today.pv_dc_w, today.load_w, today.temperature_c, strict=True):
+        if values[0] is None:
+            continue
+        position = index.get(key)
+        if position is None:
+            index[key] = len(keys)
+            keys.append(key)
+            for column, value in zip(series, values, strict=True):
+                column.append(float(cast(float, value)))
+        else:
+            for column, value in zip(series, values, strict=True):
+                column[position] = float(cast(float, value))
+    return ObservedCivilDay(
+        today.logical_day_ordinal,
+        today.local_date,
+        today.timezone,
+        tuple(keys),
+        tuple(series[0]),
+        tuple(series[1]),
+        tuple(series[2]),
+    )
+
+
+def window_plan_span(
+    horizon: KnownTariffHorizon, layout: DispatchInstructions, planning_days: int
+) -> tuple[int, tuple[int, ...]]:
+    """How many horizon steps a window decision plans, and its windows' starts in them (A19).
+
+    The plan covers the windows that start before the decision's wall-clock
+    time ``planning_days`` civil days later, the decision's own window
+    first, each to the next window's start. The last one is cut where the
+    known horizon ends.
+    """
+    keys, offsets = horizon.slot_keys, horizon.civil_day_offsets
+    limit = len(keys)
+    if len(offsets) > planning_days + 1:
+        lo, hi = offsets[planning_days], offsets[planning_days + 1]
+        wall = keys[0][0]
+        limit = next((lo + i for i, key in enumerate(keys[lo:hi]) if key[0] >= wall), hi)
+    starts = charge_window_day_starts(layout)
+    end = next((start for start in starts[1:] if start >= limit), len(keys))
+    return end, tuple(start for start in starts if start < end) + (end,)
 
 
 def preserve_start_energy(
@@ -231,12 +411,21 @@ def daily_persistence_provenance(
     across all its years; its hash identifies what the policy did without
     exposing its forecasts or per-day targets.
     """
+    policy = {
+        "controller_version": CONTROLLER_VERSION,
+        "planner_version": PLANNER_VERSION,
+        "forecast_policy": FORECAST_POLICY,
+        "warm_start_policy": WARM_START_POLICY,
+    }
+    if spec.decision_boundary == "charge_window_start":
+        policy.update(WINDOW_POLICY)
     return {
         "mode": spec.mode,
         "overlap_policy": spec.overlap_policy,
+        "decision_boundary": spec.decision_boundary,
         "experimental": True,
-        "controller_version": CONTROLLER_VERSION,
-        "planner_version": PLANNER_VERSION,
+        "controller_version": policy["controller_version"],
+        "planner_version": policy["planner_version"],
         "charge_periods": list(spec.charge_periods),
         "discharge_periods": list(spec.discharge_periods),
         "grid_charge_efficiency": spec.grid_charge_efficiency,
@@ -245,8 +434,9 @@ def daily_persistence_provenance(
         "forecast_horizon_days": spec.forecast_horizon_days,
         "target_levels": spec.target_levels,
         "soc_states": spec.soc_states,
-        "forecast_policy": FORECAST_POLICY,
-        "warm_start_policy": WARM_START_POLICY,
+        "wear_cost_per_kwh": spec.wear_cost_per_kwh,
+        "forecast_policy": policy["forecast_policy"],
+        "warm_start_policy": policy["warm_start_policy"],
         "planner_terminal_policy": PLANNER_TERMINAL_POLICY,
         "terminal_convention": TERMINAL_CONVENTION,
         "schedule_hash": tariff.schedule_hash,

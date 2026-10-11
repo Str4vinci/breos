@@ -44,6 +44,7 @@ dependencies = [
     "pvlib>=0.14.0,<0.16",
     "rainflow>=3.2.0",
     "scipy>=1.14",
+    "threadpoolctl>=3.5.0",
 ]
 
 [project.urls]
@@ -88,6 +89,7 @@ docs = [
     "sphinx-autodoc-typehints>=2.5",
     "matplotlib>=3.10.8",
     "sphinx-gallery>=0.19",
+    "sphinxext-opengraph>=0.10",
 ]
 
 [tool.pytest.ini_options]
@@ -178,6 +180,7 @@ module = [
     "rainflow.*",
     "requests.*",
     "scipy.*",
+    "threadpoolctl.*",
 ]
 ignore_missing_imports = true
 

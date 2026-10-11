@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime
 from numbers import Real
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
@@ -25,6 +25,7 @@ from breos.constants import (
     DEFAULT_INDOOR_SETPOINT_C,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
+    SKIPPED_REPLACEMENT_ACTIONS,
 )
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
 from breos.economics import (
@@ -33,6 +34,7 @@ from breos.economics import (
     DEFAULT_INFLATION_RATE,
     CostParams,
     calculate_costs,
+    default_amount_cost_keys,
     replacement_event_cost,
 )
 from breos.emissions import EmissionsParams
@@ -45,12 +47,17 @@ from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.smart_charging import (
+    DECISION_BOUNDARIES,
+    DECISION_BOUNDARY_KEY,
     DISCHARGE_ONLY_MODES,
     OVERLAP_POLICIES,
+    PLANNER_KEYS,
     PLANNER_MODES,
     PLANNER_SETTINGS,
     SMART_CHARGING_MODES,
+    WEAR_COST_KEY,
     SmartChargingSpec,
+    check_charge_windows,
     check_overlap_policy,
 )
 from breos.solar import (
@@ -75,17 +82,19 @@ from breos.solar import (
 from breos.solar import default_azimuth as default_azimuth_fn
 from breos.tariffs import (
     BOUNDARY_POLICIES,
+    DEFAULT_CURRENCY,
     SCHEDULE_CYCLES,
-    SUPPORTED_CURRENCIES,
+    AnnualNetworkCredit,
     ReferenceTariffSpec,
     ScheduleDefinition,
     TariffPrices,
     TariffSchedule,
     TariffSpec,
     available_tariff_schedules,
+    check_currency,
     get_schedule_definition,
     parse_schedule_definition,
-    result_currency,
+    run_currency,
     schedule_resolution_minutes,
     validate_season_prices,
 )
@@ -256,6 +265,19 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "the {py:class}`~breos.economics.CostParams` defaults"
         ),
         summary="economics.cost_preset",
+    ),
+    "currency": AppConfigField(
+        default=None,
+        cli_flags=("--currency",),
+        cli_help="ISO 4217 code of the run's money, for example 'USD' (default: the tariff's, else EUR).",
+        normalizer=_upper,
+        doc=(
+            'ISO 4217 code of the run\'s money, such as `"USD"`. Every money input must be in it, and every money '
+            "output is; BREOS does not convert. Unset, the run takes the `[tariff]` currency, else EUR. A run in "
+            "another currency than EUR gives its costs in that currency; see [Currency](configuration.md#currency)"
+        ),
+        default_doc='*the `[tariff]` currency, else `"EUR"`*',
+        summary="economics.currency",
     ),
     "emissions_country": AppConfigField(
         default=None,
@@ -713,6 +735,24 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_doc="*unset*",
         summary="battery.smart_charging",
     ),
+    "weather_file": AppConfigField(
+        default=None,
+        cli_flags=("--weather-file",),
+        cli_type=Path,
+        cli_help=(
+            "One-year weather CSV to simulate, instead of the weather/ cache or a PVGIS fetch. "
+            "A relative path is taken from the working directory."
+        ),
+        normalizer=_path_string,
+        doc=(
+            "One-year weather CSV (or gzip-compressed `.csv.gz`) to simulate, in the layout of the cached "
+            "`weather/` files, instead of the `weather/` cache or a PVGIS fetch. Any filename and any location "
+            "work. A relative path is taken from the working directory. The file's path and SHA-256 digest are "
+            "recorded under `provenance.weather`; see [Run offline with cached "
+            "weather](../how-to/offline-weather.md#name-the-weather-file)"
+        ),
+        summary="simulation.weather_file",
+    ),
     "weather_source": AppConfigField(
         default=None,
         cli_flags=("--weather-source",),
@@ -787,8 +827,20 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     "battery_eol_percentage": AppConfigField(
         default=DEFAULT_EOL_PERCENTAGE,
-        doc="SOH fraction that triggers a battery replacement",
+        doc=(
+            "SOH fraction at which the battery reaches end of life: it is replaced, or, when the replacement is "
+            "skipped, kept or retired"
+        ),
         summary="battery.eol_percentage",
+    ),
+    "battery_enable_replacement": AppConfigField(
+        default=True,
+        doc=(
+            "Whether a battery that reaches end of life is replaced. `false` skips every replacement: the battery "
+            "keeps ageing below its threshold, or is retired, as `battery_skipped_replacement_action` says. See "
+            "[Running without replacement](configuration.md#running-without-replacement)"
+        ),
+        summary="battery.enable_replacement",
     ),
     "battery_allow_terminal_replacement": AppConfigField(
         default=True,
@@ -800,6 +852,29 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "(configuration.md#battery-replacement-at-the-end-of-the-horizon)"
         ),
         summary="battery.allow_terminal_replacement",
+    ),
+    "battery_replacement_min_remaining_years": AppConfigField(
+        default=0.0,
+        doc=(
+            "Fewest project years a replacement battery must have left to serve. A battery that reaches end of "
+            "life with less than this left before the end of the horizon is not replaced; it keeps ageing below "
+            "its end-of-life threshold. `0` replaces at every end of life. See "
+            "[Battery replacement at the end of the horizon]"
+            "(configuration.md#battery-replacement-at-the-end-of-the-horizon)"
+        ),
+        summary="battery.replacement_min_remaining_years",
+    ),
+    "battery_skipped_replacement_action": AppConfigField(
+        default="keep",
+        doc=(
+            'What happens to a battery whose end-of-life replacement is skipped. `"keep"` leaves it in service '
+            'below its threshold until its state of health reaches 0, when it is retired; `"retire"` switches it '
+            "off, and the project finishes PV-only. Applies only when "
+            "`battery_enable_replacement`, `battery_replacement_min_remaining_years` or "
+            "`battery_allow_terminal_replacement` skips a swap. See "
+            "[Retiring the battery instead of keeping it](configuration.md#retiring-the-battery-instead-of-keeping-it)"
+        ),
+        summary="battery.skipped_replacement_action",
     ),
     "battery_rte": AppConfigField(
         default=None,
@@ -1118,6 +1193,8 @@ class ResolvedAppConfig:
     smart_charging: SmartChargingSpec | None
     cost_params: CostParams
     emissions_params: EmissionsParams | None
+    # The currency of every money input and output (run_currency).
+    currency: str
     # The configured [period], or None for the whole calendar year of start_date.
     period: SimulationPeriod | None = None
     # The configured [reference_tariff], or None: the no-system baseline is
@@ -1343,8 +1420,16 @@ def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
         # conversion that may be deferred until the simulation is running.
         timezone = resolve_location(cfg)[2]
         tariff_spec = resolve_tariff_spec(cfg, timezone)
+    currency = run_currency(cfg["currency"], tariff_spec.prices.currency if tariff_spec is not None else None)
     if cfg["reference_tariff"] is not None:
-        resolve_reference_tariff_spec(cfg, resolve_location(cfg)[2], tariff_spec)
+        resolve_reference_tariff_spec(cfg, resolve_location(cfg)[2], currency)
+    check_cost_currency(
+        currency,
+        given=cfg.get("costs") or {},
+        preset=cfg.get("cost_preset"),
+        tariff=tariff_spec is not None,
+        battery=cfg["battery_kwh"] * 1000 > 1,
+    )
     _validate_battery_and_degradation(cfg)
     _validate_period(cfg)
     _validate_smart_charging(cfg, tariff_spec)
@@ -1513,6 +1598,7 @@ def _check_tariff_prices(table: dict[str, Any], where: str) -> None:
     if ("schedule" in table) == ("custom_schedule" in table):
         raise ValueError(f"'{where}' must set exactly one of 'schedule' or 'custom_schedule'")
     _check_period_prices(table, where, ("import_prices", "export_prices"))
+    _check_network_credit_periods(table, where)
 
 
 def _check_period_prices(table: dict[str, Any], where: str, names: tuple[str, ...]) -> None:
@@ -1558,17 +1644,63 @@ def _price_entry(value: Any, where: str) -> Any:
 # either level (tariff.import_prices.peak, tariff.import_prices.winter.peak).
 _PRICE_LIST = mapping_of(text, _price_entry, depth=2)
 
+ANNUAL_NETWORK_CREDIT_TABLE = TableSpec(
+    "annual_network_credit",
+    keys={
+        "amount_per_year": number(minimum=0),
+        "network_fixed_per_year": number(minimum=0),
+        "network_import_prices": _PRICE_LIST,
+    },
+    required=frozenset({"amount_per_year", "network_fixed_per_year", "network_import_prices"}),
+    docs={
+        "amount_per_year": "Annual reduction of the household's network charges, at year-1 prices; an explicit 0 is valid",
+        "network_fixed_per_year": (
+            "Network part of the fixed charge per year, gross, at year-1 prices: at most 365 days of "
+            "`fixed_charge_per_day`, and never added to it. An explicit 0 is valid"
+        ),
+        "network_import_prices": (
+            "Network part of the import price per kWh, gross, by period name, in the shape of `import_prices`; "
+            "`all` prices every period. At most the period's import price, and never added to it"
+        ),
+    },
+)
+
+
+def _annual_network_credit(value: Any, where: str) -> dict[str, Any]:
+    return ANNUAL_NETWORK_CREDIT_TABLE.validate(value, where)
+
+
+def _network_credit(table: Mapping[str, Any]) -> AnnualNetworkCredit | None:
+    """The annual network credit a validated [tariff] or [reference_tariff] table sets, or None."""
+    credit = table.get("annual_network_credit")
+    if credit is None:
+        return None
+    return AnnualNetworkCredit(
+        amount_per_year=credit["amount_per_year"],
+        network_fixed_per_year=credit["network_fixed_per_year"],
+        network_import_prices=credit["network_import_prices"],
+    )
+
+
+def _check_network_credit_periods(table: dict[str, Any], where: str) -> None:
+    # The network prices name the schedule's periods, as the import prices do.
+    if "annual_network_credit" in table:
+        credit = {**table, **table["annual_network_credit"]}
+        _check_period_prices(credit, f"{where}.annual_network_credit", ("network_import_prices",))
+
+
 TARIFF_TABLE = TableSpec(
     "tariff",
     keys={
         "schedule": choice(available_tariff_schedules()),
         "custom_schedule": _custom_schedule,
-        "currency": choice(tuple(sorted(SUPPORTED_CURRENCIES))),
+        "currency": check_currency,
         "import_prices": _PRICE_LIST,
         "export_prices": _PRICE_LIST,
         "fixed_charge_per_day": number(minimum=0),
         "boundary_policy": choice(tuple(sorted(BOUNDARY_POLICIES))),
         "study_date": _tariff_study_date,
+        "annual_network_credit": _annual_network_credit,
     },
     required=frozenset({"currency", "import_prices", "export_prices"}),
     check=_check_tariff_prices,
@@ -1583,8 +1715,8 @@ TARIFF_TABLE = TableSpec(
             "[Custom App schedules](../api/tariffs.md#custom-app-schedules)"
         ),
         "currency": (
-            f"Currency of the prices: {', '.join(sorted(SUPPORTED_CURRENCIES))}. The cost preset should be in the "
-            "same currency; BREOS does not convert"
+            "ISO 4217 code of the prices, such as `EUR`. It is the run's currency unless the top-level `currency` "
+            "is set, which it must then equal; BREOS does not convert"
         ),
         "import_prices": (
             "Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, "
@@ -1600,6 +1732,10 @@ TARIFF_TABLE = TableSpec(
             + ", ".join(f"`{policy}`" for policy in sorted(BOUNDARY_POLICIES))
         ),
         "study_date": "A date in the schedule's effective window, needed when the simulated year is outside it",
+        "annual_network_credit": (
+            "Annual network credit of the system household, capped at its own network charges; see "
+            "[`annual_network_credit`](#annual_network_credit)"
+        ),
     },
 )
 # Flat-price cost keys a tariff replaces; setting both would price energy twice.
@@ -1666,6 +1802,7 @@ def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None
         fixed_charge_per_day=table.get("fixed_charge_per_day", 0.0),
         identifier="config",
         version="1",
+        annual_network_credit=_network_credit(table),
     )
     return TariffSpec(
         schedule=schedule,
@@ -1680,12 +1817,19 @@ def _check_reference_prices(table: dict[str, Any], where: str) -> None:
         raise ValueError(f"'{where}' sets both 'schedule' and 'custom_schedule'; set one, or neither for a flat price")
     if "schedule" in table or "custom_schedule" in table:
         _check_period_prices(table, where, ("import_prices",))
+        _check_network_credit_periods(table, where)
         return
     # Without a schedule the reference is one flat price.
     if set(table["import_prices"]) != {"all"} or isinstance(table["import_prices"].get("all"), Mapping):
         raise ValueError(
             f"'{where}' has no schedule, so it is one flat price: set '{where}.import_prices' = {{ all = <price> }}, "
             "or set a schedule or custom_schedule"
+        )
+    network = (table.get("annual_network_credit") or {}).get("network_import_prices")
+    if network is not None and (set(network) != {"all"} or isinstance(network.get("all"), Mapping)):
+        raise ValueError(
+            f"'{where}' has no schedule, so its network price is flat too: set "
+            f"'{where}.annual_network_credit.network_import_prices' = {{ all = <price> }}"
         )
     scheduled = sorted(key for key in ("boundary_policy", "study_date") if key in table)
     if scheduled:
@@ -1699,12 +1843,13 @@ REFERENCE_TARIFF_TABLE = TableSpec(
     keys={
         "schedule": choice(available_tariff_schedules()),
         "custom_schedule": _custom_schedule,
-        "currency": choice(tuple(sorted(SUPPORTED_CURRENCIES))),
+        "currency": check_currency,
         "import_prices": _PRICE_LIST,
         "fixed_charge_per_day": number(minimum=0),
         "boundary_policy": choice(tuple(sorted(BOUNDARY_POLICIES))),
         "study_date": _tariff_study_date,
         "import_price_escalation": number(minimum=-1, min_exclusive=True),
+        "annual_network_credit": _annual_network_credit,
     },
     required=frozenset({"currency", "import_prices", "fixed_charge_per_day"}),
     check=_check_reference_prices,
@@ -1718,8 +1863,8 @@ REFERENCE_TARIFF_TABLE = TableSpec(
             "`schedule`, or neither for one flat price"
         ),
         "currency": (
-            f"Currency of the prices: {', '.join(sorted(SUPPORTED_CURRENCIES))}. Must be the result's currency: the "
-            "`[tariff]` currency, or EUR on flat prices"
+            "ISO 4217 code of the prices. Must be the run's currency: `currency`, else the `[tariff]` currency, "
+            "else EUR"
         ),
         "import_prices": (
             "Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, "
@@ -1733,28 +1878,30 @@ REFERENCE_TARIFF_TABLE = TableSpec(
         "import_price_escalation": (
             "Annual escalation of the reference energy and fixed charge. Default: the system's import escalation"
         ),
+        "annual_network_credit": (
+            "Annual network credit of the no-system household, capped at its own network charges, in the shape of "
+            "[`annual_network_credit`](#annual_network_credit). Without a schedule, "
+            "`network_import_prices = { all = <price> }`"
+        ),
     },
 )
 
 
-def resolve_reference_tariff_spec(
-    cfg: dict[str, Any], timezone: str, tariff: TariffSpec | None
-) -> ReferenceTariffSpec | None:
+def resolve_reference_tariff_spec(cfg: dict[str, Any], timezone: str, currency: str) -> ReferenceTariffSpec | None:
     """Validate and build the no-system reference tariff for App or an adapted optimizer config.
 
     ``cfg`` supplies ``reference_tariff`` and ``resolution``, and from App
-    ``start_date``, as :func:`resolve_tariff_spec` reads them. ``tariff`` is
-    the system's: the reference must be in the result's currency, since
-    BREOS does not convert.
+    ``start_date``, as :func:`resolve_tariff_spec` reads them. ``currency``
+    is the run's (:func:`~breos.tariffs.run_currency`): the reference must be
+    in it, since BREOS does not convert.
     """
     if cfg.get("reference_tariff") is None:
         return None
     table = REFERENCE_TARIFF_TABLE.validate(cfg["reference_tariff"])
-    currency = result_currency(tariff)
     if table["currency"] != currency:
         raise ValueError(
-            f"'reference_tariff.currency' is {table['currency']}, but the result is in {currency}"
-            f"{' (the [tariff] currency)' if tariff is not None else ' (flat prices)'}. BREOS does not convert."
+            f"'reference_tariff.currency' is {table['currency']}, but the run is in {currency}. BREOS does not "
+            f"convert currencies: give the reference prices in {currency}."
         )
     schedule: ScheduleDefinition | None = None
     if "schedule" in table or "custom_schedule" in table:
@@ -1769,6 +1916,7 @@ def resolve_reference_tariff_spec(
         fixed_charge_per_day=table["fixed_charge_per_day"],
         identifier="reference",
         version="1",
+        annual_network_credit=_network_credit(table),
     )
     return ReferenceTariffSpec(
         prices=prices,
@@ -1794,9 +1942,9 @@ _MODE_REQUIRED = {
 # setting where the grid never charges.
 _GRID_CHARGE_KEYS = ("target_usable_fraction", "charge_periods", "grid_charge_efficiency", "grid_import_limit_w")
 _MODE_REFUSED = {
-    "fixed_target": tuple(PLANNER_SETTINGS),
+    "fixed_target": PLANNER_KEYS,
     "daily_persistence": ("target_usable_fraction",),
-    "discharge_only": (*_GRID_CHARGE_KEYS, *PLANNER_SETTINGS),
+    "discharge_only": (*_GRID_CHARGE_KEYS, *PLANNER_KEYS),
 }
 
 
@@ -1829,7 +1977,7 @@ def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
         raise ValueError(
             f"'{where}.charge_periods' and '{where}.discharge_periods' share {', '.join(overlap)}; "
             "every step either charges or discharges; "
-            "set overlap_policy = 'hold_target' with mode = 'fixed_target' to allow overlap"
+            "set overlap_policy = 'hold_target' with mode = 'fixed_target' or 'daily_persistence' to allow overlap"
         )
 
 
@@ -1845,15 +1993,17 @@ SMART_CHARGING_TABLE = TableSpec(
         # None, as well as omitting the key, leaves site import unlimited.
         "grid_import_limit_w": number(minimum=0, min_exclusive=True, allow_none=True),
         **{name: integer(minimum=minimum) for name, (_default, minimum) in PLANNER_SETTINGS.items()},
+        WEAR_COST_KEY: number(minimum=0),
+        DECISION_BOUNDARY_KEY: choice(DECISION_BOUNDARIES),
     },
     required=frozenset({"mode"}),
     check=_check_smart_charging_keys,
     docs={
         "overlap_policy": (
-            "Default `reject`: charge and discharge periods must be disjoint. `hold_target` (`fixed_target` only) "
-            "uses the grid target as the discharge floor on overlapping steps. Above it the battery may "
-            "discharge; below it the grid may charge; PV may charge above it. `daily_persistence` refuses it "
-            "because its planner keeps reserves fixed while replacing targets"
+            "Default `reject`: charge and discharge periods must be disjoint. `hold_target` (`fixed_target` and "
+            "`daily_persistence`) uses the grid target as the discharge floor on overlapping steps. Above it the "
+            "battery may discharge; below it the grid may charge; PV may charge above it. Under "
+            "`daily_persistence` the floor is each day's planned target, and 0 on a day with no grid target"
         ),
         "mode": (
             "`fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App "
@@ -1865,7 +2015,8 @@ SMART_CHARGING_TABLE = TableSpec(
             "`battery_max_soc`. `fixed_target` only"
         ),
         "forecast_horizon_days": (
-            f"`daily_persistence` only: civil days the planner looks ahead, today included. An integer of at "
+            f"`daily_persistence` only: civil days the planner looks ahead, today included; under "
+            f"`charge_window_start`, the windows that start within that many days. An integer of at "
             f"least {PLANNER_SETTINGS['forecast_horizon_days'][1]}; default "
             f"{PLANNER_SETTINGS['forecast_horizon_days'][0]}"
         ),
@@ -1877,6 +2028,17 @@ SMART_CHARGING_TABLE = TableSpec(
         "soc_states": (
             f"`daily_persistence` only: stored-energy grid points of the planner's value function. An integer of "
             f"at least {PLANNER_SETTINGS['soc_states'][1]}; default {PLANNER_SETTINGS['soc_states'][0]}"
+        ),
+        WEAR_COST_KEY: (
+            "`daily_persistence` only: a planning weight, in the tariff's currency per kWh of DC energy the "
+            "battery discharges, that the planner adds to each day's cost. Not a degradation model: realised "
+            "ageing still comes from the battery model. At least 0; default 0"
+        ),
+        DECISION_BOUNDARY_KEY: (
+            "`daily_persistence` only: when the planner decides a target. `civil_day` (default) decides one per "
+            "civil day at local midnight; `charge_window_start` decides one per charge window at its start, held "
+            "until the next window starts. A window is a run of consecutive steps in `charge_periods`; it may "
+            "cross midnight or span a weekend. Needs a tariff period outside `charge_periods`"
         ),
         "charge_periods": "Tariff periods in which the grid may charge the battery. Not with `discharge_only`",
         "discharge_periods": (
@@ -1943,6 +2105,7 @@ def _checked_smart_charging(
                 f"'smart_charging.{name}' has period(s) {', '.join(unknown)} that schedule {schedule.identifier!r} "
                 f"does not have. Its periods: {', '.join(sorted(periods))}."
             )
+    check_charge_windows(table.get(DECISION_BOUNDARY_KEY), table.get("charge_periods", ()), periods)
     return table
 
 
@@ -1980,7 +2143,7 @@ def resolve_smart_charging_spec(
         grid_import_limit_w=table.get("grid_import_limit_w"),
         # Omitted planner settings take the planner's defaults, which the
         # spec then records.
-        **{name: table[name] for name in PLANNER_SETTINGS if name in table},
+        **{name: table[name] for name in PLANNER_KEYS if name in table},
     )
 
 
@@ -2142,6 +2305,7 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
         raise ValueError("'resolution' must be 'h' or '15min'")
     cfg["irradiance_resampling"] = validate_irradiance_resampling(cfg["irradiance_resampling"])
     _validate_weather_source(cfg)
+    _validate_weather_file(cfg)
     cfg["horizon_profile"] = normalise_horizon_profile(cfg["horizon_profile"])
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
     if not is_known_model(cfg["solar_position"], SOLAR_POSITION_METHODS):
@@ -2192,6 +2356,24 @@ def _validate_weather_source(cfg: dict[str, Any]) -> None:
         )
 
 
+def _validate_weather_file(cfg: dict[str, Any]) -> None:
+    """Check ``weather_file`` names an existing file, and is not combined with ``weather_source``.
+
+    A relative path is taken from the working directory, as for the other
+    path keys. The file is read when the weather is loaded.
+    """
+    weather_file = cfg["weather_file"]
+    if weather_file is None:
+        return
+    if cfg["weather_source"] is not None:
+        raise ValueError(
+            "'weather_file' names the weather file directly, and 'weather_source' selects one from the "
+            "weather/ cache; set one of them"
+        )
+    if not Path(weather_file).is_file():
+        raise FileNotFoundError(f"weather_file not found: {weather_file}")
+
+
 def _validate_economics(cfg: dict[str, Any]) -> None:
     """Validate financial and optional export-emissions inputs."""
     for key in ("inflation_rate", "discount_rate"):
@@ -2209,6 +2391,8 @@ def _validate_economics(cfg: dict[str, Any]) -> None:
         cfg["terminal_value"].setdefault("basis", "none")
     if "costs" in cfg:
         COSTS_TABLE.validate(cfg["costs"])
+    if cfg["currency"] is not None:
+        cfg["currency"] = check_currency(cfg["currency"], "currency")
     if cfg["export_emissions_factor_gco2_kwh"] is not None:
         if _finite_real(cfg["export_emissions_factor_gco2_kwh"], "export_emissions_factor_gco2_kwh") < 0:
             raise ValueError("'export_emissions_factor_gco2_kwh' must be >= 0 when configured")
@@ -2265,8 +2449,20 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
 
     if not isinstance(cfg["enable_resistance_fade"], bool):
         raise TypeError("'enable_resistance_fade' must be a boolean")
+    if not isinstance(cfg["battery_enable_replacement"], bool):
+        raise TypeError("'battery_enable_replacement' must be a boolean")
     if not isinstance(cfg["battery_allow_terminal_replacement"], bool):
         raise TypeError("'battery_allow_terminal_replacement' must be a boolean")
+    min_remaining = _finite_real(
+        cfg["battery_replacement_min_remaining_years"], "battery_replacement_min_remaining_years"
+    )
+    if min_remaining < 0:
+        raise ValueError("'battery_replacement_min_remaining_years' must be >= 0")
+    cfg["battery_replacement_min_remaining_years"] = min_remaining
+    if cfg["battery_skipped_replacement_action"] not in SKIPPED_REPLACEMENT_ACTIONS:
+        raise ValueError(
+            f"'battery_skipped_replacement_action' must be one of: {', '.join(SKIPPED_REPLACEMENT_ACTIONS)}"
+        )
 
     # Validated through breos.execution so App and Monte Carlo cannot disagree
     # about which names exist. The default stays "python": the compiled path is
@@ -2442,6 +2638,56 @@ def resolve_tracking(cfg: dict[str, Any]) -> str:
     return tracking
 
 
+def _cost_preset_currency(key: str) -> str:
+    """The currency of a packaged cost preset; an unknown key raises with the available ones."""
+    costs_db = load_config_json("costs.json")
+    if key not in costs_db:
+        raise ValueError(f"Unknown cost preset '{key}'. Available: {', '.join(sorted(costs_db))}")
+    return str(costs_db[key]["currency"])
+
+
+def check_cost_currency(
+    currency: str,
+    *,
+    given: Iterable[str],
+    preset: str | None = None,
+    tariff: bool,
+    battery: bool | None,
+    where: str = "[costs]",
+) -> None:
+    """Refuse cost inputs that are not in the run's ``currency``.
+
+    BREOS does not convert, and never relabels an amount: a cost preset must
+    be in the run's currency, and in a run whose currency is not EUR every
+    cost the run prices with whose :class:`~breos.economics.CostParams`
+    default is a EUR amount must be given, in ``given`` (the cost keys set
+    explicitly) or by a preset in that currency. Defaults of zero are zero in
+    any currency and stay. ``tariff`` and ``battery`` select the keys the run
+    prices with (:func:`~breos.economics.default_amount_cost_keys`).
+
+    Raises:
+        ValueError: If the preset's currency differs, or a EUR default would be read.
+    """
+    supplied = set(given)
+    if preset:
+        preset_currency = _cost_preset_currency(preset)
+        if preset_currency != currency:
+            raise ValueError(
+                f"cost_preset '{preset}' is priced in {preset_currency}, but the run is in {currency}. BREOS does "
+                f"not convert currencies: remove cost_preset and give the costs in {currency} under {where}, or "
+                f"choose a cost preset in {currency}."
+            )
+        supplied.update(load_config_json("costs.json")[preset])
+    if currency == DEFAULT_CURRENCY:
+        return
+    missing = [key for key in default_amount_cost_keys(tariff=tariff, battery=battery) if key not in supplied]
+    if missing:
+        raise ValueError(
+            f"The run is in {currency}, but {', '.join(missing)} would come from the built-in "
+            f"{DEFAULT_CURRENCY} defaults. BREOS does not convert currencies: set them in {currency} under {where}."
+        )
+
+
 def resolve_costs(cfg: dict[str, Any]) -> CostParams:
     """Build CostParams from packaged presets, overrides, and financial defaults.
 
@@ -2535,6 +2781,8 @@ def _normalise_config_values(cfg: dict[str, Any]) -> dict[str, Any]:
 EXCLUSIVE_ALTERNATIVES: Mapping[str, str] = {
     "inverter_ac_rating_kw": "inverter_loading_ratio",
     "inverter_loading_ratio": "inverter_ac_rating_kw",
+    "weather_file": "weather_source",
+    "weather_source": "weather_file",
 }
 
 
@@ -2586,6 +2834,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     else:
         ac_capacity_w = inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"])
 
+    currency = run_currency(cfg["currency"], tariff.prices.currency if tariff is not None else None)
     return ResolvedAppConfig(
         cfg=cfg,
         lat=lat,
@@ -2607,5 +2856,6 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         cost_params=cost_params,
         emissions_params=resolve_emissions(cfg),
         period=resolve_period(cfg, timezone),
-        reference_tariff=resolve_reference_tariff_spec(cfg, timezone, tariff),
+        reference_tariff=resolve_reference_tariff_spec(cfg, timezone, currency),
+        currency=currency,
     )

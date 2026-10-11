@@ -908,7 +908,10 @@ def test_sweep_resolves_a_season_price_that_the_season_never_uses(tmp_path, caps
 @pytest.mark.parametrize(
     ("key", "message"),
     [
-        ("tariff.shedule", r"Unknown sweep key 'tariff\.shedule'\. Available: tariff\.boundary_policy"),
+        (
+            "tariff.shedule",
+            r"Unknown sweep key 'tariff\.shedule'\. Available: tariff\.annual_network_credit, tariff\.boundary_policy",
+        ),
         ("smart_charging.target", r"Available: smart_charging\.charge_periods"),
         ("tariff.schedule.peak", r"'tariff\.schedule' is not a table of named entries"),
         (

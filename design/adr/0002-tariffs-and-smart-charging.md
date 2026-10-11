@@ -1,12 +1,14 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted; amendments A1–A14 Accepted. Implemented in 0.7.0,
+- **Status:** Accepted; amendments A1–A17 Accepted, A18 and A19 Proposed.
+  Implemented in 0.7.0, A15–A19 in 0.7.1,
   with two additions that no amendment accepted: discharge-only mode and
   calendar-month seasons (see
   [Additions without an amendment](#additions-without-an-amendment)).
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
   A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
-  A13 and A14 accepted 2026-10-01
+  A13 and A14 accepted 2026-10-01; A15–A17 accepted 2026-10-02; A18 and
+  A19 proposed 2026-10-03
 
 ## Context
 
@@ -299,9 +301,10 @@ configuration, with the same strict validation as a bundled one.
 
 The 0.7 readiness audit (#187) found details the decision above leaves open
 and statements the code has since outgrown. A6 was **Accepted** on 2026-09-26,
-A11 and A12 on 2026-09-30, A13 and A14 on 2026-10-01, and every other amendment below on
+A11 and A12 on 2026-09-30, A13 and A14 on 2026-10-01, A15 on 2026-10-02 for
+0.7.1, and every other amendment below on
 2026-09-27. Each one replaces the text it names, and that text is marked in
-place above; A11 and A12 add rules and replace none. Accepting A6–A10 accepted the
+place above; A11, A12 and A15 add rules and replace none. Accepting A6–A10 accepted the
 design for the dispatch-seam and ledger work, not its implementation. Grid
 charging, origin accounting, ledger schema 2.0 and net-exchange emissions were
 then implemented for 0.7.0 in #279–#282 (#178). Economic
@@ -349,7 +352,9 @@ load and PV series each year, projected optimization repeats one weather year
 with one load series, and Monte Carlo restamps each sampled weather year to
 its target year. The tariff follows the same rule in 0.7.0: it is resolved
 once on the simulated calendar and reused for every project year. Weekday
-patterns, holidays and effective dates do not advance.
+patterns, holidays and effective dates do not advance. *(Amended by A16,
+accepted 2026-10-02: the calendar still replays, but static instructions may differ by
+project year.)*
 
 Advancing calendars needs per-year load, PV and tariff construction, which
 belongs to the shared projection loop of #179, and the inputs do not support
@@ -495,6 +500,8 @@ degradation still closes once on its existing positional window. A controller
 at a shared boundary observes the post-aging/post-replacement state. The
 window close uses the `Battery_Energy_Beginning` ledger value from the
 subcall containing its last step.
+*(Extended by A19, proposed 2026-10-03: a controller may also decide on
+steps it marks inside a civil day.)*
 
 ### A12. Daily persistence: warm start and forecast-terminal value — Accepted 2026-09-30
 
@@ -517,6 +524,8 @@ the current or a future day's PV, load or temperature.
   and a clipped `[period]` edge are not observations. The observation and
   any day decision in progress carry across the A2 year seam; a standalone
   `[period]` never joins its end to its start.
+  *(Amended by A18, proposed 2026-10-03: under `hold_target` a step in both
+  period lists has no floor, reserve 0, while there is no grid target.)*
 - **Rolling solve.** Each day builds a fresh daily-target problem on the
   forecast from the measured stored energy, the current state of health and
   the resistance-adjusted efficiencies, which stay fixed inside the solve.
@@ -541,6 +550,8 @@ mode. Price-aware dispatch forces simulation, so `App.revalue` re-simulates
 when the per-step prices change. Results record the policy in
 `provenance.smart_charging`, with a hash of the instructions every project
 year executed, and no forecast or per-day target.
+*(Extended by A17, accepted 2026-10-02: an optional wear cost in the
+planner's objective.)*
 
 ### A13. The no-system baseline can have its own reference tariff (#339) — Accepted 2026-10-01
 
@@ -605,8 +616,310 @@ shared periods under `mode = "fixed_target"`:
   replaces targets while retaining fixed reserves; it cannot plan and replay
   the same held-target instructions. Supporting it later requires the floor
   to follow each candidate and executed daily target, including warm start.
+  *(Replaced by A18, proposed 2026-10-03: the floor follows each daily
+  target, and `daily_persistence` accepts `hold_target`.)*
 - App, Monte Carlo and projected optimization accept `hold_target` for
   `fixed_target`. Python and Numba execute the same kernel source. Results
   record `overlap_policy` in `provenance.smart_charging`; the
   instruction hash already covers the reserve and target arrays. The ledger
   schema does not change.
+
+## Amendments for 0.7.1
+
+These amendments follow the 0.7.0 release. Each one names the text it amends.
+
+### A15. An annual network credit capped at the household's own network charges (#375) — Accepted 2026-10-02
+
+Adds a rule; it replaces no text. Some network tariffs reduce a
+household's network charges by an annual amount that cannot exceed what the
+household paid for the network that year. Stromnetz Berlin's §14a EnWG
+Modul 1 is one: 146.58 EUR a year, gross, capped at the connection's
+network charges. A household with PV and storage imports less, so its cap
+can bind where the same household without the system gets the full
+amount. An optional `[tariff.annual_network_credit]` table, and the same
+table under `[reference_tariff]`, express it:
+
+```toml
+[tariff.annual_network_credit]
+amount_per_year = 146.58
+network_fixed_per_year = 39.70
+network_import_prices = { low = 0.0311, standard = 0.0888, high = 0.1659 }
+```
+
+- **Keys.** All three are required; an explicit 0 is valid.
+  `amount_per_year` is the annual reduction. `network_fixed_per_year` is
+  the network part of the fixed charge. `network_import_prices` is the
+  network part of each import price per kWh, in the shape of
+  `import_prices`: by period, or by month season and period, with `all` as
+  the fallback. A reference without a schedule gives `{ all = x }`.
+- **Gross parts, never added.** Every value is a part of a price the
+  tariff already sets, with the same taxes. The network price of every
+  period is at most its import price, and `network_fixed_per_year` is at
+  most 365 days of the fixed charge; validation refuses anything else.
+  Neither is added to the bill: the import cost and the fixed charge are
+  priced as before, and the parts only set the cap.
+- **Cap basis.** A household's eligible network charges for year `y` are
+  its grid import times the network price, summed over the steps, plus
+  `network_fixed_per_year × f`. The credit is `credit_y = min(amount_per_year
+  × f, eligible_y)`. `f` is 1 for a simulated year, a leap year too, and
+  `d / D` for a `[period]` window of `d` civil days in a year of `D` days:
+  the amounts are annual, so they are pro rata by civil days, and a full
+  year gets exactly the annual amount.
+- **Households.** The system household's credit comes from
+  `[tariff.annual_network_credit]` and its own grid import. The no-system
+  household's credit comes from `[reference_tariff.annual_network_credit]`
+  and the whole household load when a `[reference_tariff]` is set (none
+  if that reference has no table), and otherwise from the `[tariff]` table
+  and the whole load, as A13 prices it at the system's prices.
+- **Escalation.** The amount and the cap escalate at the tariff's own
+  import escalation: the system's import escalation for the system
+  household, and A13's reference escalation for the no-system household.
+- **Cash flows.** Each credit is booked in its household's yearly cash
+  flow, `Cost_System_Annual` or `Cost_No_Sys_Annual`, before discounting,
+  so NPV, payback and every comparison include it. LCOE excludes it, as it
+  excludes the other tariff outcomes.
+- **Dispatch.** The credit never drives dispatch. Smart charging and the
+  experimental `daily_persistence` planner see the per-step prices only,
+  also when a binding cap makes extra network charges free at the margin.
+- **Entry points.** App, Monte Carlo (each trajectory from its own import
+  and load), the projected optimizer objective and `App.revalue` apply it.
+  `App.revalue` re-prices a credit added, changed or removed from the
+  retained energy by period and the retained household load, and never
+  re-simulates for it. The credit is pricing only, so it does not change a
+  Monte Carlo year cache.
+- **Results.** A household with a credit gets its eligible network charges
+  and its credit in the year rows, the cost projection and each App
+  `financial` row, and `provenance.tariff.annual_network_credit` or
+  `provenance.reference_tariff.annual_network_credit` records the table.
+  Without the table, results are unchanged bit for bit, and the result
+  format stays "1".
+- **Scope.** This is not a billing engine. Metering, control-box and other
+  per-connection charges stay outside BREOS; a study adds them to the
+  fixed charge or leaves them out.
+
+### A16. Instructions per project year (#383) — Accepted 2026-10-02
+
+Amends A2 for static instructions only; the calendar still replays.
+
+The projection takes static instructions in one of three forms, through
+`project_years`, `run_projection` and `run_app_simulation(instructions=)`:
+
+- **One set** for every year: today's path, unchanged and bit-identical.
+- **One set per project year**: a sequence with exactly one set for each
+  year, all on the replayed calendar. A sequence of the same set is the one
+  set, bit for bit.
+- **A year planner**: a function called once as each project year begins,
+  which returns that year's set. It receives a `YearStart`: the year index,
+  the year's inputs with its PV degradation applied, the year's battery
+  configuration, and the state its first step dispatches from. That state
+  is the carried stored energy and origins, and the state of health,
+  resistance growth and efficiencies after the degradation engine has
+  restored them. It is the state a daily controller's first decision of
+  the year would see (A11).
+
+The seam is a planner hook at each year start, not only a precomputed list.
+A list cannot express a plan that depends on the state earlier years left,
+because that state exists only once the production run reaches it. A
+planner can, in one pass. Planning outside the loop instead would need a
+separate projection for each year, or a second copy of the year loop's
+carry. The hook is called inside the simulation core after the opening
+state is restored, so the planner reads the dispatch's own values and does
+not repeat the core's rules for the native and BLAST engines. A list is
+still accepted, because a schedule that is planned once is easier to
+replay and compare as data.
+
+Rules:
+
+- A planner runs on per-step years with a battery, as a daily controller
+  does; summary years accept one set or a sequence. Static instructions and
+  a daily controller cannot be combined.
+- Health changes inside a year as before. The planner sees only the year's
+  opening state.
+- The run records the set each year dispatched on
+  (`ProjectionRun.year_instructions`). The replay tool records each year's
+  instruction hash.
+- App configuration does not change. No config key selects per-year
+  instructions; they are for validation tools.
+
+The daily-target oracle uses the planner for its `yearly` planning mode.
+Year `y` is planned with perfect information on that year's PV, load and
+temperature, at the state the production replay of years `1..y-1` reached.
+The replay then runs year `y`. The stored energy that ends a year below its
+opening energy is bought back, capped at the max-SOC energy at the year's
+last temperature. Because of that cap, year one is planned as the
+first-year mode plans it. The result is perfect-information daily targets
+on a grid. It is not a bound on lifetime NPV: each year is chosen at its
+opening health, and the choice ignores what the year's cycling costs later
+years.
+
+### A17. Daily persistence: an optional wear cost in the planner (#381) — Accepted 2026-10-02
+
+Adds a rule to A12 and replaces none. A12's rolling solve minimises import
+cost less export revenue plus the forecast-terminal value, with no term for
+battery ageing. `smart_charging.wear_cost_per_kwh`, a `daily_persistence`
+planner setting, adds one:
+
+- **Term.** Each day's stage cost in the shared daily-target solver gains
+  `wear_cost_per_kwh` times the DC energy the battery discharges that day
+  (`Battery_Discharge_DC` of the planner's own dispatch, in kWh). It counts
+  every discharge, whatever the stored energy's origin. Charge is not
+  counted: energy still stored at the end of the window has not cycled, and
+  the A12 terminal value prices it as energy only. Over a full cycle,
+  charge and discharge throughput differ only by the losses, so their
+  mean would add little but a charge on energy the window never uses.
+- **Default.** 0, which leaves every decision and result bit-identical to
+  0.7.0. The value must be finite and at least 0. `fixed_target`,
+  `discharge_only` and `disabled` refuse the key, as they refuse the other
+  planner settings.
+- **Scope.** It is a planning weight in the tariff's currency, not a
+  degradation model. It moves only the targets the planner picks. It is
+  not a cash flow: the import cost, export revenue and NPV are unchanged,
+  and realised ageing and replacement still come from the degradation
+  model. BREOS does not derive a value; the user documentation shows one
+  estimate, a replacement pack's price over its usable discharge throughput
+  to end of life.
+- **Callers.** `solve_daily_targets` takes it as `wear_cost_per_kwh`, so
+  the offline oracles that use the same solver can set it. The plan reports
+  it as `wear_cost`, apart from `stage_cost`, so a replay compares the
+  plan's money with production's money alone.
+- **Provenance.** `provenance.smart_charging.wear_cost_per_kwh` records the
+  resolved value of every `daily_persistence` run, 0 included.
+  `planner_version` stays `"1"`: the default planner decides as before.
+
+### A18. Daily targets hold the floor on shared periods (#398) — Proposed 2026-10-03
+
+Replaces A14's refusal of `hold_target` under `daily_persistence`; the
+rest of A14 stands. A14 made the grid target the discharge floor on a step
+in both period lists, but the daily-target planner replaced the target and
+kept the reserve. A day target above the layout's reserve then broke the
+instruction invariant, and one below it planned a floor that was not the
+held target. Always dispatch with off-peak charging (discharge in every
+period, charge off-peak, hold the target) could not be planned.
+
+- **The floor follows the target.** `daily_target_instructions`, which
+  places one target per day on the fixed-target layout, also sets the
+  reserve to that day's target on every step that allows discharge and has
+  a grid target. Other steps keep their reserve. Every caller places
+  targets through it: each candidate the shared solver evaluates, the day
+  `daily_persistence` executes, its warm start, and both planning modes of
+  the daily-target oracle, the yearly planner (A16) included. Planning and
+  production replay then run the same held-target instructions.
+- **A day with no target.** On a day with no grid target (NaN), the
+  reserve on those steps is 0, so the battery may discharge to the minimum
+  SOC, as on a target-0 day. With no target there is nothing to hold. The
+  layout's own reserve on such a step is only the target the layout was
+  built with: the configured one for the oracle, a placeholder of 1 for
+  `daily_persistence`, which would forbid discharge in the shared period
+  for the whole day. The `daily_persistence` warm start
+  (`no_grid_until_one_complete_local_day`) is such a day, so under
+  `hold_target` it discharges in every discharge period, shared ones
+  included. That is one day for a run that starts at local midnight and two
+  when the first day is partial; the observation then carries across project
+  years and replacements, so the warm start does not recur. The planner
+  never chooses NaN; its candidates are finite.
+- **What holding the target means.** The floor holds the energy up to the
+  day's target, not all the stored energy. Above the target the battery may
+  discharge to the load in a shared period, whatever charged it. A policy
+  that never discharges off-peak is a discharge restriction, a period left
+  out of `discharge_periods` under `reject`, not `hold_target`. With a
+  target that changes from day to day, a shared period that crosses
+  midnight holds the previous day's target before midnight and the new
+  day's after it. When the new target is lower, the energy above it can
+  include grid charge bought the evening before, and the battery may
+  discharge it in the same shared period. The planner prices this in the
+  costs it compares; it is a property of the policy, not of the dispatch
+  step.
+- **Configuration.** `daily_persistence` accepts
+  `overlap_policy = "hold_target"`, in App configuration and in a directly
+  constructed `SmartChargingSpec`. `disabled` and `discharge_only` still
+  refuse it. `provenance.smart_charging` records `overlap_policy` as for
+  `fixed_target`, and the instruction hash covers the executed reserves.
+  `controller_version` and `planner_version` stay `"1"`: a configuration
+  accepted before decides as before.
+- **Unchanged.** Under `reject` no step both may discharge and has a grid
+  target, so every reserve, plan and result is bit-identical. The dispatch
+  kernel is unchanged; Python and Numba run the same held-target step as
+  under `fixed_target`. The result format stays `"1"`.
+
+### A19. Daily targets can be decided at the start of each charge window (#406) — Proposed 2026-10-03
+
+Extends A11 and A12 and replaces neither. Under A12 `daily_persistence`
+picks one target per civil day, decided at local midnight. Off-peak windows
+usually cross midnight: under Bi-hourly, 22:00–08:00 is split between two
+targets, and the 22:00–24:00 part charges toward a target chosen for a day
+whose peak it does not serve. Under `hold_target` (A18) the floor also
+changes at midnight, and a lower new target can release the grid energy the
+battery bought the evening before. A household controller sets its target
+when charging starts.
+
+- **Configuration.** `smart_charging.decision_boundary`, a
+  `daily_persistence` planner setting: `"civil_day"`, the default, keeps
+  A12 bit for bit; `"charge_window_start"` decides one target per charge
+  window. `fixed_target`, `discharge_only` and `disabled` refuse the key, as
+  they refuse the other planner settings.
+- **Windows.** A charge window is a maximal run of consecutive steps whose
+  period is in `charge_periods`. Adjacent charge periods therefore form one
+  window, a day may hold several windows (the Saturday of the Portuguese
+  weekly cycle has three), and a window may cross midnight or run for days
+  (off-peak from Saturday 22:00 to Monday 07:00 is one window). A window
+  starts at a charge step that does not follow one; the first step of a
+  replayed calendar follows the calendar's last step (A2). Windows are
+  local wall-clock periods of the resolved tariff, so they keep their
+  local start across DST. With every tariff period a charge period a
+  window would never end, and the boundary is refused.
+- **Decision and hold.** The target is decided at the window's first step
+  and holds on every charge step until the next window starts. Under
+  `hold_target` the floor is that one target for the whole window, across
+  midnight. Steps before the first window start the run sees have no
+  target, as in the warm start.
+- **Controller seam (A11).** A controller may name, per step of the
+  resolved calendar, where it decides inside a civil day. The session then
+  ends a dispatch segment at each marked step and asks the controller there
+  for the rest of the logical day, with the battery state the segment left.
+  Civil-day decisions, observations, aging windows and the A2 seam carry
+  are unchanged; a marked decision inside a day carried across the seam
+  replaces the carried instructions from its step. A civil-day start that
+  is not a window start keeps the target in force. A controller that marks
+  no step decides exactly as before.
+- **Causality and forecast (A12).** A window decision sees the known
+  tariff, the battery state at the window start, and observations made
+  before it only. Its forecast
+  (`repeat_local_day_before_decision`) repeats, slot by wall time and fold,
+  each slot's most recent observation: the current day so far, then the
+  last complete local day. When that is the day before, the forecast is the
+  local day that ends at the decision (23 or 25 hours across a DST change).
+- **Warm start** (`no_grid_until_a_window_after_one_complete_local_day`).
+  A window that starts before one complete local day has been observed gets
+  no grid target and holds none until the next window starts. A run that
+  begins at local midnight plans its first target at the first window start
+  after its first day ends; one that begins mid-day, whose first day is not
+  an observation, a day later. The day before a decision can be fully
+  observed before that; it is not used, so the observation unit stays the
+  civil day.
+- **Rolling solve.** Each planning stage is one window, from its start to
+  the next window's start. A solve covers the windows that start before the
+  decision's wall-clock time `forecast_horizon_days` civil days later, the
+  decision's own window first, cut where the known tariff ends. For a
+  window every day at 22:00 that is `forecast_horizon_days` days, as under
+  civil days. The session supplies two more days of known tariff for the
+  last window's run to the next window start. Only the first window's
+  target is executed; the next window is planned again. The A12 terminal
+  value and the A17 wear cost apply unchanged.
+- **Oracle and solver.** `DailyTargetProblem.from_tariff` and the
+  daily-target oracle (`--decision-boundary`) take the same boundary, so
+  each planning day is a window, from one window start to the next. A plan
+  covers one project year in both oracle modes, so the window across the
+  year seam is cut there: its last part (31 December 22:00–24:00 under
+  Bi-hourly) is a short final planning day whose target is chosen against
+  the year-end refill, and the year starts with the rest of it as a day of
+  its own. The oracle therefore still splits one night per project year,
+  where the controller holds one target across the seam; a comparison of
+  the two differs by that night. The oracle's CSV records the boundary.
+- **Provenance.** `provenance.smart_charging.decision_boundary` records the
+  boundary of every `daily_persistence` run. Under `charge_window_start`
+  `controller_version` and `planner_version` are `"2"` and the forecast and
+  warm-start policies carry the names above; under `civil_day` everything
+  stays as in A12. The result format stays `"1"`.
+- **Unchanged.** The dispatch kernel. Every configuration accepted before
+  decides, dispatches and reports as before, apart from the new
+  `decision_boundary` provenance key; App goldens are bit-identical.

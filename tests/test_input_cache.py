@@ -21,6 +21,7 @@ from breos.app_inputs import (
     prepare_simulation_inputs,
     reuse_prepared_inputs,
 )
+from breos.economics import default_amount_cost_keys
 from tools.generate_app_golden import _fake_fetch
 
 BASE = {
@@ -58,7 +59,10 @@ CHANGES = {
     "battery_max_discharge_power_w": {"battery_max_discharge_power_w": 2000.0},
     "battery_power_limit_c_rate": {"battery_power_limit_c_rate": 0.5},
     "battery_eol_percentage": {"battery_eol_percentage": 0.8},
+    "battery_enable_replacement": {"battery_enable_replacement": False},
     "battery_allow_terminal_replacement": {"battery_allow_terminal_replacement": False},
+    "battery_replacement_min_remaining_years": {"battery_replacement_min_remaining_years": 1.0},
+    "battery_skipped_replacement_action": {"battery_skipped_replacement_action": "retire"},
     "battery_rte": {"battery_rte": 0.9},
     "enable_resistance_fade": {"enable_resistance_fade": True},
     "inverter_efficiency": {"inverter_efficiency": 0.97},
@@ -71,6 +75,11 @@ CHANGES = {
     "projection_years": {"projection_years": 5},
     "cost_preset": {"cost_preset": "residential_es"},
     "costs": {"costs": {"storage_cost_per_kwh": 300.0}},
+    "currency": {
+        "currency": "USD",
+        "cost_preset": None,
+        "costs": dict.fromkeys(default_amount_cost_keys(tariff=False, battery=True), 1.0),
+    },
     "inflation_rate": {"inflation_rate": 0.03},
     "sell_price_inflation": {"sell_price_inflation": 0.01},
     "import_price_escalation": {"import_price_escalation": 0.04},
@@ -78,6 +87,18 @@ CHANGES = {
     "replacement_cost_learning": {"replacement_cost_learning": 0.03},
     "discount_rate": {"discount_rate": 0.05},
     "tariff": {"tariff": TOU},
+    "reference_tariff": {
+        "reference_tariff": {
+            "currency": "EUR",
+            "import_prices": {"all": 0.30},
+            "fixed_charge_per_day": 0.40,
+            "annual_network_credit": {
+                "amount_per_year": 100.0,
+                "network_fixed_per_year": 40.0,
+                "network_import_prices": {"all": 0.09},
+            },
+        }
+    },
     "smart_charging": {"tariff": TOU, "smart_charging": FIXED_TARGET},
     "emissions_country": {"emissions_country": "ES"},
     "export_emissions_factor_gco2_kwh": {"export_emissions_factor_gco2_kwh": 100.0},

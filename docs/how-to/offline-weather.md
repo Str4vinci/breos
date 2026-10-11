@@ -55,4 +55,35 @@ only the window.
 The repository's `validation/data/weather/` directory holds PVGIS TMYs for a
 few preset locations as `.csv.gz` files, with the Porto file's sidecar. The
 [case examples](../gallery/index.rst) ran on them: copy one, with its sidecar
-if it has one, into `weather/` to reproduce a case offline.
+if it has one, into `weather/` to reproduce a case offline, or name it with
+`weather_file`.
+
+## Name the weather file
+
+A study that keeps its weather elsewhere, or under another name, can name the
+file directly with `weather_file`:
+
+```python
+App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000,
+     "weather_file": "inputs/porto_tmy.csv"})
+```
+
+or `weather_file = "inputs/porto_tmy.csv"` in a config file, or
+`breos run --config config.toml --weather-file inputs/porto_tmy.csv`. A
+relative path is taken from the working directory, as for `rlp_directory`
+and `battery_temperature`. Any filename works, a gzip-compressed `.csv.gz` is
+read as it is, and the location may be a preset or a coordinate dict. The
+App then neither scans `weather/` nor fetches from PVGIS, and a missing file
+is an error when the App is built. A digest-matching `.csv.metadata.json`
+sidecar next to the file is read as for the cache, and the year rules above
+apply.
+
+The file must hold one year of weather, such as a TMY: a file that spans more
+than one year is refused, because the App would restamp all its years onto
+one calendar. Monte Carlo samples years from its own
+`[montecarlo].weather_file` and refuses the App key. `weather_file` and
+`weather_source` are alternatives: setting both in one config is an error,
+and a `--weather-file` flag replaces a config file's `weather_source`. The
+file's absolute path and SHA-256 digest are recorded as
+`provenance.weather.path` and `provenance.weather.sha256`, and the path as
+given as `provenance.resolved_config.weather_file`.

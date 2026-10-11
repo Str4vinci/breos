@@ -194,8 +194,9 @@ such as `tariff.import_prices.q1.high`.
 The month partition is part of the schedule: it is recorded in
 `provenance.tariff.seasons`, and each step's season joins the schedule hash.
 Two partitions that give the same periods still have different hashes, so
-`App.revalue` re-simulates when the seasons change and re-prices when only
-the prices change. Schedules without month seasons keep the hashes they had
+`App.revalue` re-prices by period only when the prices alone change. When
+the seasons change, it prices a run without smart charging from its stored
+step flows and simulates a smart-charging run again. Schedules without month seasons keep the hashes they had
 before seasons existed.
 
 ## Schedule definitions
@@ -224,6 +225,17 @@ the system's grid flows or the dispatch. Its `resolve` method gives a
 `TariffSpec` does, with an export price of 0: the household without a system
 exports nothing.
 
+## Annual network credit
+
+An {class}`~breos.tariffs.AnnualNetworkCredit` is the App's
+[`annual_network_credit`](../getting-started/configuration.md#annual-network-credit)
+table of `[tariff]` or `[reference_tariff]`, held as
+`TariffPrices.annual_network_credit`. It gives an annual amount, the network
+part of the fixed charge, and the network part of each import price, given
+gross. Resolving the tariff adds each step's network price as
+`ResolvedTariff.network_price_per_kwh`. The projection caps each household's
+credit at that year's eligible network charges.
+
 ## Resolution
 
 ```{eval-rst}
@@ -236,6 +248,7 @@ exports nothing.
    breos.tariffs.HolidayCalendar
    breos.tariffs.MonthSeasons
    breos.tariffs.TariffPrices
+   breos.tariffs.AnnualNetworkCredit
    breos.tariffs.TariffSpec
    breos.tariffs.ReferenceTariffSpec
    breos.tariffs.ResolvedTariff

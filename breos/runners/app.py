@@ -23,11 +23,16 @@ from breos.economics import TerminalHealthCredit, find_payback_year
 from breos.execution import aggregate_jit_cache_states, backend_provenance, config_has_battery
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import (
+    BASELINE_NETWORK_CREDIT_COLUMNS,
+    SYSTEM_NETWORK_CREDIT_COLUMNS,
     ProjectionRun,
     ProjectionValue,
     ProjectionYear,
+    YearInstructions,
     effective_reference_escalation,
     price_reference_year_rows,
+    price_tariff_year_rows_by_step,
+    reprice_network_credit_year_rows,
     reprice_tariff_year_rows,
     run_projection,
     value_projection,
@@ -85,6 +90,8 @@ class SimulationArtifacts:
     reference_tariff: dict[str, Any] | None = None
     resolved_reference_tariff: ResolvedTariff | None = None
     terminal_health: TerminalHealthCredit | None = None
+    # Each end-of-life crossing of the battery, in project order (ADR 0003 E11).
+    end_of_life_events: tuple[dict[str, Any], ...] = ()
 
 
 # The avoided-CO2 columns a result reports for its first year, or its window.
@@ -346,15 +353,18 @@ def run_app_simulation(
     resolved: ResolvedAppConfig,
     deps: AppRuntimeDependencies,
     *,
-    instructions: DispatchInstructions | None = None,
+    instructions: YearInstructions | None = None,
 ) -> SimulationArtifacts:
     """Run the weather/PV/load/battery/economics simulation pipeline.
 
     ``instructions`` replaces the dispatch instructions the ``[smart_charging]``
     table would give, for a validation tool that replays a schedule of its
     own (``tools/oracles/replay.py``). They must be resolved on the simulated
-    index. The run then reports no smart-charging provenance, since the table
-    did not produce them. App never passes them.
+    index. They are one set every project year replays, one set per project
+    year, or a year planner asked as each year begins (ADR 0002 A16); the
+    projection's ``year_instructions`` records what each year dispatched on.
+    The run then reports no smart-charging provenance, since the table did
+    not produce them. App never passes them.
     """
     cfg = resolved.cfg
     # Resolve the backend before anything is fetched or computed. Input
@@ -445,6 +455,7 @@ def run_app_simulation(
         # calendar, so a civil day cut by a year's end continues next year.
         replay_seam=period is None,
         reference_tariff=reference_tariff,
+        record_priced_flows=_price_blind(instructions, day_controller),
     )
     first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
     current_soh = projection.carry.soh_pct
@@ -494,7 +505,7 @@ def run_app_simulation(
             assert executed is not None
             smart_charging = daily_persistence_provenance(spec, tariff, executed, **stored)
         else:
-            assert instructions is not None
+            assert isinstance(instructions, DispatchInstructions)
             smart_charging = {**smart_charging_provenance(spec, instructions, tariff), **stored}
 
     return SimulationArtifacts(
@@ -502,6 +513,7 @@ def run_app_simulation(
         first_year_results_df=first_year_results_df,
         current_soh=current_soh,
         total_replacements=total_replacements,
+        end_of_life_events=projection.end_of_life_events,
         pv_loss_waterfall=_build_pv_loss_waterfall(inputs.pv_breakdown, first_year_results_df, resolved),
         weather_metadata=dict(inputs.weather.attrs.get(WEATHER_METADATA_KEY, unknown_source_metadata("weather"))),
         load_profile_metadata=dict(
@@ -513,10 +525,22 @@ def run_app_simulation(
         smart_charging=smart_charging,
         projection=projection,
         resolved_tariff=tariff,
-        instructions=instructions,
+        # Only one static set can be re-resolved and compared on revaluation.
+        instructions=instructions if isinstance(instructions, DispatchInstructions) else None,
         period=period.record() if period is not None else None,
         **_reference_fields(resolved, reference_tariff),
     )
+
+
+def _price_blind(instructions: object, day_controller: object) -> bool:
+    """Whether a run dispatches without reading a tariff, so any schedule can price its stored flows.
+
+    Greedy dispatch, with or without a battery, never sees the tariff.
+    Static instructions, per-year instructions, a year planner and a daily
+    controller all follow the tariff's periods or prices, so such a run keeps
+    no step flows and a new schedule simulates it again.
+    """
+    return instructions is None and day_controller is None
 
 
 def _reference_fields(resolved: ResolvedAppConfig, reference: ResolvedTariff | None) -> dict[str, Any]:
@@ -533,10 +557,18 @@ def _reference_fields(resolved: ResolvedAppConfig, reference: ResolvedTariff | N
 
 # The year-row columns a tariff fills; without one, economics prices the
 # energy at the flat rates instead.
-_TARIFF_MONEY_COLUMNS = ("Import_Cost", "Export_Revenue", "Baseline_Import_Cost", "Grid_Charge_Cost", "Fixed_Charge")
+_TARIFF_MONEY_COLUMNS = (
+    "Import_Cost",
+    "Export_Revenue",
+    "Baseline_Import_Cost",
+    "Grid_Charge_Cost",
+    "Fixed_Charge",
+    *SYSTEM_NETWORK_CREDIT_COLUMNS,
+    *BASELINE_NETWORK_CREDIT_COLUMNS,
+)
 # The year-row columns a reference tariff fills; without one, they follow the
 # system's prices.
-_REFERENCE_MONEY_COLUMNS = ("Baseline_Import_Cost", "Baseline_Fixed_Charge")
+_REFERENCE_MONEY_COLUMNS = ("Baseline_Import_Cost", "Baseline_Fixed_Charge", *BASELINE_NETWORK_CREDIT_COLUMNS)
 
 
 def _simulated_index(artifacts: SimulationArtifacts) -> pd.DatetimeIndex:
@@ -559,32 +591,45 @@ def revalue_app_simulation(
     artifacts: SimulationArtifacts,
     deps: AppRuntimeDependencies,
 ) -> tuple[SimulationArtifacts, str]:
-    """Value a finished run at ``resolved``'s prices; return the artifacts and ``"repriced"`` or ``"resimulated"``.
+    """Value a finished run at ``resolved``'s prices; return the artifacts and how they were valued.
 
     ``resolved`` must differ from the run's configuration in economics keys only
-    (App.revalue checks). The stored projection is re-priced when the new
-    prices cannot change the dispatch: flat prices, a tariff removed, or a
-    tariff on the same schedule whose smart-charging instructions are
-    unchanged. A tariff added, a different schedule or calendar, or
-    instructions that change re-simulate the run. Under ``daily_persistence``
-    so does any change to the per-step import or export prices, which its
-    planner reads; a change to the fixed charge alone is re-priced. A
-    reference tariff added, changed or removed is always re-priced: it
-    prices only the household load, which no dispatch changes.
+    (App.revalue checks). The stored projection is re-priced (``"repriced"``)
+    when the new prices cannot change the dispatch: flat prices, a tariff
+    removed, or a tariff on the same schedule whose smart-charging
+    instructions are unchanged. A tariff added, or a different schedule or
+    calendar, is priced from the stored step flows (``"repriced_by_step"``)
+    when the dispatch never read a tariff, and re-simulates the run
+    (``"resimulated"``) when it did. Instructions that change re-simulate
+    the run. Under ``daily_persistence`` so does any change to the per-step
+    import or export prices, which its planner reads; a change to the fixed
+    charge alone is re-priced. A reference tariff added, changed or removed
+    is always re-priced: it prices only the household load, which no
+    dispatch changes. So is an annual network credit, of either household:
+    the dispatch never sees it.
     """
     cfg = resolved.cfg
     run, old_tariff = artifacts.projection, artifacts.resolved_tariff
     if run is None:
         raise ValueError("these artifacts carry no projection to re-price")
-    if resolved.tariff is not None and old_tariff is None:
+    tariff = (
+        resolved.tariff.resolve(old_tariff.index if old_tariff else _simulated_index(artifacts), resolved.timezone)
+        if resolved.tariff
+        else None
+    )
+    # A new schedule, or a first one, gives the stored energy by period no
+    # meaning; only a run whose dispatch never read a tariff can be priced
+    # on it, step by step.
+    new_schedule = tariff is not None and (old_tariff is None or tariff.schedule_hash != old_tariff.schedule_hash)
+    if new_schedule and run.priced_flows is None:
         return run_app_simulation(resolved, deps), "resimulated"
 
-    tariff = resolved.tariff.resolve(old_tariff.index, resolved.timezone) if resolved.tariff and old_tariff else None
     instructions = None
     yearly = run.yearly_df
-    if tariff is not None and old_tariff is not None:
-        if tariff.schedule_hash != old_tariff.schedule_hash:
-            return run_app_simulation(resolved, deps), "resimulated"
+    if new_schedule:
+        assert tariff is not None and run.priced_flows is not None
+        yearly = price_tariff_year_rows_by_step(yearly, run.priced_flows, tariff, cfg["resolution"])
+    elif tariff is not None and old_tariff is not None:
         planner = resolved.smart_charging is not None and resolved.smart_charging.mode in PLANNER_MODES
         if planner and not _same_step_prices(tariff, old_tariff):
             # The planner chooses each day's target on these prices, so new
@@ -595,7 +640,15 @@ def revalue_app_simulation(
             if instructions is None or instructions.instruction_hash() != artifacts.instructions.instruction_hash():
                 return run_app_simulation(resolved, deps), "resimulated"
         if tariff.price_hash != old_tariff.price_hash:
-            yearly = reprice_tariff_year_rows(yearly, cast(pd.DataFrame, run.period_energy), tariff)
+            period_energy = cast(pd.DataFrame, run.period_energy)
+            if _same_step_prices(tariff, old_tariff) and (
+                tariff.prices.fixed_charge_per_day == old_tariff.prices.fixed_charge_per_day
+            ):
+                # Only the annual network credit changed: the energy money
+                # keeps the floats the simulation summed per step.
+                yearly = reprice_network_credit_year_rows(yearly, period_energy, tariff)
+            else:
+                yearly = reprice_tariff_year_rows(yearly, period_energy, tariff)
     elif old_tariff is not None:
         yearly = yearly.drop(columns=[column for column in _TARIFF_MONEY_COLUMNS if column in yearly.columns])
 
@@ -607,13 +660,14 @@ def revalue_app_simulation(
     if reference is not None:
         houseload = artifacts.first_year_results_df["Houseload"].to_numpy(dtype=float)
         yearly = price_reference_year_rows(yearly, houseload, reference, cfg["resolution"])
-    elif artifacts.resolved_reference_tariff is not None:
+    elif artifacts.resolved_reference_tariff is not None and not new_schedule:
         # The reference is gone: the no-system household pays the system's
         # prices again, the tariff's by period or the flat costs.
         yearly = yearly.drop(columns=[column for column in _REFERENCE_MONEY_COLUMNS if column in yearly.columns])
         if tariff is not None:
             baseline = reprice_tariff_year_rows(yearly, cast(pd.DataFrame, run.period_energy), tariff)
-            yearly = yearly.assign(Baseline_Import_Cost=baseline["Baseline_Import_Cost"])
+            columns = ["Baseline_Import_Cost", *(c for c in BASELINE_NETWORK_CREDIT_COLUMNS if c in baseline)]
+            yearly = yearly.assign(**{column: baseline[column] for column in columns})
 
     value = value_projection(cfg, resolved, replace(run, yearly_df=yearly))
     smart_charging = artifacts.smart_charging
@@ -628,4 +682,4 @@ def revalue_app_simulation(
         resolved_tariff=tariff,
         **_reference_fields(resolved, reference),
     )
-    return revalued, "repriced"
+    return revalued, "repriced_by_step" if new_schedule else "repriced"

@@ -77,9 +77,10 @@ SECTIONS: list[dict[str, Any]] = [
         "intro": "Preset keys for the `cost_preset` config key, from `breos/data/configs/costs.json`.",
         "columns": [
             ("key", "Key", "code"),
-            ("electricity_cost_per_kwh", "Buy (EUR/kWh)", "text"),
-            ("export_price_per_kwh", "Export (EUR/kWh)", "text"),
-            ("storage_cost_per_kwh", "Battery (EUR/kWh)", "text"),
+            ("currency", "Currency", "text"),
+            ("electricity_cost_per_kwh", "Buy (per kWh)", "text"),
+            ("export_price_per_kwh", "Export (per kWh)", "text"),
+            ("storage_cost_per_kwh", "Battery (per kWh)", "text"),
         ],
     },
     {

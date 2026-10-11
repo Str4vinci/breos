@@ -60,6 +60,20 @@ no-system keys use the reference's prices instead.
 | `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; the fixed charge is `no_system_fixed_charge_year1_prices` |
 | `no_system_fixed_charge_year1_prices` | The fixed charge of the household without a system for year 1: `fixed_charge_year1_prices`, or the reference tariff's fixed charge for the same days when a `[reference_tariff]` is set |
 
+With an [annual network credit](configuration.md#annual-network-credit),
+each household that has one also reports its eligible network charges, the
+cap basis, and its credit:
+
+| Key | Description |
+|---|---|
+| `network_charge_year1_prices` | The system household's eligible network charges for year 1: its grid import at the network prices, plus the network fixed amount |
+| `network_credit_year1_prices` | The system household's credit for year 1: the annual amount, capped at `network_charge_year1_prices` |
+| `no_system_network_charge_year1_prices` | The eligible network charges of the household without a system, on its whole year-1 load |
+| `no_system_network_credit_year1_prices` | The credit of the household without a system, capped at `no_system_network_charge_year1_prices` |
+
+The eligible network charges are part of the import cost and the fixed
+charge, not an addition to them. Each credit lowers its household's bill.
+
 `grid_charge_cost_year1_prices` is already included in
 `grid_import_cost_year1_prices`, so do not add the two. It is the same value
 as `smart_charging.yearly[0].grid_charge_cost_year1_prices`.
@@ -88,12 +102,111 @@ than 1 Wh):
 | `battery_replacements` | Total number of replacements over the projection |
 | `battery_replacement_cost_t0_prices` | Total replacement cost at t = 0 prices, neither inflated nor discounted |
 | `battery_replacement_cost_npv` | The same replacements inflated to and discounted from each swap instant, as `npv_savings` counts them |
+| `battery_end_of_life_events` | Every end-of-life crossing over the projection, in order; see [End-of-life events](#end-of-life-events) |
+| `battery_first_end_of_life_years` | Time of the first crossing, in years from commissioning; None without one |
+| `battery_first_end_of_life_action` | What was done at the first crossing: `"replaced"`, `"kept"` or `"retired"`; None without one |
+| `battery_first_end_of_life_reason` | Why, as in `battery_end_of_life_events`; None without one |
+| `battery_first_end_of_life_soh_pct` | State of health at the first crossing; None without one |
+| `battery_degradation_history` | The battery's state at the end of each project year, with the year's use and stress; see [Degradation history](#degradation-history) |
 
 With `battery_allow_terminal_replacement = false`, a pack that reaches end of
 life in the final degradation period of the horizon is not replaced. The
 replacement count and costs then leave out that one swap, and
-`battery_soh_end_pct` can end below the end-of-life threshold. See
+`battery_soh_end_pct` can end below the end-of-life threshold. With
+`battery_replacement_min_remaining_years` above 0, every swap that would leave
+the new pack less than that many project years is left out in the same way,
+and the old pack ages below the threshold until the end of the project. See
 [Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
+
+### End-of-life events
+
+A crossing is a degradation period that closes with the installed pack at or
+below `battery_eol_percentage`. Each entry of `battery_end_of_life_events`
+records one:
+
+| Field | Description |
+|---|---|
+| `year` | Project year of the crossing, from 1 |
+| `time_years` | Years from commissioning to the end of the closing step: the instant a replacement is booked at, equal to the `financial` row's `replacement_time_years` |
+| `date` | Calendar date of the closing step; every project year replays the simulated calendar, moved forward by its year |
+| `action` | `"replaced"`: a new pack was installed. `"kept"`: no pack was bought and the old one stays in service below its threshold. `"retired"`: no pack was bought and the old one was switched off; the project finishes PV-only (`battery_skipped_replacement_action = "retire"`, or a kept pack whose state of health reached 0) |
+| `reason` | `"end_of_life"` for a replacement. For a skipped one, `"replacement_disabled"` (`battery_enable_replacement = false`), `"min_remaining_years"` (less than `battery_replacement_min_remaining_years` was left) or `"terminal_period"` (the final period with `battery_allow_terminal_replacement = false`). `"zero_health"` for a kept pack retired when its state of health reached 0 |
+| `soh_pct` | State of health at the crossing, the value compared with the threshold |
+
+A replaced pack's successor can cross again, so a long horizon can list
+several replacements. A pack that is kept or retired crosses once: it stays below its
+threshold, and no later period records it again. A kept pack whose state of
+health reaches 0 has no capacity left: it is retired at the close of that
+period, as with `battery_skipped_replacement_action = "retire"`, and the
+retirement is a second entry, with `"action": "retired"` and `"reason":
+"zero_health"`. A skipped replacement, or that retirement, is therefore
+always the last entry. For example, with 20 project years and
+`battery_replacement_min_remaining_years = 1.0`, a pack that reaches end of
+life at 19.3 years shows as `{"year": 20, "time_years": 19.3, "action":
+"kept", "reason": "min_remaining_years", ...}`: the replacement was skipped
+and the old battery was retained. With
+`battery_skipped_replacement_action = "retire"` the same entry has `"action":
+"retired"`: the old battery was switched off at 19.3 years.
+
+Monte Carlo reports the first crossing of each trajectory as
+`first_end_of_life_years`, `first_end_of_life_action`,
+`first_end_of_life_reason` and `first_end_of_life_soh_pct`; the projected
+optimizer reports it as `Projected_First_End_Of_Life_Years`,
+`Projected_First_End_Of_Life_Action`, `Projected_First_End_Of_Life_Reason`
+and `Projected_First_End_Of_Life_SOH_%`. Without a crossing the times and
+health are NaN and the text fields None.
+
+### Degradation history
+
+`battery_degradation_history` has one entry per project year. A
+[`[period]`](configuration.md#simulate-part-of-a-year) run has one entry, labelled
+year 1, that covers the window. The state of health, capacities,
+`cumulative_fec` and loss split belong to the pack installed at the end of
+the year, so they restart after a replacement. The year's own figures cover
+every pack that served in it.
+
+| Field | Description |
+|---|---|
+| `year` | Project year, from 1 |
+| `in_service` | True while the pack is in service at the end of the year; false from the year it is retired in (`battery_skipped_replacement_action = "retire"`, or a kept pack at zero health) |
+| `soh_pct` | State of health at the end of the year, as `yearly[].soh_pct`: rounded to 2 decimals, then, with BLAST, to 1. `battery_soh_end_pct` and an end-of-life event's `soh_pct` round once, so with BLAST they can differ from it by 0.1 |
+| `capacity_kwh` | `battery_kwh` times the state of health |
+| `usable_capacity_kwh` | `capacity_kwh` times the SOC window, `battery_max_soc - battery_min_soc` |
+| `replacements` | Replacements in the year |
+| `charge_throughput_kwh` | Energy stored in the cells in the year, after charging losses |
+| `discharge_throughput_kwh` | Energy drawn from the cells in the year, before inverter losses |
+| `fec` | Full equivalent cycles in the year, over every pack, as the degradation model counts them (below) |
+| `cumulative_fec` | Full equivalent cycles of the installed pack since it was installed |
+| `mean_soc_pct` | Mean state of charge over the steps the pack served in the year, as a share of the pack's aged capacity; the SOC the ageing model sees. None for a year the pack never served |
+| `mean_cell_temperature_c` | Mean cell temperature over the steps the pack served in the year, the temperature the ageing model sees. None for a year the pack never served |
+| `cycle_loss_pct` | State of health the installed pack has lost to cycling, in percentage points. Native engine only; None with BLAST |
+| `calendar_loss_pct` | The same for calendar ageing. Native engine only; None with BLAST |
+| `resistance_growth_pct` | Growth of the installed pack's internal resistance, in percent. Only with `enable_resistance_fade` (native engine); None otherwise |
+| `round_trip_efficiency` | Cell round-trip efficiency at that resistance, as the dispatch applies it. Only with `enable_resistance_fade`; None otherwise |
+
+A field is None when the degradation model does not supply it, never 0. The
+BLAST models report a state of health but no split into cycle and calendar
+loss, and only the native engine has a resistance model. For the native
+engine `cycle_loss_pct + calendar_loss_pct` is the state of health lost
+since the pack was installed, to rounding. The year rows behind the history
+also carry `Battery_Cell_Temperature_Mean_C` and `Battery_In_Service_Hours`,
+both None without a battery. In a year that starts with the pack retired,
+`Battery_In_Service_Hours` is 0 and `Battery_Cell_Temperature_Mean_C` is
+None.
+
+A retired pack is switched off but stays installed. Its entries keep the
+state of health, capacities, `cumulative_fec` and loss split it had when it
+was retired, with `in_service` false. It stores and delivers nothing, so the
+throughput and `fec` are 0. The means cover the steps the pack served
+through the step that retired it, so a later year has none. That step counts
+with a state of charge of 0, since its stored energy leaves with the pack at
+its end, and with its cell temperature as dispatched.
+
+The cycle counts are the model's own. The native engine counts rainflow
+cycles of the state of charge, which is a share of the aged capacity, so a
+full cycle of a worn pack counts as one. BLAST scales each cycle by the
+capacity left, so it counts cycles of the new pack's capacity, and the same
+use gives fewer cycles as the pack ages.
 
 ## Estimated battery residual value
 
@@ -257,7 +370,12 @@ escalated and not discounted, beside the system's `cost_import`,
 `revenue_export`, `cost_operation`, `cost_fixed_charge` and
 `cost_replacement`. With a
 [no-system reference tariff](configuration.md#no-system-reference-tariff),
-they are at the reference's prices and escalation. `payback_year` is the sustained discounted
+they are at the reference's prices and escalation. With an
+[annual network credit](configuration.md#annual-network-credit), the rows of
+a household with a credit also carry `network_charge` and `network_credit`,
+or `no_system_network_charge` and `no_system_network_credit`, escalated and
+not discounted; each credit is already in that household's cost.
+`payback_year` is the sustained discounted
 payback within the simulated period: the year from which `balance ≥ 0` holds
 to the end of the horizon. The series starts at year 0, so a system that
 recovers its investment during year 1 reports 1. If a battery replacement
@@ -327,10 +445,12 @@ reason; the example is a PV-only run without emissions.
 ## Currency and result format
 
 Money keys carry no currency. Every money value in a result is in the run's
-currency, which `provenance.currency` records: the tariff's `currency` when
-the run has a `[tariff]` table, otherwise `EUR`, the currency of the bundled
-cost catalogue. BREOS does not convert currencies. Summary and plot labels
-read the recorded currency.
+currency, which `provenance.currency` records: the `currency` key, else the
+tariff's `currency` when the run has a `[tariff]` table, otherwise `EUR`, the
+currency of the bundled cost catalogue (see
+[Currency](configuration.md#currency)). BREOS does not convert currencies.
+The CSVs BREOS writes (sweep, Monte Carlo, cost projection) have a `currency`
+column. Summary and plot labels read the recorded currency.
 
 `result_schema_version` is the result's format number, independent of the
 ledger schema. The format changes, to the next integer, only when a field is
@@ -375,23 +495,28 @@ by feature:
   each season to its period prices instead of each period to a price.
 - **Smart charging.** `provenance.smart_charging` records `overlap_policy`
   in App, Monte Carlo and optimizer results, including the default `reject`;
-  `hold_target` permits overlapping periods in `fixed_target` only and keeps
-  the grid target as the discharge floor. A
+  `hold_target` permits overlapping periods in `fixed_target` and
+  `daily_persistence` and keeps the grid target as the discharge floor. A
   [`discharge_only`](configuration.md#discharge-only) run records its
   discharge periods, an empty `charge_periods`, and `None` for
   `target_usable_fraction`, `grid_charge_efficiency` and
   `grid_import_limit_w`; the App's top-level `smart_charging` block reports
   it as it reports the other modes. An App run with the experimental
   [daily-persistence smart charging](configuration.md#daily-persistence-experimental)
-  records `experimental`, `controller_version`, `planner_version`,
-  `forecast_horizon_days`, `target_levels`, `soc_states`, `forecast_policy`,
-  `warm_start_policy`, `planner_terminal_policy`, and the
-  `initial_stored_energy` and `final_stored_energy` by origin.
+  records `experimental`, `decision_boundary`, `controller_version`,
+  `planner_version`, `forecast_horizon_days`, `target_levels`, `soc_states`,
+  `wear_cost_per_kwh`, `forecast_policy`, `warm_start_policy`,
+  `planner_terminal_policy`, and the `initial_stored_energy` and
+  `final_stored_energy` by origin. Under
+  `decision_boundary = "charge_window_start"` the two versions are `"2"`.
 - **Battery replacement at the end of the horizon.**
-  `battery_allow_terminal_replacement` is in the `resolved_config` of App and
-  Monte Carlo results, and the provenance of a projected design and of an
-  optimizer search carries `battery_replacement_treatment`, with its
-  `allow_terminal_replacement` policy and a `terminal_period` description.
+  `battery_allow_terminal_replacement` and
+  `battery_replacement_min_remaining_years` are in the `resolved_config` of
+  App and Monte Carlo results, and the provenance of a projected design and
+  of an optimizer search carries `battery_replacement_treatment`, with its
+  `allow_terminal_replacement` policy, a `terminal_period` description, its
+  `replacement_min_remaining_years` and a `minimum_service` description. An
+  enabled `[terminal_value]` records both in its `replacement_policy`.
   See
   [battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
 - **No-system costs.** Results carry `no_system_fixed_charge_year1_prices`
@@ -403,6 +528,16 @@ by feature:
   Carlo results. Results with a
   [no-system reference tariff](configuration.md#no-system-reference-tariff)
   also carry `provenance.reference_tariff`.
+- **Annual network credit (0.7.1).** A household with an
+  [annual network credit](configuration.md#annual-network-credit) carries
+  its year-1 keys (see [Year-1 money keys](#year-1-money-keys)), its
+  `financial` row fields, the `Network_Charge` and `Network_Credit`, or
+  `Baseline_Network_Charge` and `Baseline_Network_Credit`, year-row columns,
+  and the `Cost_Network_Charge` and `Cost_Network_Credit`, or
+  `Cost_No_Sys_Network_Charge` and `Cost_No_Sys_Network_Credit`,
+  cost-projection columns. `provenance.tariff.annual_network_credit` and
+  `provenance.reference_tariff.annual_network_credit` record the table.
+  Without the table none of these are present.
 - **Estimated battery residual value.** The three residual-value fields,
   `terminal_value` in the resolved config and the optional
   `provenance.terminal_value` are described [above](#estimated-battery-residual-value).

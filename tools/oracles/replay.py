@@ -26,6 +26,7 @@ configuration without preparing its inputs each time, run
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Mapping
 
@@ -38,7 +39,7 @@ from breos.app_inputs import AppRuntimeDependencies, PreparedSimulationInputs, p
 from breos.battery import AlignedSimulationInputs, BatteryConfig, align_simulation_inputs
 from breos.dispatch_instructions import DispatchInstructions
 from breos.execution import config_has_battery
-from breos.projection import CarryState, build_battery_config
+from breos.projection import CarryState, YearInstructions, build_battery_config
 from breos.runners import app as app_runner
 from breos.runners.app import SimulationArtifacts
 from breos.smart_charging import resolve_instructions
@@ -46,6 +47,7 @@ from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 
 REPLAY_SCHEMA = "breos_dispatch_replay_v2"
+_YEAR_HASH_SCHEMA = b"breos-year-instructions-v1"
 
 # A planned flow, by name, and the results column it is compared with. The
 # ``_w`` flows are average power over the step, as the ledger reports them;
@@ -158,6 +160,10 @@ class ReplayResult:
     its tolerance, and ``plan_matched`` says there were none. With no planned
     flows nothing is compared and the plan matches. ``first_year_step_cost``
     is each first-year step's import cost less export revenue.
+
+    ``year_instruction_hashes`` holds the hash of the set each project year
+    dispatched on. ``instruction_hash`` is that set's hash when every year
+    replays one set, and a hash over the per-year hashes otherwise.
     """
 
     artifacts: SimulationArtifacts
@@ -169,6 +175,7 @@ class ReplayResult:
     mismatched_steps: tuple[int, ...]
     plan_matched: bool
     tolerances: dict[str, Tolerance]
+    year_instruction_hashes: tuple[str, ...] = ()
     schema: str = REPLAY_SCHEMA
 
 
@@ -194,9 +201,18 @@ def _tolerances(tolerance: Tolerance | Mapping[str, Tolerance], flows: Mapping[s
     return {name: tolerance.get(name, DEFAULT_TOLERANCE) for name in flows}
 
 
+def _combined_hash(instructions: YearInstructions, year_hashes: tuple[str, ...]) -> str:
+    if isinstance(instructions, DispatchInstructions):
+        return instructions.instruction_hash()
+    digest = hashlib.sha256(_YEAR_HASH_SCHEMA)
+    for year_hash in year_hashes:
+        digest.update(bytes.fromhex(year_hash))
+    return digest.hexdigest()
+
+
 def replay_instructions(
     case: ReplayCase,
-    instructions: DispatchInstructions,
+    instructions: YearInstructions,
     *,
     planned: Mapping[str, Any] | None = None,
     tolerance: Tolerance | Mapping[str, Tolerance] = DEFAULT_TOLERANCE,
@@ -204,8 +220,11 @@ def replay_instructions(
 ) -> ReplayResult:
     """Run ``instructions`` through ``case``'s App run and compare the first year with ``planned``.
 
-    The instructions cover one year on the tariff's calendar and are replayed
-    every project year, as App replays its own (ADR 0002 A2). ``planned``
+    The instructions cover one year on the tariff's calendar. One set is
+    replayed every project year, as App replays its own (ADR 0002 A2); a
+    sequence gives one set per project year, and a
+    :data:`~breos.projection.YearPlanner` chooses each year's set as the year
+    begins, from the state the replay has reached (A16). ``planned``
     maps names in :data:`PLANNED_FLOWS` to one value per step of the first
     project year, the only year whose per-step frame the run keeps; later
     years are simulated and priced but not compared. ``tolerance`` is one
@@ -215,10 +234,16 @@ def replay_instructions(
     execution backend defaults to the configuration's.
     """
     n_steps = len(case.index)
-    if len(instructions) != n_steps:
-        raise ValueError(f"The instructions cover {len(instructions)} steps; the tariff's calendar has {n_steps}")
-    requested = _planned_arrays(planned or {}, n_steps)
-    tolerances = _tolerances(tolerance, requested)
+    # A planner's sets are checked by the simulation as each year begins.
+    if isinstance(instructions, DispatchInstructions):
+        sets: list[DispatchInstructions] = [instructions]
+    else:
+        sets = [] if callable(instructions) else list(instructions)
+    for year_set in sets:
+        if len(year_set) != n_steps:
+            raise ValueError(f"The instructions cover {len(year_set)} steps; the tariff's calendar has {n_steps}")
+    # Checked before the run, which can take minutes.
+    _tolerances(tolerance, _planned_arrays(planned or {}, n_steps))
     resolved = (
         case.resolved
         if execution_backend is None
@@ -233,7 +258,40 @@ def replay_instructions(
         frame["Import_From_Grid"].to_numpy() * np.asarray(case.tariff.import_price_per_kwh)
         - frame["PV_AC_Export"].to_numpy() * np.asarray(case.tariff.export_price_per_kwh)
     ) * (hours_per_step / 1000)
+    projection = artifacts.projection
+    dispatched = projection.year_instructions if projection is not None else None
+    year_hashes = tuple(year_set.instruction_hash() for year_set in dispatched or ())
+    replay = ReplayResult(
+        artifacts=artifacts,
+        instruction_hash=_combined_hash(instructions, year_hashes),
+        first_year_step_cost=step_cost,
+        planned={},
+        delivered={},
+        planned_minus_delivered_wh={},
+        mismatched_steps=(),
+        plan_matched=True,
+        tolerances={},
+        year_instruction_hashes=year_hashes,
+    )
+    return compare_with_plan(case, replay, planned or {}, tolerance)
 
+
+def compare_with_plan(
+    case: ReplayCase,
+    replay: ReplayResult,
+    planned: Mapping[str, Any],
+    tolerance: Tolerance | Mapping[str, Tolerance] = DEFAULT_TOLERANCE,
+) -> ReplayResult:
+    """``replay`` with its first project year compared with ``planned``, as :func:`replay_instructions` compares.
+
+    For a planner whose first-year flows are known only once the replay has
+    run, such as a year planner (ADR 0002 A16).
+    """
+    frame = replay.artifacts.first_year_results_df
+    n_steps = len(frame)
+    requested = _planned_arrays(planned, n_steps)
+    tolerances = _tolerances(tolerance, requested)
+    hours_per_step = get_hours_per_step(case.resolved.cfg["resolution"])
     delivered = {name: frame[PLANNED_FLOWS[name]].to_numpy(dtype=np.float64) for name in requested}
     mismatched = np.zeros(n_steps, dtype=bool)
     differences = {}
@@ -242,10 +300,8 @@ def replay_instructions(
         differences[name] = (values - delivered[name]) * to_wh
         allowed = tolerances[name].atol_wh + tolerances[name].rtol * np.abs(delivered[name] * to_wh)
         mismatched |= np.abs(differences[name]) > allowed
-    return ReplayResult(
-        artifacts=artifacts,
-        instruction_hash=instructions.instruction_hash(),
-        first_year_step_cost=step_cost,
+    return replace(
+        replay,
         planned=requested,
         delivered=delivered,
         planned_minus_delivered_wh=differences,

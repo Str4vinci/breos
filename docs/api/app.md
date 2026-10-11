@@ -61,8 +61,14 @@ for storage_cost in (500, 400, 300):
   retained final battery health. Flat prices give the same floats as a new
   run. A re-priced tariff sums each year's energy by period instead of by
   step, so it agrees with a new run to rounding.
-- `"resimulated"`: the run was simulated again, because a tariff was added,
-  the schedule changed, or the smart-charging instructions would change.
+- `"repriced_by_step"`: a run without smart charging was priced on a tariff
+  added, or on a different schedule, from its stored step flows. Greedy
+  dispatch never reads the tariff, so the run keeps each year's grid import
+  and export step by step, about 11 MB for 20 years at 15-minute
+  resolution. This gives the same floats as a new run.
+- `"resimulated"`: the run was simulated again, because a tariff was added
+  or the schedule changed under smart charging, or the smart-charging
+  instructions would change.
   Under the experimental `daily_persistence` smart charging, whose planner
   reads the prices, any change to the import or export prices simulates
   again; a change to the fixed charge alone is re-priced.
