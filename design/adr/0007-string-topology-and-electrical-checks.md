@@ -47,6 +47,17 @@ PV generator power the manufacturer permits; `recommended_dc_power_w` is its
 recommendation. Datasheets publish one or the other, so neither is reported
 missing when omitted.
 
+Some datasheets publish further limits, and a Fronius Verto Plus publishes all
+of them. On an input: each string connection's operating and short-circuit
+current (`max_string_input_current_a`, `max_string_short_circuit_current_a`),
+the PV generator power it may carry (`max_dc_power_w`) and the DC power it
+converts (`max_usable_dc_power_w`). On the inverter: the short-circuit current
+over all its inputs (`max_short_circuit_current_a`) and the DC power it
+converts over all of them (`max_usable_dc_power_w`). Most datasheets publish
+none of these, so they are not reported missing when omitted. Connection counts
+beyond the permitted parallel strings are not modelled: `max_strings` is what
+the inverter accepts.
+
 Three states are kept apart:
 
 | Value | Meaning |
@@ -80,6 +91,10 @@ are out of scope.
 
 Entries on the same input add up. A caller may send each string as its own
 entry with `parallel = 1`, or group identical strings; the check is the same.
+Entries from different arrays may share an input when they have the same module
+and the same length, as the two halves of a roof face split by a window, or an
+east-west pair, often do. They share the input's voltage, and D7 models the
+energy their different curves cost.
 
 ### D3. Every module is strung exactly once
 
@@ -107,9 +122,13 @@ would clear strings that are too long.
 | `modules × Vmp` ≥ MPPT minimum | Hottest cell | warning |
 | `modules × Vmp` ≤ MPPT maximum | Coldest operating cell (cold ambient + rise) | warning |
 | Strings on an input ≤ its `max_strings` | — | error |
-| Strings on an input share one array and one length | — | error |
+| Strings on an input share one module and one length | — | error |
 | Σ max(factor × STC Isc, hot-cell Isc), with bifacial rear gain ≤ input short-circuit rating | STC and hottest cell | error |
 | Σ Imp ≤ input operating current | STC | warning |
+| Each string's design Isc ≤ its connection's short-circuit rating | STC and hottest cell | error |
+| Each string's Imp ≤ its connection's operating current | STC | warning |
+| Strung STC power on an input ≤ its `max_dc_power_w` | — | error |
+| Σ design Isc over the inverter ≤ its short-circuit rating | STC and hottest cell | error |
 | Strung STC power ≤ `max_dc_power_w` | — | error |
 | Strung STC power ≤ `recommended_dc_power_w` | — | warning |
 | DC/AC ratio inside a caller's range (optional) | — | warning |
@@ -206,13 +225,26 @@ default stays `"aggregate"`, so a topology alone changes no number.
    of service, not less current while running, so it applies after the limits
    and cannot hide a current limit.
 3. Per input, the strings run at their maximum power point when it lies inside
-   the MPPT voltage range and the current is under the operating limit.
-   Otherwise the inverter moves along the IV curve to the best point that
-   respects both: the voltage at the current limit or the nearer end of the
-   range. When no point of the curve satisfies both, the input has no usable
-   operating point and delivers nothing for that step. A brute-force search of
-   the IV curve pins this, including the empty case.
-4. The lost DC is `mppt_limit_loss`, a waterfall stage after the static losses.
+   the MPPT voltage range and the current is under the input's and each string
+   connection's operating limit. Otherwise the inverter moves along the IV
+   curve to the best point that respects them: the voltage at the current limit
+   or the nearer end of the range. When no point of the curve satisfies them,
+   the input has no usable operating point and delivers nothing for that step.
+   A brute-force search of the IV curve pins this, including the empty case.
+4. Strings from different arrays on one input share its voltage, so the input
+   runs at the best point of their summed IV curve, found by a grid and a
+   golden-section search after a bisection for the current limits. Where their
+   irradiance or temperature differ, that point lies below the sum of their
+   maximum powers, and the difference is lost. A brute-force search pins it.
+5. An input delivers at most its usable DC power, and the inverter at most its
+   own. The inverter can shed power at any operating point, so a power limit
+   costs only the excess, however the inverter shares it among its inputs.
+6. The inverter starts at the first producing step of a day on which an
+   input's open-circuit voltage reaches `startup_voltage_v`, and runs until
+   production stops. Once running, it works down to the MPPT minimum, so the
+   start-up voltage costs energy only before the first start of a spell. String
+   mode therefore needs the start-up voltage; 0 states none.
+7. The lost DC is `mppt_limit_loss`, a waterfall stage after the static losses.
    Where no limit binds the DC is the aggregate model's, bit for bit.
 
 The PVWatts `mismatch` loss stays. It stands for differences between modules
@@ -230,22 +262,18 @@ diagnostic.
 
 Later years scale the first year's limited DC by module degradation, as the
 aggregate model does. A limit that binds in year 1 is assumed to bind as much
-later, which slightly understates later years when it binds on current. The
-start-up voltage, partial shading of single modules, bypass diodes and cable
-losses are separate increments.
+later, which slightly understates later years when it binds on current. Partial
+shading of single modules, bypass diodes and cable losses are separate
+increments.
 
 ### Open items
 
 These are additive and do not change a field above:
 
-- Whole-inverter limits, such as a total short-circuit current across inputs
-  (a Fronius Verto has 50 A per tracker and 150 A in total), physical inputs
-  with their own limits, connector counts apart from permitted parallel
-  strings, and per-tracker power limits.
-- Parallel strings from separate arrays that are electrically equivalent (same
-  module, length and orientation) are refused today because the check keys on
-  the array. Telling them apart needs each array's orientation in the check.
-- Per-array mounting and cell temperatures.
+- Per-array mounting and cell temperatures. The energy model takes one thermal
+  model for every array by design, so a roof array and a carport share their
+  cell temperatures; the check takes one mounting to match.
+- Several inverters in string mode, after ADR 0004 (#419).
 
 ## Consequences
 

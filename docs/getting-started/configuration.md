@@ -577,7 +577,9 @@ mounting = "tilted_rack"
 entry is `parallel` identical strings (1 by default) of `modules` modules in
 series, all from one array, on one input. Every module of every array must be
 in exactly one string; to leave modules out, lower the array's `modules`.
-Without `pv_arrays`, the single array is `array = 0`.
+Without `pv_arrays`, the single array is `array = 0`. Strings on one input
+share its voltage, so they need the same module and the same length; they may
+come from different arrays, such as an east and a west face.
 
 A datasheet value you omit is unknown, and the check reports it rather than
 assuming one. A limit the equipment does not have is `inf` for an upper limit
@@ -592,6 +594,14 @@ datasheets publish only one. `isc_comparison_factor` is the multiplier the
 manufacturer applies to the array's STC short-circuit current, such as 1.25;
 give 1 where the manufacturer compares Isc as it is. Omitted, it is reported
 missing, and the hot-cell Isc alone is compared.
+
+Some datasheets publish further limits, and the check applies them when set:
+on an input, `max_string_input_current_a` and
+`max_string_short_circuit_current_a` for each string connection, and
+`max_dc_power_w` for the PV generator power it may carry; on the inverter,
+`max_short_circuit_current_a` over all its inputs. `max_usable_dc_power_w`, on
+an input or on the inverter, is the DC power it converts; only string-level
+energy applies it. None of these is reported missing when omitted.
 
 `min_design_temp_c` is the extreme annual minimum ambient on the basis your
 jurisdiction or the manufacturer requires, not a heating-design percentile:
@@ -617,15 +627,23 @@ and {py:func}`breos.electrical.check_topology` for the rules.
 
 `electrical_fidelity = "string"` makes energy depend on the wiring. Each MPPT
 input runs its strings at their maximum power point when that point lies inside
-the MPPT voltage range and under the input's operating-current limit. Otherwise
-it moves along the strings' IV curve, from the module's single-diode model, to
-the best point both limits allow. The DC this costs appears as the
-`mppt_limits` stage of the [PV loss waterfall](interpreting-results.md#pv-loss-waterfall),
-and where no limit binds the result equals the aggregate run.
+the MPPT voltage range and under the input's and each string connection's
+operating-current limit. Otherwise it moves along the strings' IV curve, from
+the module's single-diode model, to the best point the limits allow. Strings
+from different arrays on one input run at the best point of their summed IV
+curve, which lies a little below the sum of their own maximum power points when
+their irradiance or temperature differ. An input then delivers at most its
+`max_usable_dc_power_w`, and the inverter at most its own. The inverter starts
+each day at the first step on which an input's open-circuit voltage reaches
+`startup_voltage_v`, and runs while it produces. The DC all this costs appears
+as the `mppt_limits` stage of the
+[PV loss waterfall](interpreting-results.md#pv-loss-waterfall), and where no
+limit binds the result equals the aggregate run.
 
-String-level energy needs one inverter, the MPPT voltage range, each used
-input's `max_input_current_a`, and a wiring without structural errors (every
-reference resolves, every module is strung once, and parallel strings match).
+String-level energy needs one inverter, the MPPT voltage range, the start-up
+voltage (0 for none), each used input's `max_input_current_a`, and a wiring
+without structural errors (every reference resolves, every module is strung
+once, and parallel strings match).
 It refuses to run otherwise rather than fall back to the aggregate model. Hard
 limits such as an overvoltage do not stop it; they remain errors in the check.
 
@@ -635,8 +653,8 @@ including `mismatch` between modules, still apply: they scale each string's
 current before the limits, except `availability`, which is time out of service
 and applies after them. Later years reuse the
 first year's limited production scaled by module degradation, so a limit that
-binds in year 1 is assumed to bind as much later. Start-up voltage, partial
-shading of single modules, bypass diodes and cable losses are not modelled.
+binds in year 1 is assumed to bind as much later. Partial shading of single
+modules, bypass diodes and cable losses are not modelled.
 
 ## Sky-diffusion (transposition) model
 

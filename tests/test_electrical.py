@@ -80,6 +80,38 @@ FRONIUS_GEN24_6 = InverterSpec(
     isc_comparison_factor=1.0,
 )
 
+# Fronius Verto 15.0 Plus, datasheet SE_DS_Fronius_Verto_Plus_EN (preliminary data), retrieved 2026-10-11:
+# https://www.fronius.com/-/media/australia/se/downloads/se_ds_fronius_verto_plus_en.pdf
+# Three trackers with two DC connections each. Every string connection is
+# rated like its tracker (28 A operating, 50 A short-circuit); each tracker
+# converts 13 000 W and may carry 20 000 Wp; the inverter converts 22 500 W
+# and takes 150 A short-circuit over all inputs. The datasheet states no Isc
+# comparison rule, so the factor stays unknown.
+VERTO_15_PLUS = InverterSpec(
+    nominal_power_w=15000,
+    inverter_efficiency=0.9803,
+    is_hybrid=True,
+    max_dc_voltage_v=1000,
+    max_dc_power_w=22500,
+    min_mppt_voltage_v=150,
+    max_mppt_voltage_v=870,
+    startup_voltage_v=150,
+    mppts=(
+        MpptSpec(
+            max_input_current_a=28,
+            max_short_circuit_current_a=50,
+            max_strings=2,
+            max_string_input_current_a=28,
+            max_string_short_circuit_current_a=50,
+            max_dc_power_w=20000,
+            max_usable_dc_power_w=13000,
+        ),
+    )
+    * 3,
+    max_short_circuit_current_a=150,
+    max_usable_dc_power_w=22500,
+)
+
 # The Isc comparison basis was not transcribed; 1 states a direct comparison for these tests.
 PORTO = ElectricalEnvironment(min_design_temp_c=-5, max_ambient_temp_c=40)
 
@@ -204,10 +236,64 @@ def test_parallel_strings_on_one_input_must_match():
     arrays = [(TRINA_450, 17)]
     lengths = check_topology(arrays, [FRONIUS_GEN24_6], [PVString(0, 0, 0, 8), PVString(0, 0, 0, 9)], PORTO)
     assert codes(lengths, "error") == ["parallel_strings_mismatch"]
+    # Strings from two arrays of the same module and length share an input;
+    # different modules do not.
     faces = check_topology(
         [(TRINA_450, 10), (TRINA_450, 10)], [FRONIUS_GEN24_6], [PVString(0, 0, 0, 10), PVString(0, 0, 1, 10)], PORTO
     )
-    assert codes(faces, "error") == ["parallel_strings_mismatch"]
+    assert "parallel_strings_mismatch" not in codes(faces)
+    mixed = check_topology(
+        [(TRINA_450, 10), (JINKO_440, 10)], [FRONIUS_GEN24_6], [PVString(0, 0, 0, 10), PVString(0, 0, 1, 10)], PORTO
+    )
+    assert codes(mixed, "error") == ["parallel_strings_mismatch"]
+
+
+def test_a_verto_plus_design_inside_its_limits_passes_its_checks():
+    # Two strings of 8 Trina modules on each tracker: 21 600 Wp, under the
+    # 22 500 Wp the inverter may carry, and 21.8 A design Isc a tracker.
+    strings = [PVString(0, mppt, 0, 8, parallel=2) for mppt in range(3)]
+    check = check_topology([(TRINA_450, 48)], [VERTO_15_PLUS], strings, PORTO)
+    assert codes(check, "error") == []
+    assert {f.field for f in check.findings if f.severity == "missing"} == {"isc_comparison_factor"}
+
+
+def test_each_string_connection_is_held_to_its_own_rating():
+    # Trina's hot-cell Isc at 65 °C is 10.74 * (1 + 40 * 0.0004) = 10.91 A.
+    spec = replace(VERTO_15_PLUS.mppts[0], max_string_short_circuit_current_a=10.8, max_string_input_current_a=10.0)
+    inverter = replace(VERTO_15_PLUS, mppts=(spec,) * 3, isc_comparison_factor=1.0)
+    check = check_topology([(TRINA_450, 30)], [inverter], [PVString(0, 0, 0, 15, parallel=2)], PORTO)
+    isc = next(f for f in check.findings if f.code == "isc_above_string_limit")
+    assert (isc.severity, isc.value, isc.limit) == ("error", pytest.approx(10.74 * 1.016), 10.8)
+    assert (isc.inverter, isc.mppt, isc.string, isc.array) == (0, 0, 0, 0)
+    assert isc.limit_field == "max_string_short_circuit_current_a"
+    imp = next(f for f in check.findings if f.code == "imp_above_string_limit")
+    assert (imp.severity, imp.value, imp.limit) == ("warning", 10.09, 10.0)
+    assert "isc_above_mppt_limit" not in codes(check)
+
+
+def test_a_tracker_may_carry_its_maximum_generator_power_and_no_more():
+    spec = replace(VERTO_15_PLUS.mppts[0], max_dc_power_w=13000)
+    inverter = replace(VERTO_15_PLUS, mppts=(spec,) * 3)
+    check = check_topology([(TRINA_450, 30)], [inverter], [PVString(0, 1, 0, 15, parallel=2)], PORTO)
+    finding = next(f for f in check.findings if f.code == "mppt_dc_power_above_max")
+    assert (finding.value, finding.limit, finding.inverter, finding.mppt) == (13500, 13000, 0, 1)
+    assert finding.limit_field == "max_dc_power_w"
+
+
+def test_the_inverter_short_circuit_rating_covers_all_its_inputs():
+    # What-if 40 A over the inverter: four Trina strings carry 43.6 A.
+    inverter = replace(VERTO_15_PLUS, max_short_circuit_current_a=40, isc_comparison_factor=1.0)
+    strings = [PVString(0, 0, 0, 12, parallel=2), PVString(0, 1, 0, 12, parallel=2)]
+    check = check_topology([(TRINA_450, 48)], [inverter], strings, PORTO)
+    finding = next(f for f in check.findings if f.code == "isc_above_inverter_limit")
+    assert (finding.value, finding.limit, finding.inverter) == (pytest.approx(4 * 10.74 * 1.016), 40, 0)
+    assert codes(check, "error") == ["isc_above_inverter_limit"]
+
+
+def test_limits_some_datasheets_publish_are_not_reported_missing():
+    bare = replace(VERTO_15_PLUS, mppts=(MpptSpec(28, 50, 2),) * 3, max_short_circuit_current_a=None)
+    check = check_topology([(TRINA_450, 30)], [bare], [PVString(0, 0, 0, 15, parallel=2)], PORTO)
+    assert {f.field for f in check.findings if f.severity == "missing"} == {"isc_comparison_factor"}
 
 
 def test_every_module_is_strung_exactly_once():

@@ -203,7 +203,7 @@ class PVProductionBreakdown:
     age_degradation_loss: pd.Series
     # One array's module operating point; None on a sum of arrays.
     module_operating: Optional[ModuleOperatingPoint] = None
-    # DC lost to MPPT voltage and current limits with string-level energy
+    # DC lost to the inverter's input limits with string-level energy
     # (``electrical_fidelity = "string"``), already taken out of
     # ``dc_after_losses``; None otherwise.
     mppt_limit_loss: Optional[pd.Series] = None

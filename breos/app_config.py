@@ -707,7 +707,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         normalizer=_lower,
         doc=(
             'How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT '
-            'input\'s voltage range and current limit. `"string"` needs `inverters`, `pv_strings` and '
+            "input's voltage, current and power limits, the inverter's power limit and its start-up voltage. "
+            '`"string"` needs `inverters`, `pv_strings` and '
             "`electrical_environment`, one inverter, and a wiring without structural errors"
         ),
         summary="inverter.electrical_fidelity",
@@ -1397,6 +1398,12 @@ INVERTER_TABLE = TableSpec(
             "Multiplier the manufacturer applies to the array's STC Isc before comparing it with an input's "
             "short-circuit rating, at least 1; 1 where Isc is compared as it is. Unset is reported as missing"
         ),
+        "max_short_circuit_current_a": (
+            "Maximum array short-circuit current over all inputs (A), or `inf` for none; checked when set"
+        ),
+        "max_usable_dc_power_w": (
+            "DC power the inverter converts over all inputs (W), or `inf` for none; string-level energy applies it"
+        ),
     },
 )
 
@@ -1407,6 +1414,14 @@ MPPT_TABLE = TableSpec(
         "max_input_current_a": "Maximum operating input current (A), or `inf` for none",
         "max_short_circuit_current_a": "Maximum array short-circuit current (A), or `inf` for none",
         "max_strings": "Strings the input takes in parallel",
+        "max_string_input_current_a": (
+            "Maximum operating current of each string connection (A), or `inf` for none; checked when set"
+        ),
+        "max_string_short_circuit_current_a": (
+            "Maximum short-circuit current of each string connection (A), or `inf` for none; checked when set"
+        ),
+        "max_dc_power_w": "Maximum PV generator power on the input (W), or `inf` for none; checked when set",
+        "max_usable_dc_power_w": ("DC power the input converts (W), or `inf` for none; string-level energy applies it"),
     },
 )
 
@@ -1458,6 +1473,9 @@ _UNBOUNDED_FIELDS = frozenset(
         "recommended_dc_power_w",
         "max_input_current_a",
         "max_short_circuit_current_a",
+        "max_string_input_current_a",
+        "max_string_short_circuit_current_a",
+        "max_usable_dc_power_w",
     }
 )
 

@@ -1,5 +1,6 @@
-"""String-level energy applies each MPPT input's voltage range and current limit."""
+"""String-level energy applies the inverter's input limits and start-up voltage."""
 
+import math
 from dataclasses import replace
 
 import numpy as np
@@ -202,6 +203,7 @@ def test_the_operating_point_is_the_best_one_the_limits_allow(v_min, v_max, curr
         nominal_power_w=6000,
         min_mppt_voltage_v=v_min,
         max_mppt_voltage_v=v_max,
+        startup_voltage_v=0,
         mppts=(MpptSpec(max_input_current_a=current_limit),),
     )
     strings = (PVString(0, 0, 0, modules),)
@@ -272,7 +274,9 @@ def test_aggregate_runs_keep_no_operating_point_in_the_result_path(modules):
 def test_no_feasible_operating_point_delivers_nothing():
     # 7 modules at 1000 W/m2 and 45 °C carry 9.56 A at 250 V; 8 A needs 312 V.
     breakdown = _breakdown(TRINA_450, 7, [1000.0], [45.0], 0.9)
-    inverter = InverterSpec(nominal_power_w=6000, min_mppt_voltage_v=80, max_mppt_voltage_v=250, mppts=(MpptSpec(8.0),))
+    inverter = InverterSpec(
+        nominal_power_w=6000, min_mppt_voltage_v=80, max_mppt_voltage_v=250, startup_voltage_v=0, mppts=(MpptSpec(8.0),)
+    )
     strings = (PVString(0, 0, 0, 7),)
     environment = ElectricalEnvironment(-5, 40)
     setup = ElectricalSetup(
@@ -286,7 +290,9 @@ def test_no_feasible_operating_point_delivers_nothing():
 def test_availability_does_not_lower_the_current_against_the_limit():
     # At STC, 7 Trina modules carry 10.09 A against a 9.9 A limit. A 3 %
     # availability loss is time out of service and must not hide the limit.
-    inverter = InverterSpec(nominal_power_w=6000, min_mppt_voltage_v=80, max_mppt_voltage_v=800, mppts=(MpptSpec(9.9),))
+    inverter = InverterSpec(
+        nominal_power_w=6000, min_mppt_voltage_v=80, max_mppt_voltage_v=800, startup_voltage_v=0, mppts=(MpptSpec(9.9),)
+    )
     strings = (PVString(0, 0, 0, 7),)
     environment = ElectricalEnvironment(-5, 40)
     setup = ElectricalSetup(
@@ -298,3 +304,158 @@ def test_availability_does_not_lower_the_current_against_the_limit():
     _, loss_available = string_limited_dc(setup, [in_service])
     assert loss_full.iloc[0] > 0
     assert loss_available.iloc[0] == pytest.approx(0.97 * loss_full.iloc[0])
+
+
+def _setup(inverter, strings, arrays):
+    environment = ElectricalEnvironment(-5, 40)
+    strings = tuple(strings)
+    return ElectricalSetup((inverter,), strings, environment, check_topology(arrays, [inverter], strings, environment))
+
+
+def _inverter(*mppts, **limits):
+    values = {"min_mppt_voltage_v": 80, "max_mppt_voltage_v": 800, "startup_voltage_v": 0, **limits}
+    return InverterSpec(nominal_power_w=6000, mppts=mppts, **values)
+
+
+def _module_current(breakdown, step, voltage):
+    op = breakdown.module_operating
+    params = [np.asarray(p)[step] for p in (op.photocurrent, op.saturation_current, op.resistance_series)]
+    params += [np.asarray(op.resistance_shunt)[step], np.asarray(op.n_ns_vth)[step]]
+    return pvlib.pvsystem.i_from_v(voltage, *params)
+
+
+def test_an_input_and_the_inverter_deliver_at_most_their_usable_dc_power():
+    # 7 Trina modules at 1000 W/m2 and 45 °C deliver about 2.6 kW after a 10 % loss.
+    east = _breakdown(TRINA_450, 7, [1000.0, 300.0], [45.0, 30.0], 0.9)
+    west = _breakdown(TRINA_450, 7, [1000.0, 300.0], [45.0, 30.0], 0.9)
+    strings = (PVString(0, 0, 0, 7), PVString(0, 1, 1, 7))
+    arrays = [(TRINA_450, 7), (TRINA_450, 7)]
+    free = string_limited_dc(_setup(_inverter(MpptSpec(25), MpptSpec(25)), strings, arrays), [east, west])[0]
+    assert free.iloc[0] > 4000
+
+    per_input = _inverter(MpptSpec(25, max_usable_dc_power_w=2000), MpptSpec(25))
+    dc, loss = string_limited_dc(_setup(per_input, strings, arrays), [east, west])
+    assert dc.iloc[0] == pytest.approx(2000 + free.iloc[0] / 2)
+    assert dc.iloc[1] == free.iloc[1]
+
+    whole = _inverter(MpptSpec(25), MpptSpec(25), max_usable_dc_power_w=3000)
+    dc, loss = string_limited_dc(_setup(whole, strings, arrays), [east, west])
+    assert dc.iloc[0] == pytest.approx(3000)
+    assert loss.iloc[0] == pytest.approx(free.iloc[0] - 3000)
+    assert dc.iloc[1] == free.iloc[1]
+
+
+def test_a_string_connection_limit_bounds_identical_parallel_strings_together():
+    breakdown = _breakdown(TRINA_450, 14, [1000.0, 600.0], [45.0, 35.0], 0.9)
+    arrays = [(TRINA_450, 14)]
+    strings = [PVString(0, 0, 0, 7, parallel=2)]
+    by_string = _inverter(MpptSpec(25, max_string_input_current_a=8.0))
+    by_input = _inverter(MpptSpec(16.0))
+    dc_string = string_limited_dc(_setup(by_string, strings, arrays), [breakdown])[0]
+    dc_input = string_limited_dc(_setup(by_input, strings, arrays), [breakdown])[0]
+    assert dc_string.iloc[0] < breakdown.dc_after_losses.iloc[0]
+    pd.testing.assert_series_equal(dc_string, dc_input)
+
+
+def test_identical_arrays_in_parallel_match_one_array_with_two_strings():
+    one = _breakdown(TRINA_450, 14, [1000.0, 600.0, 200.0], [45.0, 35.0, 20.0], 0.9)
+    half = _breakdown(TRINA_450, 7, [1000.0, 600.0, 200.0], [45.0, 35.0, 20.0], 0.9)
+    for limit in (25.0, 15.0):
+        inverter = _inverter(MpptSpec(limit))
+        single = string_limited_dc(_setup(inverter, [PVString(0, 0, 0, 7, parallel=2)], [(TRINA_450, 14)]), [one])
+        split = string_limited_dc(
+            _setup(inverter, [PVString(0, 0, 0, 7), PVString(0, 0, 1, 7)], [(TRINA_450, 7), (TRINA_450, 7)]),
+            [half, half],
+        )
+        np.testing.assert_allclose(split[0], single[0], rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("v_min", "v_max", "current_limit", "string_limit"),
+    [(80, 800, 25.0, math.inf), (80, 800, 15.0, math.inf), (300, 800, 25.0, math.inf), (80, 250, 25.0, 8.0)],
+    ids=["free", "input_current", "low_window", "string_current_and_high_window"],
+)
+def test_parallel_arrays_run_at_the_best_point_of_their_summed_curve(v_min, v_max, current_limit, string_limit):
+    """Brute force on east and west strings in parallel: the largest V * (I_east + I_west) the limits allow."""
+    irradiance_east, irradiance_west = [900.0, 150.0, 600.0], [200.0, 700.0, 600.0]
+    temperature_east, temperature_west = [50.0, 25.0, 40.0], [30.0, 45.0, 40.0]
+    east = _breakdown(TRINA_450, 7, irradiance_east, temperature_east, 0.9)
+    west = _breakdown(TRINA_450, 7, irradiance_west, temperature_west, 0.85)
+    inverter = _inverter(
+        MpptSpec(current_limit, max_string_input_current_a=string_limit),
+        min_mppt_voltage_v=v_min,
+        max_mppt_voltage_v=v_max,
+    )
+    strings = (PVString(0, 0, 0, 7), PVString(0, 0, 1, 7))
+    dc, loss = string_limited_dc(_setup(inverter, strings, [(TRINA_450, 7), (TRINA_450, 7)]), [east, west])
+
+    grid = np.linspace(v_min, v_max, 400001)
+    for step in range(3):
+        i_east = 0.9 * np.nan_to_num(_module_current(east, step, grid / 7))
+        i_west = 0.85 * np.nan_to_num(_module_current(west, step, grid / 7))
+        total = i_east + i_west
+        allowed = (total <= current_limit + 1e-9) & (np.maximum(i_east, i_west) <= string_limit + 1e-9)
+        best = float((grid * np.clip(total, 0, None))[allowed].max()) if allowed.any() else 0.0
+        separate = east.dc_after_losses.iloc[step] + west.dc_after_losses.iloc[step]
+        assert dc.iloc[step] == pytest.approx(best, rel=1e-5, abs=1e-3)
+        assert loss.iloc[step] == pytest.approx(separate - dc.iloc[step], rel=1e-6, abs=1e-6)
+    # Unequal irradiance costs some energy even without a limit: the summed
+    # curve peaks below the sum of the two peaks.
+    if (v_min, v_max, current_limit) == (80, 800, 25.0):
+        assert 0 < loss.iloc[0] < 0.02 * dc.iloc[0]
+        assert loss.iloc[2] == pytest.approx(0.0, abs=0.05 * 0.01 * dc.iloc[2])
+
+
+def test_the_inverter_starts_once_an_input_reaches_its_start_up_voltage():
+    # A dim morning step, two bright ones, a dim one, night, then dim and bright again.
+    irradiance = [15.0, 400.0, 1000.0, 15.0, 0.0, 15.0, 1000.0]
+    breakdown = _breakdown(TRINA_450, 3, irradiance, [25.0] * 7, 0.9)
+    v_oc = np.asarray(
+        [3 * pvlib.pvsystem.v_from_i(0.0, *_params(breakdown, s)) if g else 0.0 for s, g in enumerate(irradiance)]
+    )
+    startup = 0.5 * (v_oc[0] + v_oc[1])
+    assert v_oc[0] < startup < min(v_oc[1], v_oc[2], v_oc[6])
+    inverter = _inverter(MpptSpec(25), startup_voltage_v=float(startup))
+    dc, loss = string_limited_dc(_setup(inverter, [PVString(0, 0, 0, 3)], [(TRINA_450, 3)]), [breakdown])
+    free = breakdown.dc_after_losses
+    # Below the start-up voltage before it has started; running once started,
+    # down to the dim evening step; stopped overnight and waiting again.
+    assert dc.iloc[0] == pytest.approx(0.0, abs=1e-9)
+    assert loss.iloc[0] == pytest.approx(free.iloc[0])
+    for step in (1, 2, 3, 6):
+        assert dc.iloc[step] == free.iloc[step]
+    assert dc.iloc[5] == pytest.approx(0.0, abs=1e-9)
+
+
+def _params(breakdown, step):
+    op = breakdown.module_operating
+    return [
+        np.asarray(p)[step]
+        for p in (op.photocurrent, op.saturation_current, op.resistance_series, op.resistance_shunt, op.n_ns_vth)
+    ]
+
+
+def test_string_energy_needs_the_start_up_voltage(modules):
+    with pytest.raises(ValueError, match="no startup_voltage_v"):
+        resolve_app_config(
+            {
+                **EAST_WEST,
+                "inverters": [{**FRONIUS_GEN24_6, "startup_voltage_v": None}],
+                "electrical_fidelity": "string",
+            }
+        )
+
+
+def test_app_parallels_two_arrays_on_one_input(modules, _patch_weather):
+    cfg = config(
+        EAST_WEST["pv_arrays"],
+        [
+            {"inverter": 0, "mppt": 0, "array": 0, "modules": 7},
+            {"inverter": 0, "mppt": 0, "array": 1, "modules": 7},
+        ],
+    )
+    aggregate, string = run(cfg), run({**cfg, "electrical_fidelity": "string"})
+    assert "parallel_strings_mismatch" not in {f["code"] for f in string["electrical"]["findings"]}
+    mismatch = -stage(string, "mppt_limits")["delta_kwh"]
+    # East and west in parallel lose a little to their different curves.
+    assert 0 < mismatch < 0.02 * aggregate["pv_dc_generation_kwh"]

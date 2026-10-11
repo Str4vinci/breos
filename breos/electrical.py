@@ -24,7 +24,8 @@ instead. Voc and Isc move with the coefficients the energy model uses
 datasheet does not publish it.
 
 :func:`string_limited_dc` is the energy side: it applies each MPPT input's
-voltage range and current limit to the production of the wired strings.
+voltage, current and power limits, the inverter's power limit and its start-up
+voltage to the production of the wired strings.
 """
 
 import math
@@ -95,6 +96,10 @@ FINDING_CODES: dict[str, FindingKind] = {
     "too_many_strings": FindingKind("error", "count", _INPUT),
     "isc_above_mppt_limit": FindingKind("error", "A", _INPUT),
     "imp_above_mppt_limit": FindingKind("warning", "A", _INPUT),
+    "isc_above_string_limit": FindingKind("error", "A", _STRING),
+    "imp_above_string_limit": FindingKind("warning", "A", _STRING),
+    "mppt_dc_power_above_max": FindingKind("error", "W", _INPUT),
+    "isc_above_inverter_limit": FindingKind("error", "A", ("inverter",)),
     "dc_power_above_max": FindingKind("error", "W", ("inverter",)),
     "dc_power_above_recommended": FindingKind("warning", "W", ("inverter",)),
     "dc_ac_ratio_outside_range": FindingKind("warning", "ratio", ("inverter",)),
@@ -250,6 +255,15 @@ def _isc_hot(module: PVModuleParams, environment: ElectricalEnvironment) -> floa
     return float(isc_hot * _rear_gain(module, environment))
 
 
+def _design_isc(module: PVModuleParams, factor: float | None, environment: ElectricalEnvironment) -> float:
+    """One string's design Isc: the manufacturer's rule on STC Isc or the hot-cell Isc, whichever is larger.
+
+    An unknown factor leaves the hot-cell Isc, the physical maximum; the check
+    reports the factor missing.
+    """
+    return max((factor or 0.0) * _isc_stc(module, environment), _isc_hot(module, environment))
+
+
 class _Findings:
     def __init__(self) -> None:
         self.items: list[ElectricalFinding] = []
@@ -346,10 +360,12 @@ def check_topology(
             )
 
     for (inverter_index, mppt_index), members in on_input.items():
-        _check_mppt(found, inverter_index, mppt_index, [strings[i] for i in members], arrays, inverters, environment)
+        _check_mppt(
+            found, inverter_index, mppt_index, [(i, strings[i]) for i in members], arrays, inverters, environment
+        )
 
     for inverter_index, inverter in enumerate(inverters):
-        _check_inverter(found, inverter_index, inverter, strings, arrays, dc_ac_ratio_range)
+        _check_inverter(found, inverter_index, inverter, strings, arrays, environment, dc_ac_ratio_range)
     return TopologyCheck(tuple(found.items))
 
 
@@ -436,7 +452,7 @@ def _check_mppt(
     found: _Findings,
     inverter_index: int,
     mppt_index: int,
-    members: list[PVString],
+    indexed: list[tuple[int, PVString]],
     arrays: Sequence[tuple[PVModuleParams, int]],
     inverters: Sequence[InverterSpec],
     environment: ElectricalEnvironment,
@@ -446,12 +462,18 @@ def _check_mppt(
     spec = inverter.mppts[mppt_index]
     where = {"inverter": inverter_index, "mppt": mppt_index}
     owner = f"MPPT {mppt_index} of inverter {inverter_index}"
+    members = [string for _, string in indexed]
     parallel = sum(string.parallel for string in members)
 
-    if len({(string.array, string.modules) for string in members}) > 1:
+    # Strings from different arrays may share an input, as a roof face split
+    # into several arrays or an east-west pair often does: they share its
+    # voltage, so they need the same module and the same length.
+    first_module = arrays[members[0].array][0]
+    same_module = all(arrays[string.array][0] == first_module for string in members)
+    if len({string.modules for string in members}) > 1 or not same_module:
         found.add(
             "parallel_strings_mismatch",
-            f"{owner}: parallel strings must have the same length and come from the same array.",
+            f"{owner}: parallel strings must have the same module and the same length.",
             **where,
         )
 
@@ -472,11 +494,7 @@ def _check_mppt(
     factor = inverter.isc_comparison_factor
     if factor is None:
         found.missing("isc_comparison_factor", f"Inverter {inverter_index}", inverter=inverter_index)
-    isc = 0.0
-    for string in members:
-        module = arrays[string.array][0]
-        by_rule = (factor or 0.0) * _isc_stc(module, environment)
-        isc += string.parallel * max(by_rule, _isc_hot(module, environment))
+    isc = sum(string.parallel * _design_isc(arrays[string.array][0], factor, environment) for string in members)
     if spec.max_short_circuit_current_a is None:
         found.missing("max_short_circuit_current_a", owner, **where)
     elif isc > spec.max_short_circuit_current_a + _TOLERANCE:
@@ -503,6 +521,47 @@ def _check_mppt(
             **where,
         )
 
+    # Each string connection has its own rating on some inverters; unset, the
+    # input's rating is the only one.
+    for index, string in indexed:
+        module = arrays[string.array][0]
+        at = {**where, "string": index, "array": string.array}
+        string_isc = _design_isc(module, factor, environment)
+        string_isc_limit = spec.max_string_short_circuit_current_a
+        if string_isc_limit is not None and string_isc > string_isc_limit + _TOLERANCE:
+            found.add(
+                "isc_above_string_limit",
+                f"String {index}: design Isc is {string_isc:.2f} A, above the {string_isc_limit:.2f} A rating "
+                f"of a string connection on {owner}.",
+                value=string_isc,
+                limit=string_isc_limit,
+                limit_field="max_string_short_circuit_current_a",
+                **at,
+            )
+        string_imp_limit = spec.max_string_input_current_a
+        if string_imp_limit is not None and module.Imp > string_imp_limit + _TOLERANCE:
+            found.add(
+                "imp_above_string_limit",
+                f"String {index}: operating current is {module.Imp:.2f} A, above the {string_imp_limit:.2f} A "
+                f"limit of a string connection on {owner}; the inverter limits its current and loses yield.",
+                value=module.Imp,
+                limit=string_imp_limit,
+                limit_field="max_string_input_current_a",
+                **at,
+            )
+
+    stc_w = sum(s.modules * s.parallel * arrays[s.array][0].Mpp for s in members)
+    if spec.max_dc_power_w is not None and stc_w > spec.max_dc_power_w + _TOLERANCE:
+        found.add(
+            "mppt_dc_power_above_max",
+            f"{owner}: {stc_w:.0f} W of modules at STC exceeds its {spec.max_dc_power_w:.0f} W maximum "
+            "PV generator power.",
+            value=stc_w,
+            limit=spec.max_dc_power_w,
+            limit_field="max_dc_power_w",
+            **where,
+        )
+
 
 def _check_inverter(
     found: _Findings,
@@ -510,11 +569,26 @@ def _check_inverter(
     inverter: InverterSpec,
     strings: Sequence[PVString],
     arrays: Sequence[tuple[PVModuleParams, int]],
+    environment: ElectricalEnvironment,
     dc_ac_ratio_range: tuple[float, float] | None,
 ) -> None:
     connected = [s for s in strings if s.inverter == index and s.array < len(arrays)]
     if not connected:
         return
+    if inverter.max_short_circuit_current_a is not None:
+        isc = sum(
+            s.parallel * _design_isc(arrays[s.array][0], inverter.isc_comparison_factor, environment) for s in connected
+        )
+        if isc > inverter.max_short_circuit_current_a + _TOLERANCE:
+            found.add(
+                "isc_above_inverter_limit",
+                f"Inverter {index}: design Isc over all its inputs is {isc:.2f} A, above its "
+                f"{inverter.max_short_circuit_current_a:.2f} A rating.",
+                value=isc,
+                limit=inverter.max_short_circuit_current_a,
+                limit_field="max_short_circuit_current_a",
+                inverter=index,
+            )
     stc_w = sum(s.modules * s.parallel * arrays[s.array][0].Mpp for s in connected)
     if inverter.max_dc_power_w is not None and stc_w > inverter.max_dc_power_w + _TOLERANCE:
         found.add(
@@ -565,8 +639,8 @@ def electrical_result(setup: ElectricalSetup | None) -> dict[str, Any]:
     """The ``electrical`` block of an App result.
 
     ``fidelity`` says how energy was modelled: ``"aggregate"`` for the system
-    as a whole, or ``"string"`` when each MPPT input's voltage range and current
-    limit applied. Without a topology, ``status`` is ``"not_evaluated"``.
+    as a whole, or ``"string"`` when the inputs' and the inverter's limits
+    applied (:func:`string_limited_dc`). Without a topology, ``status`` is ``"not_evaluated"``.
     """
     if setup is None:
         return {"fidelity": "aggregate", "status": "not_evaluated", "findings": []}
@@ -595,10 +669,10 @@ _STRUCTURAL_CODES = frozenset(
 def string_model_problems(setup: ElectricalSetup) -> list[str]:
     """Why the string energy model cannot run for this setup; empty when it can.
 
-    The model needs one inverter, a wiring with no structural error, and the
-    MPPT voltage range and each used input's operating-current limit. Other
-    errors, such as an overvoltage, do not stop it: their energy is a
-    diagnostic, as in aggregate mode.
+    The model needs one inverter, a wiring with no structural error, the MPPT
+    voltage range, the start-up voltage and each used input's operating-current
+    limit. Other errors, such as an overvoltage, do not stop it: their energy is
+    a diagnostic, as in aggregate mode.
     """
     problems = []
     if len(setup.inverters) != 1:
@@ -608,7 +682,7 @@ def string_model_problems(setup: ElectricalSetup) -> list[str]:
         problems.append("the wiring has " + ", ".join(structural))
     if setup.inverters:
         inverter = setup.inverters[0]
-        for name in ("min_mppt_voltage_v", "max_mppt_voltage_v"):
+        for name in ("min_mppt_voltage_v", "max_mppt_voltage_v", "startup_voltage_v"):
             if getattr(inverter, name) is None:
                 problems.append(f"inverter 0 has no {name}")
         if inverter.mppts is None:
@@ -622,18 +696,25 @@ def string_model_problems(setup: ElectricalSetup) -> list[str]:
 
 
 def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd.Series, pd.Series]:
-    """DC power after each MPPT input's voltage range and current limit, in W.
+    """DC power after each MPPT input's limits and the inverter's, in W.
 
     ``arrays`` holds one :class:`~breos.solar.PVProductionBreakdown` per PV
     array, in order, each with its module operating point. Each input runs its
     strings at their maximum power point when that point is inside the MPPT
-    voltage range and below the input's operating-current limit. Otherwise it
-    moves along the strings' IV curve to the best point that respects both: the
-    nearest end of the range, or the voltage at which the current falls to the
-    limit. When no point of the curve respects both, the input delivers
-    nothing. Static losses scale the current, except availability, which
-    applies after the limits, so the unconstrained power equals the aggregate
-    model's.
+    voltage range and under the input's and each string connection's
+    operating-current limit. Otherwise it moves along the strings' IV curve to
+    the best point that respects them: the nearest end of the range, or the
+    voltage at which the current falls to the limit. When no point of the curve
+    respects them, the input delivers nothing. Strings from different arrays on
+    one input share its voltage, so the input runs at the maximum of their
+    summed IV curve, which can lie below the sum of their maximum powers.
+
+    An input then delivers at most its usable DC power, and the inverter at most
+    its own. The inverter starts at the first producing step of a day on which
+    the open-circuit voltage of an input reaches the start-up voltage, and stops
+    when production does. Static losses scale the current, except availability,
+    which applies after the limits, so the unconstrained power equals the
+    aggregate model's.
 
     Returns the limited DC and the DC the limits cost. Where no limit binds,
     the DC is the aggregate model's, bit for bit.
@@ -643,45 +724,126 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd
         raise ValueError("String-level energy cannot run: " + "; ".join(problems))
     inverter = setup.inverters[0]
     assert inverter.mppts is not None and inverter.min_mppt_voltage_v is not None
-    assert inverter.max_mppt_voltage_v is not None
+    assert inverter.max_mppt_voltage_v is not None and inverter.startup_voltage_v is not None
+    for breakdown in arrays:
+        if breakdown.module_operating is None:
+            raise ValueError("String-level energy needs each array's module operating point")
+    in_service = {_in_service(breakdown) for breakdown in arrays}
+    if len(in_service) != 1:
+        raise ValueError("String-level energy needs one availability loss for every array")
+    availability = in_service.pop()
 
     index = arrays[0].dc_after_losses.index
-    loss = np.zeros(len(index))
+    # Powers before availability: delivered after the limits, and their cost.
+    delivered = np.zeros(len(index))
+    cost = np.zeros(len(index))
+    open_circuit = np.zeros(len(index))
     by_input: dict[int, list[PVString]] = defaultdict(list)
     for string in setup.strings:
         by_input[string.mppt].append(string)
-    for mppt_index, members in by_input.items():
-        current_limit = inverter.mppts[mppt_index].max_input_current_a
-        assert current_limit is not None
-        breakdown = arrays[members[0].array]
-        loss += _input_limit_loss(
-            breakdown,
+    for mppt_index, members in sorted(by_input.items()):
+        spec = inverter.mppts[mppt_index]
+        assert spec.max_input_current_a is not None
+        string_limit = spec.max_string_input_current_a
+        groups = [
+            _StringGroup(arrays[array], sum(s.parallel for s in members if s.array == array))
+            for array in sorted({s.array for s in members})
+        ]
+        unconstrained, limited = _input_power(
+            groups,
             members[0].modules,
-            sum(s.parallel for s in members),
             inverter.min_mppt_voltage_v,
             inverter.max_mppt_voltage_v,
-            current_limit,
+            spec.max_input_current_a,
+            math.inf if string_limit is None else string_limit,
         )
+        cost += np.clip(unconstrained - limited, 0.0, None)
+        if spec.max_usable_dc_power_w is not None:
+            cost += _excess(limited, spec.max_usable_dc_power_w)
+            limited = np.minimum(limited, spec.max_usable_dc_power_w)
+        delivered += limited
+        if inverter.startup_voltage_v > 0:
+            open_circuit = np.maximum(open_circuit, members[0].modules * _open_circuit_voltage(groups))
+    if inverter.max_usable_dc_power_w is not None:
+        cost += _excess(delivered, inverter.max_usable_dc_power_w)
+        delivered = np.minimum(delivered, inverter.max_usable_dc_power_w)
+    if inverter.startup_voltage_v > 0:
+        idle = ~_running(delivered > 0, open_circuit >= inverter.startup_voltage_v - _TOLERANCE)
+        cost += np.where(idle, delivered, 0.0)
+
     total = sum((b.dc_after_losses for b in arrays[1:]), arrays[0].dc_after_losses)
-    loss_series = pd.Series(loss, index=index, name="mppt_limit_loss_W")
+    loss_series = pd.Series(cost * availability, index=index, name="mppt_limit_loss_W")
     return (total - loss_series).rename("dc_power_W"), loss_series
 
 
-def _input_limit_loss(
-    breakdown: Any, modules: int, parallel: int, v_min: float, v_max: float, current_limit: float
-) -> np.ndarray:
-    """DC one input loses to its voltage range and current limit, in W at each step."""
-    operating = breakdown.module_operating
-    if operating is None:
-        raise ValueError("String-level energy needs each array's module operating point")
-    module_dc = np.asarray(breakdown.module_dc, dtype=float)
-    dc = np.asarray(breakdown.dc_after_losses, dtype=float)
+@dataclass(frozen=True)
+class _StringGroup:
+    """``parallel`` strings of one array on one input."""
+
+    breakdown: Any
+    parallel: int
+
+    @property
+    def operating(self) -> Any:
+        return self.breakdown.module_operating
+
+    @property
+    def string_scale(self) -> np.ndarray:
+        """Each string's current over one module's, from the static losses other than availability."""
+        module_dc = np.asarray(self.breakdown.module_dc, dtype=float)
+        dc = np.asarray(self.breakdown.dc_after_losses, dtype=float)
+        in_service = _in_service(self.breakdown)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where((module_dc > 0) & (in_service > 0), dc / module_dc / in_service, 0.0)
+
+
+def _in_service(breakdown: Any) -> float:
     # Availability is time out of service, not less current while running, so
     # it applies after the limits; every other static loss scales the current.
-    in_service = 1.0 - float(breakdown.pvwatts_components_pct.get("availability", 0.0)) / 100.0
-    with np.errstate(divide="ignore", invalid="ignore"):
-        factor = np.where((module_dc > 0) & (in_service > 0), dc / module_dc / in_service, 0.0)
-    current_scale = factor * parallel
+    return 1.0 - float(breakdown.pvwatts_components_pct.get("availability", 0.0)) / 100.0
+
+
+def _excess(power: np.ndarray, limit: float) -> np.ndarray:
+    return np.clip(power - limit, 0.0, None)
+
+
+def _running(producing: np.ndarray, can_start: np.ndarray) -> np.ndarray:
+    """Whether the inverter runs: from the first step of a producing spell that can start it, to the spell's end."""
+    spell = np.cumsum(~producing)
+    started = pd.Series(producing & can_start).groupby(spell).cummax().to_numpy(dtype=bool)
+    return producing & started
+
+
+def _input_power(
+    groups: list[_StringGroup],
+    modules: int,
+    v_min: float,
+    v_max: float,
+    current_limit: float,
+    string_limit: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """One input's unconstrained and limited DC before availability, in W at each step.
+
+    The limited power equals the unconstrained array, element for element,
+    wherever no limit binds.
+    """
+    if len(groups) == 1:
+        group = groups[0]
+        # Identical strings share the current, so each string's limit bounds the input at parallel times it.
+        return _single_array_power(
+            group.operating,
+            group.string_scale * group.parallel,
+            modules,
+            v_min,
+            v_max,
+            min(current_limit, group.parallel * string_limit),
+        )
+    return _parallel_arrays_power(groups, modules, v_min, v_max, current_limit, string_limit)
+
+
+def _single_array_power(
+    operating: Any, current_scale: np.ndarray, modules: int, v_min: float, v_max: float, current_limit: float
+) -> tuple[np.ndarray, np.ndarray]:
     v_mp = np.nan_to_num(operating.v_mp)
     i_mp = np.nan_to_num(operating.i_mp)
     unconstrained = modules * v_mp * current_scale * i_mp
@@ -691,9 +853,9 @@ def _input_limit_loss(
     lower_v, upper_v = v_min / modules, v_max / modules
     producing = unconstrained > 0
     limited = producing & ((v_mp < lower_v) | (v_mp > upper_v) | (i_mp > module_current_limit))
-    result = np.zeros(len(dc))
+    result = unconstrained.copy()
     if not limited.any():
-        return result
+        return unconstrained, result
 
     params = [np.asarray(p)[limited] for p in _diode_params(operating)]
     v_at_limit = np.zeros(int(limited.sum()))
@@ -708,9 +870,112 @@ def _input_limit_loss(
     # No point of the curve is inside the range and under the current limit:
     # the input has no usable operating point and delivers nothing.
     current = np.where(lower > upper_v, 0.0, current)
-    limited_power = modules * voltage * current_scale[limited] * current
-    result[limited] = np.clip(unconstrained[limited] - limited_power, 0.0, None) * in_service
-    return result
+    result[limited] = np.minimum(modules * voltage * current_scale[limited] * current, unconstrained[limited])
+    return unconstrained, result
+
+
+# Bisection and golden-section steps for the summed IV curve of parallel
+# strings from different arrays, and the coarse grid that brackets its maximum.
+_BISECTION_STEPS = 60
+_GOLDEN_STEPS = 60
+_GRID_POINTS = 64
+
+
+def _parallel_arrays_power(
+    groups: list[_StringGroup], modules: int, v_min: float, v_max: float, current_limit: float, string_limit: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Strings from several arrays in parallel: the best point of their summed IV curve within the limits."""
+    scales = [group.string_scale for group in groups]
+    unconstrained = sum(
+        modules * group.parallel * scale * np.nan_to_num(group.operating.v_mp) * np.nan_to_num(group.operating.i_mp)
+        for group, scale in zip(groups, scales, strict=False)
+    )
+    assert isinstance(unconstrained, np.ndarray)
+    result = unconstrained.copy()
+    steps = unconstrained > 0
+    if not steps.any():
+        return unconstrained, result
+    params = [[np.asarray(p, dtype=float)[steps] for p in _diode_params(g.operating)] for g in groups]
+    string_scales = [scale[steps] for scale in scales]
+    input_scales = [g.parallel * scale for g, scale in zip(groups, string_scales, strict=False)]
+
+    everywhere = np.ones(len(string_scales[0]), dtype=bool)
+
+    def module_currents(v: np.ndarray, rows: np.ndarray = everywhere) -> list[np.ndarray]:
+        shape = (-1,) + (1,) * (v.ndim - 1)
+        return [np.nan_to_num(pvlib.pvsystem.i_from_v(v, *[p[rows].reshape(shape) for p in group])) for group in params]
+
+    def input_current(v: np.ndarray) -> np.ndarray:
+        shape = (-1,) + (1,) * (v.ndim - 1)
+        return sum(s.reshape(shape) * i for s, i in zip(input_scales, module_currents(v), strict=False))
+
+    def allowed(v: np.ndarray, rows: np.ndarray = everywhere) -> np.ndarray:
+        currents = module_currents(v, rows)
+        total = sum(s[rows] * i for s, i in zip(input_scales, currents, strict=False))
+        largest = np.max([s[rows] * i for s, i in zip(string_scales, currents, strict=False)], axis=0)
+        return (total <= current_limit + _TOLERANCE) & (largest <= string_limit + _TOLERANCE)
+
+    # Above the highest open-circuit voltage the summed curve carries no current.
+    v_oc = np.max([np.nan_to_num(pvlib.pvsystem.v_from_i(0.0, *group)) for group in params], axis=0)
+    lower = np.full(len(v_oc), v_min / modules)
+    upper = np.minimum(v_max / modules, v_oc)
+    # The currents fall with voltage, so the allowed voltages start where they meet their limits.
+    blocked = ~allowed(lower)
+    if blocked.any():
+        low, high = lower[blocked].copy(), upper[blocked].copy()
+        for _ in range(_BISECTION_STEPS):
+            middle = 0.5 * (low + high)
+            ok = allowed(middle, blocked)
+            high = np.where(ok, middle, high)
+            low = np.where(ok, low, middle)
+        lower[blocked] = high
+    feasible = (lower <= upper) & allowed(np.minimum(lower, upper))
+
+    def power(v: np.ndarray) -> np.ndarray:
+        return modules * v * np.clip(input_current(v), 0.0, None)
+
+    grid = lower[:, None] + (upper - lower).clip(min=0.0)[:, None] * np.linspace(0.0, 1.0, _GRID_POINTS)
+    values = power(grid)
+    best = np.argmax(values, axis=1)
+    rows = np.arange(len(best))
+    a = grid[rows, np.maximum(best - 1, 0)]
+    b = grid[rows, np.minimum(best + 1, _GRID_POINTS - 1)]
+    ratio = (math.sqrt(5.0) - 1.0) / 2.0
+    for _ in range(_GOLDEN_STEPS):
+        c, d = b - ratio * (b - a), a + ratio * (b - a)
+        left = power(c) >= power(d)
+        a, b = np.where(left, a, c), np.where(left, d, b)
+    best_power = np.maximum(values[rows, best], power(0.5 * (a + b)))
+    result[steps] = np.minimum(np.where(feasible, best_power, 0.0), unconstrained[steps])
+    return unconstrained, result
+
+
+def _open_circuit_voltage(groups: list[_StringGroup]) -> np.ndarray:
+    """One module's open-circuit voltage on an input at each step, in V; 0 in the dark.
+
+    Strings in parallel settle where their currents cancel, between their own
+    open-circuit voltages.
+    """
+    lit = np.all([np.nan_to_num(np.asarray(g.operating.photocurrent, dtype=float)) > 0 for g in groups], axis=0)
+    voltage = np.zeros(len(lit))
+    if not lit.any():
+        return voltage
+    params = [[np.asarray(p, dtype=float)[lit] for p in _diode_params(g.operating)] for g in groups]
+    own = [np.nan_to_num(pvlib.pvsystem.v_from_i(0.0, *group)) for group in params]
+    if len(groups) == 1:
+        voltage[lit] = own[0]
+        return voltage
+    scales = [g.parallel * g.string_scale[lit] for g in groups]
+    low, high = np.min(own, axis=0), np.max(own, axis=0)
+    for _ in range(_BISECTION_STEPS):
+        middle = 0.5 * (low + high)
+        current = sum(
+            s * np.nan_to_num(pvlib.pvsystem.i_from_v(middle, *group)) for s, group in zip(scales, params, strict=False)
+        )
+        positive = np.asarray(current) > 0
+        low, high = np.where(positive, middle, low), np.where(positive, high, middle)
+    voltage[lit] = 0.5 * (low + high)
+    return voltage
 
 
 def _diode_params(operating: Any) -> tuple[np.ndarray, ...]:

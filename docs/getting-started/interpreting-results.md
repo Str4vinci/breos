@@ -270,7 +270,7 @@ and `tracking`, plus the resolved tracker geometry for a tracking array.
 
 | Key | Meaning |
 |---|---|
-| `fidelity` | How energy was modelled. `"aggregate"`: the array's DC output feeds one AC rating, whatever the string topology. `"string"`: each MPPT input's voltage range and current limit applied (see [String-level energy](configuration.md#string-level-energy)) |
+| `fidelity` | How energy was modelled. `"aggregate"`: the array's DC output feeds one AC rating, whatever the string topology. `"string"`: each MPPT input's voltage range, current and power limits, the inverter's power limit and its start-up voltage applied (see [String-level energy](configuration.md#string-level-energy)) |
 | `status` | `"not_evaluated"` without a [string topology](configuration.md#string-topology-checks); otherwise `"fail"` on any error, `"incomplete"` on missing data, `"warning"` on any warning, else `"pass"` |
 | `findings` | One record per finding, in a stable order |
 
@@ -307,6 +307,10 @@ may add codes.
 | `too_many_strings` | error | count | `max_strings` | inverter, mppt |
 | `isc_above_mppt_limit` | error | A | `max_short_circuit_current_a` | inverter, mppt |
 | `imp_above_mppt_limit` | warning | A | `max_input_current_a` | inverter, mppt |
+| `isc_above_string_limit` | error | A | `max_string_short_circuit_current_a` of the input | inverter, mppt, string, array |
+| `imp_above_string_limit` | warning | A | `max_string_input_current_a` of the input | inverter, mppt, string, array |
+| `mppt_dc_power_above_max` | error | W | `max_dc_power_w` of the input | inverter, mppt |
+| `isc_above_inverter_limit` | error | A | `max_short_circuit_current_a` of the inverter | inverter |
 | `dc_power_above_max` | error | W | `max_dc_power_w` | inverter |
 | `dc_power_above_recommended` | warning | W | `recommended_dc_power_w` | inverter |
 | `dc_ac_ratio_outside_range` | warning | ratio | | inverter |

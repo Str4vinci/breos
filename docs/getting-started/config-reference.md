@@ -48,7 +48,7 @@ is a `breos run` option that overrides the config file.
 | `discount_rate` | `0.03` | `--discount-rate` | Nominal discount rate for NPV |
 | `dual_axis_max_tilt` | `90.0` | — | Maximum panel tilt for dual-axis tracking (degrees) |
 | `electrical_environment` | `None` | — | Design temperatures and mounting for the string check; see [`[electrical_environment]`](#electrical_environment). Set with `inverters` and `pv_strings` |
-| `electrical_fidelity` | `"aggregate"` | — | How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT input's voltage range and current limit. `"string"` needs `inverters`, `pv_strings` and `electrical_environment`, one inverter, and a wiring without structural errors |
+| `electrical_fidelity` | `"aggregate"` | — | How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT input's voltage, current and power limits, the inverter's power limit and its start-up voltage. `"string"` needs `inverters`, `pv_strings` and `electrical_environment`, one inverter, and a wiring without structural errors |
 | `emissions_country` | `None` | `--emissions-country` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...); see [Packaged options](options.md#emissions-factors) |
 | `enable_resistance_fade` | `False` | — | Grow the battery's internal resistance as it ages (Naumann), which lowers its charge and discharge efficiencies. Native engine only: it cannot be combined with `degradation_engine = "blast"` |
 | `execution_backend` | `"python"` | `--execution-backend` | Within-day dispatch implementation. `"python"` is the numerical reference; `"numba"` is an optional compiled path that reproduces it bit for bit and needs `pip install "breos[fast]"`. One of `"python"`, `"numba"` |
@@ -174,6 +174,8 @@ One entry per specified inverter, as `[[inverters]]` in TOML. `None` or an omitt
 | `max_dc_power_w` |  | Maximum PV generator power the manufacturer permits (W), or `inf` for none |
 | `max_dc_voltage_v` |  | Maximum DC input voltage (V), or `inf` for none |
 | `max_mppt_voltage_v` |  | Upper end of the MPPT voltage range (V), or `inf` for none |
+| `max_short_circuit_current_a` |  | Maximum array short-circuit current over all inputs (A), or `inf` for none; checked when set |
+| `max_usable_dc_power_w` |  | DC power the inverter converts over all inputs (W), or `inf` for none; string-level energy applies it |
 | `min_mppt_voltage_v` |  | Lower end of the MPPT voltage range (V), or 0 for none |
 | `mppts` |  | One table per MPPT input, in datasheet order; see [`mppts`](#mppts) |
 | `recommended_dc_power_w` |  | Recommended PV generator power (W), or `inf` for none |
@@ -185,9 +187,13 @@ One entry per MPPT input of an inverter, in datasheet order, as `[[inverters.mpp
 
 | Key | Required | Description |
 |---|---|---|
+| `max_dc_power_w` |  | Maximum PV generator power on the input (W), or `inf` for none; checked when set |
 | `max_input_current_a` |  | Maximum operating input current (A), or `inf` for none |
 | `max_short_circuit_current_a` |  | Maximum array short-circuit current (A), or `inf` for none |
+| `max_string_input_current_a` |  | Maximum operating current of each string connection (A), or `inf` for none; checked when set |
+| `max_string_short_circuit_current_a` |  | Maximum short-circuit current of each string connection (A), or `inf` for none; checked when set |
 | `max_strings` |  | Strings the input takes in parallel |
+| `max_usable_dc_power_w` |  | DC power the input converts (W), or `inf` for none; string-level energy applies it |
 
 ## pv_strings
 

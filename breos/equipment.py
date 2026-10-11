@@ -15,23 +15,42 @@ from numbers import Integral, Real
 class MpptSpec:
     """One MPPT input's datasheet limits, with unknown values left unset.
 
-    Currents are A. Inverters with asymmetric inputs list one ``MpptSpec`` per
-    input, so each input keeps its own current and string limits. A current
-    limit of ``math.inf`` means the input has none.
+    Currents are A and powers W. Inverters with asymmetric inputs list one
+    ``MpptSpec`` per input, so each input keeps its own current and string
+    limits. A limit of ``math.inf`` means the input has none.
+
+    The last four limits are published by some datasheets only, so leaving
+    them unset is not reported missing. ``max_string_input_current_a`` and
+    ``max_string_short_circuit_current_a`` rate each string connection of the
+    input; ``max_dc_power_w`` is the PV generator power the input may carry, and
+    ``max_usable_dc_power_w`` the DC power the input converts, above which the
+    inverter moves the input off its maximum power point.
     """
 
     max_input_current_a: float | None = None
     max_short_circuit_current_a: float | None = None
     max_strings: int | None = None
+    max_string_input_current_a: float | None = None
+    max_string_short_circuit_current_a: float | None = None
+    max_dc_power_w: float | None = None
+    max_usable_dc_power_w: float | None = None
 
     def __post_init__(self) -> None:
-        for name in ("max_input_current_a", "max_short_circuit_current_a"):
+        for name in (
+            "max_input_current_a",
+            "max_short_circuit_current_a",
+            "max_string_input_current_a",
+            "max_string_short_circuit_current_a",
+            "max_dc_power_w",
+            "max_usable_dc_power_w",
+        ):
             value = getattr(self, name)
             if value is not None:
                 _upper_limit(name, value)
         if self.max_strings is not None:
             _positive_integer("max_strings", self.max_strings)
         _ordered(self, "max_input_current_a", "max_short_circuit_current_a")
+        _ordered(self, "max_string_input_current_a", "max_string_short_circuit_current_a")
 
 
 @dataclass(frozen=True)
@@ -48,8 +67,12 @@ class InverterSpec:
     with an input's STC short-circuit current, such as 1.25; give 1 where the
     manufacturer compares Isc as it is. ``max_dc_power_w`` is the maximum PV
     generator power the manufacturer permits, and ``recommended_dc_power_w``
-    its recommended PV power. No prices, product identities, certifications
-    or sizing presets live here.
+    its recommended PV power. ``max_short_circuit_current_a`` is the array
+    short-circuit current the inverter takes over all its inputs, and
+    ``max_usable_dc_power_w`` the DC power it converts over all its inputs;
+    like those two powers, they are published by some datasheets only and
+    are not reported missing when unset. No prices, product identities,
+    certifications or sizing presets live here.
     """
 
     nominal_power_w: float
@@ -63,6 +86,8 @@ class InverterSpec:
     mppts: tuple[MpptSpec, ...] | None = None
     isc_comparison_factor: float | None = None
     recommended_dc_power_w: float | None = None
+    max_short_circuit_current_a: float | None = None
+    max_usable_dc_power_w: float | None = None
 
     def __post_init__(self) -> None:
         _positive("nominal_power_w", self.nominal_power_w)
@@ -70,7 +95,14 @@ class InverterSpec:
             value = getattr(self, name)
             if value is not None:
                 _positive(name, value)
-        for name in ("max_dc_voltage_v", "max_dc_power_w", "max_mppt_voltage_v", "recommended_dc_power_w"):
+        for name in (
+            "max_dc_voltage_v",
+            "max_dc_power_w",
+            "max_mppt_voltage_v",
+            "recommended_dc_power_w",
+            "max_short_circuit_current_a",
+            "max_usable_dc_power_w",
+        ):
             value = getattr(self, name)
             if value is not None:
                 _upper_limit(name, value)

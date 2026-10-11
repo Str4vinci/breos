@@ -223,6 +223,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   against the MPPT minimum and start-up voltage, Vmp against the MPPT maximum,
   design Isc and operating current per input, string counts, parallel-string
   matching, generator power, and that every module is strung exactly once.
+  Where a datasheet publishes them, it also checks each string connection's
+  current ratings, each input's generator power and the inverter's
+  short-circuit rating over all inputs. Parallel strings on one input may come
+  from different arrays when they share the module and the length.
   Findings are errors (hard limits and wiring), warnings (yield and operating
   limits) or missing datasheet values; a missing value is never replaced by a
   default. Each finding carries its `unit` and the `limit_field` it was checked
@@ -238,7 +242,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   findings when no topology is configured.
 - `electrical_fidelity = "string"` makes energy depend on the wiring of one
   inverter: each MPPT input moves along its strings' single-diode IV curve to
-  the best point its voltage range and operating-current limit allow. The DC
+  the best point its voltage range and its own and each string connection's
+  operating-current limits allow, then delivers at most its usable DC power,
+  and the inverter at most its own. Strings from different arrays on one input
+  run at the best point of their summed IV curve. The inverter starts each day
+  once an input's open-circuit voltage reaches the start-up voltage. The DC
   this costs is the new `mppt_limits` stage of the PV loss waterfall, and a
   design inside every limit gives the aggregate result. It refuses to run, rather
   than fall back, without one inverter, the limits it needs, or a sound wiring.
