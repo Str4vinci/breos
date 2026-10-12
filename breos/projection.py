@@ -87,6 +87,7 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
         max_discharge_power_w=cfg["battery_max_discharge_power_w"],
         power_limit_c_rate=cfg["battery_power_limit_c_rate"],
         enable_resistance_fade=cfg.get("enable_resistance_fade", False),
+        inverter_conversion=resolved.inverter_conversion,
         **efficiency,
     )
 
@@ -103,6 +104,7 @@ def build_pv_only_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfi
         nominal_energy_wh=0,
         inverter_efficiency=cfg["inverter_efficiency"],
         inverter_ac_capacity_w=resolved.inverter_ac_capacity_w,
+        inverter_conversion=resolved.inverter_conversion,
     )
 
 
@@ -740,6 +742,9 @@ class ProjectionYear:
     temperature_series: pd.Series | None = None
     aligned: AlignedSimulationInputs | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
+    # The inverter's AC rating per step as a fraction of its nameplate, from
+    # temperature derating, with the per-step series; None for none.
+    inverter_ac_derate: pd.Series | None = None
 
 
 @dataclass(frozen=True)
@@ -1035,6 +1040,7 @@ def project_years(
                     pv_dc=year.pv_dc,
                     houseload=year.houseload,
                     temperature_series=year.temperature_series if has_battery else None,
+                    inverter_ac_derate=year.inverter_ac_derate,
                     instruction_planner=plan_year,
                     **core_kwargs,
                 )
@@ -1054,6 +1060,7 @@ def project_years(
                         pv_dc=year.pv_dc,
                         houseload=year.houseload,
                         temperature_series=year.temperature_series if has_battery else None,
+                        inverter_ac_derate=year.inverter_ac_derate,
                         **common,
                     ),
                 )
@@ -1065,6 +1072,7 @@ def project_years(
                     pv_dc=year.pv_dc,
                     houseload=year.houseload,
                     temperature_series=year.temperature_series,
+                    inverter_ac_derate=year.inverter_ac_derate,
                     day_controller=day_controller,
                     controller_tariff=tariff,
                     controller_carry=carry.controller_carry,

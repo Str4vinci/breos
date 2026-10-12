@@ -58,6 +58,20 @@ simulation. Unknown efficiency leaves the engine's existing assumption in place.
 
 .. autoclass:: breos.equipment.MpptSpec
    :members:
+
+.. autoclass:: breos.equipment.EfficiencyCurve
+   :members:
+
+.. autoclass:: breos.equipment.TemperatureDerating
+   :members:
+
+.. autoclass:: breos.inverter.InverterConversion
+   :members:
+
+.. autoclass:: breos.inverter.AcCable
+   :members:
+
+.. autofunction:: breos.inverter.ac_derate
 ```
 
 ## String topology checks

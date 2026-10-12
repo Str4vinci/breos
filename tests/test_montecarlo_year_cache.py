@@ -287,7 +287,7 @@ def _year_layers(config, settings):
     """The PV layer and weather record a fresh study builds, pickled."""
     resolved = resolve_app_config(config)
     runtime_weather = {}
-    dc_by_year, temp_by_year = montecarlo_module._precompute_year_caches(
+    dc_by_year, temp_by_year, _derate = montecarlo_module._precompute_year_caches(
         resolved.cfg, resolved, settings, runtime_weather=runtime_weather
     )
     return pickle.dumps((dc_by_year, temp_by_year, runtime_weather))

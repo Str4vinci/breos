@@ -299,6 +299,7 @@
   "provenance.pv_model.bifacial.rear_gain_effective_dc_kwh": 0.0,
   "provenance.pv_model.bifacial.rear_gain_pct_of_front_effective": 0.0,
   "provenance.resolution": "h",
+  "provenance.resolved_config.ac_cable": null,
   "provenance.resolved_config.albedo": null,
   "provenance.resolved_config.annual_consumption_kwh": 4000,
   "provenance.resolved_config.axis_azimuth": 180.0,
@@ -530,7 +531,7 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "6561862dafaf2487bd971fb4eb3ec9d195a1c880",
+  "breos_commit": "0a05ec48f18f3f1ef4290a78fd8a75cdc171ddbd",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",

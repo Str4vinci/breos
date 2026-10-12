@@ -1,6 +1,6 @@
 # 0007 — String topology and electrical checks
 
-- **Status:** Proposed. D1–D8 are implemented, D7 for one inverter; several
+- **Status:** Proposed. D1–D9 are implemented, D7 for one inverter; several
   inverters are the next step.
 - **Date:** 2026-10-11
 
@@ -294,17 +294,41 @@ loss follows from the curve rather than from a percentage. The two models agree
 to within a few hundredths of the loss. A cable has no effect on the
 open-circuit voltage, so the check and the start-up voltage are unchanged.
 
-AC cables wait for the inverter efficiency curve. Their loss is quadratic in
-the inverter's AC output, which the dispatch kernels compute, so both changes
-go into the kernels together.
+AC cables are D9: their loss is quadratic in the inverter's AC output, which
+the dispatch kernels compute.
+
+### D9. Inverter efficiency curve, AC cable and temperature derating
+
+An `InverterSpec` may carry `efficiency_curve`: efficiency against AC output
+as a fraction of the nameplate, one row per DC voltage, one to three rows. It
+is the CEC and OND shape, so a PAN/OND importer fills the same field. The
+dispatch kernels read it in place of the PVWatts curve, for PV and battery
+discharge alike. Efficiency is linear in output between the points, so each
+segment solves `ac = eta(ac) * dc` exactly, forward and inverse, and dispatch
+sizes and delivers against one curve. Below the first point the loss holds at
+that point's watts, the self-consumption. Aggregate energy reads the middle
+row; string-level energy reads the row position of the strings' STC maximum
+power voltage, weighted by power. A per-step voltage is a later refinement.
+
+`[ac_cable]` is the inverter-to-meter cable: its loss is `k * ac**2`, with k
+from the conductor resistance, phases, voltage and power factor, taken inside
+the conversion before `ac_output_scale`. The kernels' reachable AC ceiling and
+the inverse account for it. Grid charging is not charged.
+
+`temperature_derating` gives the allowed AC output against ambient. The App
+turns it into a per-step rating fraction from the weather's air temperature,
+or a stated indoor ambient, and the kernels multiply the nameplate by it each
+step. PV-only runs take the same scalar conversion per step, so both paths
+agree exactly. With none of the three, every operation is the PVWatts path's,
+so results are unchanged bit for bit. Night consumption is not modelled yet.
 
 ### Open items
 
 These are additive and do not change a field above:
 
 - Several inverters in string mode, after ADR 0004 (#419).
-- AC cables between the inverter and the meter, with the inverter efficiency
-  curve.
+- The inverter's night consumption, and a per-step operating voltage for the
+  efficiency curve.
 
 ## Consequences
 

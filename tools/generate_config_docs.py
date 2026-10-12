@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from breos import app_config  # noqa: E402
 from breos.app_config import (  # noqa: E402
+    AC_CABLE_TABLE,
     ANNUAL_NETWORK_CREDIT_TABLE,
     APP_CONFIG_FIELDS,
     COSTS_TABLE,
@@ -111,6 +112,11 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "electrical_environment",
         ELECTRICAL_ENVIRONMENT_TABLE,
         "Design temperatures for the string check, as `[electrical_environment]` in TOML.",
+    ),
+    (
+        "ac_cable",
+        AC_CABLE_TABLE,
+        "The cable from the inverter to the meter, as `[ac_cable]` in TOML; see [AC cable](configuration.md#ac-cable).",
     ),
     (
         "tariff",

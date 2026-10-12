@@ -110,9 +110,9 @@ def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch)
     }
     settings = MonteCarloSettings(weather_file="unused.csv")
 
-    _dc, temperatures = _precompute_year_caches(
+    _dc, temperatures, _derate = _precompute_year_caches(
         cfg,
-        type("Resolved", (), {"lat": 41.0, "lon": -8.0})(),
+        type("Resolved", (), {"lat": 41.0, "lon": -8.0, "electrical": None})(),
         settings,
     )
 
@@ -171,7 +171,7 @@ def test_montecarlo_records_transformed_runtime_weather_timing(monkeypatch):
             "battery_temperature": 25.0,
             "battery_indoor_model": {"enabled": False},
         },
-        type("Resolved", (), {"lat": 41.0, "lon": -8.0})(),
+        type("Resolved", (), {"lat": 41.0, "lon": -8.0, "electrical": None})(),
         MonteCarloSettings(weather_file="unused.csv"),
         runtime_weather=runtime_weather,
     )
@@ -503,7 +503,7 @@ def test_pv_chain_cache_is_declined_for_a_battery_system(tmp_path, write_multiye
     weather = write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=64, years_per_run=2, seed=42)
     resolved = resolve_app_config(_base_config())
-    dc_by_year, _ = _precompute_year_caches(resolved.cfg, resolved, settings)
+    dc_by_year, _, _ = _precompute_year_caches(resolved.cfg, resolved, settings)
     aligned = {
         year: align_simulation_inputs(dc, pd.DataFrame({"Load": 0.0}, index=dc.index), freq="h")
         for year, dc in dc_by_year.items()

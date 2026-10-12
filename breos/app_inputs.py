@@ -16,6 +16,7 @@ from pvlib.location import Location
 
 from breos.app_config import ResolvedAppConfig, SimulationPeriod, resolve_app_config
 from breos.electrical import string_cable_loss, string_limited_dc
+from breos.inverter import ac_derate
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs
 from breos.solar import (
@@ -31,6 +32,7 @@ from breos.weather import (
     WEATHER_METADATA_KEY,
     AmbiguousWeatherError,
     _normalised_horizon_metadata,
+    build_battery_temperature_series,
     fill_leap_day,
     read_weather_csv,
     warn_if_naive_weather_timestamps,
@@ -59,6 +61,9 @@ class PreparedSimulationInputs:
     pv_breakdown: PVProductionBreakdown
     load_data: pd.DataFrame
     temperature_series: pd.Series
+    # The inverter's AC rating per step as a fraction of its nameplate, from
+    # its temperature derating; None for an inverter without one.
+    inverter_ac_derate: pd.Series | None = None
 
 
 def unknown_source_metadata(provider: str) -> dict[str, Any]:
@@ -594,7 +599,32 @@ def prepare_simulation_inputs(
         pv_breakdown=pv_breakdown,
         load_data=load_data,
         temperature_series=temperature_series,
+        inverter_ac_derate=build_inverter_ac_derate(resolved, weather, pd.DatetimeIndex(dc_system_base.index)),
     )
+
+
+def build_inverter_ac_derate(
+    resolved: ResolvedAppConfig, weather: pd.DataFrame, index: pd.DatetimeIndex
+) -> pd.Series | None:
+    """The inverter's AC rating per step as a fraction of its nameplate, or None without temperature derating.
+
+    The ambient is ``electrical_environment.inverter_ambient_temp_c`` when
+    stated, for an inverter indoors, and otherwise the weather's air
+    temperature, for one outdoors.
+    """
+    electrical = resolved.electrical
+    if electrical is None or len(electrical.inverters) != 1:
+        return None
+    derating = electrical.inverters[0].temperature_derating
+    if derating is None:
+        return None
+    ambient = build_battery_temperature_series(
+        electrical.environment.inverter_ambient_temp_c,
+        index=pd.DatetimeIndex(index),
+        weather_df=weather,
+        indoor_model={"enabled": False},
+    )
+    return pd.Series(ac_derate(derating, ambient.to_numpy(dtype=float)), index=index, name="inverter_ac_derate")
 
 
 # Config keys that do not reach prepare_simulation_inputs, directly or through

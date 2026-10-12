@@ -154,6 +154,7 @@ from breos._dispatch import (
 from breos.app_inputs import reuse_prepared_inputs
 from breos.battery import BatteryConfig, _step_energy_cap
 from breos.dispatch_instructions import DispatchInstructions
+from breos.inverter import NO_CONVERSION
 from breos.utils import get_hours_per_step
 from tools.oracles._output import load_config, write_csv, write_json
 from tools.oracles.replay import (
@@ -167,6 +168,9 @@ from tools.oracles.replay import (
     replay_instructions,
     replay_summary,
 )
+
+# The kernels' conversion arguments for the PVWatts curve and no AC cable.
+PVWATTS_CONVERSION = NO_CONVERSION.kernel_arguments(1.0)
 
 LP_BOUND_SCHEMA = "breos_lp_bound_v1"
 LP_SCHEDULE_SCHEMA = "breos_lp_bound_schedule_v1"
@@ -274,13 +278,13 @@ def load_secants(
     pdc0 = inverter_ac_wh / eta
     q, l, c = PVWATTS_CURVE_QUADRATIC, PVWATTS_CURVE_LINEAR, PVWATTS_CURVE_CONSTANT
     peak_dc = math.sqrt(c / q) * pdc0
-    peak_ac, _loss, _clip = _dc_ac(peak_dc, inverter_ac_wh, eta, scale, 2.0)
+    peak_ac, _loss, _clip = _dc_ac(peak_dc, inverter_ac_wh, eta, scale, 2.0, *PVWATTS_CONVERSION)
     shade = 1.0 - 1e-9
     dc_per_ac = np.full(n, peak_dc / peak_ac * shade)
     dc_per_export = np.zeros(n)
     for step in np.flatnonzero((load_wh >= MIN_SECANT_LOAD_WH) & (load_wh < peak_ac)):
         load = float(load_wh[step])
-        dc = _dc_for_ac(load, inverter_ac_wh, eta, scale)
+        dc = _dc_for_ac(load, inverter_ac_wh, eta, scale, *PVWATTS_CONVERSION)
         slope = scale * eta / PVWATTS_REFERENCE_EFFICIENCY * (2.0 * q * dc / pdc0 + l)
         dc_per_ac[step] = dc / load * shade
         dc_per_export[step] = shade / max(slope, scale)

@@ -40,17 +40,100 @@ PVWATTS_CURVE_LINEAR = 0.9858
 PVWATTS_CURVE_CONSTANT = -0.0059
 
 
+def _curve_efficiency(curve_eff: np.ndarray, curve_row: float, point: int) -> float:
+    """Efficiency at one output point, interpolated between the voltage rows at ``curve_row``.
+
+    ``curve_row`` is a position among the rows: 1.5 lies halfway between the
+    second and third. Past either end it holds the end row.
+    """
+    last = curve_eff.shape[0] - 1
+    if curve_row <= 0.0:
+        return curve_eff[0, point]
+    if curve_row >= last:
+        return curve_eff[last, point]
+    lower = int(math.floor(curve_row))
+    fraction = curve_row - lower
+    return curve_eff[lower, point] + fraction * (curve_eff[lower + 1, point] - curve_eff[lower, point])
+
+
+def _curve_ac(
+    dc: float, inverter_ac_power: float, curve_ac: np.ndarray, curve_eff: np.ndarray, curve_row: float
+) -> float:
+    """AC output for DC input ``dc`` at or below the nameplate input, on the efficiency curve.
+
+    The curve gives efficiency against AC output at its points, linear
+    between them. Within a segment ``ac = (eta_j - s * a_j) * dc / (1 - s * dc)``
+    solves ``ac = eta(ac) * dc`` exactly. Below the first point the inverter
+    loses that point's loss in watts, its self-consumption; above the last
+    point it keeps that point's efficiency.
+    """
+    last = curve_ac.shape[0] - 1
+    a_lo = curve_ac[0] * inverter_ac_power
+    eta_lo = _curve_efficiency(curve_eff, curve_row, 0)
+    d_lo = a_lo / eta_lo
+    if dc <= d_lo:
+        return max(0.0, dc - (d_lo - a_lo))
+    for j in range(last):
+        a_hi = curve_ac[j + 1] * inverter_ac_power
+        eta_hi = _curve_efficiency(curve_eff, curve_row, j + 1)
+        d_hi = a_hi / eta_hi
+        if dc < d_hi:
+            slope = (eta_hi - eta_lo) / (a_hi - a_lo)
+            return (eta_lo - slope * a_lo) * dc / (1.0 - slope * dc)
+        a_lo, eta_lo, d_lo = a_hi, eta_hi, d_hi
+    return eta_lo * dc
+
+
+def _curve_dc(
+    ac: float, inverter_ac_power: float, curve_ac: np.ndarray, curve_eff: np.ndarray, curve_row: float
+) -> float:
+    """The DC input :func:`_curve_ac` needs for AC output ``ac``: its exact inverse."""
+    last = curve_ac.shape[0] - 1
+    a_lo = curve_ac[0] * inverter_ac_power
+    eta_lo = _curve_efficiency(curve_eff, curve_row, 0)
+    if ac <= a_lo:
+        return ac + (a_lo / eta_lo - a_lo)
+    for j in range(last):
+        a_hi = curve_ac[j + 1] * inverter_ac_power
+        eta_hi = _curve_efficiency(curve_eff, curve_row, j + 1)
+        if ac < a_hi:
+            return ac / (eta_lo + (eta_hi - eta_lo) * (ac - a_lo) / (a_hi - a_lo))
+        a_lo, eta_lo = a_hi, eta_hi
+    return ac / eta_lo
+
+
+def _cable_gross(net: float, cable_k: float) -> float:
+    """AC leaving the inverter that delivers ``net`` past a cable losing ``cable_k * ac**2``; inf if none can."""
+    discriminant = 1.0 - 4.0 * cable_k * net
+    if discriminant < 0.0:
+        return math.inf
+    return 2.0 * net / (1.0 + math.sqrt(discriminant))
+
+
 def _dc_ac(
     pv_dc_power: float,
     inverter_ac_power: float,
     inverter_efficiency: float,
     ac_output_scale: float,
     pow_two: float,
+    curve_ac: np.ndarray,
+    curve_eff: np.ndarray,
+    curve_row: float,
+    cable_k: float,
 ) -> tuple[float, float, float]:
     """Scalar core of :func:`calculate_dc_ac_power`: ``(ac, conversion_loss, clipping_dc)``.
 
     Written without dataclasses or ``float()`` coercion so the Numba backend
     compiles this same function.
+
+    An empty ``curve_ac`` selects the PVWatts part-load curve. Otherwise
+    ``curve_ac`` holds output points as fractions of the AC nameplate and
+    ``curve_eff`` one row of efficiencies per DC voltage, read at row position
+    ``curve_row`` (:func:`_curve_efficiency`). ``cable_k`` is the AC cable's
+    loss over the square of the AC output, per Wh: the cable takes
+    ``cable_k * ac**2`` before ``ac_output_scale``. The conversion loss
+    includes it. With no curve and no cable the arithmetic is the PVWatts
+    path's, operation for operation.
 
     ``pow_two`` carries the literal 2.0 in from a Python caller. CPython
     evaluates ``zeta ** 2`` as a libm ``pow`` call, and for some inputs
@@ -78,6 +161,17 @@ def _dc_ac(
         ac_power = pv_dc_power * inverter_efficiency * ac_output_scale
         return ac_power, pv_dc_power - ac_power, 0.0
 
+    if curve_ac.shape[0] > 0:
+        pdc0 = _curve_dc(inverter_ac_power, inverter_ac_power, curve_ac, curve_eff, curve_row)
+        dc_used = min(pv_dc_power, pdc0)
+        ac_power = max(
+            0.0, min(dc_used, inverter_ac_power, _curve_ac(dc_used, inverter_ac_power, curve_ac, curve_eff, curve_row))
+        )
+        if cable_k > 0.0:
+            ac_power = max(0.0, ac_power - cable_k * ac_power * ac_power)
+        ac_power *= ac_output_scale
+        return ac_power, max(0.0, dc_used - ac_power), max(0.0, pv_dc_power - dc_used)
+
     # PVWatts defines pdc0 as the DC input at which the inverter reaches its
     # AC nameplate (pac0 = eta_inv_nom * pdc0). BREOS exposes the AC rating,
     # so derive the matching pdc0 here. This is the single conversion path
@@ -97,6 +191,8 @@ def _dc_ac(
             ),
         ),
     )
+    if cable_k > 0.0:
+        ac_power = max(0.0, ac_power - cable_k * ac_power * ac_power)
     ac_power *= ac_output_scale
     clipping_loss_dc = max(0.0, pv_dc_power - dc_used)
     conversion_loss = max(0.0, dc_used - ac_power)
@@ -108,12 +204,21 @@ def _dc_for_ac(
     inverter_ac_power: float,
     inverter_efficiency: float,
     ac_output_scale: float,
+    curve_ac: np.ndarray,
+    curve_eff: np.ndarray,
+    curve_row: float,
+    cable_k: float,
 ) -> float:
-    """Scalar core of :func:`dc_power_for_ac_output`, compiled as-is by the Numba backend."""
+    """Scalar core of :func:`dc_power_for_ac_output`, compiled as-is by the Numba backend.
+
+    Takes the curve and cable of :func:`_dc_ac` and stays its inverse.
+    """
     ac_output_scale = min(1.0, max(0.0, ac_output_scale))
     if ac_output_scale <= 0.0:
         return 0.0
     ac_power_w = ac_power_w / ac_output_scale
+    if cable_k > 0.0:
+        ac_power_w = _cable_gross(max(0.0, ac_power_w), cable_k)
     ac_target = max(0.0, min(ac_power_w, max(0.0, inverter_ac_power)))
     inverter_ac_power = max(0.0, inverter_ac_power)
     inverter_efficiency = min(1.0, max(0.0, inverter_efficiency))
@@ -121,6 +226,12 @@ def _dc_for_ac(
         return 0.0
     if not math.isfinite(inverter_ac_power):
         return ac_target / inverter_efficiency
+
+    if curve_ac.shape[0] > 0:
+        upper = _curve_dc(inverter_ac_power, inverter_ac_power, curve_ac, curve_eff, curve_row)
+        if ac_target >= inverter_ac_power:
+            return upper
+        return min(upper, max(ac_target, _curve_dc(ac_target, inverter_ac_power, curve_ac, curve_eff, curve_row)))
 
     upper = inverter_ac_power / inverter_efficiency
     if ac_target >= inverter_ac_power:
@@ -502,6 +613,10 @@ def _combined_conversion(
     inv_eff: float,
     ac_output_scale: float,
     pow_two: float,
+    curve_ac: np.ndarray,
+    curve_eff: np.ndarray,
+    curve_row: float,
+    cable_k: float,
 ) -> Tuple[float, float, float]:
     """Convert PV and battery DC at one shared inverter operating point.
 
@@ -509,7 +624,9 @@ def _combined_conversion(
     in proportion to each source's share of the DC input.
     """
     total_dc = pv_dc + battery_dc
-    ac_power, conversion_loss, _clipping_dc = _dc_ac(total_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two)
+    ac_power, conversion_loss, _clipping_dc = _dc_ac(
+        total_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two, curve_ac, curve_eff, curve_row, cable_k
+    )
     if total_dc <= 0.0:
         return 0.0, 0.0, 0.0
     battery_ac = ac_power * battery_dc / total_dc
@@ -537,6 +654,10 @@ def _dispatch_dc_step(
     grid_target_energy: float,
     grid_eff: float,
     grid_import_cap_wh: float,
+    curve_ac: np.ndarray,
+    curve_eff: np.ndarray,
+    curve_row: float,
+    cable_k: float,
 ) -> Tuple[
     float, float, float, float, float, float, float, float, float, float, float, float, float, float, float, float
 ]:
@@ -574,16 +695,26 @@ def _dispatch_dc_step(
     grid_dc = 0.0
     hold_target = discharge_allowed and not math.isnan(grid_target_energy) and discharge_floor >= grid_target_energy
 
-    pv_ac_max, pv_conversion_loss, pv_clipping_dc = _dc_ac(pv_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two)
+    pv_ac_max, pv_conversion_loss, pv_clipping_dc = _dc_ac(
+        pv_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two, curve_ac, curve_eff, curve_row, cable_k
+    )
 
     if pv_ac_max >= load:
         pv_ac_to_load = load
-        dc_to_load = _dc_for_ac(load, inv_cap_ac_wh, inv_eff, ac_output_scale)
+        dc_to_load = _dc_for_ac(load, inv_cap_ac_wh, inv_eff, ac_output_scale, curve_ac, curve_eff, curve_row, cable_k)
         surplus_dc = max(0.0, pv_dc - dc_to_load)
         battery_energy, drawn = _charge(surplus_dc, battery_energy, emax, eff_charge, cap_charge_in_wh, cap_stored_wh)
         remaining_dc = surplus_dc - drawn
         direct_ac, direct_conversion_loss, direct_clipping_dc = _dc_ac(
-            dc_to_load + remaining_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two
+            dc_to_load + remaining_dc,
+            inv_cap_ac_wh,
+            inv_eff,
+            ac_output_scale,
+            pow_two,
+            curve_ac,
+            curve_eff,
+            curve_row,
+            cable_k,
         )
         pv_ac_export = max(0.0, direct_ac - load)
         dc_export = max(0.0, dc_to_load + remaining_dc - direct_clipping_dc - dc_to_load)
@@ -609,10 +740,16 @@ def _dispatch_dc_step(
             available = max(0.0, battery_energy - discharge_floor)
             # AC correction is applied after the inverter curve and nameplate
             # limit, so the reachable AC ceiling is the scaled nameplate, which
-            # the (0, 1] bound keeps at or below the nameplate itself.
-            target_total_ac = min(load, inv_cap_ac_wh * ac_output_scale)
+            # the (0, 1] bound keeps at or below the nameplate itself, less
+            # what an AC cable takes at it.
+            ceiling_ac = inv_cap_ac_wh
+            if cable_k > 0.0:
+                ceiling_ac = max(0.0, ceiling_ac - cable_k * ceiling_ac * ceiling_ac)
+            target_total_ac = min(load, ceiling_ac * ac_output_scale)
             if discharge_allowed and available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
-                total_dc_target = _dc_for_ac(target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale)
+                total_dc_target = _dc_for_ac(
+                    target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale, curve_ac, curve_eff, curve_row, cable_k
+                )
                 battery_dc = min(
                     available * eff_discharge,
                     max(0.0, total_dc_target - pv_dc),
@@ -625,7 +762,16 @@ def _dispatch_dc_step(
                 # independent part-load curve.
                 if math.isfinite(cap_discharge_ac_wh):
                     unconstrained_battery_ac = _combined_conversion(
-                        pv_dc, battery_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two
+                        pv_dc,
+                        battery_dc,
+                        inv_cap_ac_wh,
+                        inv_eff,
+                        ac_output_scale,
+                        pow_two,
+                        curve_ac,
+                        curve_eff,
+                        curve_row,
+                        cable_k,
                     )[1]
                     if unconstrained_battery_ac > cap_discharge_ac_wh:
                         lower = 0.0
@@ -633,7 +779,16 @@ def _dispatch_dc_step(
                         for _iteration in range(40):
                             midpoint = (lower + upper) / 2.0
                             midpoint_battery_ac = _combined_conversion(
-                                pv_dc, midpoint, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two
+                                pv_dc,
+                                midpoint,
+                                inv_cap_ac_wh,
+                                inv_eff,
+                                ac_output_scale,
+                                pow_two,
+                                curve_ac,
+                                curve_eff,
+                                curve_row,
+                                cable_k,
                             )[1]
                             if midpoint_battery_ac < cap_discharge_ac_wh:
                                 lower = midpoint
@@ -642,7 +797,16 @@ def _dispatch_dc_step(
                         battery_dc = upper
 
                 pv_delivered_ac, delivered_ac, total_inverter_loss = _combined_conversion(
-                    pv_dc, battery_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two
+                    pv_dc,
+                    battery_dc,
+                    inv_cap_ac_wh,
+                    inv_eff,
+                    ac_output_scale,
+                    pow_two,
+                    curve_ac,
+                    curve_eff,
+                    curve_row,
+                    cable_k,
                 )
                 draw = battery_dc / eff_discharge
                 if hold_target:
@@ -742,6 +906,11 @@ def _dispatch_day(
     grid_target_fraction: np.ndarray,
     grid_eff: float,
     grid_import_cap_wh: float,
+    curve_ac: np.ndarray,
+    curve_eff: np.ndarray,
+    curve_row: float,
+    ac_derate: np.ndarray,
+    cable_k: float,
 ) -> None:
     """Dispatch timesteps ``[lo, hi)`` at fixed health, writing rows of *matrix*.
 
@@ -754,6 +923,11 @@ def _dispatch_day(
     are the per-step instruction arrays (ADR 0002), indexed like the inputs.
     A fraction is of each step's usable window, ``emin + f * (emax - emin)``,
     so the energy it names moves with temperature and health (A7).
+
+    ``curve_ac``, ``curve_eff`` and ``cable_k`` are the inverter's conversion
+    (:func:`_dc_ac`), with ``curve_row`` the operating voltage's position among
+    the curve's rows. ``ac_derate`` is each step's AC rating as a fraction of
+    ``inv_cap_ac_wh``, indexed like the inputs.
 
     Nothing is returned: the state the next window and the day-close
     replacement path need is the final step's row of *matrix*.
@@ -845,7 +1019,7 @@ def _dispatch_day(
             inv_eff,
             cap_charge_in_wh,
             cap_discharge_ac_wh,
-            inv_cap_ac_wh,
+            inv_cap_ac_wh * ac_derate[i],
             ac_output_scale,
             cap_stored_wh,
             pow_two,
@@ -854,6 +1028,10 @@ def _dispatch_day(
             grid_target_energy,
             grid_eff,
             grid_import_cap_wh,
+            curve_ac,
+            curve_eff,
+            curve_row,
+            cable_k,
         )
         if battery_charge_input > 0.0 and battery_discharge_dc > 0.0:
             raise ValueError("a dispatch step both charged and discharged the battery")
@@ -970,6 +1148,7 @@ def _day_arguments(
     cap_discharge_wh: float,
     cap_stored_wh: float = math.inf,
     instructions: Optional["DispatchInstructions"] = None,
+    ac_derate: Optional[np.ndarray] = None,
 ) -> Tuple[Any, ...]:
     """Pack one day's state into the positional arguments of :func:`_dispatch_day`.
 
@@ -982,9 +1161,17 @@ def _day_arguments(
     loop indexes it like the inputs. None means greedy dispatch; a caller
     that packs many days passes one no-op set rather than building one per
     day.
+
+    ``ac_derate`` is the inverter's AC rating per step as a fraction of
+    ``cap_wh``, over the whole run like ``instructions``; None is the full
+    rating. ``battery_config.inverter_conversion`` supplies the efficiency curve
+    and AC cable.
     """
     if instructions is None:
         instructions = DispatchInstructions.noop(len(pv_dc_vals))
+    if ac_derate is None:
+        ac_derate = np.ones(len(pv_dc_vals))
+    curve_ac, curve_eff, curve_row, cable_k = battery_config.conversion.kernel_arguments(hours_per_step)
     return (
         out.matrix,
         pv_dc_vals,
@@ -1016,6 +1203,11 @@ def _day_arguments(
         instructions.grid_target_fraction,
         float(instructions.grid_charge_efficiency),
         float(instructions.grid_import_limit_w * hours_per_step),
+        curve_ac,
+        curve_eff,
+        float(curve_row),
+        ac_derate,
+        float(cable_k),
     )
 
 

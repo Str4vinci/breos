@@ -54,6 +54,103 @@ class MpptSpec:
 
 
 @dataclass(frozen=True)
+class EfficiencyCurve:
+    """An inverter's conversion efficiency against its AC output, at one to three DC voltages.
+
+    ``output_fraction`` holds the AC output points as fractions of the AC
+    nameplate, increasing, such as the CEC points 0.1, 0.2, 0.3, 0.5, 0.75
+    and 1. ``efficiency`` holds one row of efficiencies, fractions in
+    (0, 1], per DC voltage in ``voltages_v``, lowest voltage first; a single
+    row needs no voltage. Efficiency is linear in output between the points.
+    This is the shape of the CEC and OND test data, so an importer can fill it.
+    """
+
+    output_fraction: tuple[float, ...]
+    efficiency: tuple[tuple[float, ...], ...]
+    voltages_v: tuple[float, ...] | None = None
+
+    def __post_init__(self) -> None:
+        fractions = _float_tuple("output_fraction", self.output_fraction)
+        if not fractions or any(f <= 0 for f in fractions):
+            raise ValueError("output_fraction must hold at least one fraction above 0")
+        if any(b <= a for a, b in zip(fractions, fractions[1:], strict=False)):
+            raise ValueError("output_fraction must increase")
+        if not isinstance(self.efficiency, (list, tuple)) or not self.efficiency:
+            raise ValueError("efficiency must hold at least one row")
+        rows = tuple(_float_tuple("efficiency", row) for row in self.efficiency)
+        for row in rows:
+            if len(row) != len(fractions):
+                raise ValueError("each efficiency row needs one value per output_fraction")
+            if any(not 0 < e <= 1 for e in row):
+                raise ValueError("efficiency values must be in (0, 1]")
+            # The DC input of each point must rise with its output, or the
+            # curve would map one DC input to two outputs.
+            dc = [f / e for f, e in zip(fractions, row, strict=False)]
+            if any(b <= a for a, b in zip(dc, dc[1:], strict=False)):
+                raise ValueError("efficiency rises too steeply: each point's DC input must exceed the previous one's")
+        voltages = None if self.voltages_v is None else _float_tuple("voltages_v", self.voltages_v)
+        if voltages is None:
+            if len(rows) != 1:
+                raise ValueError("give voltages_v, one per efficiency row, when there are several rows")
+        else:
+            if len(voltages) != len(rows):
+                raise ValueError("give one voltage in voltages_v per efficiency row")
+            if any(v <= 0 for v in voltages) or any(b <= a for a, b in zip(voltages, voltages[1:], strict=False)):
+                raise ValueError("voltages_v must be positive and increase")
+        if len(rows) > 3:
+            raise ValueError("efficiency takes one to three voltage rows")
+        object.__setattr__(self, "output_fraction", fractions)
+        object.__setattr__(self, "efficiency", rows)
+        object.__setattr__(self, "voltages_v", voltages)
+
+    def row_position(self, voltage_v: float) -> float:
+        """The position of DC voltage ``voltage_v`` among the rows, for interpolating between them."""
+        if self.voltages_v is None or len(self.voltages_v) == 1:
+            return 0.0
+        voltages = self.voltages_v
+        if voltage_v <= voltages[0]:
+            return 0.0
+        for index in range(len(voltages) - 1):
+            if voltage_v < voltages[index + 1]:
+                return index + (voltage_v - voltages[index]) / (voltages[index + 1] - voltages[index])
+        return float(len(voltages) - 1)
+
+
+@dataclass(frozen=True)
+class TemperatureDerating:
+    """The AC output an inverter allows at each ambient temperature.
+
+    ``max_output_fraction`` is the allowed AC output as a fraction of the
+    nameplate at each ambient in ``ambient_temp_c`` (°C, increasing), linear
+    between the points and held beyond the ends.
+    """
+
+    ambient_temp_c: tuple[float, ...]
+    max_output_fraction: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        temps = _float_tuple("ambient_temp_c", self.ambient_temp_c)
+        fractions = _float_tuple("max_output_fraction", self.max_output_fraction)
+        if not temps or len(temps) != len(fractions):
+            raise ValueError("give one max_output_fraction per ambient_temp_c, at least one")
+        if any(b <= a for a, b in zip(temps, temps[1:], strict=False)):
+            raise ValueError("ambient_temp_c must increase")
+        if any(not 0 <= f <= 1 for f in fractions):
+            raise ValueError("max_output_fraction values must be in [0, 1]")
+        object.__setattr__(self, "ambient_temp_c", temps)
+        object.__setattr__(self, "max_output_fraction", fractions)
+
+
+def _float_tuple(name: str, values: object) -> tuple[float, ...]:
+    if not isinstance(values, (list, tuple)):
+        raise ValueError(f"{name} must be a sequence of numbers")
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
+            raise ValueError(f"{name} must hold finite numbers")
+    return tuple(float(value) for value in values)
+
+
+@dataclass(frozen=True)
 class InverterSpec:
     """A specified inverter, with unknown datasheet values left unset.
 
@@ -71,8 +168,11 @@ class InverterSpec:
     short-circuit current the inverter takes over all its inputs, and
     ``max_usable_dc_power_w`` the DC power it converts over all its inputs;
     like those two powers, they are published by some datasheets only and
-    are not reported missing when unset. No prices, product identities,
-    certifications or sizing presets live here.
+    are not reported missing when unset. ``efficiency_curve`` replaces the
+    single ``inverter_efficiency`` with the measured curve, and
+    ``temperature_derating`` lowers the AC rating in hot ambients; both accept
+    mappings of their fields. No prices, product identities, certifications or
+    sizing presets live here.
     """
 
     nominal_power_w: float
@@ -88,9 +188,17 @@ class InverterSpec:
     recommended_dc_power_w: float | None = None
     max_short_circuit_current_a: float | None = None
     max_usable_dc_power_w: float | None = None
+    efficiency_curve: EfficiencyCurve | None = None
+    temperature_derating: TemperatureDerating | None = None
 
     def __post_init__(self) -> None:
         _positive("nominal_power_w", self.nominal_power_w)
+        for name, kind in (("efficiency_curve", EfficiencyCurve), ("temperature_derating", TemperatureDerating)):
+            value = getattr(self, name)
+            if isinstance(value, Mapping):
+                object.__setattr__(self, name, kind(**value))
+            elif value is not None and not isinstance(value, kind):
+                raise ValueError(f"{name} must be a {kind.__name__} or a mapping of its fields")
         for name in ("inverter_efficiency", "isc_comparison_factor"):
             value = getattr(self, name)
             if value is not None:

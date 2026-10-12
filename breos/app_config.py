@@ -51,7 +51,7 @@ from breos.electrical import (
 from breos.emissions import EmissionsParams
 from breos.equipment import InverterSpec, MpptSpec
 from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
-from breos.inverter import inverter_ac_capacity_w
+from breos.inverter import AcCable, InverterConversion, inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
 from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
@@ -705,6 +705,14 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         ),
         summary="inverter.electrical_environment",
     ),
+    "ac_cable": AppConfigField(
+        default=None,
+        doc=(
+            "The AC cable from the inverter to the meter, whose I²R loss the dispatch takes from the inverter's "
+            "output; see [`[ac_cable]`](#ac_cable) and [AC cable](configuration.md#ac-cable)"
+        ),
+        summary="inverter.ac_cable",
+    ),
     "electrical_fidelity": AppConfigField(
         default="aggregate",
         normalizer=_lower,
@@ -1251,6 +1259,11 @@ class ResolvedAppConfig:
     # The specified inverters, strings and site with their check, or None
     # without a string topology.
     electrical: ElectricalSetup | None = None
+    # The configured [ac_cable], or None.
+    ac_cable: AcCable | None = None
+    # The inverter's efficiency curve and AC cable as the dispatch runs them,
+    # or None for the PVWatts curve and no cable.
+    inverter_conversion: InverterConversion | None = None
 
 
 def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -1424,6 +1437,16 @@ INVERTER_TABLE = TableSpec(
         "max_usable_dc_power_w": (
             "DC power the inverter converts over all inputs (W), or `inf` for none; string-level energy applies it"
         ),
+        "efficiency_curve": (
+            "Measured efficiency against AC output, replacing the single efficiency: `output_fraction` (AC "
+            "output over the nameplate, increasing), `efficiency` (one row per DC voltage) and `voltages_v` "
+            "(one per row, increasing; optional with one row). See "
+            "[Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
+        ),
+        "temperature_derating": (
+            "Allowed AC output against ambient: `ambient_temp_c` (°C, increasing) and `max_output_fraction` "
+            "(of the nameplate). See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
+        ),
     },
 )
 
@@ -1479,6 +1502,10 @@ ELECTRICAL_ENVIRONMENT_TABLE = TableSpec(
             "Coldest cell temperature while producing (°C), instead of `min_design_temp_c` plus the mounting rise"
         ),
         "bifacial_rear_irradiance_w_m2": "Rear irradiance behind 1000 W/m² front for a bifacial design Isc; 135",
+        "inverter_ambient_temp_c": (
+            "The inverter's ambient (°C) for its `temperature_derating`, for an inverter indoors; unstated, the "
+            "weather's air temperature applies"
+        ),
         "conductor_temp_c": (
             "Operating temperature (°C) of the string cables' conductors; "
             f"{DEFAULT_CONDUCTOR_TEMP_C:g} °C is assumed, and reported as assumed, when unstated"
@@ -1487,6 +1514,24 @@ ELECTRICAL_ENVIRONMENT_TABLE = TableSpec(
             "Module mounting, which sets the screening cell temperature rise: "
             + ", ".join(f'`"{key}"` ({rise:g} °C)' for key, rise in MOUNTING_TEMPERATURE_RISE_C.items())
             + '; `"tilted_rack"` by default'
+        ),
+    },
+)
+
+AC_CABLE_TABLE = TableSpec(
+    "ac_cable",
+    keys=dict.fromkeys((f.name for f in fields(AcCable)), anything),
+    required=frozenset({"length_m", "cross_section_mm2", "phases", "voltage_v"}),
+    docs={
+        "length_m": "One-way length (m) from the inverter to the meter",
+        "cross_section_mm2": "Cross-section (mm²) of each conductor",
+        "phases": "1 or 3",
+        "voltage_v": "Grid voltage (V): line to neutral for 1 phase, line to line for 3",
+        "conductor": '`"copper"` or `"aluminium"`; `"copper"` by default',
+        "power_factor": "The inverter's power factor; 1 by default",
+        "conductor_temp_c": (
+            "Operating temperature (°C) of the conductors; "
+            f"{DEFAULT_CONDUCTOR_TEMP_C:g} °C is assumed, and reported as assumed, when unstated"
         ),
     },
 )
@@ -2329,6 +2374,7 @@ NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
     "smart_charging": SMART_CHARGING_TABLE,
     "period": PERIOD_TABLE,
     "electrical_environment": ELECTRICAL_ENVIRONMENT_TABLE,
+    "ac_cable": AC_CABLE_TABLE,
 }
 
 
@@ -3118,6 +3164,9 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         ac_capacity_w = inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"])
 
     currency = run_currency(cfg["currency"], tariff.prices.currency if tariff is not None else None)
+    ac_cable = (
+        None if cfg["ac_cable"] is None else _built(AcCable, AC_CABLE_TABLE.validate(cfg["ac_cable"]), "ac_cable")
+    )
     return ResolvedAppConfig(
         cfg=cfg,
         lat=lat,
@@ -3142,7 +3191,43 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         reference_tariff=resolve_reference_tariff_spec(cfg, timezone, currency),
         currency=currency,
         electrical=electrical,
+        ac_cable=ac_cable,
+        inverter_conversion=_inverter_conversion(electrical, ac_cable, pv_arrays, pv_params),
     )
+
+
+def _inverter_conversion(
+    electrical: ElectricalSetup | None,
+    ac_cable: AcCable | None,
+    pv_arrays: list[dict[str, Any]],
+    pv_params: PVModuleParams,
+) -> InverterConversion | None:
+    """The efficiency curve and AC cable the dispatch runs, or None for the PVWatts curve and no cable.
+
+    Aggregate energy reads the curve at its middle row, the nominal voltage of
+    a three-row curve. String-level energy reads it at the strings' STC
+    maximum power voltage, weighted by their STC power.
+    """
+    inverters = electrical.inverters if electrical is not None else ()
+    if len(inverters) > 1 and any(i.efficiency_curve or i.temperature_derating for i in inverters):
+        raise ValueError(
+            "An inverter efficiency_curve or temperature_derating needs a single inverter in 'inverters'; "
+            f"{len(inverters)} are configured"
+        )
+    curve = inverters[0].efficiency_curve if inverters else None
+    if curve is None and ac_cable is None:
+        return None
+    voltage = None
+    if curve is not None and electrical is not None and electrical.fidelity == "string":
+        modules = [get_module(arr["module"]) for arr in pv_arrays] or [pv_params]
+        weighted = [
+            (s.modules * s.parallel * modules[s.array].Mpp, s.modules * modules[s.array].Vmp)
+            for s in electrical.strings
+            if s.array < len(modules)
+        ]
+        power = sum(p for p, _ in weighted)
+        voltage = sum(p * v for p, v in weighted) / power if power > 0 else None
+    return InverterConversion.build(curve, voltage_v=voltage, ac_cable=ac_cable)
 
 
 def _resolve_electrical(

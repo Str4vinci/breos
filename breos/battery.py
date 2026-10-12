@@ -83,7 +83,7 @@ from breos.degradation.protocol import (
 )
 from breos.dispatch_instructions import DispatchInstructions
 from breos.execution import is_pv_only_dispatch, single_thread_blas, validate_execution_backend
-from breos.inverter import _calculate_dc_ac_power_arrays
+from breos.inverter import InverterConversion, _calculate_dc_ac_power_arrays, as_inverter_conversion
 from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
 
 if TYPE_CHECKING:
@@ -223,6 +223,9 @@ class BatteryConfig:
     # an under-predicting model on the DC side instead. The default 1.0 is a
     # no-op and reproduces prior behaviour bit-for-bit.
     ac_output_scale: float = 1.0
+    # The inverter's measured efficiency curve and AC cable; None keeps the
+    # PVWatts part-load curve and no cable. A mapping of its fields is accepted.
+    inverter_conversion: Optional[InverterConversion] = None
 
     def __post_init__(self):
         def finite(name: str, value: float) -> float:
@@ -305,6 +308,8 @@ class BatteryConfig:
             if rate <= 0.0:
                 raise ValueError("power_limit_c_rate must be greater than 0")
             self.power_limit_c_rate = rate
+        if self.inverter_conversion is not None:
+            self.inverter_conversion = as_inverter_conversion(self.inverter_conversion)
         self.ac_output_scale = finite("ac_output_scale", self.ac_output_scale)
         if not 0.0 < self.ac_output_scale <= 1.0:
             raise ValueError(
@@ -313,6 +318,11 @@ class BatteryConfig:
                 "nameplate and more AC than the DC entering the inverter. Scale the DC series "
                 "instead to correct an under-predicting model"
             )
+
+    @property
+    def conversion(self) -> InverterConversion:
+        """The inverter conversion the kernels run, the default when none is configured."""
+        return as_inverter_conversion(self.inverter_conversion)
 
     @property
     def stored_power_limit_w(self) -> Optional[float]:
@@ -362,6 +372,18 @@ def _repeat_annual_load_across_year_edges(load_utc: pd.Series, rng_utc: pd.Datet
         return load_utc
     combined = pd.concat(parts)
     return combined[~combined.index.duplicated(keep="first")].sort_index()
+
+
+def _align_ac_derate(inverter_ac_derate: Optional[pd.Series], rng: pd.DatetimeIndex) -> Optional[np.ndarray]:
+    """Reindex the inverter's per-step AC rating fraction onto ``rng``; None when there is none."""
+    if inverter_ac_derate is None:
+        return None
+    values = inverter_ac_derate.reindex(rng)
+    _require_complete_series(values, "inverter_ac_derate")
+    array = values.values.astype(np.float64)
+    if (array < 0.0).any() or (array > 1.0).any():
+        raise ValueError("inverter_ac_derate must be a fraction in [0, 1] at every step")
+    return array
 
 
 def _align_input_arrays(
@@ -464,6 +486,8 @@ class AlignedSimulationInputs:
         temperature_c: Battery cell temperature (C) per step, 25 C if none was given.
         freq: The calendar's step, which converts power to energy. A run on
             these inputs takes it from here.
+        inverter_ac_derate: The inverter's AC rating per step as a fraction
+            of its nameplate, from temperature derating; None for none.
     """
 
     index: pd.DatetimeIndex
@@ -472,7 +496,8 @@ class AlignedSimulationInputs:
     temperature_c: np.ndarray
     freq: str
     pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
-    pv_chain_key: Optional[Tuple[int, int, int, float, float, float, float]] = None
+    pv_chain_key: Optional[Tuple[Any, ...]] = None
+    inverter_ac_derate: Optional[np.ndarray] = None
 
     def resolve_freq(self, freq: Optional[str]) -> str:
         """Return the inputs' own step, refusing a ``freq`` that disagrees with it."""
@@ -496,6 +521,7 @@ class AlignedSimulationInputs:
             freq=self.freq,
             pv_chain=self.pv_chain if pv_factor == 1.0 else None,
             pv_chain_key=self.pv_chain_key if pv_factor == 1.0 else None,
+            inverter_ac_derate=self.inverter_ac_derate,
         )
 
     def _pv_chain_cache_key(
@@ -504,7 +530,7 @@ class AlignedSimulationInputs:
         hours_per_step: float,
         *,
         pv_dc_w: Optional[np.ndarray] = None,
-    ) -> Tuple[int, int, int, float, float, float, float]:
+    ) -> Tuple[Any, ...]:
         """Identify the aligned PV values and inverter settings used by the memo."""
         cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
         pv_values = self.pv_dc_w if pv_dc_w is None else pv_dc_w
@@ -516,6 +542,8 @@ class AlignedSimulationInputs:
             float(cap_wh),
             float(battery_config.inverter_efficiency),
             float(battery_config.ac_output_scale),
+            battery_config.conversion.cache_key(),
+            None if self.inverter_ac_derate is None else id(self.inverter_ac_derate),
         )
 
     def with_pv_only_chain(
@@ -550,6 +578,9 @@ class AlignedSimulationInputs:
             cap_wh,
             battery_config.inverter_efficiency,
             battery_config.ac_output_scale,
+            conversion=battery_config.conversion,
+            ac_derate=self.inverter_ac_derate,
+            hours_per_step=hours_per_step,
         )
         for values in chain:
             values.setflags(write=False)
@@ -562,6 +593,7 @@ class AlignedSimulationInputs:
             freq=self.freq,
             pv_chain=chain,
             pv_chain_key=pv_chain_key,
+            inverter_ac_derate=self.inverter_ac_derate,
         )
 
 
@@ -573,6 +605,7 @@ def align_simulation_inputs(
     freq: str = "h",
     start_time: Optional[pd.Timestamp] = None,
     end_time: Optional[pd.Timestamp] = None,
+    inverter_ac_derate: Optional[pd.Series] = None,
 ) -> AlignedSimulationInputs:
     """Align simulation inputs once so many runs can share the result.
 
@@ -594,6 +627,7 @@ def align_simulation_inputs(
         load_w=load_values,
         temperature_c=temperature_values,
         freq=freq,
+        inverter_ac_derate=_align_ac_derate(inverter_ac_derate, rng),
     )
 
 
@@ -1205,6 +1239,7 @@ def _dispatch_no_battery_vectorized(
     cap_wh: float,
     pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
     steps: slice = slice(None),
+    ac_derate: Optional[np.ndarray] = None,
 ) -> None:
     """Fill a PV-only result buffer without entering the timestep loop.
 
@@ -1227,6 +1262,9 @@ def _dispatch_no_battery_vectorized(
             cap_wh,
             battery_config.inverter_efficiency,
             battery_config.ac_output_scale,
+            conversion=battery_config.conversion,
+            ac_derate=None if ac_derate is None else ac_derate[steps],
+            hours_per_step=hours_per_step,
         )
     else:
         # Memoized by the caller for these exact inputs. Same values, same
@@ -1753,6 +1791,7 @@ def _simulate_core(
     replay_seam: bool = False,
     instruction_planner: Optional[Callable[[ControllerBatteryState], DispatchInstructions]] = None,
     battery_retired: bool = False,
+    inverter_ac_derate: Optional[pd.Series] = None,
 ) -> "_CoreRun":
     """
     Simulate energy balance with battery storage and degradation.
@@ -1779,6 +1818,9 @@ def _simulate_core(
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
         temperature_series: Ambient (battery-location) temperature (C),
             defaults to 25C. The dispatch derives ``T_cell`` from it.
+        inverter_ac_derate: Optional inverter AC rating per step as a fraction
+            of ``battery_config.inverter_ac_capacity_w``, from temperature
+            derating. It must cover every step. None is the full rating.
         degradation_engine: Degradation backend. ``"native"`` preserves the
             Naumann/Lam model; ``"blast"`` uses the BLAST daily endpoint adapter.
         blast_model: BLAST model key when ``degradation_engine="blast"``.
@@ -1856,12 +1898,16 @@ def _simulate_core(
         # Create time range
         rng = pd.date_range(start=start_time, end=end_time, freq=freq)
         _pv_dc_vals, _load_vals, _temp_vals = _align_input_arrays(pv_dc, houseload, temperature_series, rng)
+        _derate_vals = _align_ac_derate(inverter_ac_derate, rng)
     else:
         # The caller has already built the calendar and reindexed onto it.
+        if inverter_ac_derate is not None:
+            raise ValueError("pass inverter_ac_derate to align_simulation_inputs with aligned inputs")
         rng = aligned.index
         _pv_dc_vals = aligned.pv_dc_w
         _load_vals = aligned.load_w
         _temp_vals = aligned.temperature_c
+        _derate_vals = aligned.inverter_ac_derate
 
     degradation_engine_key = _resolve_degradation_engine(
         degradation_engine,
@@ -2080,6 +2126,8 @@ def _simulate_core(
     # The dispatch reads instructions at global positions; a controller's
     # buffer is filled day by day ahead of each segment.
     dispatch_arrays: Any = instructions if session is None else session.instructions
+    # The kernels read a per-step rating fraction; one array of ones serves every day.
+    _full_rating = np.ones(n_steps) if _derate_vals is None else _derate_vals
 
     # PV-only balance is already vectorized with NumPy and does not need the
     # general per-step dispatcher. This common path is faster than either the
@@ -2094,6 +2142,7 @@ def _simulate_core(
             hours_per_step=hours_per_step,
             cap_wh=cap_wh,
             pv_chain=None if aligned is None else aligned.pv_chain,
+            ac_derate=_derate_vals,
         )
         return _CoreRun(
             buffers=out,
@@ -2156,6 +2205,7 @@ def _simulate_core(
                     hours_per_step=hours_per_step,
                     cap_wh=cap_wh,
                     steps=slice(segment_start, segment_end),
+                    ac_derate=_derate_vals,
                 )
                 out.columns["Battery_SOH"][segment_start:segment_end] = aging.soh_percent
             else:
@@ -2180,6 +2230,7 @@ def _simulate_core(
                     cap_discharge_wh=cap_discharge_wh,
                     cap_stored_wh=cap_stored_wh,
                     instructions=dispatch_arrays,
+                    ac_derate=_full_rating if _derate_vals is None else _derate_vals,
                 )
             if session is not None:
                 session.complete_segment(_pv_dc_vals, _load_vals, _temp_vals)
@@ -2266,6 +2317,7 @@ def simulate_energy_balance(
     execution_backend: str = "python",
     finalize_degradation: Optional[bool] = None,
     battery_retired: bool = False,
+    inverter_ac_derate: Optional[pd.Series] = None,
 ) -> (
     Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame]
     | Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, Dict[str, Any]]
@@ -2316,6 +2368,7 @@ def simulate_energy_balance(
         dispatch_instructions=dispatch_instructions,
         execution_backend=execution_backend,
         battery_retired=battery_retired,
+        inverter_ac_derate=inverter_ac_derate,
     )
     result = _detailed_frames(core)
     if not return_degradation_state:
@@ -2420,6 +2473,7 @@ def simulate_energy_balance_summary(
     finalize_degradation: Optional[bool] = None,
     weights: Optional[Mapping[str, Tuple[str, np.ndarray]]] = None,
     battery_retired: bool = False,
+    inverter_ac_derate: Optional[pd.Series] = None,
 ) -> SimulationSummary:
     """Simulate an energy balance and return annual totals and carry state.
 
@@ -2476,6 +2530,7 @@ def simulate_energy_balance_summary(
         summary_only=True,
         aligned=aligned,
         battery_retired=battery_retired,
+        inverter_ac_derate=inverter_ac_derate,
     )
     return _build_simulation_summary(core, return_degradation_state=return_degradation_state, weights=weights)
 

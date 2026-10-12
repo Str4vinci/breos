@@ -342,7 +342,15 @@ produced the gain.
 
 The `pvwatts` block contains fixed-loss percentages and attributed kWh. The
 `inverter` block reports AC rating plus separate direct-PV and
-battery-discharge conversion losses. `energy_balance.pv_dc` reconciles PV
+battery-discharge conversion losses. With an
+[efficiency curve](configuration.md#inverter-efficiency-curve) it adds
+`efficiency_curve`: the `row_position` the curve was read at and its
+`voltage_v`. With an [AC cable](configuration.md#ac-cable) it adds `ac_cable`:
+`conductor_resistance_ohm`, `conductor_temp_c`, `conductor_temp_stated`,
+`loss_kwh` (part of `conversion_loss_kwh`) and `loss_pct_at_nameplate`. With
+temperature derating it adds `temperature_derating`: the `ambient` source
+(`"weather"` or `"stated"`), the year's `min_output_fraction` and its
+`derated_hours`. `energy_balance.pv_dc` reconciles PV
 routing; `energy_balance.ac_delivery` reconciles delivered/exported AC; and
 `energy_balance.battery_stored_energy` reconciles beginning/end energy,
 charge, discharge, standby, capacity-window, and replacement boundary flows.

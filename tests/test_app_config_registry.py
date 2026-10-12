@@ -85,6 +85,7 @@ EXPECTED_DEFAULTS = {
     "inverters": None,
     "pv_strings": None,
     "electrical_environment": None,
+    "ac_cable": None,
     "electrical_fidelity": "aggregate",
 }
 

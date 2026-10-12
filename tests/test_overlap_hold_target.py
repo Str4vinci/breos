@@ -12,6 +12,7 @@ from breos._dispatch import _dispatch_dc_step, lfp_capacity_factor
 from breos.app import App
 from breos.battery import BatteryConfig, _simulate_detailed_run, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
+from breos.inverter import NO_CONVERSION
 from breos.smart_charging import FixedTargetDayController, SmartChargingSpec, period_layout, resolve_instructions
 from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 from tests.test_controller_seam import SPEC, _project, _Recording, _scenario, _steps_per_day
@@ -105,6 +106,7 @@ def _step(
         floor,
         0.95,
         1e9,
+        *NO_CONVERSION.kernel_arguments(1.0),
     )
 
 

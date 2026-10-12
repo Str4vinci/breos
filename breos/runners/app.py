@@ -6,6 +6,7 @@ import warnings
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
+import numpy as np
 import pandas as pd
 
 from breos._daily_persistence import DailyPersistenceController, daily_persistence_provenance
@@ -215,8 +216,64 @@ def _bifacial_summary(
     }
 
 
+def _inverter_model_fields(
+    resolved: ResolvedAppConfig,
+    first_year_results_df: pd.DataFrame,
+    freq: str,
+    inverter_ac_derate: pd.Series | None,
+) -> dict[str, Any]:
+    """The inverter block's records of an efficiency curve, an AC cable and temperature derating.
+
+    Each is present only when configured. The AC cable's loss is part of
+    ``conversion_loss_kwh``; ``ac_cable.loss_kwh`` reports it alone, from the
+    inverter's delivered AC output at each step.
+    """
+    fields: dict[str, Any] = {}
+    conversion = resolved.inverter_conversion
+    electrical = resolved.electrical
+    curve = electrical.inverters[0].efficiency_curve if electrical is not None and electrical.inverters else None
+    if conversion is not None and curve is not None:
+        position = conversion.curve_row
+        voltages = curve.voltages_v
+        fields["efficiency_curve"] = {
+            "row_position": _rounded(position, digits=4),
+            "voltage_v": None
+            if voltages is None
+            else _rounded(float(np.interp(position, np.arange(len(voltages)), voltages)), digits=1),
+        }
+    cable = resolved.ac_cable
+    if cable is not None:
+        k = cable.loss_coefficient_per_w
+        delivered = (
+            first_year_results_df["PV_AC_To_Load"]
+            + first_year_results_df["PV_AC_Export"]
+            + first_year_results_df["Battery_AC_To_Load"]
+        ).to_numpy(dtype=float)
+        root = np.sqrt(np.clip(1.0 - 4.0 * k * delivered, 0.0, None))
+        gross = 2.0 * delivered / (1.0 + root)
+        loss = pd.Series(gross - delivered, index=first_year_results_df.index)
+        fields["ac_cable"] = {
+            "conductor_resistance_ohm": _rounded(cable.conductor_resistance_ohm, digits=6),
+            "conductor_temp_c": cable.conductor_c,
+            "conductor_temp_stated": cable.conductor_temp_c is not None,
+            "loss_kwh": _rounded(_series_energy_kwh(loss, freq)),
+            "loss_pct_at_nameplate": _rounded(cable.loss_pct_at(resolved.inverter_ac_capacity_w or 0.0), digits=4),
+        }
+    if inverter_ac_derate is not None:
+        assert electrical is not None
+        fields["temperature_derating"] = {
+            "ambient": "weather" if electrical.environment.inverter_ambient_temp_c is None else "stated",
+            "min_output_fraction": _rounded(float(inverter_ac_derate.min()), digits=4),
+            "derated_hours": _rounded(float((inverter_ac_derate < 1.0).sum()) * get_hours_per_step(freq)),
+        }
+    return fields
+
+
 def _build_pv_loss_waterfall(
-    pv_breakdown: PVProductionBreakdown, first_year_results_df: pd.DataFrame, resolved: ResolvedAppConfig
+    pv_breakdown: PVProductionBreakdown,
+    first_year_results_df: pd.DataFrame,
+    resolved: ResolvedAppConfig,
+    inverter_ac_derate: pd.Series | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable year-1 PV loss waterfall, or the window's for a [period] run."""
     cfg = resolved.cfg
@@ -326,6 +383,7 @@ def _build_pv_loss_waterfall(
             "conversion_loss_kwh": _rounded(inverter_conversion),
             "direct_pv_conversion_loss_kwh": _rounded(direct_pv_conversion),
             "battery_discharge_conversion_loss_kwh": _rounded(battery_discharge_conversion),
+            **_inverter_model_fields(resolved, first_year_results_df, freq, inverter_ac_derate),
         },
         "dispatch": dispatch,
         "energy_balance": {
@@ -416,6 +474,7 @@ def run_app_simulation(
             houseload=inputs.load_data,
             temperature_series=inputs.temperature_series,
             extra=extra,
+            inverter_ac_derate=inputs.inverter_ac_derate,
         )
 
     # Every project year replays the start-year calendar (ADR 0002 A2), so the
@@ -523,7 +582,9 @@ def run_app_simulation(
         current_soh=current_soh,
         total_replacements=total_replacements,
         end_of_life_events=projection.end_of_life_events,
-        pv_loss_waterfall=_build_pv_loss_waterfall(inputs.pv_breakdown, first_year_results_df, resolved),
+        pv_loss_waterfall=_build_pv_loss_waterfall(
+            inputs.pv_breakdown, first_year_results_df, resolved, inputs.inverter_ac_derate
+        ),
         weather_metadata=dict(inputs.weather.attrs.get(WEATHER_METADATA_KEY, unknown_source_metadata("weather"))),
         load_profile_metadata=dict(
             inputs.load_data.attrs.get(LOAD_PROFILE_METADATA_KEY, unknown_source_metadata("load-profile"))

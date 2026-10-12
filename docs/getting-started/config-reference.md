@@ -16,6 +16,7 @@ is a `breos run` option that overrides the config file.
 
 | Key | Default | CLI flag | Description |
 |---|---|---|---|
+| `ac_cable` | `None` | — | The AC cable from the inverter to the meter, whose I²R loss the dispatch takes from the inverter's output; see [`[ac_cable]`](#ac_cable) and [AC cable](configuration.md#ac-cable) |
 | `albedo` | `None` | `--albedo` | Ground reflectance (0-1) for the ground-diffuse component; `None` uses pvlib's 0.25 default. Mutually exclusive with `surface_type` |
 | `annual_consumption_kwh` | *required* | `--annual-consumption-kwh` | Annual electricity demand (kWh) |
 | `axis_azimuth` | `None` | — | Tracker axis azimuth (degrees). `None` sets it from the latitude |
@@ -172,6 +173,7 @@ One entry per specified inverter, as `[[inverters]]` in TOML. `None` or an omitt
 | Key | Required | Description |
 |---|---|---|
 | `nominal_power_w` | yes | AC nameplate (W) |
+| `efficiency_curve` |  | Measured efficiency against AC output, replacing the single efficiency: `output_fraction` (AC output over the nameplate, increasing), `efficiency` (one row per DC voltage) and `voltages_v` (one per row, increasing; optional with one row). See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve) |
 | `inverter_efficiency` |  | Efficiency fraction. When every inverter sets it, their nameplate-weighted mean replaces `inverter_efficiency` |
 | `is_hybrid` |  | Whether the inverter also connects a battery; metadata |
 | `isc_comparison_factor` |  | Multiplier the manufacturer applies to the array's STC Isc before comparing it with an input's short-circuit rating, at least 1; 1 where Isc is compared as it is. Unset is reported as missing |
@@ -184,6 +186,7 @@ One entry per specified inverter, as `[[inverters]]` in TOML. `None` or an omitt
 | `mppts` |  | One table per MPPT input, in datasheet order; see [`mppts`](#mppts) |
 | `recommended_dc_power_w` |  | Recommended PV generator power (W), or `inf` for none |
 | `startup_voltage_v` |  | Start-up voltage (V), or 0 for none |
+| `temperature_derating` |  | Allowed AC output against ambient: `ambient_temp_c` (°C, increasing) and `max_output_fraction` (of the nameplate). See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve) |
 
 ## mppts
 
@@ -226,7 +229,22 @@ Design temperatures for the string check, as `[electrical_environment]` in TOML.
 | `cold_operating_cell_temp_c` |  | Coldest cell temperature while producing (°C), instead of `min_design_temp_c` plus the mounting rise |
 | `conductor_temp_c` |  | Operating temperature (°C) of the string cables' conductors; 50 °C is assumed, and reported as assumed, when unstated |
 | `hot_cell_temp_c` |  | Hottest cell temperature (°C), instead of `max_ambient_temp_c` plus the mounting rise |
+| `inverter_ambient_temp_c` |  | The inverter's ambient (°C) for its `temperature_derating`, for an inverter indoors; unstated, the weather's air temperature applies |
 | `mounting` |  | Module mounting, which sets the screening cell temperature rise: `"flush"` (30 °C), `"tilted_rack"` (25 °C), `"ground_mount"` (20 °C); `"tilted_rack"` by default |
+
+## ac_cable
+
+The cable from the inverter to the meter, as `[ac_cable]` in TOML; see [AC cable](configuration.md#ac-cable).
+
+| Key | Required | Description |
+|---|---|---|
+| `cross_section_mm2` | yes | Cross-section (mm²) of each conductor |
+| `length_m` | yes | One-way length (m) from the inverter to the meter |
+| `phases` | yes | 1 or 3 |
+| `voltage_v` | yes | Grid voltage (V): line to neutral for 1 phase, line to line for 3 |
+| `conductor` |  | `"copper"` or `"aluminium"`; `"copper"` by default |
+| `conductor_temp_c` |  | Operating temperature (°C) of the conductors; 50 °C is assumed, and reported as assumed, when unstated |
+| `power_factor` |  | The inverter's power factor; 1 by default |
 
 ## tariff
 

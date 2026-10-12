@@ -139,6 +139,9 @@ class ElectricalEnvironment:
     is the rear irradiance behind 1000 W/m² front for a bifacial design Isc.
     ``conductor_temp_c`` is the operating temperature of the strings' cables;
     unstated, :data:`DEFAULT_CONDUCTOR_TEMP_C` is assumed.
+    ``inverter_ambient_temp_c`` is the inverter's ambient for its temperature
+    derating, for an inverter indoors; unstated, the weather's air
+    temperature applies.
     """
 
     min_design_temp_c: float
@@ -148,11 +151,12 @@ class ElectricalEnvironment:
     cold_operating_cell_temp_c: float | None = None
     bifacial_rear_irradiance_w_m2: float = 1000.0 * BIFACIAL_REAR_IRRADIANCE_RATIO
     conductor_temp_c: float | None = None
+    inverter_ambient_temp_c: float | None = None
 
     def __post_init__(self) -> None:
         for name in ("min_design_temp_c", "max_ambient_temp_c", "bifacial_rear_irradiance_w_m2"):
             _finite(name, getattr(self, name))
-        for name in ("hot_cell_temp_c", "cold_operating_cell_temp_c", "conductor_temp_c"):
+        for name in ("hot_cell_temp_c", "cold_operating_cell_temp_c", "conductor_temp_c", "inverter_ambient_temp_c"):
             if getattr(self, name) is not None:
                 _finite(name, getattr(self, name))
         if self.min_design_temp_c >= self.max_ambient_temp_c:

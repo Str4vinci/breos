@@ -365,7 +365,9 @@ def test_montecarlo_values_each_trajectory_before_aggregation(monkeypatch):
         outputs.append((i, metrics, trajectory, None))
     assert len({output[1]["terminal_health_credit"] for output in outputs}) == 3
     # Feed the actual per-trajectory valuations through study assembly and its statistics.
-    monkeypatch.setattr("breos.montecarlo._precompute_year_caches", lambda *args, **kwargs: ({2025: pv}, {2025: temp}))
+    monkeypatch.setattr(
+        "breos.montecarlo._precompute_year_caches", lambda *args, **kwargs: ({2025: pv}, {2025: temp}, {2025: None})
+    )
     monkeypatch.setattr("breos.montecarlo._run_trajectory_index", lambda i: outputs[i])
     result = run_montecarlo(resolved.cfg, settings)
     for field in FIELDS:

@@ -714,6 +714,71 @@ of the [PV loss waterfall](interpreting-results.md#pv-loss-waterfall), and
 `electrical.dc_wiring` reports each string's resistance and the share of its
 STC power its cable dissipates.
 
+### Inverter efficiency curve
+
+By default the inverter converts DC to AC on the PVWatts part-load curve,
+scaled to `inverter_efficiency`. An inverter in `inverters` may carry its
+measured curve instead: efficiency against AC output, at one to three DC
+voltages. This is the shape of the CEC test data and of a PVsyst OND file.
+
+```toml
+[inverters.efficiency_curve]
+output_fraction = [0.1, 0.2, 0.3, 0.5, 0.75, 1.0]
+voltages_v = [250, 400, 550]
+efficiency = [
+    [0.950, 0.966, 0.971, 0.974, 0.973, 0.970],
+    [0.955, 0.970, 0.975, 0.978, 0.977, 0.975],
+    [0.948, 0.965, 0.971, 0.975, 0.975, 0.973],
+]
+
+[inverters.temperature_derating]
+ambient_temp_c = [40, 50, 60]
+max_output_fraction = [1.0, 0.85, 0.6]
+```
+
+The numbers above show the shape only; take yours from the manufacturer's
+datasheet or test report. `output_fraction` is the AC output over the
+nameplate, and each `efficiency` row belongs to the DC voltage in
+`voltages_v` at the same position. Efficiency is linear in output between the
+points. Below the first point the inverter loses that point's loss in watts,
+its self-consumption, and above the last it keeps that point's efficiency.
+Each segment is solved exactly in both directions, so dispatch sizes and
+delivers against the same curve. Aggregate energy reads the curve at its
+middle row, the nominal voltage of a three-row curve; string-level energy
+reads it at the strings' STC maximum power voltage, weighted by their STC
+power, between the rows. The curve applies to PV and battery discharge alike,
+as they share the inverter. `inverter_efficiency` is then not used for the
+conversion.
+
+`temperature_derating` lowers the AC rating in hot ambients: the allowed
+output as a fraction of the nameplate at each ambient, linear between the
+points and held beyond them. The ambient is the weather's air temperature,
+for an inverter outdoors, or `electrical_environment.inverter_ambient_temp_c`
+when you state it, for one indoors. DC above the derated rating is clipped,
+and a battery may still store it. Both keys need a single inverter.
+
+### AC cable
+
+`[ac_cable]` models the cable from the inverter to the meter. Its loss is I²R
+on the inverter's AC output, so it grows with the square of the output and
+applies to PV and battery discharge alike.
+
+```toml
+[ac_cable]
+length_m = 20
+cross_section_mm2 = 6
+phases = 3
+voltage_v = 400
+```
+
+`length_m` is one-way and `cross_section_mm2` each conductor's. With
+`phases = 1`, `voltage_v` is line to neutral and two conductors carry the
+current; with 3, it is line to line and three do. `conductor` is copper by
+default, `power_factor` 1, and `conductor_temp_c` 50 °C when unstated, which
+the result reports as assumed. Grid charging through the same cable is not
+charged. Without `[ac_cable]` the AC side has no cable loss beyond any
+`wiring` loss you keep (see [DC cables](#dc-cables)).
+
 ## Sky-diffusion (transposition) model
 
 To compute plane-of-array (POA) irradiance, BREOS transposes the horizontal

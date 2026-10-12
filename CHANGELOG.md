@@ -270,6 +270,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and its STC loss. `breos.electrical.string_limited_dc` now also returns the
   cable loss, and `string_cable_loss` gives the aggregate one. Without cable
   data every result is unchanged.
+- Inverters may carry a measured `efficiency_curve` (efficiency against AC
+  output at one to three DC voltages, the CEC and OND shape) and a
+  `temperature_derating` (allowed AC output against ambient), and `[ac_cable]`
+  models the inverter-to-meter cable's I²R loss. The dispatch kernels, both
+  backends, and the PV-only path apply them to PV and battery discharge alike.
+  `electrical_environment.inverter_ambient_temp_c` states an indoor
+  inverter's ambient; otherwise the weather's air temperature applies. The
+  result's `inverter` block reports each when configured. Without them every
+  result is unchanged.
 - `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
   only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
   coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.

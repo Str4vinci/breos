@@ -162,6 +162,7 @@ def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(
         lambda *args, **kwargs: (
             {2021: pd.Series([0.0], index=pd.DatetimeIndex(["2021-01-01"]))},
             {2021: pd.Series([25.0], index=pd.DatetimeIndex(["2021-01-01"]))},
+            {2021: None},
         ),
     )
     # A one-column frame, which is what load_consumption_profile really

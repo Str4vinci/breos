@@ -92,7 +92,7 @@ def test_montecarlo_records_the_offset_the_pv_model_applies(monkeypatch, spellin
             "battery_temperature": 25.0,
             "battery_indoor_model": {"enabled": False},
         },
-        type("Resolved", (), {"lat": 41.0, "lon": -8.0})(),
+        type("Resolved", (), {"lat": 41.0, "lon": -8.0, "electrical": None})(),
         MonteCarloSettings(weather_file="unused.csv"),
         runtime_weather=runtime_weather,
     )
