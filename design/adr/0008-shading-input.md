@@ -76,8 +76,14 @@ beam_shaded_fraction = [
 
 The table does not depend on the weather year or the resolution, so one table
 serves App, Monte Carlo over many weather years, and 15-minute and hourly runs
-alike. It is small: a 36 × 18 grid per array. Outside the grid, the nearest
-edge holds, and the sun below the horizon carries no beam.
+alike. Both axes take any increasing values: shade edges are sharp, so a layout
+tool may send steps of a few degrees where the shade changes and wider ones
+where it does not. BREOS interpolates bilinearly in azimuth and elevation.
+When the azimuth axis spans the full circle, it is periodic and the last
+column interpolates to the first across north; otherwise, and on the
+elevation axis, the nearest edge holds outside the grid. A full circle matters
+at higher latitudes, where the summer sun rises north of east. The sun below
+the horizon carries no beam.
 
 `sky_view_factor` is the share of the isotropic sky diffuse the array still
 sees, from 0 to 1. It is optional and 1 when omitted, since many layout tools
@@ -86,7 +92,10 @@ given. It scales the sky-diffuse component at every
 step. The ground-reflected component is not shaded; a layout tool that knows
 better can lower `albedo` for the array.
 
-### S3. The time-series form, for tools that compute hour by hour
+### S3. The time-series form, deferred until a tool needs it
+
+This form is recorded so a later tool can use it without a new contract; it
+is not built with the table unless the maintainer asks for it (question 1).
 
 A layout tool that has already simulated the year may give a **shading
 series** instead: one column per array of beam-shaded fractions, on the
@@ -118,7 +127,8 @@ modifier:
     poa_ground  := poa_ground
 
 `horizon_profile` still applies first: a sun behind the terrain is not
-shaded again. A bifacial array's rear irradiance is not shaded by this input.
+shaded again. A table or series given with `horizon_profile` must therefore
+hold near shading only; one that also includes the terrain counts it twice. A bifacial array's rear irradiance is not shaded by this input.
 The loss appears as a new `near_shading` stage of the PV loss waterfall,
 between transposition and the incidence-angle modifier.
 
@@ -139,7 +149,10 @@ At level 2, the shading table or series is given per module rather than per
 array: `pv_strings[i].module_shading` lists, for each module of each string
 in series order, a beam shading table or series column of its own, with an
 optional `substrings` count (3 for a typical 60- or 120-half-cell module) and
-a per-substring table. BREOS then builds each module's IV curve from its own
+one table per substring, in the module's own substring order. Bypass-diode
+substrings run along the module's long axis, so where they lie on the roof
+depends on portrait or landscape mounting; the layout tool maps them, and
+BREOS assumes no geometry. BREOS then builds each module's IV curve from its own
 irradiance, adds the bypass-diode branch per substring (pvlib's `bishop88`
 with reverse-bias breakdown), sums the curves in series at equal current and
 in parallel at equal voltage, and tracks the input's maximum power point
@@ -175,8 +188,10 @@ this record's contract does not change when MLPE arrives.
 
 1. **Table first, series second, or both at once?** The table serves Monte
    Carlo and both resolutions; the series is what a tool that simulates the
-   year already has. Recommended: the table first, the series in the same
-   release if a layout tool needs it.
+   year already has. Recommended: the table only, with the series (S3)
+   deferred until a layout tool asks for it. The layout tools consulted
+   compute on sun positions or clear-sky geometry and have no weather
+   timeline to fill a series with.
 2. **Grid convention.** PVsyst writes its table in azimuth from south and
    elevation; pvlib uses azimuth from north. Recommended: pvlib's convention,
    as `horizon_profile` already does, and an importer for PVsyst's table later.
