@@ -279,6 +279,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   inverter's ambient; otherwise the weather's air temperature applies. The
   result's `inverter` block reports each when configured. Without them every
   result is unchanged.
+- Monte Carlo reports P50, P75, P90 and P99 annual yield for one year and
+  the study horizon (`MonteCarloResult.yield_exceedance`, also in the
+  provenance and `--json`), from the weather years' variability and an
+  optional stated `model_uncertainty_pct` (`--model-uncertainty`), as PVsyst's
+  P50/P90 evaluation does. With it, each trajectory draws one persistent PV
+  yield factor (`pv_model_factor`), so the economics' quantiles include the
+  model uncertainty. The summary gains the `p10`, `p25`, `p75` and `p90`
+  quantiles. `breos.exceedance` computes the values. Without
+  `model_uncertainty_pct`, every trajectory is unchanged.
 - `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
   only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
   coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.

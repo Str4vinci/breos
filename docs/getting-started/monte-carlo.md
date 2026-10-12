@@ -70,6 +70,7 @@ target_year = 2025
 seed = 42
 collect_yearly = false
 n_procs = 1
+model_uncertainty_pct = 4.0
 ```
 
 `load_uncertainty` is the standard deviation of the annual demand multiplier,
@@ -77,6 +78,9 @@ which is normal around 1.0 by default. Set `load_distribution = "uniform"` to
 draw from `1 - load_uncertainty` to `1 + load_uncertainty` instead.
 `weather_start_year` and `weather_end_year` restrict which years are eligible
 for sampling when your file covers more history than you want to use.
+`model_uncertainty_pct` is the one-sigma uncertainty of the modelled yield;
+see [P50 and P90 yield](#p50-and-p90-yield). The 4 % above is an example, not
+a recommendation: take it from your data source and model validation.
 
 `target_year` is the study's calendar year. Every sampled weather year is
 restamped to it, and the demand profile and any tariff follow its calendar.
@@ -139,6 +143,39 @@ the runs that paid back.
 a payback median of 9.8 years means little if only 60% of runs pay back.
 The provenance file and the `--json` output are standard JSON, so a statistic
 with no defined value is written as `null`, never as `NaN` or `Infinity`.
+
+## P50 and P90 yield
+
+A P90 annual yield is the yield exceeded with 90 % probability: the 10th
+percentile of its distribution. Lenders read P50 and P90 as the expected and
+the conservative yield. With two or more weather years, the result's
+`yield_exceedance`, also in the provenance and the `--json` output, gives
+`P50_kwh`, `P75_kwh`, `P90_kwh` and `P99_kwh` for one year and for the mean
+over `years_per_run` years.
+
+The method is PVsyst's P50/P90 evaluation. Each weather year's yield is the
+system's first-year, undegraded AC output without a battery, so it measures
+the weather and the PV system alone. `P50_kwh` is their mean, and
+`variability_pct` their standard deviation over it. Model uncertainty, from
+the irradiance data, the transposition and PV models and the loss
+assumptions, is not in the weather, so you state it as `model_uncertainty_pct`
+(one sigma, in percent) or `--model-uncertainty`. Both are taken as normal and
+independent. Over N years the weather averages out by √N and the model
+uncertainty does not, since a biased model is biased every year:
+σ = √(variability² / N + model²), and P_x = P50 × (1 − z_x σ), with z = 1.2816
+for P90. Without `model_uncertainty_pct` the values cover weather variability
+alone, and `model_uncertainty_pct` is `null`; a bankable estimate needs it.
+
+With `model_uncertainty_pct`, each trajectory also draws one PV yield factor,
+normal around 1 with that sigma, and keeps it for every year, so the
+economics' quantiles carry the model uncertainty too. The factor is drawn from
+its own stream, so the weather years and load scales each run samples do not
+change. The runs CSV records it as `pv_model_factor`.
+
+The summary's `p*` keys are quantiles: `p10` is the value 10 % of runs fall
+below. The bankable P90 of a quantity that should be high, such as
+`npv_savings`, is therefore its `p10`; of one that should be low, such as
+`lcoe_per_kwh`, its `p90`.
 
 ## Fix the seed
 

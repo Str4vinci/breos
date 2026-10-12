@@ -643,6 +643,7 @@ def _montecarlo(args: argparse.Namespace) -> int:
         "collect_yearly": (args.collect_yearly, bool),
         "n_procs": (args.n_procs, int),
         "execution_backend": (args.execution_backend, None),
+        "model_uncertainty_pct": (args.model_uncertainty, float),
     }
     chosen: dict[str, Any] = {}
     for name, (cli_value, convert) in options.items():
@@ -682,6 +683,7 @@ def _montecarlo(args: argparse.Namespace) -> int:
         "yearly_csv_sha256": _sha256(yearly_path) if yearly_path is not None else None,
         # A statistic with no defined value is written as null.
         "summary": nonfinite_to_none(result.summary),
+        "yield_exceedance": result.yield_exceedance,
     }
     # The load profile's file and hash come from the run's provenance
     # (load_profile.file, load_profile.sha256); these keys repeat them for an
@@ -705,6 +707,7 @@ def _montecarlo(args: argparse.Namespace) -> int:
             "currency": result.provenance["currency"],
             "settings": settings.__dict__,
             "summary": nonfinite_to_none(result.summary),
+            "yield_exceedance": result.yield_exceedance,
             "available_years": result.available_years,
             "results_csv": str(out_path),
             "yearly_csv": str(yearly_path) if yearly_path is not None else None,
@@ -734,6 +737,20 @@ def _montecarlo(args: argparse.Namespace) -> int:
         print(
             f"{metric:<28}{runs:>12}{stats['mean']:>12.2f}{stats['p5']:>12.2f}{stats['p50']:>12.2f}{stats['p95']:>12.2f}"
         )
+    exceedance = result.yield_exceedance
+    if exceedance is not None:
+        model = exceedance["model_uncertainty_pct"]
+        basis = f"weather variability {exceedance['variability_pct']:.1f} %" + (
+            f" and model uncertainty {model:.1f} %" if model else ", no model uncertainty stated"
+        )
+        print(f"Annual AC yield exceeded with each probability ({basis}):")
+        print(f"{'horizon':<28}{'P50':>12}{'P75':>12}{'P90':>12}{'P99':>12}")
+        for horizon, values in exceedance["horizons"].items():
+            label = "1 year" if horizon == "1" else f"{horizon}-year mean"
+            print(
+                f"{label:<28}{values['P50_kwh']:>12.0f}{values['P75_kwh']:>12.0f}"
+                f"{values['P90_kwh']:>12.0f}{values['P99_kwh']:>12.0f}"
+            )
     payback = result.summary.get("payback_year")
     if payback is not None:
         print(
@@ -809,6 +826,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--load-uncertainty",
         type=float,
         help="Demand uncertainty: normal standard deviation or uniform half-width around 1.",
+    )
+    mc.add_argument(
+        "--model-uncertainty",
+        type=float,
+        help=(
+            "One-sigma uncertainty of the PV model's annual yield, in percent: irradiance data, transposition, "
+            "PV model and losses together. Adds it to the P50/P90 yield and to each trajectory's PV."
+        ),
     )
     mc.add_argument(
         "--load-distribution",

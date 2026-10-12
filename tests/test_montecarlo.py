@@ -1,5 +1,7 @@
 """Tests for the Monte Carlo runner (weather + demand resampling)."""
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -67,7 +69,7 @@ def test_montecarlo_worker_omits_uncollected_trajectory(monkeypatch):
     monkeypatch.setattr(
         montecarlo_module,
         "_simulate_trajectory",
-        lambda *args: ({"npv_savings": 1.0}, trajectory),
+        lambda *args, **kwargs: ({"npv_savings": 1.0}, trajectory),
     )
     montecarlo_module._initialize_worker({}, None, np.array([2021]), 1, settings, {}, {}, None, None, None)
 
@@ -670,3 +672,27 @@ def test_montecarlo_cli_labels_conditional_payback_statistics(monkeypatch, tmp_p
     payback_row = next(line for line in out.splitlines() if line.startswith("payback_year "))
     assert payback_row.split()[1] == "1/10"
     assert "Paid back within the horizon: 1 of 10 runs (10.0%)" in out
+
+
+def test_run_montecarlo_reports_yield_exceedance_and_keeps_its_draws(tmp_path, write_multiyear_weather):
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    base = MonteCarloSettings(weather_file=str(weather), n_runs=6, years_per_run=2, seed=11, collect_yearly=True)
+    plain = run_montecarlo(_base_config(), base)
+    record = plain.yield_exceedance
+    assert record["model_uncertainty_pct"] is None
+    assert set(record["horizons"]) == {"1", "2"}
+    one = record["horizons"]["1"]
+    # The fixture's weather years may repeat, so the variability can be 0.
+    assert one["P90_kwh"] <= one["P75_kwh"] <= one["P50_kwh"] == pytest.approx(record["p50_kwh"])
+    assert (plain.runs["pv_model_factor"] == 1.0).all()
+    assert {"p10", "p25", "p75", "p90"} <= set(plain.summary["npv_savings"])
+
+    uncertain = run_montecarlo(_base_config(), replace(base, model_uncertainty_pct=5.0))
+    two = uncertain.yield_exceedance["horizons"]["2"]
+    assert two["P90_kwh"] < two["P75_kwh"] < two["P50_kwh"]
+    assert two["P90_kwh"] < record["horizons"]["2"]["P90_kwh"]
+    # The model factor comes from its own stream: the weather and load draws are unchanged.
+    for column in ("Weather_Year", "Load_Scale"):
+        pd.testing.assert_series_equal(uncertain.yearly[column], plain.yearly[column])
+    assert (uncertain.runs["pv_model_factor"] != 1.0).all()
+    assert not uncertain.runs["npv_savings"].equals(plain.runs["npv_savings"])

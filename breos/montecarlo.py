@@ -43,9 +43,15 @@ from breos.app_inputs import (
     resample_hourly_weather,
     weather_input_frequency,
 )
-from breos.battery import LEDGER_SCHEMA_VERSION, AlignedSimulationInputs, align_simulation_inputs
+from breos.battery import (
+    LEDGER_SCHEMA_VERSION,
+    AlignedSimulationInputs,
+    align_simulation_inputs,
+    simulate_energy_balance_summary,
+)
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import find_payback_year, find_payback_year_interpolated, projection_rates_record
+from breos.exceedance import yield_exceedance
 from breos.execution import (
     aggregate_jit_cache_states,
     backend_provenance,
@@ -120,6 +126,11 @@ class MonteCarloSettings:
     # the App config's top-level ``execution_backend``, which itself defaults
     # to "python"; see :func:`run_montecarlo`.
     execution_backend: str | None = None
+    # One-sigma uncertainty of the PV model's annual yield, in percent: the
+    # irradiance data, transposition, PV model and loss assumptions together.
+    # Stated by the caller; None leaves it out. Each trajectory then draws one
+    # persistent yield factor, and the yield exceedance values include it.
+    model_uncertainty_pct: float | None = None
 
 
 @dataclass
@@ -132,6 +143,22 @@ class MonteCarloResult:
     available_years: list[int] = field(default_factory=list)
     yearly: pd.DataFrame | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
+    # P50/P75/P90/P99 annual yield over the weather years, for one year and
+    # the study horizon (breos.exceedance); None with fewer than two years.
+    yield_exceedance: dict[str, Any] | None = None
+
+
+def _sample_pv_model_factor(settings: MonteCarloSettings, run_idx: int) -> float:
+    """One trajectory's PV yield factor from the model uncertainty; 1 without one.
+
+    Drawn from the run's own child stream, ``SeedSequence(seed).spawn(n_runs)[run_idx].spawn(1)[0]``,
+    so stating an uncertainty leaves every weather year and load scale draw as it was.
+    """
+    sigma = settings.model_uncertainty_pct
+    if not sigma:
+        return 1.0
+    rng = np.random.default_rng(np.random.SeedSequence(settings.seed, spawn_key=(run_idx, 0)))
+    return max(0.0, 1.0 + float(rng.normal(0.0, sigma / 100.0)))
 
 
 def _sample_load_scale(
@@ -577,7 +604,9 @@ def _prepare_pv_chains(
     Returns ``None`` when the study is not shaped to benefit, in which case
     every run computes its own conversion exactly as before.
     """
-    if config_has_battery(cfg):
+    if config_has_battery(cfg) or settings.model_uncertainty_pct:
+        # A trajectory's model factor scales its PV, which a memoized
+        # conversion cannot follow.
         return None
     any_year = next(iter(aligned_by_year.values()), None)
     if any_year is None:
@@ -615,11 +644,14 @@ def _simulate_trajectory(
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
     reference_tariff: ResolvedTariff | None = None,
+    pv_model_factor: float = 1.0,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     """Run one Monte Carlo trajectory and return its summary metrics.
 
     A ``reference_tariff`` prices the trajectory's no-system household on its
     own sampled load, so the with- and without-system costs stay paired.
+    ``pv_model_factor`` scales the trajectory's PV in every year: a model
+    bias persists, unlike the weather.
     """
     degradation_rate = cfg["pv_degradation_rate"]
     has_battery = config_has_battery(cfg)
@@ -639,7 +671,9 @@ def _simulate_trajectory(
         # With a PV chain memoized for this pair the PV side is already
         # scaled, and scaling the load does not invalidate the chain.
         if pv_chains is None:
-            aligned = aligned_by_year[year].scaled(pv_factor=pv_degradation_factor, load_factor=load_scale)
+            aligned = aligned_by_year[year].scaled(
+                pv_factor=pv_degradation_factor * pv_model_factor, load_factor=load_scale
+            )
         else:
             aligned = pv_chains[(year, year_idx)].scaled(load_factor=load_scale)
         return ProjectionYear(
@@ -685,6 +719,7 @@ def _simulate_trajectory(
         "lifetime_grid_independence_pct": lifetime_gi,
         "total_replacements": int(total_replacements),
         "total_replacement_cost_t0_prices": float(total_replacement_cost),
+        "pv_model_factor": float(pv_model_factor),
         # The trajectory's first end-of-life crossing (ADR 0003 E11); NaN
         # and None without one.
         **first_end_of_life_metrics(projection.end_of_life_events),
@@ -709,6 +744,11 @@ def _simulate_trajectory(
 
 def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
     """Describe each metric across runs.
+
+    The ``p*`` keys are quantiles: ``p10`` is the value 10 % of runs fall
+    below. A bankable P90 of a quantity that should be high, such as
+    ``npv_savings``, is its ``p10``; of one that should be low, such as
+    ``lcoe_per_kwh``, its ``p90``.
 
     Each entry gives ``count``, the number of runs its statistics cover, out
     of ``n_runs``. Runs without a value are left out of the statistics. For
@@ -736,7 +776,11 @@ def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
                 "std": 0.0 if len(series) == 1 else float(series.std()),
                 "p5": float(series.quantile(0.05)),
                 "p2_5": float(series.quantile(0.025)),
+                "p10": float(series.quantile(0.10)),
+                "p25": float(series.quantile(0.25)),
                 "p50": float(series.quantile(0.50)),
+                "p75": float(series.quantile(0.75)),
+                "p90": float(series.quantile(0.90)),
                 "p95": float(series.quantile(0.95)),
                 "p97_5": float(series.quantile(0.975)),
                 "min": float(series.min()),
@@ -751,6 +795,30 @@ def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
 
 
 _WORKER_CONTEXT: tuple[Any, ...] | None = None
+
+
+def _yield_exceedance(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    aligned_by_year: dict[int, AlignedSimulationInputs],
+    settings: MonteCarloSettings,
+    years_per_run: int,
+) -> dict[str, Any] | None:
+    """P50/P75/P90/P99 annual AC yield over the weather years, for one year and ``years_per_run``.
+
+    Each weather year's yield is the system's first-year, undegraded AC output
+    without a battery, so it measures the weather and the PV system alone.
+    None with fewer than two weather years.
+    """
+    if len(aligned_by_year) < 2:
+        return None
+    battery_config = build_pv_only_battery_config(cfg, resolved)
+    yields = {
+        year: simulate_energy_balance_summary(aligned=aligned, battery_config=battery_config).total_pv_wh / 1000.0
+        for year, aligned in aligned_by_year.items()
+    }
+    result = yield_exceedance(yields, model_uncertainty_pct=settings.model_uncertainty_pct)
+    return result.as_dict(horizons=(1, years_per_run))
 
 
 def _resolve_study_tariff(
@@ -831,6 +899,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         tariff,
         instructions,
         reference_tariff,
+        pv_model_factor=_sample_pv_model_factor(settings, run_idx),
     )
     # None from a numba run means no compiled dispatch call was observed -- a
     # trajectory can legitimately never enter the kernel. Record that as
@@ -888,6 +957,10 @@ def run_montecarlo(
         raise ValueError("years_per_run must be at least 1")
     if not (math.isfinite(settings.load_uncertainty) and settings.load_uncertainty >= 0.0):
         raise ValueError("load_uncertainty must be a finite, non-negative number")
+    if settings.model_uncertainty_pct is not None and not (
+        math.isfinite(settings.model_uncertainty_pct) and settings.model_uncertainty_pct >= 0.0
+    ):
+        raise ValueError("model_uncertainty_pct must be a finite, non-negative number or None")
     # The load scale multiplies demand, so a negative bound would make demand negative.
     if not (math.isfinite(settings.min_load_scale) and settings.min_load_scale >= 0.0):
         raise ValueError(f"min_load_scale must be a finite, non-negative number, got {settings.min_load_scale}")
@@ -1010,12 +1083,14 @@ def run_montecarlo(
     # Plot labels read the currency from the frame.
     runs_df.attrs["currency"] = currency
     yearly_df = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else None
+    exceedance = _yield_exceedance(cfg, resolved, aligned_by_year, settings, years_per_run)
     return MonteCarloResult(
         runs=runs_df,
         summary=_summarize(runs_df),
         settings=settings,
         available_years=[int(y) for y in available_years],
         yearly=yearly_df,
+        yield_exceedance=exceedance,
         provenance={
             "breos_version": package_version(),
             "result_schema_version": RESULT_SCHEMA_VERSION,

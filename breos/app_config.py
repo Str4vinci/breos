@@ -1200,6 +1200,7 @@ MONTECARLO_CONFIG_KEYS: frozenset[str] = frozenset(
         "collect_yearly",
         "n_procs",
         "execution_backend",
+        "model_uncertainty_pct",
     }
 )
 
