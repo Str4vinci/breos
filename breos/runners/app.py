@@ -38,6 +38,8 @@ from breos.projection import (
     run_projection,
     value_projection,
 )
+from breos.pv.model_options import normalise_model_name
+from breos.pv.shading import CIRCUMSOLAR_MODELS, as_shading_table
 from breos.pv_modules import get_module
 from breos.smart_charging import (
     PLANNER_MODES,
@@ -269,6 +271,32 @@ def _inverter_model_fields(
     return fields
 
 
+def _near_shading_summary(resolved: ResolvedAppConfig, poa_dc: float, poa_shaded_dc: float) -> dict[str, Any] | None:
+    """The arrays' near-shading inputs and their loss, or None when no array has a table."""
+    tables = [as_shading_table(arr.get("shading")) for arr in resolved.pv_arrays or []]
+    if not any(table is not None for table in tables):
+        return None
+    cfg = resolved.cfg
+    arrays = []
+    for index, (arr, table) in enumerate(zip(resolved.pv_arrays or [], tables, strict=True)):
+        assert table is not None
+        transposition = normalise_model_name(arr.get("transposition_model", cfg["transposition_model"]))
+        arrays.append(
+            {
+                "array": index,
+                **table.as_dict(),
+                "circumsolar_shaded_with_beam": transposition in CIRCUMSOLAR_MODELS,
+            }
+        )
+    loss = poa_dc - poa_shaded_dc
+    return {
+        "loss_kwh": _rounded(loss),
+        "loss_pct_of_poa": _rounded(loss / poa_dc * 100.0 if poa_dc else 0.0),
+        "flat_shading_pct": float((cfg["pv_loss_overrides"] or {}).get("shading", 0.0)),
+        "arrays": arrays,
+    }
+
+
 def _build_pv_loss_waterfall(
     pv_breakdown: PVProductionBreakdown,
     first_year_results_df: pd.DataFrame,
@@ -321,7 +349,14 @@ def _build_pv_loss_waterfall(
     stages = [
         _waterfall_stage("horizontal_reference_dc", "Horizontal irradiance reference", horizontal_dc),
         _waterfall_stage("transposition", "Plane-of-array transposition", poa_dc, horizontal_dc),
-        _waterfall_stage("iam", "Front-side incidence-angle modifier", front_effective_dc, poa_dc),
+    ]
+    poa_shaded_dc = poa_dc
+    if pv_breakdown.poa_shaded_dc is not None:
+        # The arrays' near-shading tables.
+        poa_shaded_dc = _series_energy_kwh(pv_breakdown.poa_shaded_dc, freq)
+        stages.append(_waterfall_stage("near_shading", "Near shading", poa_shaded_dc, poa_dc))
+    stages += [
+        _waterfall_stage("iam", "Front-side incidence-angle modifier", front_effective_dc, poa_shaded_dc),
         _waterfall_stage("bifacial_rear_gain", "Bifacial rear gain", effective_dc, front_effective_dc),
         _waterfall_stage("temperature", "Cell temperature", module_dc, effective_dc),
         _waterfall_stage("pvwatts_static", "Static PVWatts losses", dc_after_static, module_dc),
@@ -371,6 +406,7 @@ def _build_pv_loss_waterfall(
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "stages": stages,
         "bifacial": _bifacial_summary(resolved, front_effective_dc, rear_gain_dc),
+        "near_shading": _near_shading_summary(resolved, poa_dc, poa_shaded_dc),
         "pvwatts": {
             "components_pct": {name: float(value) for name, value in pv_breakdown.pvwatts_components_pct.items()},
             "components_kwh": pvwatts_components,

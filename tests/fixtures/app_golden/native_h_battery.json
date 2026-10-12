@@ -439,6 +439,7 @@
   "pv_loss_waterfall.inverter.direct_pv_conversion_loss_kwh": 155.69,
   "pv_loss_waterfall.inverter.efficiency_pct": 96.0,
   "pv_loss_waterfall.ledger_schema_version": "3.0",
+  "pv_loss_waterfall.near_shading": null,
   "pv_loss_waterfall.pvwatts.combined_kwh": 661.93,
   "pv_loss_waterfall.pvwatts.combined_pct": 14.0757,
   "pv_loss_waterfall.pvwatts.components_kwh.availability": 124.97,
@@ -531,7 +532,7 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "0a05ec48f18f3f1ef4290a78fd8a75cdc171ddbd",
+  "breos_commit": "e031d34812b840e63f96e3460bcd6231b0579a08",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",

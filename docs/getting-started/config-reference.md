@@ -160,6 +160,7 @@ One entry per array, as `[[pv_arrays]]` in TOML. `modules` is required; an array
 | `mounting` |  | String-check mounting for this array; inherits `electrical_environment.mounting` |
 | `pvrow_height` |  | `pvrow_height` for this array; inherits the top-level value |
 | `pvrow_pitch` |  | `pvrow_pitch` for this array; inherits the top-level value |
+| `shading` |  | Near-shading table: `azimuth_deg`, `elevation_deg`, `beam_shaded_fraction` (one row per elevation) and optional `sky_view_factor`; every array or none |
 | `surface_type` |  | `surface_type` for this array; inherits the top-level value |
 | `temperature_model` |  | `temperature_model` for this array; inherits the top-level value |
 | `tilt` |  | `tilt` for this array; inherits the top-level value |

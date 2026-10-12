@@ -56,6 +56,7 @@ from breos.pv.model_options import (
 from breos.pv.model_options import (
     TRANSPOSITION_MODELS as TRANSPOSITION_MODELS,
 )
+from breos.pv.shading import CIRCUMSOLAR_MODELS, ShadingTable, as_shading_table
 from breos.pv.temperature import calculate_cell_temperature
 from breos.pv_modules import PVModuleParams, get_module
 from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column
@@ -212,6 +213,9 @@ class PVProductionBreakdown:
     # DC lost in the strings' cables when the topology gives them, already
     # taken out of ``dc_after_losses``; None otherwise.
     dc_wiring_loss: Optional[pd.Series] = None
+    # The plane-of-array stage after near shading when the array has a
+    # shading table; None otherwise. ``poa_global_dc`` stays unshaded.
+    poa_shaded_dc: Optional[pd.Series] = None
 
 
 @dataclass(frozen=True)
@@ -224,6 +228,10 @@ class _IrradianceModelResult:
     rear_effective_irradiance: np.ndarray
     effective_irradiance: np.ndarray
     temp_cell: np.ndarray
+    # The plane-of-array and effective irradiance before near shading; None
+    # without it.
+    poa_global_unshaded: Optional[np.ndarray] = None
+    effective_irradiance_unshaded: Optional[np.ndarray] = None
 
 
 def _prepare_solarpos_and_weather(
@@ -279,6 +287,7 @@ def _compute_irradiance_and_cell_temp_detail(
     surface_azimuth,
     pv_params: PVModuleParams,
     model_options: PVModelOptions,
+    shading: Optional[ShadingTable] = None,
 ) -> _IrradianceModelResult:
     """Compute GHI, POA, effective irradiance, and cell temperature.
 
@@ -296,6 +305,13 @@ def _compute_irradiance_and_cell_temp_detail(
     bifaciality-weighted rear irradiance, so rear gain contributes heat as well
     as power; with ``bifacial_model="none"`` the rear term is zero and the
     result is unchanged.
+
+    ``shading`` reduces the front plane-of-array irradiance before the
+    incidence-angle modifier: the beam by the table's shaded fraction at the
+    sun's position, the sky diffuse by the sky view factor, and, with a
+    transposition model that separates it, the circumsolar diffuse by the
+    beam's shaded fraction. The ground-reflected and rear irradiance are not
+    shaded.
     """
     dni, ghi, dhi = _extract_irradiance(weather_aligned)
     temp_air, wind_speed = _extract_met_data(weather_aligned)
@@ -334,6 +350,29 @@ def _compute_irradiance_and_cell_temp_detail(
         **ground_kwargs,
     )
 
+    poa_global_unshaded = None
+    front_unshaded = None
+    if shading is not None:
+        poa_global_unshaded = np.nan_to_num(poa["poa_global"].values, nan=0.0)
+        front_unshaded = calculate_front_effective_irradiance(
+            poa,
+            aoi,
+            surface_tilt,
+            model_options.diffuse_iam,
+            model_options.iam_model,
+        )
+        poa = _shaded_poa(
+            poa,
+            shading,
+            solarpos,
+            surface_tilt,
+            surface_azimuth,
+            dni=dni,
+            dhi=dhi,
+            dni_extra=dni_extra,
+            airmass=airmass,
+            model_options=model_options,
+        )
     poa_global = np.nan_to_num(poa["poa_global"].values, nan=0.0)
     front_effective_irradiance = calculate_front_effective_irradiance(
         poa,
@@ -408,6 +447,65 @@ def _compute_irradiance_and_cell_temp_detail(
         rear_effective_irradiance=rear_effective_irradiance,
         effective_irradiance=effective_irradiance,
         temp_cell=np.asarray(temp_cell, dtype=float),
+        poa_global_unshaded=poa_global_unshaded,
+        effective_irradiance_unshaded=(None if front_unshaded is None else front_unshaded + rear_effective_irradiance),
+    )
+
+
+def _shaded_poa(
+    poa: pd.DataFrame,
+    shading: ShadingTable,
+    solarpos: pd.DataFrame,
+    surface_tilt,
+    surface_azimuth,
+    *,
+    dni,
+    dhi,
+    dni_extra,
+    airmass,
+    model_options: PVModelOptions,
+) -> pd.DataFrame:
+    """The plane-of-array components after near shading from ``shading``."""
+    elevation = 90.0 - np.asarray(solarpos.apparent_zenith, dtype=float)
+    beam_shaded = shading.beam_fraction(np.asarray(solarpos.azimuth, dtype=float), elevation)
+    direct = np.nan_to_num(poa["poa_direct"].to_numpy(dtype=float), nan=0.0)
+    sky = np.nan_to_num(poa["poa_sky_diffuse"].to_numpy(dtype=float), nan=0.0)
+    ground = np.nan_to_num(poa["poa_ground_diffuse"].to_numpy(dtype=float), nan=0.0)
+    circumsolar = np.zeros_like(sky)
+    model = model_options.transposition_model
+    if model in CIRCUMSOLAR_MODELS:
+        # The same call get_total_irradiance makes, with its parts.
+        common = {
+            "surface_tilt": surface_tilt,
+            "surface_azimuth": surface_azimuth,
+            "dhi": dhi,
+            "dni": dni,
+            "dni_extra": dni_extra,
+            "solar_zenith": solarpos.apparent_zenith,
+            "solar_azimuth": solarpos.azimuth,
+        }
+        if model == "haydavies":
+            parts = pvlib.irradiance.haydavies(**common, return_components=True)
+        elif model == "perez":
+            parts = pvlib.irradiance.perez(
+                **common, airmass=airmass, model=model_options.model_perez, return_components=True
+            )
+        else:
+            parts = pvlib.irradiance.perez_driesse(**common, airmass=airmass, return_components=True)
+        # Not capped at the sky total: Perez's isotropic and horizon terms
+        # can be negative, so its circumsolar part can exceed their sum.
+        circumsolar = np.clip(np.nan_to_num(np.asarray(parts["poa_circumsolar"], dtype=float), nan=0.0), 0.0, None)
+    shaded_direct = direct * (1.0 - beam_shaded)
+    shaded_sky = np.clip((sky - circumsolar) * shading.sky_view_factor + circumsolar * (1.0 - beam_shaded), 0.0, None)
+    return pd.DataFrame(
+        {
+            "poa_global": shaded_direct + shaded_sky + ground,
+            "poa_direct": shaded_direct,
+            "poa_diffuse": shaded_sky + ground,
+            "poa_sky_diffuse": shaded_sky,
+            "poa_ground_diffuse": ground,
+        },
+        index=poa.index,
     )
 
 
@@ -608,6 +706,7 @@ def _build_pv_production_breakdown(
     start_year: Optional[int],
     loss_overrides: Optional[Dict[str, float]],
     model_kwargs: Dict[str, Any],
+    shading: Any = None,
 ) -> PVProductionBreakdown:
     """Build the full fixed/tracking PV production breakdown.
 
@@ -633,6 +732,7 @@ def _build_pv_production_breakdown(
         surface_azimuth=surface_azimuth,
         pv_params=pv_params,
         model_options=model_options,
+        shading=as_shading_table(shading),
     )
     module_dc, module_operating = _module_dc_before_losses(
         detail.effective_irradiance,
@@ -655,16 +755,32 @@ def _build_pv_production_breakdown(
         name="front_effective_irradiance_dc_W",
     )
     rear_gain_dc = (effective_irradiance_dc - front_effective_irradiance_dc).rename("rear_gain_dc_W")
+    # The stages before near shading scale from the unshaded irradiance, so a
+    # fully shaded step still shows what the shading removed.
+    reference_dc, reference_irradiance = effective_irradiance_dc, detail.effective_irradiance
+    poa_shaded_dc = None
+    if detail.effective_irradiance_unshaded is not None:
+        reference_irradiance = detail.effective_irradiance_unshaded
+        unshaded_dc, _ = _module_dc_before_losses(
+            reference_irradiance, detail.temp_cell, pv_params, n_modules, times, name="module_dc_W"
+        )
+        reference_dc = unshaded_dc / pd.Series(safe_temperature_factor, index=times)
+        poa_shaded_dc = _scale_reference_dc(
+            effective_irradiance_dc,
+            detail.poa_global,
+            detail.effective_irradiance,
+            name="poa_shaded_dc_W",
+        )
     poa_global_dc = _scale_reference_dc(
-        effective_irradiance_dc,
-        detail.poa_global,
-        detail.effective_irradiance,
+        reference_dc,
+        detail.poa_global if detail.poa_global_unshaded is None else detail.poa_global_unshaded,
+        reference_irradiance,
         name="poa_global_dc_W",
     )
     horizontal_reference_dc = _scale_reference_dc(
-        effective_irradiance_dc,
+        reference_dc,
         detail.ghi,
-        detail.effective_irradiance,
+        reference_irradiance,
         name="horizontal_reference_dc_W",
     )
     age_pct = _age_degradation_percent(
@@ -693,6 +809,7 @@ def _build_pv_production_breakdown(
         age_degradation_pct=age_pct,
         age_degradation_loss=(dc_after_static - dc_after_losses).rename("age_degradation_loss_W"),
         module_operating=module_operating,
+        poa_shaded_dc=poa_shaded_dc,
     )
 
 
@@ -720,13 +837,16 @@ def calculate_pv_production_breakdown(
     gcr: float = 0.35,
     pvrow_height: Optional[float] = None,
     pvrow_pitch: Optional[float] = None,
+    shading: Optional[ShadingTable | Dict[str, Any]] = None,
 ) -> PVProductionBreakdown:
     """Calculate fixed-tilt PV production with intermediate loss stages.
 
     Module age is counted at the start of ``current_year``: ``current_year -
     start_year`` full years of compound ``degradation_rate``, and none in the
     installation year. See :func:`calculate_pv_production_dc` for the
-    parameters.
+    parameters. ``shading`` is the array's near-shading table, a
+    :class:`breos.pv.shading.ShadingTable` or its mapping; it reduces the
+    front plane-of-array irradiance before the incidence-angle modifier.
     """
     breakdown = _build_pv_production_breakdown(
         weather_data,
@@ -740,6 +860,7 @@ def calculate_pv_production_breakdown(
         start_year=start_year,
         loss_overrides=loss_overrides,
         model_kwargs=_model_option_kwargs(locals()),
+        shading=shading,
     )
 
     return breakdown
@@ -879,6 +1000,7 @@ def calculate_pv_production_tracking_breakdown(
     bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
     pvrow_height: Optional[float] = None,
     pvrow_pitch: Optional[float] = None,
+    shading: Optional[ShadingTable | Dict[str, Any]] = None,
 ) -> PVProductionBreakdown:
     """Calculate tracking-array PV production with intermediate loss stages.
 
@@ -889,7 +1011,7 @@ def calculate_pv_production_tracking_breakdown(
     Module age is counted at the start of ``current_year``: ``current_year -
     start_year`` full years of compound ``degradation_rate``, and none in the
     installation year. See :func:`calculate_pv_production_dc_tracking` for the
-    parameters.
+    parameters, and :func:`calculate_pv_production_breakdown` for ``shading``.
     """
     if tracking not in ("single_axis", "dual_axis"):
         raise ValueError(f"tracking must be 'single_axis' or 'dual_axis', got {tracking!r}")
@@ -919,6 +1041,7 @@ def calculate_pv_production_tracking_breakdown(
         start_year=start_year,
         loss_overrides=loss_overrides,
         model_kwargs=_model_option_kwargs(locals()),
+        shading=shading,
     )
 
     return breakdown
@@ -1264,6 +1387,7 @@ def _sum_pv_breakdowns(breakdowns: list[PVProductionBreakdown]) -> PVProductionB
         pvwatts_combined_pct=breakdowns[0].pvwatts_combined_pct,
         age_degradation_pct=breakdowns[0].age_degradation_pct,
         age_degradation_loss=_sum_attr("age_degradation_loss"),
+        poa_shaded_dc=(_sum_attr("poa_shaded_dc") if all(b.poa_shaded_dc is not None for b in breakdowns) else None),
     )
 
 
@@ -1314,6 +1438,7 @@ def _array_breakdowns(
                 current_year=current_year,
                 start_year=start_year,
                 loss_overrides=loss_overrides,
+                shading=arr.get("shading"),
                 **arr_options,
             )
         elif tracking in ("single_axis", "dual_axis"):
@@ -1335,6 +1460,7 @@ def _array_breakdowns(
                 current_year=current_year,
                 start_year=start_year,
                 loss_overrides=loss_overrides,
+                shading=arr.get("shading"),
                 # gcr goes in the tracker geometry block above, not here.
                 **{key: value for key, value in arr_options.items() if key != "gcr"},
             )
@@ -1492,7 +1618,8 @@ def calculate_multi_array_production(
             ``dual_axis_max_tilt``. Any array may also set
             ``transposition_model``, ``albedo``/``surface_type``,
             ``model_perez`` or ``temperature_model`` to override the
-            function-level defaults.
+            function-level defaults, and ``shading``, a near-shading table
+            (see :func:`calculate_pv_production_breakdown`).
         freq: Time frequency ('h' or '15min')
         degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
         current_year: Calendar year being simulated. Module age is counted at

@@ -288,6 +288,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   model uncertainty. The summary gains the `p10`, `p25`, `p75` and `p90`
   quantiles. `breos.exceedance` computes the values. Without
   `model_uncertainty_pct`, every trajectory is unchanged.
+- Near shading from a layout tool (ADR 0008, level 1). Each `pv_arrays`
+  entry may carry a `shading` table, the beam shaded fraction on a grid of
+  sun azimuth and elevation (pvlib's convention), with an optional
+  `sky_view_factor`; every array or none. BREOS reads it bilinearly at each
+  step's sun position, across north when the azimuth axis closes the circle,
+  and reduces the array's beam and sky diffuse before the incidence-angle
+  modifier. With Hay-Davies or a Perez model the circumsolar diffuse is
+  shaded with the beam. One table serves both resolutions and every weather
+  year. The flat `shading` loss defaults to 0 when the tables are given; a
+  stated one stays. The loss is the new `near_shading` waterfall stage, and
+  `pv_loss_waterfall.near_shading` reports each array's table. Without
+  tables every result is unchanged.
 - `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
   only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
   coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.

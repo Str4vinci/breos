@@ -831,6 +831,7 @@
     }
    ]
   },
+  "near_shading": null,
   "pvwatts": {
    "components_pct": {
     "soiling": 2.0,

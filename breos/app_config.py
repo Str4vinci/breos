@@ -55,6 +55,7 @@ from breos.inverter import AcCable, InverterConversion, inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
 from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
+from breos.pv.shading import ShadingTable
 from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
@@ -1388,6 +1389,7 @@ _PV_ARRAY_KEYS = frozenset(
         *_TRACKER_GEOMETRY_KEYS,
         *_PV_ARRAY_OPTION_KEYS,
         *_PV_ARRAY_MOUNTING_KEYS,
+        "shading",
     )
 )
 PV_ARRAY_TABLE = TableSpec(
@@ -1405,6 +1407,10 @@ PV_ARRAY_TABLE = TableSpec(
         "hot_cell_temp_c": "Hottest cell temperature (°C) for this array's strings, instead of any mounting rise",
         "cold_operating_cell_temp_c": (
             "Coldest cell temperature while producing (°C) for this array's strings, instead of any mounting rise"
+        ),
+        "shading": (
+            "Near-shading table: `azimuth_deg`, `elevation_deg`, `beam_shaded_fraction` (one row per elevation) "
+            "and optional `sky_view_factor`; every array or none"
         ),
     },
 )
@@ -2573,6 +2579,14 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
                 arr.get("pvrow_pitch", cfg["pvrow_pitch"]),
                 where=f"pv_arrays[{i}]",
             )
+            if "shading" in arr:
+                _validate_shading_table(arr["shading"], f"pv_arrays[{i}].shading")
+        shaded = ["shading" in arr for arr in cfg["pv_arrays"]]
+        if any(shaded) and not all(shaded):
+            raise ValueError(
+                f"'pv_arrays[{shaded.index(False)}]' has no 'shading' table. Give every array a shading table, "
+                "or none; an unshaded array takes an all-zero table"
+            )
     if _finite_real(cfg["annual_consumption_kwh"], "annual_consumption_kwh") <= 0:
         raise ValueError("'annual_consumption_kwh' must be > 0")
     if _finite_real(cfg["battery_kwh"], "battery_kwh") < 0:
@@ -2601,6 +2615,16 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
             raise ValueError("'inverter_ac_rating_kw' must be > 0")
     elif cfg.get("inverters") is None and _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
         raise ValueError("'inverter_loading_ratio' must be > 0")
+
+
+def _validate_shading_table(value: Any, where: str) -> None:
+    """Raise unless ``value`` is a valid near-shading table, naming ``where``."""
+    if not isinstance(value, Mapping):
+        raise ValueError(f"'{where}' must be a table of azimuth_deg, elevation_deg and beam_shaded_fraction")
+    try:
+        ShadingTable.from_mapping(value)
+    except ValueError as error:
+        raise ValueError(f"'{where}': {error}") from None
 
 
 def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
@@ -2878,8 +2902,23 @@ def normalise_pv_arrays(
         for key in (*_PV_ARRAY_OPTION_KEYS, *_PV_ARRAY_MOUNTING_KEYS):
             if key in arr:
                 entry[key] = arr[key]
+        if "shading" in arr:
+            entry["shading"] = _plain_shading(arr["shading"])
         normalized.append(entry)
     return normalized
+
+
+def _plain_shading(value: Mapping[str, Any]) -> dict[str, Any]:
+    """A validated shading table as plain lists of floats, as the result echoes it."""
+    table = ShadingTable.from_mapping(value)
+    plain: dict[str, Any] = {
+        "azimuth_deg": list(table.azimuth_deg),
+        "elevation_deg": list(table.elevation_deg),
+        "beam_shaded_fraction": [list(row) for row in table.beam_shaded_fraction],
+    }
+    if table.sky_view_factor_stated:
+        plain["sky_view_factor"] = table.sky_view_factor
+    return plain
 
 
 def resolve_pv_system(
@@ -3127,6 +3166,11 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         cfg["inverter_loading_ratio"] = None
     _normalise_config_values(cfg)
     tariff = validate_config(cfg)
+    if cfg.get("pv_arrays"):
+        # The result echoes the tables as plain floats, whatever numbers they came as.
+        cfg["pv_arrays"] = [
+            {**arr, "shading": _plain_shading(arr["shading"])} if "shading" in arr else arr for arr in cfg["pv_arrays"]
+        ]
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
     tilt, azimuth, axis_azimuth = resolve_orientation(cfg, lat)
@@ -3147,6 +3191,12 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
             # The cables model the DC wiring. A stated wiring loss stays, as the
             # AC side's until AC cables are modelled.
             cfg["pv_loss_overrides"] = {**overrides, "wiring": 0.0}
+    if any("shading" in arr for arr in pv_arrays):
+        overrides = cfg["pv_loss_overrides"] or {}
+        if "shading" not in overrides:
+            # The tables model the near shading. A stated flat loss stays, on
+            # top of them, for whatever they leave out.
+            cfg["pv_loss_overrides"] = {**overrides, "shading": 0.0}
     if electrical is not None:
         cfg["inverter_ac_rating_kw"] = sum(inverter.nominal_power_w for inverter in electrical.inverters) / 1000
         rated = [(i.nominal_power_w, i.inverter_efficiency) for i in electrical.inverters]

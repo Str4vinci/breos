@@ -13,4 +13,4 @@ or that the implementation does differently.
 | [0003: Economic basis and currency-neutral results](0003-economic-basis.md) | Accepted, E1–E10; implemented in 0.7.0. E11–E13 Proposed, implemented for 0.7.1 |
 | [0004: AC-coupled batteries](0004-ac-coupled-batteries.md) | Accepted 2026-10-04; not implemented, planned for 0.8.0 |
 | [0007: String topology and electrical checks](0007-string-topology-and-electrical-checks.md) | Proposed 2026-10-11; checks and energy per MPPT for one inverter implemented |
-| [0008: Shading as an input](0008-shading-input.md) | Proposed 2026-10-12; not implemented |
+| [0008: Shading as an input](0008-shading-input.md) | Accepted 2026-10-12; level 1 implemented |

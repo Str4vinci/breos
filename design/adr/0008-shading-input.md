@@ -1,7 +1,7 @@
 # 0008 — Shading as an input
 
-- **Status:** Proposed. Not implemented; the maintainer approves the
-  decisions before any code.
+- **Status:** Accepted 2026-10-12. Level 1 with the shading table is
+  implemented; level 2 follows; the series form (S3) is deferred.
 - **Date:** 2026-10-12
 
 ## Context
@@ -122,9 +122,17 @@ At array level, the step's beam shaded fraction `f` and the sky view factor
 `v` act on the plane-of-array components before the incidence-angle
 modifier:
 
-    poa_direct  := poa_direct  * (1 - f)
-    poa_sky     := poa_sky     * v
-    poa_ground  := poa_ground
+    poa_direct       := poa_direct       * (1 - f)
+    poa_circumsolar  := poa_circumsolar  * (1 - f)
+    poa_sky_rest     := poa_sky_rest     * v
+    poa_ground       := poa_ground
+
+The circumsolar diffuse comes from around the sun's disc, so an object that
+shades the beam shades it too. Hay-Davies and the Perez models separate it,
+and with them it takes the beam's fraction; the rest of the sky diffuse
+(isotropic, and Perez's horizon band) takes the sky view factor. The other
+transposition models do not separate it, and their whole sky diffuse takes
+the sky view factor.
 
 `horizon_profile` still applies first: a sun behind the terrain is not
 shaded again. A table or series given with `horizon_profile` must therefore
@@ -184,7 +192,44 @@ this record's contract does not change when MLPE arrives.
 - Snow and soiling, which vary in time but are not shading. They stay on the
   deferred list.
 
-## Questions for the maintainer
+## Decisions of the maintainer (2026-10-12)
+
+1. The table first. The series (S3) stays deferred, and more accurate
+   modelling remains a goal (see "Accuracy" below).
+2. pvlib's convention for the grid.
+3. Every array or none.
+4. Level 2 per module, with substrings optional.
+5. Hourly first; 15-minute runs are wanted too, after the performance of
+   both resolutions is measured at each level. The table serves both, so
+   question 5, which concerns the series only, waits with it.
+
+## Accuracy
+
+For a fixed scene, the beam shaded fraction is a function of the sun's
+direction alone, so tracing the sun through the year gives the table's own
+values at the positions the sun visits. The table loses nothing but the
+interpolation between its nodes, and a layout tool controls that with its
+grid step. Measured against an exact shade function at Porto (2026-10-12),
+a long wall's smoothly growing shade came within 0.04 percentage points of
+the annual beam loss on a 5-degree grid and 0.01 on a 2-degree grid; a
+10-degree object that switches the beam fully on and off, sampled as single
+points, was 0.2 points high on a 1-degree grid and more than doubled on a
+5-degree one. Nodes that hold the shaded share of the array's area, not a
+single ray, keep the error small.
+
+What a table cannot hold, in the order of the gain expected from adding it:
+
+1. The electrical effect of partial shading (level 2). One shaded cell
+   string costs a whole bypass-diode substring, far more than its share of
+   the irradiance, so this is the largest gap for roofs with near objects.
+2. Diffuse shading that depends on direction. The sky view factor is one
+   number for the whole dome; the circumsolar part already follows the beam.
+   A table of sky view by sky region would refine the rest.
+3. Shading that changes with time: deciduous trees in leaf or bare,
+   construction. A table per season, or the series, carries it.
+4. Interpolation error at sharp edges, which a finer grid removes.
+
+## Questions for the maintainer (answered above)
 
 1. **Table first, series second, or both at once?** The table serves Monte
    Carlo and both resolutions; the series is what a tool that simulates the
@@ -204,6 +249,13 @@ this record's contract does not change when MLPE arrives.
    substrings today.
 5. **Hourly series in 15-minute runs (S3).** Repeat the hour's value, as
    proposed, or refuse and ask for a table or a 15-minute series.
+
+## Performance
+
+Level 1 reads the table once per step and array. On a one-year single-array
+run it added 3 to 5 ms to about 40 ms hourly, and 5 to 9 ms to about 140 ms
+at 15 minutes, for a 180 by 46 table (2026-10-12). Level 2 will be measured
+the same way, at both resolutions, before its defaults are set.
 
 ## Consequences
 

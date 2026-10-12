@@ -1,10 +1,10 @@
 {
  "case": "battery_worth",
- "title": "Is a battery worth it?",
+ "title": "Battery size and storage price",
  "breos_version": "0.7.0",
- "git_describe": "v0.6.2-610-gd29419b",
- "generated_utc": "2026-10-01T20:54:29+00:00",
- "runtime_s": 4.1,
+ "git_describe": "v0.7.0-115-g2d37f1b-dirty",
+ "generated_utc": "2026-10-12T12:16:48+00:00",
+ "runtime_s": 4.3,
  "cheap": true,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
