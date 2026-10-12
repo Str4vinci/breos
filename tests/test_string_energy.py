@@ -212,7 +212,8 @@ def test_the_operating_point_is_the_best_one_the_limits_allow(v_min, v_max, curr
     setup = ElectricalSetup(
         (inverter,), strings, environment, check_topology([(TRINA_450, modules)], [inverter], strings, environment)
     )
-    dc, loss, _, _ = string_limited_dc(setup, [breakdown])
+    energy = string_limited_dc(setup, [breakdown])
+    dc, loss = energy.dc, energy.limit_loss
 
     op = breakdown.module_operating
     for step in range(len(irradiance)):
@@ -283,7 +284,8 @@ def test_no_feasible_operating_point_delivers_nothing():
     setup = ElectricalSetup(
         (inverter,), strings, environment, check_topology([(TRINA_450, 7)], [inverter], strings, environment)
     )
-    dc, loss, _, _ = string_limited_dc(setup, [breakdown])
+    energy = string_limited_dc(setup, [breakdown])
+    dc, loss = energy.dc, energy.limit_loss
     assert dc.iloc[0] == pytest.approx(0.0, abs=1e-6)
     assert loss.iloc[0] == pytest.approx(breakdown.dc_after_losses.iloc[0])
 
@@ -301,8 +303,8 @@ def test_availability_does_not_lower_the_current_against_the_limit():
     )
     full = _breakdown(TRINA_450, 7, [1000.0], [25.0], 1.0)
     in_service = replace(_breakdown(TRINA_450, 7, [1000.0], [25.0], 0.97), pvwatts_components_pct={"availability": 3.0})
-    _, loss_full, _, _ = string_limited_dc(setup, [full])
-    _, loss_available, _, _ = string_limited_dc(setup, [in_service])
+    loss_full = string_limited_dc(setup, [full]).limit_loss
+    loss_available = string_limited_dc(setup, [in_service]).limit_loss
     assert loss_full.iloc[0] > 0
     assert loss_available.iloc[0] == pytest.approx(0.97 * loss_full.iloc[0])
 
@@ -331,16 +333,18 @@ def test_an_input_and_the_inverter_deliver_at_most_their_usable_dc_power():
     west = _breakdown(TRINA_450, 7, [1000.0, 300.0], [45.0, 30.0], 0.9)
     strings = (PVString(0, 0, 0, 7), PVString(0, 1, 1, 7))
     arrays = [(TRINA_450, 7), (TRINA_450, 7)]
-    free = string_limited_dc(_setup(_inverter(MpptSpec(25), MpptSpec(25)), strings, arrays), [east, west])[0]
+    free = string_limited_dc(_setup(_inverter(MpptSpec(25), MpptSpec(25)), strings, arrays), [east, west]).dc
     assert free.iloc[0] > 4000
 
     per_input = _inverter(MpptSpec(25, max_usable_dc_power_w=2000), MpptSpec(25))
-    dc, loss, _, _ = string_limited_dc(_setup(per_input, strings, arrays), [east, west])
+    energy = string_limited_dc(_setup(per_input, strings, arrays), [east, west])
+    dc, loss = energy.dc, energy.limit_loss
     assert dc.iloc[0] == pytest.approx(2000 + free.iloc[0] / 2)
     assert dc.iloc[1] == free.iloc[1]
 
     whole = _inverter(MpptSpec(25), MpptSpec(25), max_usable_dc_power_w=3000)
-    dc, loss, _, _ = string_limited_dc(_setup(whole, strings, arrays), [east, west])
+    energy = string_limited_dc(_setup(whole, strings, arrays), [east, west])
+    dc, loss = energy.dc, energy.limit_loss
     assert dc.iloc[0] == pytest.approx(3000)
     assert loss.iloc[0] == pytest.approx(free.iloc[0] - 3000)
     assert dc.iloc[1] == free.iloc[1]
@@ -352,8 +356,8 @@ def test_a_string_connection_limit_bounds_identical_parallel_strings_together():
     strings = [PVString(0, 0, 0, 7, parallel=2)]
     by_string = _inverter(MpptSpec(25, max_string_input_current_a=8.0))
     by_input = _inverter(MpptSpec(16.0))
-    dc_string = string_limited_dc(_setup(by_string, strings, arrays), [breakdown])[0]
-    dc_input = string_limited_dc(_setup(by_input, strings, arrays), [breakdown])[0]
+    dc_string = string_limited_dc(_setup(by_string, strings, arrays), [breakdown]).dc
+    dc_input = string_limited_dc(_setup(by_input, strings, arrays), [breakdown]).dc
     assert dc_string.iloc[0] < breakdown.dc_after_losses.iloc[0]
     pd.testing.assert_series_equal(dc_string, dc_input)
 
@@ -368,7 +372,7 @@ def test_identical_arrays_in_parallel_match_one_array_with_two_strings():
             _setup(inverter, [PVString(0, 0, 0, 7), PVString(0, 0, 1, 7)], [(TRINA_450, 7), (TRINA_450, 7)]),
             [half, half],
         )
-        np.testing.assert_allclose(split[0], single[0], rtol=1e-6)
+        np.testing.assert_allclose(split.dc, single.dc, rtol=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -388,23 +392,36 @@ def test_parallel_arrays_run_at_the_best_point_of_their_summed_curve(v_min, v_ma
         max_mppt_voltage_v=v_max,
     )
     strings = (PVString(0, 0, 0, 7), PVString(0, 0, 1, 7))
-    dc, loss, _, _ = string_limited_dc(_setup(inverter, strings, [(TRINA_450, 7), (TRINA_450, 7)]), [east, west])
+    energy = string_limited_dc(_setup(inverter, strings, [(TRINA_450, 7), (TRINA_450, 7)]), [east, west])
+    dc, loss = energy.dc, energy.limit_loss
+    assert energy.parallel_mismatch is not None
+    parallel = energy.parallel_mismatch.total
+    pd.testing.assert_series_equal(energy.parallel_mismatch.inputs[0], parallel, check_names=False)
 
     grid = np.linspace(v_min, v_max, 400001)
+    # Without the range or a limit the input could run anywhere up to its open-circuit voltage.
+    anywhere = np.linspace(0.0, 400.0, 400001)
     for step in range(3):
         i_east = 0.9 * np.nan_to_num(_module_current(east, step, grid / 7))
         i_west = 0.85 * np.nan_to_num(_module_current(west, step, grid / 7))
         total = i_east + i_west
         allowed = (total <= current_limit + 1e-9) & (np.maximum(i_east, i_west) <= string_limit + 1e-9)
         best = float((grid * np.clip(total, 0, None))[allowed].max()) if allowed.any() else 0.0
+        free_current = 0.9 * np.nan_to_num(_module_current(east, step, anywhere / 7))
+        free_current += 0.85 * np.nan_to_num(_module_current(west, step, anywhere / 7))
+        shared = float((anywhere * np.clip(free_current, 0, None)).max())
         separate = east.dc_after_losses.iloc[step] + west.dc_after_losses.iloc[step]
         assert dc.iloc[step] == pytest.approx(best, rel=1e-5, abs=1e-3)
-        assert loss.iloc[step] == pytest.approx(separate - dc.iloc[step], rel=1e-6, abs=1e-6)
+        # The shared voltage costs the parallel mismatch; the limits cost the rest.
+        assert parallel.iloc[step] == pytest.approx(min(separate - shared, separate - best), rel=1e-4, abs=1e-3)
+        assert loss.iloc[step] + parallel.iloc[step] == pytest.approx(separate - dc.iloc[step], rel=1e-6, abs=1e-6)
     # Unequal irradiance costs some energy even without a limit: the summed
-    # curve peaks below the sum of the two peaks.
+    # curve peaks below the sum of the two peaks. That is parallel mismatch,
+    # not a limit.
     if (v_min, v_max, current_limit) == (80, 800, 25.0):
-        assert 0 < loss.iloc[0] < 0.02 * dc.iloc[0]
-        assert loss.iloc[2] == pytest.approx(0.0, abs=0.05 * 0.01 * dc.iloc[2])
+        assert 0 < parallel.iloc[0] < 0.02 * dc.iloc[0]
+        assert loss.iloc[0] == pytest.approx(0.0, abs=1e-6)
+        assert parallel.iloc[2] == pytest.approx(0.0, abs=0.05 * 0.01 * dc.iloc[2])
 
 
 def test_the_inverter_starts_once_an_input_reaches_its_start_up_voltage():
@@ -417,7 +434,8 @@ def test_the_inverter_starts_once_an_input_reaches_its_start_up_voltage():
     startup = 0.5 * (v_oc[0] + v_oc[1])
     assert v_oc[0] < startup < min(v_oc[1], v_oc[2], v_oc[6])
     inverter = _inverter(MpptSpec(25), startup_voltage_v=float(startup))
-    dc, loss, _, _ = string_limited_dc(_setup(inverter, [PVString(0, 0, 0, 3)], [(TRINA_450, 3)]), [breakdown])
+    energy = string_limited_dc(_setup(inverter, [PVString(0, 0, 0, 3)], [(TRINA_450, 3)]), [breakdown])
+    dc, loss = energy.dc, energy.limit_loss
     free = breakdown.dc_after_losses
     # Below the start-up voltage before it has started; running once started,
     # down to the dim evening step; stopped overnight and waiting again.
@@ -457,9 +475,18 @@ def test_app_parallels_two_arrays_on_one_input(modules, _patch_weather):
     )
     aggregate, string = run(cfg), run({**cfg, "electrical_fidelity": "string"})
     assert "parallel_strings_mismatch" not in {f["code"] for f in string["electrical"]["findings"]}
-    mismatch = -stage(string, "mppt_limits")["delta_kwh"]
-    # East and west in parallel lose a little to their different curves.
+    mismatch = -stage(string, "parallel_mismatch")["delta_kwh"]
+    # East and west in parallel lose a little to their different curves, a
+    # parallel mismatch rather than a limit.
     assert 0 < mismatch < 0.02 * aggregate["pv_dc_generation_kwh"]
+    assert stage(string, "mppt_limits")["delta_kwh"] == pytest.approx(0.0, abs=1e-3)
+    summary = string["pv_loss_waterfall"]["parallel_mismatch"]
+    assert summary["loss_kwh"] == pytest.approx(mismatch, abs=1e-3)
+    assert summary["inputs"] == [{"inverter": 0, "mppt": 0, "strings": [0, 1], "loss_kwh": summary["loss_kwh"]}]
+    # One string per input: nothing in parallel.
+    split = run({**EAST_WEST, "electrical_fidelity": "string"})
+    assert split["pv_loss_waterfall"]["parallel_mismatch"] is None
+    assert stage(split, "parallel_mismatch") is None
 
 
 @pytest.mark.parametrize("v_min", [80.0, 290.0], ids=["free", "cable_drop_crosses_the_window"])
@@ -476,7 +503,8 @@ def test_a_cable_moves_the_operating_point_and_costs_its_loss(v_min):
     ohm = cable.cable_resistance_ohm(50.0)
     assert ohm == pytest.approx(1.7241e-8 * (1 + 0.00393 * 30) * 80 / 2.5e-6)
     setup = _setup(_inverter(MpptSpec(25), min_mppt_voltage_v=v_min), [cable], [(TRINA_450, n)])
-    dc, limits, wiring, _ = string_limited_dc(setup, [breakdown])
+    energy = string_limited_dc(setup, [breakdown])
+    dc, limits, wiring = energy.dc, energy.limit_loss, energy.wiring_loss
 
     op = breakdown.module_operating
     for step in range(len(irradiance)):
@@ -503,8 +531,8 @@ def test_a_zero_length_cable_changes_nothing():
     bare = string_limited_dc(_setup(inverter, [PVString(0, 0, 0, 7)], [(TRINA_450, 7)]), [breakdown])
     zero = PVString(0, 0, 0, 7, cable_length_m=0.0, cable_cross_section_mm2=4.0)
     cabled = string_limited_dc(_setup(inverter, [zero], [(TRINA_450, 7)]), [breakdown])
-    pd.testing.assert_series_equal(cabled[0], bare[0])
-    assert (cabled[2] == 0).all()
+    pd.testing.assert_series_equal(cabled.dc, bare.dc)
+    assert (cabled.wiring_loss == 0).all()
 
 
 def test_the_aggregate_cable_loss_is_i2r_at_the_maximum_power_current():

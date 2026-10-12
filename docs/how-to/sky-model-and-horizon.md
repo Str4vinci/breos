@@ -176,7 +176,9 @@ irradiance stage, `near_shading`, is the mean of its modules, and the rest of
 the cost is the `shading_mismatch` stage. `pv_loss_waterfall.shading_mismatch`
 reports it, with each string's own loss measured from that string's mean
 irradiance, so stringings can be compared: a string whose modules are shaded
-alike loses little to mismatch.
+alike loses little to mismatch. Strings shaded differently but on one input also
+share its voltage; the `parallel_mismatch` stage reports what that costs, which
+is what a separate input for each would save.
 
 Every string of an array carries `module_shading` or none does, such a string
 has `parallel = 1`, and an array whose strings carry it takes no `shading`

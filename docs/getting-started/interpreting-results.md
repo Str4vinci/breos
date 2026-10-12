@@ -327,8 +327,11 @@ built.
 ordered `stages` cover only the linear PV-model chain: horizontal reference,
 transposition, front-side incidence-angle modifier, optional bifacial rear
 gain, cell temperature, and static PVWatts losses, then `dc_wiring` with
-[DC cables](configuration.md#dc-cables) and `mppt_limits` with
-[string-level energy](configuration.md#string-level-energy). There is no degradation
+[DC cables](configuration.md#dc-cables), and `parallel_mismatch` and
+`mppt_limits` with [string-level energy](configuration.md#string-level-energy).
+`parallel_mismatch` appears only when an input holds strings on different
+curves, and `pv_loss_waterfall.parallel_mismatch` then lists each such input
+with its strings and loss; otherwise it is `null`. There is no degradation
 stage because year 1 has none (see [Module aging](../api/pv.md#module-aging)),
 so the last stage equals `energy_balance.pv_dc.generation_kwh`. Dispatch
 is a branching flow and is therefore reported under `energy_balance`, not

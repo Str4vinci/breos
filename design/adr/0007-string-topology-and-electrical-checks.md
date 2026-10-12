@@ -243,7 +243,10 @@ default stays `"aggregate"`, so a topology alone changes no number.
    runs at the best point of their summed IV curve, found by a grid and a
    golden-section search after a bisection for the current limits. Where their
    irradiance or temperature differ, that point lies below the sum of their
-   maximum powers, and the difference is lost. A brute-force search pins it.
+   maximum powers. That difference, at the summed curve's global maximum
+   without the range or a limit, is the parallel mismatch: a loss of the
+   wiring, not of the inverter's limits, so it is reported apart. A
+   brute-force search pins both.
 5. An input delivers at most its usable DC power, and the inverter at most its
    own. The inverter can shed power at any operating point, so a power limit
    costs only the excess, however the inverter shares it among its inputs.
@@ -252,8 +255,10 @@ default stays `"aggregate"`, so a topology alone changes no number.
    production stops. Once running, it works down to the MPPT minimum, so the
    start-up voltage costs energy only before the first start of a spell. String
    mode therefore needs the start-up voltage; 0 states none.
-7. The lost DC is `mppt_limit_loss`, a waterfall stage after the static losses.
-   Where no limit binds the DC is the aggregate model's, bit for bit.
+7. The lost DC is `parallel_mismatch_loss` and `mppt_limit_loss`, waterfall
+   stages after the static losses; the limits' stage takes what they cost
+   beyond the parallel mismatch. Where no limit binds and no input holds
+   strings on different curves, the DC is the aggregate model's, bit for bit.
 
 The PVWatts `mismatch` loss stays. It stands for differences between modules
 in a string, which a model of identical modules does not produce, so the string

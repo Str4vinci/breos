@@ -205,6 +205,32 @@ def test_all_clear_modules_match_the_unshaded_string_run(trina, _patch_weather):
     assert results["shaded"] == pytest.approx(results["plain"], rel=1e-6)
 
 
+def test_differently_shaded_strings_on_one_input_report_the_parallel_mismatch(trina, _patch_weather):
+    from breos import App
+
+    split = _module_shaded_config(trina, CHIMNEY)
+    together = json.loads(json.dumps(split))
+    together["pv_strings"][1]["mppt"] = 0
+    # Room for both strings on one input, so no limit binds and the gap is the shared voltage alone.
+    together["inverters"][0]["mppts"][0].update(max_input_current_a=32, max_short_circuit_current_a=40, max_strings=2)
+    results = {}
+    for name, config in (("split", split), ("together", together)):
+        app = App(config)
+        app.simulate()
+        results[name] = app.result()["pv_loss_waterfall"]
+    assert results["split"]["parallel_mismatch"] is None
+    parallel = results["together"]["parallel_mismatch"]
+    assert parallel["inputs"] == [{"inverter": 0, "mppt": 0, "strings": [0, 1], "loss_kwh": parallel["loss_kwh"]}]
+    stages = {stage["key"]: stage.get("delta_kwh") for stage in results["together"]["stages"]}
+    assert -stages["parallel_mismatch"] == pytest.approx(parallel["loss_kwh"], abs=1e-3)
+    assert stages["mppt_limits"] == pytest.approx(0.0, abs=1e-3)
+    # Each string's own shading mismatch does not depend on its input.
+    assert results["together"]["shading_mismatch"] == results["split"]["shading_mismatch"]
+    # What the second input saves is the parallel mismatch, to the results' 0.01 kWh rounding.
+    generation = {name: r["energy_balance"]["pv_dc"]["generation_kwh"] for name, r in results.items()}
+    assert 0 < parallel["loss_kwh"] == pytest.approx(generation["split"] - generation["together"], abs=0.02)
+
+
 @pytest.mark.parametrize(
     "change, message",
     [

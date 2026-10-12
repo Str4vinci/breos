@@ -318,6 +318,21 @@ def _shading_mismatch_summary(
     }
 
 
+def _parallel_mismatch_summary(
+    resolved: ResolvedAppConfig, pv_breakdown: PVProductionBreakdown, freq: str
+) -> dict[str, Any] | None:
+    """What strings in parallel lose by sharing an input's voltage, per input, or None when none do."""
+    if pv_breakdown.parallel_mismatch_loss is None or resolved.electrical is None:
+        return None
+    inputs = []
+    for mppt, loss in sorted((pv_breakdown.input_parallel_mismatch or {}).items()):
+        strings = [i for i, string in enumerate(resolved.electrical.strings) if string.mppt == mppt]
+        inputs.append(
+            {"inverter": 0, "mppt": mppt, "strings": strings, "loss_kwh": _rounded(_series_energy_kwh(loss, freq))}
+        )
+    return {"loss_kwh": _rounded(_series_energy_kwh(pv_breakdown.parallel_mismatch_loss, freq)), "inputs": inputs}
+
+
 def _build_pv_loss_waterfall(
     pv_breakdown: PVProductionBreakdown,
     first_year_results_df: pd.DataFrame,
@@ -392,10 +407,15 @@ def _build_pv_loss_waterfall(
         # The strings' cables, when the topology gives them.
         after_wiring = after_mismatch - _series_energy_kwh(pv_breakdown.dc_wiring_loss, freq)
         stages.append(_waterfall_stage("dc_wiring", "DC cables", after_wiring, after_mismatch))
+    after_parallel = after_wiring
+    if pv_breakdown.parallel_mismatch_loss is not None:
+        # String-level energy: strings on different curves share an input's voltage.
+        after_parallel = after_wiring - _series_energy_kwh(pv_breakdown.parallel_mismatch_loss, freq)
+        stages.append(_waterfall_stage("parallel_mismatch", "Strings in parallel", after_parallel, after_wiring))
     if pv_breakdown.mppt_limit_loss is not None:
         # String-level energy: the inverter's input limits.
-        after_limits = after_wiring - _series_energy_kwh(pv_breakdown.mppt_limit_loss, freq)
-        stages.append(_waterfall_stage("mppt_limits", "Inverter input limits", after_limits, after_wiring))
+        after_limits = after_parallel - _series_energy_kwh(pv_breakdown.mppt_limit_loss, freq)
+        stages.append(_waterfall_stage("mppt_limits", "Inverter input limits", after_limits, after_parallel))
 
     battery_begin = float(first_year_results_df["Battery_Energy_Beginning"].iloc[0]) / 1000.0
     battery_end = float(first_year_results_df["Battery_Energy_End"].iloc[-1]) / 1000.0
@@ -434,6 +454,7 @@ def _build_pv_loss_waterfall(
         "bifacial": _bifacial_summary(resolved, front_effective_dc, rear_gain_dc),
         "near_shading": _near_shading_summary(resolved, poa_dc, poa_shaded_dc),
         "shading_mismatch": _shading_mismatch_summary(resolved, pv_breakdown, freq),
+        "parallel_mismatch": _parallel_mismatch_summary(resolved, pv_breakdown, freq),
         "pvwatts": {
             "components_pct": {name: float(value) for name, value in pv_breakdown.pvwatts_components_pct.items()},
             "components_kwh": pvwatts_components,

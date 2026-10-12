@@ -272,6 +272,12 @@ class PVProductionBreakdown:
     # its position in ``pv_strings``.
     shading_mismatch_loss: Optional[pd.Series] = None
     string_shading_mismatch: Optional[Dict[int, pd.Series]] = None
+    # DC that strings on different curves lose by sharing an MPPT input's
+    # voltage, already taken out of ``dc_after_losses``; None when no input
+    # holds such strings. ``input_parallel_mismatch`` holds each input's, by
+    # its MPPT index.
+    parallel_mismatch_loss: Optional[pd.Series] = None
+    input_parallel_mismatch: Optional[Dict[int, pd.Series]] = None
 
 
 @dataclass(frozen=True)

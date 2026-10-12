@@ -311,6 +311,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and the new `shading_mismatch` waterfall stage takes the electrical effect;
   `pv_loss_waterfall.shading_mismatch` reports each string's own.
   `breos.electrical.string_limited_dc` now also returns the mismatch.
+- With string-level energy, what strings on different curves lose by sharing
+  an input's voltage is its own `parallel_mismatch` waterfall stage ("Strings
+  in parallel"), and `pv_loss_waterfall.parallel_mismatch` reports it per
+  input with the input's strings, so a stringing can be compared with one that
+  gives each string its own input. It is the gap between the strings' own
+  maximum powers and their summed curve's global maximum before any limit;
+  `mppt_limits` keeps what the limits cost beyond it, and the DC delivered is
+  unchanged. It applies to module-shaded strings and to strings from different
+  arrays, which until now counted it under `mppt_limits`.
+  `breos.electrical.string_limited_dc` returns a `StringEnergy` with the DC,
+  each loss and the shading and parallel mismatches.
 - `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
   only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
   coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.

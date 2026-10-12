@@ -34,9 +34,9 @@ import dataclasses
 import math
 import warnings
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
-from functools import cached_property
+from functools import cached_property, partial
 from numbers import Integral, Real
 from typing import Any, Literal
 
@@ -895,9 +895,40 @@ class ShadingMismatch:
     strings: dict[int, pd.Series]
 
 
-def string_limited_dc(
-    setup: ElectricalSetup, arrays: Sequence[Any]
-) -> tuple[pd.Series, pd.Series, pd.Series, ShadingMismatch | None]:
+@dataclass(frozen=True)
+class ParallelMismatch:
+    """DC that strings in parallel lose by sharing their input's voltage, in W, after availability.
+
+    ``total`` is the system's; ``inputs`` holds each input's, by MPPT index,
+    for the inputs whose strings run on different curves.
+    """
+
+    total: pd.Series
+    inputs: dict[int, pd.Series]
+
+
+@dataclass(frozen=True)
+class StringEnergy:
+    """String-level DC and what each electrical effect costs, in W, after availability.
+
+    ``dc`` is the DC delivered to the inverter. ``limit_loss`` is what the
+    MPPT voltage range, the current limits, the usable DC powers and the
+    start-up voltage cost; ``wiring_loss`` what the strings' cables cost.
+    ``parallel_mismatch`` is what strings in parallel lose by sharing their
+    input's voltage: the sum of each one's own maximum power less the global
+    maximum of their summed curve, before any limit. It is None when no input
+    holds strings on different curves. ``shading`` is the shading mismatch,
+    or None without module shading.
+    """
+
+    dc: pd.Series
+    limit_loss: pd.Series
+    wiring_loss: pd.Series
+    parallel_mismatch: ParallelMismatch | None
+    shading: ShadingMismatch | None
+
+
+def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEnergy:
     """DC power after the strings' cables, each MPPT input's limits and the inverter's, in W.
 
     ``arrays`` holds one :class:`~breos.solar.PVProductionBreakdown` per PV
@@ -909,7 +940,9 @@ def string_limited_dc(
     voltage at which the current falls to the limit. When no point of the curve
     respects them, the input delivers nothing. Strings from different arrays on
     one input share its voltage, so the input runs at the maximum of their
-    summed IV curve, which can lie below the sum of their maximum powers.
+    summed IV curve, which can lie below the sum of their maximum powers. That
+    difference, before any limit, is the parallel mismatch; the limits cost
+    what they take beyond it.
 
     An input then delivers at most its usable DC power, and the inverter at most
     its own. The inverter starts at the first producing step of a day on which
@@ -929,10 +962,8 @@ def string_limited_dc(
     the limits. The difference from the array's mean irradiance is the
     shading mismatch.
 
-    Returns the limited DC, the DC the limits cost, the DC the cables cost and
-    the shading mismatch, or None when no string has module shading. Where no
-    cable or module shading is given and no limit binds, the DC is the
-    aggregate model's, bit for bit.
+    Where no cable or module shading is given and no limit binds, the DC is
+    the aggregate model's, bit for bit.
     """
     problems = string_model_problems(setup)
     if problems:
@@ -955,6 +986,7 @@ def string_limited_dc(
     wiring = np.zeros(len(index))
     mismatch = np.zeros(len(index))
     string_mismatch: dict[int, np.ndarray] = {}
+    input_parallel: dict[int, np.ndarray] = {}
     open_circuit = np.zeros(len(index))
     conductor_c = setup.environment.conductor_c
     position = {id(s): i for i, s in enumerate(setup.strings)}
@@ -1002,25 +1034,23 @@ def string_limited_dc(
                 string_mismatch[position[id(string)]] = curve.own_mean_power() - curve.mpp_bare
                 curves.append(curve)
             sources: list[Any] = [_GroupSource(group) for group in groups] + [_CurveSource(c) for c in curves]
-            unconstrained, limited = _curves_power(
-                sources,
-                inverter.min_mppt_voltage_v,
-                inverter.max_mppt_voltage_v,
-                spec.max_input_current_a,
-                string_limit,
-            )
+            solve: Callable[..., tuple[np.ndarray, np.ndarray]] = partial(_curves_power, sources)
             input_open_circuit = _sources_open_circuit(sources)
         else:
-            unconstrained, limited = _input_power(
-                groups,
-                members[0].modules,
-                inverter.min_mppt_voltage_v,
-                inverter.max_mppt_voltage_v,
-                spec.max_input_current_a,
-                string_limit,
-            )
+            solve = partial(_input_power, groups, members[0].modules)
             input_open_circuit = None
-        cost += np.clip(unconstrained - limited, 0.0, None)
+        unconstrained, limited = solve(
+            inverter.min_mppt_voltage_v, inverter.max_mppt_voltage_v, spec.max_input_current_a, string_limit
+        )
+        lost = np.clip(unconstrained - limited, 0.0, None)
+        if len(groups) + len(shaded) > 1:
+            # Strings on different curves share the input's voltage. What that
+            # costs before any limit is the parallel mismatch; the limits cost
+            # the rest, so the two add up to the input's whole loss.
+            _, shared = solve(0.0, math.inf, math.inf, math.inf)
+            input_parallel[mppt_index] = np.minimum(np.clip(unconstrained - shared, 0.0, None), lost)
+            lost = lost - input_parallel[mppt_index]
+        cost += lost
         if spec.max_usable_dc_power_w is not None:
             cost += _excess(limited, spec.max_usable_dc_power_w)
             limited = np.minimum(limited, spec.max_usable_dc_power_w)
@@ -1041,6 +1071,16 @@ def string_limited_dc(
     wiring_series = pd.Series(wiring * availability, index=index, name="dc_wiring_loss_W")
     shading = None
     removed = loss_series + wiring_series
+    parallel = None
+    if input_parallel:
+        parallel = ParallelMismatch(
+            total=pd.Series(sum(input_parallel.values()) * availability, index=index, name="parallel_mismatch_loss_W"),
+            inputs={
+                i: pd.Series(values * availability, index=index, name=f"mppt_{i}_parallel_mismatch_W")
+                for i, values in sorted(input_parallel.items())
+            },
+        )
+        removed = removed + parallel.total
     if string_mismatch:
         shading = ShadingMismatch(
             total=pd.Series(mismatch * availability, index=index, name="shading_mismatch_loss_W"),
@@ -1050,7 +1090,7 @@ def string_limited_dc(
             },
         )
         removed = removed + shading.total
-    return (total - removed).rename("dc_power_W"), loss_series, wiring_series, shading
+    return StringEnergy((total - removed).rename("dc_power_W"), loss_series, wiring_series, parallel, shading)
 
 
 def string_cable_loss(setup: ElectricalSetup, arrays: Sequence[Any]) -> pd.Series:

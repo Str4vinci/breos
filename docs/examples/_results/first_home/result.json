@@ -833,6 +833,7 @@
   },
   "near_shading": null,
   "shading_mismatch": null,
+  "parallel_mismatch": null,
   "pvwatts": {
    "components_pct": {
     "soiling": 2.0,

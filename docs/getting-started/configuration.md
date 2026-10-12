@@ -643,13 +643,17 @@ operating-current limit. Otherwise it moves along the strings' IV curve, from
 the module's single-diode model, to the best point the limits allow. Strings
 from different arrays on one input run at the best point of their summed IV
 curve, which lies a little below the sum of their own maximum power points when
-their irradiance or temperature differ. An input then delivers at most its
+their irradiance or temperature differ; the same holds for module-shaded strings
+on one input. That gap is the `parallel_mismatch` stage of the waterfall, and
+`pv_loss_waterfall.parallel_mismatch` reports it per input: limits aside, it is
+what giving each string its own input would save. An input then delivers at most its
 `max_usable_dc_power_w`, and the inverter at most its own. The inverter starts
 each day at the first step on which an input's open-circuit voltage reaches
-`startup_voltage_v`, and runs while it produces. The DC all this costs appears
+`startup_voltage_v`, and runs while it produces. The DC the limits cost appears
 as the `mppt_limits` stage of the
 [PV loss waterfall](interpreting-results.md#pv-loss-waterfall), and where no
-limit binds the result equals the aggregate run.
+limit binds and no input holds strings on different curves the result equals
+the aggregate run.
 
 String-level energy needs one inverter, the MPPT voltage range, the start-up
 voltage (0 for none), each used input's `max_input_current_a`, and a wiring

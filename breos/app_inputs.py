@@ -486,15 +486,18 @@ def build_pv_production_breakdown(
             arrays = [_single_array_breakdown(cfg, resolved, weather, location, model_kwargs)]
         total = _sum_pv_breakdowns(arrays) if len(arrays) > 1 else arrays[0]
         if string_level:
-            dc, mppt_loss, wiring_loss, mismatch = string_limited_dc(electrical, arrays)
+            energy = string_limited_dc(electrical, arrays)
+            parallel, shading = energy.parallel_mismatch, energy.shading
             return replace(
                 total,
-                dc_after_losses=dc,
-                mppt_limit_loss=mppt_loss,
-                dc_wiring_loss=wiring_loss if cabled else None,
+                dc_after_losses=energy.dc,
+                mppt_limit_loss=energy.limit_loss,
+                dc_wiring_loss=energy.wiring_loss if cabled else None,
                 module_operating=None,
-                shading_mismatch_loss=None if mismatch is None else mismatch.total,
-                string_shading_mismatch=None if mismatch is None else mismatch.strings,
+                shading_mismatch_loss=None if shading is None else shading.total,
+                string_shading_mismatch=None if shading is None else shading.strings,
+                parallel_mismatch_loss=None if parallel is None else parallel.total,
+                input_parallel_mismatch=None if parallel is None else parallel.inputs,
             )
         wiring_loss = string_cable_loss(electrical, arrays)
         return replace(
