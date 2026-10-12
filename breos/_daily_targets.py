@@ -60,7 +60,7 @@ only. At 0, the default, every decision is the one the planner makes without it.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from numbers import Integral, Real
 from typing import Any, Sequence
 
@@ -380,6 +380,10 @@ class _DayEvaluator:
             for level in levels
         ]
         soh, eff_charge, eff_discharge = problem.health()
+        if config.conversion.night_consumption_w > 0.0:
+            # The inverter's night draw is a cost of the system, not of a
+            # target: planned without it, it cannot change dispatch.
+            config = replace(config, inverter_conversion=replace(config.conversion, night_consumption_w=0.0))
         self.state = {
             "battery_config": config,
             "battery_soh_decimal": soh,

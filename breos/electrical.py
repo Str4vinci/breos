@@ -1064,12 +1064,18 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
             if input_open_circuit is None:
                 input_open_circuit = members[0].modules * _open_circuit_voltage(groups)
             open_circuit = np.maximum(open_circuit, input_open_circuit)
+    # The inputs' operating voltage, weighted by what each delivers before the
+    # inverter's own cap, which sheds power from all of them alike.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        voltage = np.where(delivered > 0, voltage_power / delivered, 0.0)
     if inverter.max_usable_dc_power_w is not None:
         cost += _excess(delivered, inverter.max_usable_dc_power_w)
         delivered = np.minimum(delivered, inverter.max_usable_dc_power_w)
     if inverter.startup_voltage_v > 0:
         idle = ~_running(delivered > 0, open_circuit >= inverter.startup_voltage_v - _TOLERANCE)
         cost += np.where(idle, delivered, 0.0)
+        delivered = np.where(idle, 0.0, delivered)
+        voltage = np.where(idle, 0.0, voltage)
 
     total = sum((b.dc_after_losses for b in arrays[1:]), arrays[0].dc_after_losses)
     loss_series = pd.Series(cost * availability, index=index, name="mppt_limit_loss_W")
@@ -1095,10 +1101,11 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
             },
         )
         removed = removed + shading.total
-    with np.errstate(divide="ignore", invalid="ignore"):
-        voltage = np.where(delivered > 0, voltage_power / delivered, 0.0)
+    # Where nothing reaches the inverter its DC is exactly 0, not the rounding
+    # left by taking every loss from the arrays' DC.
+    dc = (total - removed).where(delivered > 0, 0.0)
     return StringEnergy(
-        (total - removed).rename("dc_power_W"),
+        dc.rename("dc_power_W"),
         loss_series,
         wiring_series,
         parallel,

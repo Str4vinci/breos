@@ -341,7 +341,8 @@ substring is lit like the string's brightest reuse that curve.
   `shading_mismatch` stage with each string's own mismatch. Where strings
   in parallel on one input are shaded differently, the voltage they then
   share costs the `parallel_mismatch` stage, as for parallel arrays (ADR 0007
-  D7), so a layout tool can see what a second input would save.
+  D7), so a layout tool can see what a second input would save before the
+  inverter's limits; a binding power cap can leave less to recover.
 - The flat 3 % shading default no longer double-counts when a shading input is
   given.
 - Level 2 is the expensive part: a curve per string and step from its

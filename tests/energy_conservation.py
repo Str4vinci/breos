@@ -91,9 +91,15 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
         atol,
         "PV DC split",
     )
+    # Import also feeds grid charging and the inverter's night consumption.
+    night = _column(results, "Inverter_Night_Consumption")
     _assert_balanced(
         results["Houseload"],
-        results["PV_AC_To_Load"] + results["Battery_AC_To_Load"] + results["Import_From_Grid"] - grid_to_battery,
+        results["PV_AC_To_Load"]
+        + results["Battery_AC_To_Load"]
+        + results["Import_From_Grid"]
+        - grid_to_battery
+        - night,
         atol,
         "load supply",
     )

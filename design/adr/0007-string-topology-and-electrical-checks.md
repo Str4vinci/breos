@@ -344,6 +344,10 @@ These are additive and do not change a field above:
 - Several inverters in string mode, after ADR 0004 (#419).
 - The DC link's voltage while only the battery discharges, for the curve row
   of those steps.
+- The daily-target planner reads the curve at the fixed row, at the full AC
+  rating and without the night consumption. It plans on these; dispatch then
+  runs on the per-step rows and derating, so a plan can be slightly off where
+  they differ.
 
 ## Consequences
 

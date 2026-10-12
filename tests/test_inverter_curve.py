@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity")
 
 from harness import build  # noqa: E402
 
+from tests.energy_conservation import assert_energy_conservation  # noqa: E402
+
 # A synthetic curve with the CEC shape, for the tests only: three voltages,
 # efficiency rising with output and peaking at the middle voltage.
 CURVE = EfficiencyCurve(
@@ -320,6 +322,8 @@ def test_the_inverter_draws_its_night_consumption_from_the_grid_while_it_convert
     np.testing.assert_allclose(
         drawn["Import_From_Grid"] - plain["Import_From_Grid"], drawn["Inverter_Night_Consumption"], atol=1e-9
     )
+    pv, load, temp, cfg, _ = build("discharge_limited", "h")
+    assert_energy_conservation(drawn, BatteryConfig(**{**cfg, "inverter_conversion": night}))
     # It is a draw on the grid, not a dispatch decision: the battery runs as before.
     for column in ("Battery_Energy", "Battery_Discharge_DC", "PV_AC_Export", "Houseload"):
         np.testing.assert_array_equal(drawn[column], plain[column], err_msg=column)

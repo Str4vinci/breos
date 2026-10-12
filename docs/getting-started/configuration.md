@@ -767,8 +767,8 @@ and a battery may still store it. Both keys need a single inverter.
 converts nothing: a step with no PV DC and no battery charge or discharge.
 Take it from the datasheet; unset, it is not modelled. It adds to `Import_From_Grid`, and so to the
 import cost, and the results frame reports it as `Inverter_Night_Consumption`.
-It does not change dispatch. With several inverters their stated values add
-up. The planned charging targets do not see it.
+It does not change dispatch: the planned charging targets are chosen without
+it. With several inverters their stated values add up.
 
 ### AC cable
 

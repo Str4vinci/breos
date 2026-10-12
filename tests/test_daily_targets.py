@@ -554,3 +554,13 @@ def test_python_and_numba_plan_a_held_target_alike(steps_per_day):
     numba = solve_daily_targets(problem, initial_energy_wh=900.0, execution_backend="numba")
     np.testing.assert_array_equal(python.targets, numba.targets)
     assert (python.objective, python.end_energy_wh) == (numba.objective, numba.end_energy_wh)
+
+
+def test_the_inverters_night_consumption_does_not_move_the_targets():
+    from breos.inverter import InverterConversion
+
+    night = _pack(inverter_conversion=InverterConversion(night_consumption_w=6.0))
+    plain = solve_daily_targets(_problem(), initial_energy_wh=1200.0)
+    drawn = solve_daily_targets(_problem(config=night), initial_energy_wh=1200.0)
+    np.testing.assert_array_equal(drawn.targets, plain.targets)
+    assert drawn.objective == plain.objective

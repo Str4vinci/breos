@@ -353,6 +353,28 @@ def test_an_input_and_the_inverter_deliver_at_most_their_usable_dc_power():
     assert dc.iloc[1] == free.iloc[1]
 
 
+def test_the_parallel_mismatch_and_the_limits_add_up_to_the_inputs_loss():
+    """East and west on one input under a usable-DC cap, start-up and availability: the two stages share the loss."""
+    east = replace(
+        _breakdown(TRINA_450, 7, [900.0, 150.0, 600.0], [50.0, 25.0, 40.0], 0.9),
+        pvwatts_components_pct={"availability": 3.0},
+    )
+    west = replace(
+        _breakdown(TRINA_450, 7, [200.0, 700.0, 600.0], [30.0, 45.0, 40.0], 0.85),
+        pvwatts_components_pct={"availability": 3.0},
+    )
+    strings = (PVString(0, 0, 0, 7), PVString(0, 0, 1, 7))
+    arrays = [(TRINA_450, 7), (TRINA_450, 7)]
+    capped = _inverter(MpptSpec(25, max_usable_dc_power_w=2000), startup_voltage_v=80)
+    energy = string_limited_dc(_setup(capped, strings, arrays), [east, west])
+    assert energy.parallel_mismatch is not None
+    parallel = energy.parallel_mismatch.total
+    separate = east.dc_after_losses + west.dc_after_losses
+    np.testing.assert_allclose(parallel + energy.limit_loss, separate - energy.dc, atol=1e-9)
+    # The cap binds at the first step; the shared voltage costs something there too.
+    assert energy.limit_loss.iloc[0] > 0 and parallel.iloc[0] > 0
+
+
 def test_a_string_connection_limit_bounds_identical_parallel_strings_together():
     breakdown = _breakdown(TRINA_450, 14, [1000.0, 600.0], [45.0, 35.0], 0.9)
     arrays = [(TRINA_450, 14)]
@@ -485,6 +507,8 @@ def test_app_parallels_two_arrays_on_one_input(modules, _patch_weather):
     # parallel mismatch rather than a limit.
     assert 0 < mismatch < 0.02 * aggregate["pv_dc_generation_kwh"]
     assert stage(string, "mppt_limits")["delta_kwh"] == pytest.approx(0.0, abs=1e-3)
+    keys = [s["key"] for s in string["pv_loss_waterfall"]["stages"]]
+    assert keys.index("pvwatts_static") < keys.index("parallel_mismatch") == keys.index("mppt_limits") - 1
     summary = string["pv_loss_waterfall"]["parallel_mismatch"]
     assert summary["loss_kwh"] == pytest.approx(mismatch, abs=1e-3)
     assert summary["inputs"] == [{"inverter": 0, "mppt": 0, "strings": [0, 1], "loss_kwh": summary["loss_kwh"]}]
@@ -554,3 +578,28 @@ def test_the_aggregate_cable_loss_is_i2r_at_the_maximum_power_current():
     # Each string carries one module's current; availability is time out of service.
     np.testing.assert_allclose(loss, 2 * i_mp**2 * ohm * 0.97, rtol=1e-12)
     assert loss.iloc[2] == 0
+
+
+def test_the_inverters_cap_does_not_move_the_operating_voltage():
+    # Review regression: the inverter's own cap used to shrink the weights after the voltages were summed.
+    one = _breakdown(TRINA_450, 7, [1000.0], [45.0], 0.9)
+    other = _breakdown(TRINA_450, 7, [1000.0], [45.0], 0.9)
+    strings = (PVString(0, 0, 0, 7), PVString(0, 1, 1, 7))
+    arrays = [(TRINA_450, 7), (TRINA_450, 7)]
+    free = string_limited_dc(_setup(_inverter(MpptSpec(25), MpptSpec(25)), strings, arrays), [one, other])
+    capped = _inverter(MpptSpec(25), MpptSpec(25), max_usable_dc_power_w=3000)
+    energy = string_limited_dc(_setup(capped, strings, arrays), [one, other])
+    assert energy.dc.iloc[0] == pytest.approx(3000)
+    assert energy.voltage.iloc[0] == pytest.approx(7 * one.module_operating.v_mp[0])
+    assert energy.voltage.iloc[0] == free.voltage.iloc[0]
+
+
+def test_an_inverter_waiting_to_start_has_no_voltage_and_exactly_no_dc():
+    # Review regression: idle steps kept their voltage, and the subtraction left about 1e-12 W of DC.
+    trina = _breakdown(TRINA_450, 7, [1000.0], [45.0], 0.9)
+    jinko = _breakdown(JINKO_440, 10, [600.0], [35.0], 0.83)
+    strings = (PVString(0, 0, 0, 7), PVString(0, 1, 1, 10))
+    inverter = _inverter(MpptSpec(8.0), MpptSpec(8.0), startup_voltage_v=600)
+    energy = string_limited_dc(_setup(inverter, strings, [(TRINA_450, 7), (JINKO_440, 10)]), [trina, jinko])
+    assert energy.dc.iloc[0] == 0.0
+    assert energy.voltage.iloc[0] == 0.0
