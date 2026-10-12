@@ -252,6 +252,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   than fall back, without one inverter, the limits it needs, or a sound wiring.
   `breos.solar.calculate_array_breakdowns` returns the per-array breakdowns,
   which now carry each module's operating point.
+- Each `pv_arrays` entry may set its own `temperature_model`, since a rack and
+  a flush roof on one site run about 10 °C apart, and its own `mounting`,
+  `hot_cell_temp_c` and `cold_operating_cell_temp_c` for the string check
+  (`breos.electrical.ArrayMounting`). The most specific value wins: the
+  array's stated temperature, then its mounting's rise, then the
+  `electrical_environment` values. Without these keys every result is
+  unchanged.
 - `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
   only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
   coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.

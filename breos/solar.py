@@ -93,13 +93,15 @@ DEFAULT_PVWATTS_LOSSES: Dict[str, float] = {
 _TRACKING_MODEL_OPTION_KEYS = tuple(key for key in PV_MODEL_CONFIG_KEYS if key != "gcr")
 
 # Model options a single array in ``calculate_multi_array_production_breakdown``
-# may override. ``iam_model``, ``diffuse_iam``, ``temperature_model`` and
-# ``solar_position`` are deliberately absent: they are function-level for every
-# array. That asymmetry is intentional and documented on the public function —
-# sky and ground geometry genuinely differ between arrays on one building,
-# whereas the thermal model and the solar-position convention describe the
-# simulation, not the array.
+# may override. ``iam_model``, ``diffuse_iam`` and ``solar_position`` are
+# deliberately absent: they are function-level for every array. That asymmetry
+# is intentional and documented on the public function. Sky and ground
+# geometry differ between arrays on one building, and so does the thermal
+# model: it encodes the mounting, and a rack and a flush roof on one site run
+# about 10 °C apart. The solar-position convention and the angle-of-incidence
+# model describe the simulation, not the array.
 _PER_ARRAY_MODEL_OPTION_KEYS = (
+    "temperature_model",
     "transposition_model",
     "albedo",
     "surface_type",
@@ -1287,8 +1289,8 @@ def _array_breakdowns(
         mod_name = arr.get("module", "Generic_400W")
         pv_params = get_module(mod_name)
         tracking = arr.get("tracking", "fixed")
-        # Sky/ground geometry is per-array overridable; the thermal model and
-        # solar-position convention stay function-level for every array.
+        # Sky/ground geometry and the thermal model are per-array overridable;
+        # the solar-position convention and IAM stay function-level.
         arr_options = {key: arr.get(key, defaults[key]) for key in _PER_ARRAY_MODEL_OPTION_KEYS}
         arr_options.update({key: defaults[key] for key in _FUNCTION_LEVEL_MODEL_OPTION_KEYS})
         arr_gcr = arr_options["gcr"]
@@ -1485,8 +1487,9 @@ def calculate_multi_array_production(
             ``axis_tilt``, ``axis_azimuth``, ``max_angle``, ``backtrack``,
             ``gcr``, and ``cross_axis_tilt``. Dual-axis arrays can set
             ``dual_axis_max_tilt``. Any array may also set
-            ``transposition_model``, ``albedo``/``surface_type``, or
-            ``model_perez`` to override the function-level defaults.
+            ``transposition_model``, ``albedo``/``surface_type``,
+            ``model_perez`` or ``temperature_model`` to override the
+            function-level defaults.
         freq: Time frequency ('h' or '15min')
         degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
         current_year: Calendar year being simulated. Module age is counted at
@@ -1507,9 +1510,10 @@ def calculate_multi_array_production(
         diffuse_iam: Whether IAM is also applied to the diffuse POA
             components (one of ``DIFFUSE_IAM_METHODS``); function-level for
             all arrays, like ``solar_position``.
-        temperature_model: Cell-temperature model / mounting preset (one of
-            ``TEMPERATURE_MODELS``); function-level for all arrays, like
-            ``solar_position``.
+        temperature_model: Default cell-temperature model / mounting preset
+            (one of ``TEMPERATURE_MODELS``) for arrays that do not set their
+            own. The thermal model encodes the mounting, so it may differ by
+            array: a rack and a flush roof on one site run about 10 °C apart.
         bifacial_model: Default rear-irradiance model for arrays that do not
             override it. ``"infinite_sheds"`` requires bifacial module metadata
             plus GCR, row height, and row pitch.

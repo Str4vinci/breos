@@ -93,7 +93,7 @@ is a `breos run` option that overrides the config file.
 | `surface_type` | `None` | `--surface-type` | Named ground cover mapped to an albedo; an alternative to `albedo`. One of `"aluminum"`, `"asphalt"`, `"concrete"`, `"copper"`, `"dirty steel"`, `"fresh grass"`, `"fresh snow"`, `"fresh steel"`, `"grass"`, `"sand"`, `"sea"`, `"snow"`, `"soil"`, `"urban"` |
 | `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Run a parameter sweep](../how-to/parameter-sweep.md) |
 | `tariff` | *unset* | — | Time-of-use import and export prices on a bundled or custom schedule, replacing the flat `costs.electricity_cost`, `costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use tariffs](configuration.md#time-of-use-tariffs) |
-| `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. The default is Faiman, open rack. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
+| `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. The default is Faiman, open rack. A `pv_arrays` entry may set its own. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
 | `terminal_value` | *unset (basis = none)* | — | Optional estimate of the final battery pack's residual value from its capacity health; see [`[terminal_value]`](#terminal_value) and [Estimated battery residual value](configuration.md#estimated-battery-residual-value) |
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
 | `tracking` | `"fixed"` | — | Tracking mode: `"fixed"`, `"single_axis"`, `"dual_axis"` |
@@ -148,15 +148,19 @@ One entry per array, as `[[pv_arrays]]` in TOML. `modules` is required; an array
 | `azimuth` |  | `azimuth` for this array; inherits the top-level value |
 | `backtrack` |  | `backtrack` for this array; inherits the top-level value |
 | `bifacial_model` |  | `bifacial_model` for this array; inherits the top-level value |
+| `cold_operating_cell_temp_c` |  | Coldest cell temperature while producing (°C) for this array's strings, instead of any mounting rise |
 | `cross_axis_tilt` |  | `cross_axis_tilt` for this array; inherits the top-level value |
 | `dual_axis_max_tilt` |  | `dual_axis_max_tilt` for this array; inherits the top-level value |
 | `gcr` |  | `gcr` for this array; inherits the top-level value |
+| `hot_cell_temp_c` |  | Hottest cell temperature (°C) for this array's strings, instead of any mounting rise |
 | `max_angle` |  | `max_angle` for this array; inherits the top-level value |
 | `model_perez` |  | `model_perez` for this array; inherits the top-level value |
 | `module` |  | Module catalogue key for this array; inherits `pv_module` |
+| `mounting` |  | String-check mounting for this array; inherits `electrical_environment.mounting` |
 | `pvrow_height` |  | `pvrow_height` for this array; inherits the top-level value |
 | `pvrow_pitch` |  | `pvrow_pitch` for this array; inherits the top-level value |
 | `surface_type` |  | `surface_type` for this array; inherits the top-level value |
+| `temperature_model` |  | `temperature_model` for this array; inherits the top-level value |
 | `tilt` |  | `tilt` for this array; inherits the top-level value |
 | `tracking` |  | `tracking` for this array; inherits the top-level value |
 | `transposition_model` |  | `transposition_model` for this array; inherits the top-level value |

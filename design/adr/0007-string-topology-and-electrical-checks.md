@@ -111,6 +111,14 @@ by a mounting-dependent amount (`MOUNTING_TEMPERATURE_RISE_C`: flush 30 °C,
 tilted rack 25 °C, ground mount 20 °C). These are screening values, not bounds:
 an insulated roof at zero wind runs hotter. A caller with a thermal study or
 local rules states `hot_cell_temp_c` and `cold_operating_cell_temp_c` instead.
+Each array may set its own `mounting` and cell temperatures, because a flush
+pitched roof and a tilted rack on one site differ by several degrees. The most
+specific value wins: the array's stated temperature, then the rise of the
+array's mounting, then the site's stated temperature, then the rise of the
+site's mounting. The energy model's `temperature_model` may also differ by
+array, for the same reason. It stays a separate key from `mounting`: the
+screening rises and the thermal-model presets are different scales, and no
+mapping between them is exact.
 `min_design_temp_c` is the extreme annual minimum on the jurisdiction's or
 manufacturer's basis, not a heating-design percentile, which is warmer and
 would clear strings that are too long.
@@ -270,9 +278,6 @@ increments.
 
 These are additive and do not change a field above:
 
-- Per-array mounting and cell temperatures. The energy model takes one thermal
-  model for every array by design, so a roof array and a carport share their
-  cell temperatures; the check takes one mounting to match.
 - Several inverters in string mode, after ADR 0004 (#419).
 
 ## Consequences

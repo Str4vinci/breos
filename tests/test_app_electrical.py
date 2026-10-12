@@ -220,3 +220,31 @@ def test_json_states_an_unbounded_limit_as_text_and_results_stay_strict_json(eas
     result = app.result()
     json.dumps(result, allow_nan=False)
     assert result["provenance"]["resolved_config"]["inverters"][0]["max_dc_voltage_v"] == "inf"
+
+
+def test_an_array_may_set_its_own_mounting_for_the_check(east_west):
+    east_west["pv_arrays"][1]["mounting"] = "flush"
+    east_west["pv_arrays"][1]["hot_cell_temp_c"] = 75
+    resolved = resolve_app_config(east_west)
+    assert resolved.pv_arrays[1]["mounting"] == "flush"
+    assert resolved.electrical.check.status == "pass"
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"mounting": "roof"}, "'pv_arrays[0]': mounting"),
+        ({"temperature_model": "sapm"}, "'pv_arrays[0].temperature_model' must be one of"),
+    ],
+)
+def test_malformed_array_thermal_settings_are_refused(east_west, change, message):
+    east_west["pv_arrays"][0].update(change)
+    with pytest.raises(ValueError, match=re.escape(message)):
+        resolve_app_config(east_west)
+
+
+def test_array_mounting_needs_a_string_topology(east_west):
+    plain = {k: v for k, v in east_west.items() if k not in ("inverters", "pv_strings", "electrical_environment")}
+    plain["pv_arrays"][0]["mounting"] = "flush"
+    with pytest.raises(ValueError, match="applies to the string check"):
+        resolve_app_config(plain)

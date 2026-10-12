@@ -609,6 +609,17 @@ cold Voc is taken at it, before appreciable solar heating. The mounting rises
 are screening values. Where a thermal study or local practice gives other cell
 temperatures, state `hot_cell_temp_c` and `cold_operating_cell_temp_c`.
 
+Arrays on one site may be mounted differently, such as a flush pitched roof and
+a tilted rack on a flat roof. A `pv_arrays` entry may set its own `mounting`,
+`hot_cell_temp_c` and `cold_operating_cell_temp_c` for the strings it feeds.
+The most specific value wins: a temperature the array states, then the rise of
+the array's `mounting`, then a temperature `electrical_environment` states,
+then the rise of its `mounting`. So an array that sets `mounting` takes its
+cell temperatures from that rise and not from the site's stated ones. These
+keys need a string topology. The energy model's `temperature_model` may also
+be set per array; it is separate from `mounting`, so set both when an array's
+mounting differs.
+
 The inverters replace `inverter_loading_ratio` and `inverter_ac_rating_kw`:
 the AC rating is the sum of `nominal_power_w`. When every inverter sets
 `inverter_efficiency`, their nameplate-weighted mean replaces the top-level

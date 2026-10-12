@@ -90,6 +90,9 @@ check.status, [finding.code for finding in check.findings]
 .. autoclass:: breos.electrical.ElectricalEnvironment
    :members:
 
+.. autoclass:: breos.electrical.ArrayMounting
+   :members:
+
 .. autoclass:: breos.electrical.TopologyCheck
    :members:
 

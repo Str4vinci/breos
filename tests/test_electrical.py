@@ -8,6 +8,7 @@ import pytest
 from breos.electrical import (
     BIFACIAL_REAR_IRRADIANCE_RATIO,
     MOUNTING_TEMPERATURE_RISE_C,
+    ArrayMounting,
     ElectricalEnvironment,
     PVString,
     check_topology,
@@ -485,3 +486,27 @@ def test_the_documented_catalogue_matches_the_code():
         if len(cells) == 5 and cells[0].startswith("`") and cells[0].strip("`") in FINDING_CODES:
             rows[cells[0].strip("`")] = (cells[1], cells[2] or None)
     assert rows == {code: (kind.severity, kind.unit) for code, kind in FINDING_CODES.items()}
+
+
+def test_an_array_mounting_overrides_the_site_for_its_own_strings():
+    # 3 modules: 116.1 V hot Vmp at the 65 °C tilted-rack cell, 113.9 V at the 70 °C flush cell.
+    floor = replace(HUAWEI_4KTL, min_mppt_voltage_v=115)
+    arrays = [(TRINA_450, 3), (TRINA_450, 3)]
+    strings = [PVString(0, 0, 0, 3), PVString(0, 1, 1, 3)]
+    assert codes(check_topology(arrays, [floor], strings, PORTO)) == []
+    check = check_topology(arrays, [floor], strings, PORTO, mountings=[None, ArrayMounting(mounting="flush")])
+    assert [(f.code, f.array) for f in check.findings] == [("hot_vmp_below_mppt_min", 1)]
+    with pytest.raises(ValueError, match="1 entries for 2 arrays"):
+        check_topology(arrays, [floor], strings, PORTO, mountings=[None])
+
+
+def test_the_most_specific_cell_temperature_wins():
+    site = ElectricalEnvironment(-5, 40, hot_cell_temp_c=80, cold_operating_cell_temp_c=0)
+    assert ArrayMounting().applied_to(site) == site
+    assert ArrayMounting(hot_cell_temp_c=70).applied_to(site).hot_cell_c == 70
+    assert ArrayMounting(hot_cell_temp_c=70).applied_to(site).cold_operating_cell_c == 0
+    flush = ArrayMounting(mounting="flush").applied_to(site)
+    assert (flush.hot_cell_c, flush.cold_operating_cell_c) == (70, 25)
+    assert ArrayMounting(mounting="flush", hot_cell_temp_c=90).applied_to(site).hot_cell_c == 90
+    with pytest.raises(ValueError, match="mounting must be one of"):
+        ArrayMounting(mounting="roof")

@@ -18,7 +18,9 @@ annual minimum ambient, before appreciable solar heating. Hot Vmp, hot Voc and
 the hot-cell Isc use the hottest ambient plus a mounting-dependent screening
 rise, and the upper MPPT check reads Vmp at the cold operating cell, the
 coldest ambient plus the same rise; a caller may state both cell temperatures
-instead. Voc and Isc move with the coefficients the energy model uses
+instead. Each array may set its own mounting and cell temperatures
+(:class:`ArrayMounting`), since a rack and a flush roof on one site differ by
+several degrees. Voc and Isc move with the coefficients the energy model uses
 (``beta_voc`` and ``alpha_sc``, which honour absolute overrides), and Vmp with
 ``PVModuleParams.T_Vmp_pct_effective``, which derives the coefficient when the
 datasheet does not publish it.
@@ -31,7 +33,7 @@ voltage to the production of the wired strings.
 import math
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from numbers import Integral, Real
 from typing import Any, Literal
 
@@ -158,6 +160,47 @@ class ElectricalEnvironment:
         if self.hot_cell_temp_c is not None:
             return float(self.hot_cell_temp_c)
         return float(self.max_ambient_temp_c + MOUNTING_TEMPERATURE_RISE_C[self.mounting])
+
+
+@dataclass(frozen=True)
+class ArrayMounting:
+    """One array's mounting and cell temperatures, overriding the site's for its strings.
+
+    Each field left None inherits from the :class:`ElectricalEnvironment`. The
+    most specific value wins: a temperature the array states, then the rise of
+    the array's ``mounting``, then a temperature the site states, then the rise
+    of the site's ``mounting``. So an array that states its ``mounting`` takes
+    its cell temperatures from that rise, not from the site's stated ones.
+    """
+
+    mounting: str | None = None
+    hot_cell_temp_c: float | None = None
+    cold_operating_cell_temp_c: float | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("hot_cell_temp_c", "cold_operating_cell_temp_c"):
+            if getattr(self, name) is not None:
+                _finite(name, getattr(self, name))
+        if self.mounting is not None and self.mounting not in MOUNTING_TEMPERATURE_RISE_C:
+            raise ValueError(f"mounting must be one of {sorted(MOUNTING_TEMPERATURE_RISE_C)}, got {self.mounting!r}")
+
+    def applied_to(self, environment: ElectricalEnvironment) -> ElectricalEnvironment:
+        """The site ``environment`` as this array sees it."""
+        if self.mounting is not None:
+            environment = replace(
+                environment, mounting=self.mounting, hot_cell_temp_c=None, cold_operating_cell_temp_c=None
+            )
+        return replace(
+            environment,
+            hot_cell_temp_c=_first_set(self.hot_cell_temp_c, environment.hot_cell_temp_c),
+            cold_operating_cell_temp_c=_first_set(
+                self.cold_operating_cell_temp_c, environment.cold_operating_cell_temp_c
+            ),
+        )
+
+
+def _first_set(value: float | None, fallback: float | None) -> float | None:
+    return fallback if value is None else value
 
 
 def _finite(name: str, value: object) -> None:
@@ -296,6 +339,7 @@ def check_topology(
     environment: ElectricalEnvironment,
     *,
     dc_ac_ratio_range: tuple[float, float] | None = None,
+    mountings: Sequence[ArrayMounting | None] | None = None,
 ) -> TopologyCheck:
     """Check declared strings against the arrays, the inverters and the site.
 
@@ -304,8 +348,16 @@ def check_topology(
     more modules strung than it has, is an error. Exclude a module by lowering
     its array's count. ``dc_ac_ratio_range`` optionally warns when an
     inverter's connected STC power over its AC nameplate falls outside
-    ``(low, high)``. :data:`FINDING_CODES` lists every finding.
+    ``(low, high)``. ``mountings`` optionally gives each array, by position,
+    its own :class:`ArrayMounting`; None inherits the site's.
+    :data:`FINDING_CODES` lists every finding.
     """
+    if mountings is not None and len(mountings) != len(arrays):
+        raise ValueError(f"mountings has {len(mountings)} entries for {len(arrays)} arrays")
+    sites = [
+        environment if mounting is None else mounting.applied_to(environment)
+        for mounting in (mountings if mountings is not None else [None] * len(arrays))
+    ]
     found = _Findings()
     if not inverters:
         found.add("no_inverters", "No inverter is declared.")
@@ -335,7 +387,7 @@ def check_topology(
                 **where,
             )
             continue
-        _check_string(found, index, string, arrays[string.array][0], inverter, environment)
+        _check_string(found, index, string, arrays[string.array][0], inverter, sites[string.array])
         if inverter.mppts is not None:
             on_input[(string.inverter, string.mppt)].append(index)
 
@@ -360,12 +412,10 @@ def check_topology(
             )
 
     for (inverter_index, mppt_index), members in on_input.items():
-        _check_mppt(
-            found, inverter_index, mppt_index, [(i, strings[i]) for i in members], arrays, inverters, environment
-        )
+        _check_mppt(found, inverter_index, mppt_index, [(i, strings[i]) for i in members], arrays, inverters, sites)
 
     for inverter_index, inverter in enumerate(inverters):
-        _check_inverter(found, inverter_index, inverter, strings, arrays, environment, dc_ac_ratio_range)
+        _check_inverter(found, inverter_index, inverter, strings, arrays, sites, dc_ac_ratio_range)
     return TopologyCheck(tuple(found.items))
 
 
@@ -455,7 +505,7 @@ def _check_mppt(
     indexed: list[tuple[int, PVString]],
     arrays: Sequence[tuple[PVModuleParams, int]],
     inverters: Sequence[InverterSpec],
-    environment: ElectricalEnvironment,
+    sites: Sequence[ElectricalEnvironment],
 ) -> None:
     inverter = inverters[inverter_index]
     assert inverter.mppts is not None
@@ -494,7 +544,7 @@ def _check_mppt(
     factor = inverter.isc_comparison_factor
     if factor is None:
         found.missing("isc_comparison_factor", f"Inverter {inverter_index}", inverter=inverter_index)
-    isc = sum(string.parallel * _design_isc(arrays[string.array][0], factor, environment) for string in members)
+    isc = sum(string.parallel * _design_isc(arrays[string.array][0], factor, sites[string.array]) for string in members)
     if spec.max_short_circuit_current_a is None:
         found.missing("max_short_circuit_current_a", owner, **where)
     elif isc > spec.max_short_circuit_current_a + _TOLERANCE:
@@ -526,7 +576,7 @@ def _check_mppt(
     for index, string in indexed:
         module = arrays[string.array][0]
         at = {**where, "string": index, "array": string.array}
-        string_isc = _design_isc(module, factor, environment)
+        string_isc = _design_isc(module, factor, sites[string.array])
         string_isc_limit = spec.max_string_short_circuit_current_a
         if string_isc_limit is not None and string_isc > string_isc_limit + _TOLERANCE:
             found.add(
@@ -569,7 +619,7 @@ def _check_inverter(
     inverter: InverterSpec,
     strings: Sequence[PVString],
     arrays: Sequence[tuple[PVModuleParams, int]],
-    environment: ElectricalEnvironment,
+    sites: Sequence[ElectricalEnvironment],
     dc_ac_ratio_range: tuple[float, float] | None,
 ) -> None:
     connected = [s for s in strings if s.inverter == index and s.array < len(arrays)]
@@ -577,7 +627,8 @@ def _check_inverter(
         return
     if inverter.max_short_circuit_current_a is not None:
         isc = sum(
-            s.parallel * _design_isc(arrays[s.array][0], inverter.isc_comparison_factor, environment) for s in connected
+            s.parallel * _design_isc(arrays[s.array][0], inverter.isc_comparison_factor, sites[s.array])
+            for s in connected
         )
         if isc > inverter.max_short_circuit_current_a + _TOLERANCE:
             found.add(

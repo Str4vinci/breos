@@ -39,6 +39,7 @@ from breos.economics import (
 )
 from breos.electrical import (
     MOUNTING_TEMPERATURE_RISE_C,
+    ArrayMounting,
     ElectricalEnvironment,
     ElectricalSetup,
     PVString,
@@ -480,7 +481,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         doc=(
             'Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting '
             'coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module '
-            "has yet. The default is Faiman, open rack"
+            "has yet. The default is Faiman, open rack. A `pv_arrays` entry may set its own"
         ),
         summary="pv.temperature_model",
     ),
@@ -1349,6 +1350,7 @@ _TRACKER_ANGLE_RANGES = {
 }
 # Per-array settings passed through to the PV model when an array sets them.
 _PV_ARRAY_OPTION_KEYS = (
+    "temperature_model",
     "gcr",
     "transposition_model",
     "albedo",
@@ -1358,8 +1360,19 @@ _PV_ARRAY_OPTION_KEYS = (
     "pvrow_height",
     "pvrow_pitch",
 )
+# Per-array overrides of electrical_environment for the string check.
+_PV_ARRAY_MOUNTING_KEYS = tuple(f.name for f in fields(ArrayMounting))
 _PV_ARRAY_KEYS = frozenset(
-    ("modules", "module", "tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *_PV_ARRAY_OPTION_KEYS)
+    (
+        "modules",
+        "module",
+        "tilt",
+        "azimuth",
+        "tracking",
+        *_TRACKER_GEOMETRY_KEYS,
+        *_PV_ARRAY_OPTION_KEYS,
+        *_PV_ARRAY_MOUNTING_KEYS,
+    )
 )
 PV_ARRAY_TABLE = TableSpec(
     "pv_arrays[i]",
@@ -1372,6 +1385,11 @@ PV_ARRAY_TABLE = TableSpec(
             key: f"`{key}` for this array; inherits the top-level value"
             for key in ("tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *_PV_ARRAY_OPTION_KEYS)
         },
+        "mounting": "String-check mounting for this array; inherits `electrical_environment.mounting`",
+        "hot_cell_temp_c": "Hottest cell temperature (°C) for this array's strings, instead of any mounting rise",
+        "cold_operating_cell_temp_c": (
+            "Coldest cell temperature while producing (°C) for this array's strings, instead of any mounting rise"
+        ),
     },
 )
 
@@ -2479,6 +2497,15 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
                 arr.get("model_perez"),
                 where=f"pv_arrays[{i}]",
             )
+            if "temperature_model" in arr and not is_known_model(arr["temperature_model"], TEMPERATURE_MODELS):
+                valid = ", ".join(TEMPERATURE_MODELS)
+                raise ValueError(f"'pv_arrays[{i}].temperature_model' must be one of: {valid}")
+            mounting_keys = [key for key in _PV_ARRAY_MOUNTING_KEYS if key in arr]
+            if mounting_keys and cfg.get("electrical_environment") is None:
+                raise ValueError(
+                    f"'pv_arrays[{i}].{mounting_keys[0]}' applies to the string check; "
+                    "set 'inverters', 'pv_strings' and 'electrical_environment'"
+                )
             _validate_bifacial_settings(
                 arr.get("bifacial_model", cfg["bifacial_model"]),
                 module or default_module_key(),
@@ -2789,7 +2816,7 @@ def normalise_pv_arrays(
             for key in _TRACKER_GEOMETRY_KEYS:
                 value = arr.get(key)
                 entry[key] = tracker_defaults[key] if value is None else value
-        for key in _PV_ARRAY_OPTION_KEYS:
+        for key in (*_PV_ARRAY_OPTION_KEYS, *_PV_ARRAY_MOUNTING_KEYS):
             if key in arr:
                 entry[key] = arr[key]
         normalized.append(entry)
@@ -2838,13 +2865,18 @@ def validate_temperature_module_metadata(
 ) -> None:
     """Validate any module metadata required by the selected thermal model.
 
-    Array configurations may name different modules, so SAM NOCT needs each
-    one checked during App config resolution rather than failing after weather
-    loading. The thermal kernel repeats this validation for direct solar calls.
+    Array configurations may name different modules and thermal models, so SAM
+    NOCT needs each array checked during App config resolution rather than
+    failing after weather loading. The thermal kernel repeats this validation
+    for direct solar calls.
     """
-    model = normalise_model_name(temperature_model)
-    modules = [get_module(arr["module"]) for arr in pv_arrays] if pv_arrays else [pv_params]
-    for module in modules:
+    if not pv_arrays:
+        validate_temperature_inputs(
+            normalise_model_name(temperature_model), pv_params.Module_Efficiency, pv_params.NOCT
+        )
+    for arr in pv_arrays:
+        module = get_module(arr["module"])
+        model = normalise_model_name(arr.get("temperature_model", temperature_model))
         validate_temperature_inputs(model, module.Module_Efficiency, module.NOCT)
 
 
@@ -3104,11 +3136,15 @@ def _resolve_electrical(
         return None
     inverters, strings, environment = inputs
     arrays = [(get_module(arr["module"]), arr["modules"]) for arr in pv_arrays] or [(pv_params, n_modules)]
+    mountings = [
+        _built(ArrayMounting, {key: arr[key] for key in _PV_ARRAY_MOUNTING_KEYS if key in arr}, f"pv_arrays[{i}]")
+        for i, arr in enumerate(pv_arrays)
+    ] or None
     setup = ElectricalSetup(
         inverters,
         strings,
         environment,
-        check_topology(arrays, inverters, strings, environment),
+        check_topology(arrays, inverters, strings, environment, mountings=mountings),
         fidelity=cfg["electrical_fidelity"],
     )
     if setup.fidelity == "string":

@@ -992,6 +992,22 @@ class TestTemperatureModel:
         assert self._annual(synthetic_weather, porto_location, with_metadata, temperature_model="noct-sam") > 0
 
 
+class TestPerArrayTemperatureModel:
+    def test_each_array_runs_its_own_thermal_model(self, synthetic_weather, porto_location):
+        def dc(arrays, **kw):
+            return calculate_multi_array_production(
+                weather_data=synthetic_weather, location=porto_location, arrays=arrays, freq="h", **kw
+            )
+
+        roof = {"modules": 10, "tilt": 30, "azimuth": 180}
+        mixed = dc([{**roof, "temperature_model": "pvsyst-insulated"}, roof], temperature_model="pvsyst-freestanding")
+        insulated = dc([roof], temperature_model="pvsyst-insulated")
+        free = dc([roof], temperature_model="pvsyst-freestanding")
+        pd.testing.assert_series_equal(mixed, insulated + free, check_names=False)
+        # Restating the default changes nothing, bit for bit.
+        pd.testing.assert_series_equal(dc([{**roof, "temperature_model": "faiman"}]), dc([roof]))
+
+
 class TestGroundReflectance:
     def _dc(self, weather, loc, pv_params, **kw):
         return calculate_pv_production_dc(

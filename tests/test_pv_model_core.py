@@ -239,16 +239,16 @@ def test_every_entry_point_declares_the_whole_model_option_block(function):
 def test_model_option_keys_partition_into_per_array_and_function_level():
     """The multi-array override asymmetry is intentional — pin it exactly.
 
-    ``iam_model``/``diffuse_iam``/``temperature_model``/``solar_position`` are function-level
-    for every array while the sky and ground geometry is per-array
-    overridable. A new option must land in one of the two tuples, and the
+    ``iam_model``/``diffuse_iam``/``solar_position`` are function-level for
+    every array while the sky and ground geometry and the thermal model are
+    per-array overridable. A new option must land in one of the two tuples, and the
     function-level set is pinned exactly.
     """
     per_array = set(solar._PER_ARRAY_MODEL_OPTION_KEYS)
     function_level = set(solar._FUNCTION_LEVEL_MODEL_OPTION_KEYS)
 
     assert per_array | function_level == set(PV_MODEL_CONFIG_KEYS)
-    assert function_level == {"solar_position", "iam_model", "diffuse_iam", "temperature_model"}
+    assert function_level == {"solar_position", "iam_model", "diffuse_iam"}
 
 
 def test_no_public_entry_point_accepts_var_keywords():
