@@ -347,8 +347,13 @@ The `pvwatts` block contains fixed-loss percentages and attributed kWh. The
 `inverter` block reports AC rating plus separate direct-PV and
 battery-discharge conversion losses. With an
 [efficiency curve](configuration.md#inverter-efficiency-curve) it adds
-`efficiency_curve`: the `row_position` the curve was read at and its
-`voltage_v`. With an [AC cable](configuration.md#ac-cable) it adds `ac_cable`:
+`efficiency_curve`: the `row_position` the curve was read at, its `voltage_v`
+and the `voltage_basis`. That is `"fixed"`, or `"operating"` when
+string-level energy reads each step's operating voltage; then
+`operating_voltage_v` is that voltage's mean, weighted by the DC, and
+`row_position` and `voltage_v` are the row of the steps without PV. With a
+stated `night_consumption_w` it adds `night_consumption`: its `power_w`, the
+year's `energy_kwh` and the `hours` it drew. With an [AC cable](configuration.md#ac-cable) it adds `ac_cable`:
 `conductor_resistance_ohm`, `conductor_temp_c`, `conductor_temp_stated`,
 `loss_kwh` (part of `conversion_loss_kwh`) and `loss_pct_at_nameplate`. With
 temperature derating it adds `temperature_derating`: the `ambient` source

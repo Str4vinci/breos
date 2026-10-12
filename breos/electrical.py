@@ -918,7 +918,8 @@ class StringEnergy:
     input's voltage: the sum of each one's own maximum power less the global
     maximum of their summed curve, before any limit. It is None when no input
     holds strings on different curves. ``shading`` is the shading mismatch,
-    or None without module shading.
+    or None without module shading. ``voltage`` is the inputs' operating DC
+    voltage, in V, weighted by the power each delivers; 0 where none does.
     """
 
     dc: pd.Series
@@ -926,6 +927,7 @@ class StringEnergy:
     wiring_loss: pd.Series
     parallel_mismatch: ParallelMismatch | None
     shading: ShadingMismatch | None
+    voltage: pd.Series
 
 
 def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEnergy:
@@ -988,6 +990,8 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
     string_mismatch: dict[int, np.ndarray] = {}
     input_parallel: dict[int, np.ndarray] = {}
     open_circuit = np.zeros(len(index))
+    # The inputs' operating voltages, weighted by the power each delivers.
+    voltage_power = np.zeros(len(index))
     conductor_c = setup.environment.conductor_c
     position = {id(s): i for i, s in enumerate(setup.strings)}
     by_input: dict[int, list[PVString]] = defaultdict(list)
@@ -1034,12 +1038,12 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
                 string_mismatch[position[id(string)]] = curve.own_mean_power() - curve.mpp_bare
                 curves.append(curve)
             sources: list[Any] = [_GroupSource(group) for group in groups] + [_CurveSource(c) for c in curves]
-            solve: Callable[..., tuple[np.ndarray, np.ndarray]] = partial(_curves_power, sources)
+            solve: Callable[..., tuple[np.ndarray, np.ndarray, np.ndarray]] = partial(_curves_power, sources)
             input_open_circuit = _sources_open_circuit(sources)
         else:
             solve = partial(_input_power, groups, members[0].modules)
             input_open_circuit = None
-        unconstrained, limited = solve(
+        unconstrained, limited, input_voltage = solve(
             inverter.min_mppt_voltage_v, inverter.max_mppt_voltage_v, spec.max_input_current_a, string_limit
         )
         lost = np.clip(unconstrained - limited, 0.0, None)
@@ -1047,7 +1051,7 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
             # Strings on different curves share the input's voltage. What that
             # costs before any limit is the parallel mismatch; the limits cost
             # the rest, so the two add up to the input's whole loss.
-            _, shared = solve(0.0, math.inf, math.inf, math.inf)
+            _, shared, _ = solve(0.0, math.inf, math.inf, math.inf)
             input_parallel[mppt_index] = np.minimum(np.clip(unconstrained - shared, 0.0, None), lost)
             lost = lost - input_parallel[mppt_index]
         cost += lost
@@ -1055,6 +1059,7 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
             cost += _excess(limited, spec.max_usable_dc_power_w)
             limited = np.minimum(limited, spec.max_usable_dc_power_w)
         delivered += limited
+        voltage_power += limited * input_voltage
         if inverter.startup_voltage_v > 0:
             if input_open_circuit is None:
                 input_open_circuit = members[0].modules * _open_circuit_voltage(groups)
@@ -1090,7 +1095,16 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
             },
         )
         removed = removed + shading.total
-    return StringEnergy((total - removed).rename("dc_power_W"), loss_series, wiring_series, parallel, shading)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        voltage = np.where(delivered > 0, voltage_power / delivered, 0.0)
+    return StringEnergy(
+        (total - removed).rename("dc_power_W"),
+        loss_series,
+        wiring_series,
+        parallel,
+        shading,
+        pd.Series(voltage, index=index, name="dc_voltage_V"),
+    )
 
 
 def string_cable_loss(setup: ElectricalSetup, arrays: Sequence[Any]) -> pd.Series:
@@ -1207,11 +1221,11 @@ def _input_power(
     v_max: float,
     current_limit: float,
     string_limit: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """One input's unconstrained and limited DC before availability, in W at each step.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One input's unconstrained and limited DC before availability, in W, and its operating voltage, in V.
 
     The limited power equals the unconstrained array, element for element,
-    wherever no limit binds.
+    wherever no limit binds. The voltage is 0 where the input delivers nothing.
     """
     if len(groups) == 1:
         group = groups[0]
@@ -1229,10 +1243,11 @@ def _input_power(
 
 def _single_array_power(
     operating: Any, current_scale: np.ndarray, modules: int, v_min: float, v_max: float, current_limit: float
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     v_mp = np.nan_to_num(operating.v_mp)
     i_mp = np.nan_to_num(operating.i_mp)
     unconstrained = modules * v_mp * current_scale * i_mp
+    operating_v = np.where(unconstrained > 0, modules * v_mp, 0.0)
 
     with np.errstate(divide="ignore", invalid="ignore"):
         module_current_limit = np.where(current_scale > 0, current_limit / current_scale, np.inf)
@@ -1241,7 +1256,7 @@ def _single_array_power(
     limited = producing & ((v_mp < lower_v) | (v_mp > upper_v) | (i_mp > module_current_limit))
     result = unconstrained.copy()
     if not limited.any():
-        return unconstrained, result
+        return unconstrained, result, operating_v
 
     params = [np.asarray(p)[limited] for p in _diode_params(operating)]
     v_at_limit = np.zeros(int(limited.sum()))
@@ -1257,7 +1272,8 @@ def _single_array_power(
     # the input has no usable operating point and delivers nothing.
     current = np.where(lower > upper_v, 0.0, current)
     result[limited] = np.minimum(modules * voltage * current_scale[limited] * current, unconstrained[limited])
-    return unconstrained, result
+    operating_v[limited] = np.where(result[limited] > 0, modules * voltage, 0.0)
+    return unconstrained, result, operating_v
 
 
 # Bisection and golden-section steps for the summed IV curve of parallel
@@ -1269,7 +1285,7 @@ _GRID_POINTS = 64
 
 def _parallel_arrays_power(
     groups: list[_StringGroup], modules: int, v_min: float, v_max: float, current_limit: float, string_limit: float
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Strings from several arrays in parallel: the best point of their summed IV curve within the limits."""
     scales = [group.string_scale for group in groups]
     unconstrained = sum(
@@ -1278,9 +1294,10 @@ def _parallel_arrays_power(
     )
     assert isinstance(unconstrained, np.ndarray)
     result = unconstrained.copy()
+    operating_v = np.zeros(len(unconstrained))
     steps = unconstrained > 0
     if not steps.any():
-        return unconstrained, result
+        return unconstrained, result, operating_v
     params = [[np.asarray(p, dtype=float)[steps] for p in _diode_params(g.operating)] for g in groups]
     string_scales = [scale[steps] for scale in scales]
     input_scales = [g.parallel * scale for g, scale in zip(groups, string_scales, strict=False)]
@@ -1331,9 +1348,13 @@ def _parallel_arrays_power(
         c, d = b - ratio * (b - a), a + ratio * (b - a)
         left = power(c) >= power(d)
         a, b = np.where(left, a, c), np.where(left, d, b)
-    best_power = np.maximum(values[rows, best], power(0.5 * (a + b)))
+    refined = 0.5 * (a + b)
+    refined_power = power(refined)
+    best_power = np.maximum(values[rows, best], refined_power)
+    best_v = np.where(refined_power >= values[rows, best], refined, grid[rows, best])
     result[steps] = np.minimum(np.where(feasible, best_power, 0.0), unconstrained[steps])
-    return unconstrained, result
+    operating_v[steps] = np.where(result[steps] > 0, modules * best_v, 0.0)
+    return unconstrained, result, operating_v
 
 
 class _GroupSource:
@@ -1379,7 +1400,7 @@ _CURVE_PEAKS = 6
 
 def _curves_power(
     sources: list[Any], v_min: float, v_max: float, current_limit: float, string_limit: float
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """An input's unconstrained and limited DC when a string has module shading, in W before availability.
 
     The strings share the input's voltage; the input runs at the global
@@ -1387,10 +1408,12 @@ def _curves_power(
     limits. A lone shaded string whose own maximum power point is inside
     every limit delivers that point exactly; otherwise it is solved on its
     exact curve. Strings in parallel are solved on their tabled curves, each
-    of the best local maxima refined.
+    of the best local maxima refined. The third array is the operating
+    voltage, 0 where the input delivers nothing.
     """
     unconstrained = np.asarray(sum(source.mpp for source in sources), dtype=float)
     result = unconstrained.copy()
+    operating_v = np.zeros(len(unconstrained))
     solve = unconstrained > 0
     if len(sources) == 1 and isinstance(sources[0], _CurveSource):
         curve = sources[0].curve
@@ -1399,14 +1422,15 @@ def _curves_power(
             & (curve.v_mp <= v_max + _TOLERANCE)
             & (curve.i_mp <= min(current_limit, string_limit) + _TOLERANCE)
         )
+        operating_v = np.where(free & (unconstrained > 0), curve.v_mp, 0.0)
         solve &= ~free
         if solve.any():
-            result[solve] = np.minimum(
-                curve.constrained_mpp(solve, v_min, v_max, min(current_limit, string_limit)), unconstrained[solve]
-            )
-        return unconstrained, result
+            found, at = curve.constrained_mpp(solve, v_min, v_max, min(current_limit, string_limit))
+            result[solve] = np.minimum(found, unconstrained[solve])
+            operating_v[solve] = np.where(result[solve] > 0, at, 0.0)
+        return unconstrained, result, operating_v
     if not solve.any():
-        return unconstrained, result
+        return unconstrained, result, operating_v
     index = np.flatnonzero(solve)
     everywhere = np.ones(index.size, dtype=bool)
 
@@ -1451,6 +1475,7 @@ def _curves_power(
     values = power(grid)
     rows = np.arange(index.size)
     best_power = values.max(axis=1)
+    best_v = grid[rows, values.argmax(axis=1)]
     peak = np.zeros_like(values, dtype=bool)
     peak[:, 1:-1] = (values[:, 1:-1] >= values[:, :-2]) & (values[:, 1:-1] >= values[:, 2:])
     peak[:, 0], peak[:, -1] = values[:, 0] >= values[:, 1], values[:, -1] >= values[:, -2]
@@ -1466,9 +1491,13 @@ def _curves_power(
             c, d = b - ratio * (b - a), a + ratio * (b - a)
             left = power(c) >= power(d)
             a, b = np.where(left, a, c), np.where(left, d, b)
-        best_power = np.maximum(best_power, power(0.5 * (a + b)))
+        refined = 0.5 * (a + b)
+        refined_power = power(refined)
+        best_v = np.where(refined_power > best_power, refined, best_v)
+        best_power = np.maximum(best_power, refined_power)
     result[index] = np.minimum(np.where(feasible, best_power, 0.0), unconstrained[index])
-    return unconstrained, result
+    operating_v[index] = np.where(result[index] > 0, best_v, 0.0)
+    return unconstrained, result, operating_v
 
 
 def _sources_open_circuit(sources: list[Any]) -> np.ndarray:

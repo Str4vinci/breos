@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from breos.app_config import APP_CONFIG_FIELDS
+from breos.app_inputs import InverterSteps
 from breos.battery import BatteryConfig, _dispatch_day_python, _resolve_dispatch_day, _ResultBuffers
 from breos.execution import EXECUTION_BACKENDS, aggregate_jit_cache_states
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
@@ -162,7 +163,7 @@ def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(
         lambda *args, **kwargs: (
             {2021: pd.Series([0.0], index=pd.DatetimeIndex(["2021-01-01"]))},
             {2021: pd.Series([25.0], index=pd.DatetimeIndex(["2021-01-01"]))},
-            {2021: None},
+            {2021: InverterSteps(None, None)},
         ),
     )
     # A one-column frame, which is what load_consumption_profile really

@@ -748,11 +748,13 @@ points. Below the first point the inverter loses that point's loss in watts,
 its self-consumption, and above the last it keeps that point's efficiency.
 Each segment is solved exactly in both directions, so dispatch sizes and
 delivers against the same curve. Aggregate energy reads the curve at its
-middle row, the nominal voltage of a three-row curve; string-level energy
-reads it at the strings' STC maximum power voltage, weighted by their STC
-power, between the rows. The curve applies to PV and battery discharge alike,
-as they share the inverter. `inverter_efficiency` is then not used for the
-conversion.
+middle row, the nominal voltage of a three-row curve. String-level energy
+reads it, between the rows, at each step's operating DC voltage: the voltage
+each MPPT input runs at, after its window and current limits, weighted by
+the power it delivers. A step without PV, when only the battery discharges,
+reads the row of the strings' STC maximum power voltage, weighted by their
+STC power. The curve applies to PV and battery discharge alike, as they share
+the inverter. `inverter_efficiency` is then not used for the conversion.
 
 `temperature_derating` lowers the AC rating in hot ambients: the allowed
 output as a fraction of the nameplate at each ambient, linear between the
@@ -760,6 +762,13 @@ points and held beyond them. The ambient is the weather's air temperature,
 for an inverter outdoors, or `electrical_environment.inverter_ambient_temp_c`
 when you state it, for one indoors. DC above the derated rating is clipped,
 and a battery may still store it. Both keys need a single inverter.
+
+`night_consumption_w` is what the inverter draws from the grid while it
+converts nothing: a step with no PV DC and no battery charge or discharge.
+Take it from the datasheet; unset, it is not modelled. It adds to `Import_From_Grid`, and so to the
+import cost, and the results frame reports it as `Inverter_Night_Consumption`.
+It does not change dispatch. With several inverters their stated values add
+up. The planned charging targets do not see it.
 
 ### AC cable
 

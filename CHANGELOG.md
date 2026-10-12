@@ -322,6 +322,24 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   arrays, which until now counted it under `mppt_limits`.
   `breos.electrical.string_limited_dc` returns a `StringEnergy` with the DC,
   each loss and the shading and parallel mismatches.
+- With string-level energy, an inverter efficiency curve is read at each
+  step's operating DC voltage: the voltage each MPPT input runs at after its
+  window and current limits, weighted by the power it delivers. Steps
+  without PV keep the strings' STC voltage row. The run passes the row per
+  step as `inverter_curve_row` to `simulate_energy_balance`,
+  `simulate_energy_balance_summary` and `align_simulation_inputs`, beside
+  `inverter_ac_derate`, and Monte Carlo builds it for each weather year.
+  `pv_loss_waterfall.inverter.efficiency_curve` gains `voltage_basis` and,
+  when it is `"operating"`, `operating_voltage_v`.
+  `StringEnergy.voltage` and `PVProductionBreakdown.dc_voltage` report the
+  voltage.
+- `inverters[i].night_consumption_w`: what the inverter draws from the grid
+  while it converts nothing, with no PV DC and no battery charge or
+  discharge. It adds to `Import_From_Grid` and the import cost, the results
+  frame gains `Inverter_Night_Consumption`, and
+  `pv_loss_waterfall.inverter.night_consumption` reports it. Unset, it is not
+  modelled. `breos.app_inputs.build_dc_system_base` is removed; read
+  `build_pv_production_breakdown(...).dc_after_losses`.
 - `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
   only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
   coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.

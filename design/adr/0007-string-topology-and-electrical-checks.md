@@ -312,8 +312,13 @@ discharge alike. Efficiency is linear in output between the points, so each
 segment solves `ac = eta(ac) * dc` exactly, forward and inverse, and dispatch
 sizes and delivers against one curve. Below the first point the loss holds at
 that point's watts, the self-consumption. Aggregate energy reads the middle
-row; string-level energy reads the row position of the strings' STC maximum
-power voltage, weighted by power. A per-step voltage is a later refinement.
+row. String-level energy reads, at each step, the row position of the inputs'
+operating DC voltage: the voltage each input's solve chose, within its window
+and current limits, weighted by the power it delivers. The kernels take one
+row position per step, like the derating. A step without PV, battery
+discharge only, reads the strings' STC maximum power voltage, weighted by
+power, since the DC link's voltage then is not modelled. A row series that
+holds that one position everywhere gives the scalar run's bits.
 
 `[ac_cable]` is the inverter-to-meter cable: its loss is `k * ac**2`, with k
 from the conductor resistance, phases, voltage and power factor, taken inside
@@ -325,15 +330,20 @@ turns it into a per-step rating fraction from the weather's air temperature,
 or a stated indoor ambient, and the kernels multiply the nameplate by it each
 step. PV-only runs take the same scalar conversion per step, so both paths
 agree exactly. With none of the three, every operation is the PVWatts path's,
-so results are unchanged bit for bit. Night consumption is not modelled yet.
+so results are unchanged bit for bit.
+
+`night_consumption_w` is the inverter's draw while it converts nothing: a step
+with no PV DC and no battery charge or discharge. It is taken from the grid,
+as `Inverter_Night_Consumption` within `Import_From_Grid`, and leaves dispatch
+unchanged. Unset, it is not modelled and not reported missing.
 
 ### Open items
 
 These are additive and do not change a field above:
 
 - Several inverters in string mode, after ADR 0004 (#419).
-- The inverter's night consumption, and a per-step operating voltage for the
-  efficiency curve.
+- The DC link's voltage while only the battery discharges, for the curve row
+  of those steps.
 
 ## Consequences
 

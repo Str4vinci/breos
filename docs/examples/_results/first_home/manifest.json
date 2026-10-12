@@ -2,9 +2,9 @@
  "case": "first_home",
  "title": "PV and battery system in Porto",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-116-gf5e6de2-dirty",
- "generated_utc": "2026-10-12T15:09:07+00:00",
- "runtime_s": 2.2,
+ "git_describe": "v0.7.0-117-g41d9619-dirty",
+ "generated_utc": "2026-10-12T17:41:39+00:00",
+ "runtime_s": 2.3,
  "cheap": true,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"

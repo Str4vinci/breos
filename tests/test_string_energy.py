@@ -227,6 +227,9 @@ def test_the_operating_point_is_the_best_one_the_limits_allow(v_min, v_max, curr
         unconstrained = factor * modules * op.v_mp[step] * op.i_mp[step]
         assert dc.iloc[step] == pytest.approx(min(best, unconstrained), rel=1e-4, abs=1e-3)
         assert loss.iloc[step] == pytest.approx(unconstrained - dc.iloc[step], rel=1e-6, abs=1e-6)
+        # The input's operating voltage is where that best point lies; 0 where it delivers nothing.
+        at = float(grid[allowed][np.argmax((grid * current)[allowed])]) if best > 0 else 0.0
+        assert energy.voltage.iloc[step] == pytest.approx(at, rel=2e-3, abs=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -407,6 +410,8 @@ def test_parallel_arrays_run_at_the_best_point_of_their_summed_curve(v_min, v_ma
         total = i_east + i_west
         allowed = (total <= current_limit + 1e-9) & (np.maximum(i_east, i_west) <= string_limit + 1e-9)
         best = float((grid * np.clip(total, 0, None))[allowed].max()) if allowed.any() else 0.0
+        at = float(grid[allowed][np.argmax((grid * np.clip(total, 0, None))[allowed])]) if best > 0 else 0.0
+        assert energy.voltage.iloc[step] == pytest.approx(at, rel=2e-3, abs=1e-6)
         free_current = 0.9 * np.nan_to_num(_module_current(east, step, anywhere / 7))
         free_current += 0.85 * np.nan_to_num(_module_current(west, step, anywhere / 7))
         shared = float((anywhere * np.clip(free_current, 0, None)).max())

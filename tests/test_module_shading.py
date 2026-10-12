@@ -100,10 +100,15 @@ def test_a_shaded_module_is_bypassed_at_the_global_maximum():
     every = np.ones(STEPS, dtype=bool)
     np.testing.assert_allclose(half.current(half.v_mp, every), half.i_mp, rtol=5e-3)
     # A window below the bypassed peak's voltage leaves the lower peak.
-    _, limited = _curves_power([_CurveSource(half)], 0.0, half.v_mp[0] * 0.8, 50.0, 50.0)
+    _, limited, voltage = _curves_power([_CurveSource(half)], 0.0, half.v_mp[0] * 0.8, 50.0, 50.0)
     assert (limited < half.mpp).all() and (limited > 0.5 * lit.mpp).all()
-    unconstrained, free = _curves_power([_CurveSource(half)], 0.0, 1000.0, 50.0, 50.0)
+    # The operating voltage lies in the window and carries the delivered power,
+    # to the accuracy of the curve's tabled current.
+    assert (voltage <= half.v_mp[0] * 0.8 + 1e-9).all()
+    np.testing.assert_allclose(voltage * half.current(voltage, every), limited, rtol=2e-3)
+    unconstrained, free, at = _curves_power([_CurveSource(half)], 0.0, 1000.0, 50.0, 50.0)
     np.testing.assert_array_equal(free, unconstrained)
+    np.testing.assert_array_equal(at, half.v_mp)
 
 
 def test_a_higher_bypass_diode_voltage_costs_more():
@@ -328,7 +333,7 @@ def _brute_force(curve: ShadedStringCurve, v_min: float, v_max: float) -> float:
 
 def test_a_binding_window_is_solved_on_the_exact_curve():
     curve = _curve([{"beam_shaded_fraction": _table(0.99)}] * 7 + [LIT])
-    _, limited = _curves_power([_CurveSource(curve)], 80.0, 260.0, 50.0, 50.0)
+    _, limited, _ = _curves_power([_CurveSource(curve)], 80.0, 260.0, 50.0, 50.0)
     assert limited[0] == pytest.approx(_brute_force(curve, 80.0, 260.0), rel=1e-4)
 
 
@@ -347,8 +352,10 @@ class _TwoPeaks:
 
 
 def test_the_summed_curve_keeps_its_global_peak():
-    _, limited = _curves_power([_TwoPeaks(), _TwoPeaks()], 0.0, 800.0, 100.0, 100.0)
+    _, limited, voltage = _curves_power([_TwoPeaks(), _TwoPeaks()], 0.0, 800.0, 100.0, 100.0)
     assert limited[0] == pytest.approx(6000.0, rel=1e-3)
+    # The global peak lies at the knee, 300 V, not the higher-voltage one near 697.5 V.
+    assert voltage[0] == pytest.approx(300.0, rel=1e-3)
 
 
 def test_inconsistent_mean_and_limiting_fractions_are_refused(trina):
@@ -464,7 +471,7 @@ def test_a_mismatched_string_draws_current_above_its_open_circuit():
 
 def test_a_window_between_two_table_points_is_still_solved():
     curve = _curve([{"beam_shaded_fraction": _table(0.99)}] * 7 + [LIT])
-    _, limited = _curves_power([_CurveSource(curve)], 80.0, 200.0, 50.0, 50.0)
+    _, limited, _ = _curves_power([_CurveSource(curve)], 80.0, 200.0, 50.0, 50.0)
     assert limited[0] > 0
     assert limited[0] == pytest.approx(_brute_force(curve, 80.0, 200.0), rel=1e-4)
 
@@ -503,7 +510,7 @@ class _FourPlateaus:
 
 
 def test_several_close_peaks_keep_the_global_one():
-    _, limited = _curves_power([_FourPlateaus(), _FourPlateaus()], 0.0, 800.0, 100.0, 100.0)
+    _, limited, _ = _curves_power([_FourPlateaus(), _FourPlateaus()], 0.0, 800.0, 100.0, 100.0)
     assert limited[0] == pytest.approx(6000.0, rel=1e-4)
 
 
@@ -516,8 +523,8 @@ def test_unsigned_current_never_goes_negative_above_open_circuit():
     assert (dim.current(np.full(STEPS, dim.v_oc[0] + 1.0), every) == 0).all()
     clear = _curve([LIT] * 8)
     window = (dim.v_oc[0] + 1.0, clear.v_oc[0])
-    _, limited = _curves_power([_CurveSource(clear), _CurveSource(dim)], *window, 50.0, 50.0)
-    _, alone = _curves_power([_CurveSource(clear)], *window, 50.0, 50.0)
+    _, limited, _ = _curves_power([_CurveSource(clear), _CurveSource(dim)], *window, 50.0, 50.0)
+    _, alone, _ = _curves_power([_CurveSource(clear)], *window, 50.0, 50.0)
     # Above its open circuit, the dim string carries nothing: the clear one delivers alone.
     assert limited[0] == pytest.approx(alone[0], rel=1e-3)
 
@@ -542,5 +549,5 @@ class _NarrowFirstPeak:
 
 
 def test_a_narrow_global_peak_is_not_filtered_out():
-    _, limited = _curves_power([_NarrowFirstPeak(), _NarrowFirstPeak()], 0.0, 800.0, 100.0, 100.0)
+    _, limited, _ = _curves_power([_NarrowFirstPeak(), _NarrowFirstPeak()], 0.0, 800.0, 100.0, 100.0)
     assert limited[0] == pytest.approx(600.0, rel=1e-4)

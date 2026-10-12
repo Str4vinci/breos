@@ -171,7 +171,9 @@ class InverterSpec:
     are not reported missing when unset. ``efficiency_curve`` replaces the
     single ``inverter_efficiency`` with the measured curve, and
     ``temperature_derating`` lowers the AC rating in hot ambients; both accept
-    mappings of their fields. No prices, product identities, certifications or
+    mappings of their fields. ``night_consumption_w`` is what the inverter
+    draws from the grid while it converts nothing, as datasheets state it;
+    unset, it is not modelled and not reported missing. No prices, product identities, certifications or
     sizing presets live here.
     """
 
@@ -190,6 +192,7 @@ class InverterSpec:
     max_usable_dc_power_w: float | None = None
     efficiency_curve: EfficiencyCurve | None = None
     temperature_derating: TemperatureDerating | None = None
+    night_consumption_w: float | None = None
 
     def __post_init__(self) -> None:
         _positive("nominal_power_w", self.nominal_power_w)
@@ -214,7 +217,7 @@ class InverterSpec:
             value = getattr(self, name)
             if value is not None:
                 _upper_limit(name, value)
-        for name in ("min_mppt_voltage_v", "startup_voltage_v"):
+        for name in ("min_mppt_voltage_v", "startup_voltage_v", "night_consumption_w"):
             value = getattr(self, name)
             if value is not None:
                 _lower_limit(name, value)

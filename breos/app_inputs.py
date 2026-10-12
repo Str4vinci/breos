@@ -9,8 +9,9 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, TypeVar, cast
+from typing import Any, Callable, Iterator, NamedTuple, TypeVar, cast
 
+import numpy as np
 import pandas as pd
 from pvlib.location import Location
 
@@ -65,6 +66,9 @@ class PreparedSimulationInputs:
     # The inverter's AC rating per step as a fraction of its nameplate, from
     # its temperature derating; None for an inverter without one.
     inverter_ac_derate: pd.Series | None = None
+    # The efficiency curve's row position per step, from the operating DC
+    # voltage; None where the curve is read at one row.
+    inverter_curve_row: pd.Series | None = None
 
 
 def unknown_source_metadata(provider: str) -> dict[str, Any]:
@@ -439,11 +443,6 @@ def _require_one_year_weather(weather: pd.DataFrame) -> None:
         )
 
 
-def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame) -> pd.Series:
-    """Build undegraded system-level DC production for one simulation year."""
-    return build_pv_production_breakdown(cfg, resolved, weather).dc_after_losses
-
-
 def arrays_with_module_shading(resolved: ResolvedAppConfig) -> list[dict[str, Any]]:
     """The resolved arrays, each whose strings carry module shading with their mean as its ``shading``."""
     arrays = [dict(arr) for arr in resolved.pv_arrays or []]
@@ -498,6 +497,7 @@ def build_pv_production_breakdown(
                 string_shading_mismatch=None if shading is None else shading.strings,
                 parallel_mismatch_loss=None if parallel is None else parallel.total,
                 input_parallel_mismatch=None if parallel is None else parallel.inputs,
+                dc_voltage=energy.voltage,
             )
         wiring_loss = string_cable_loss(electrical, arrays)
         return replace(
@@ -621,7 +621,39 @@ def prepare_simulation_inputs(
         load_data=load_data,
         temperature_series=temperature_series,
         inverter_ac_derate=build_inverter_ac_derate(resolved, weather, pd.DatetimeIndex(dc_system_base.index)),
+        inverter_curve_row=build_inverter_curve_row(resolved, pv_breakdown),
     )
+
+
+class InverterSteps(NamedTuple):
+    """The inverter's per-step inputs for one weather year: its AC rating fraction and its curve row, or None."""
+
+    ac_derate: pd.Series | None
+    curve_row: pd.Series | None
+
+
+def build_inverter_curve_row(resolved: ResolvedAppConfig, pv_breakdown: PVProductionBreakdown) -> pd.Series | None:
+    """The efficiency curve's row position at each step's operating DC voltage, or None.
+
+    With string-level energy and a curve of several voltage rows, each step
+    reads the curve at the inputs' operating voltage, weighted by the power
+    each delivers. A step without PV, when only the battery discharges, keeps
+    the row of the strings' STC maximum power voltage.
+    """
+    voltage = pv_breakdown.dc_voltage
+    if voltage is None:
+        return None
+    electrical = resolved.electrical
+    conversion = resolved.inverter_conversion
+    if electrical is None or conversion is None or len(electrical.inverters) != 1:
+        return None
+    curve = electrical.inverters[0].efficiency_curve
+    if curve is None or curve.voltages_v is None or len(curve.voltages_v) < 2:
+        return None
+    values = voltage.to_numpy(dtype=float)
+    position = np.interp(values, curve.voltages_v, np.arange(len(curve.voltages_v), dtype=float))
+    rows = np.where(values > 0, position, conversion.curve_row)
+    return pd.Series(rows, index=voltage.index, name="inverter_curve_row")
 
 
 def build_inverter_ac_derate(

@@ -299,7 +299,10 @@ def test_default_reject_preserves_the_existing_ledger_bits(name, freq, digest):
         execution_backend="python",
         **kwargs,
     )[0]
-    assert hashlib.sha256(frame.drop(columns="Datetime").to_numpy(dtype=np.float64).tobytes()).hexdigest() == digest
+    # No inverter night consumption is configured: its column is 0 and the rest keep their bits.
+    assert (frame["Inverter_Night_Consumption"] == 0.0).all()
+    ledger = frame.drop(columns=["Datetime", "Inverter_Night_Consumption"])
+    assert hashlib.sha256(ledger.to_numpy(dtype=np.float64).tobytes()).hexdigest() == digest
 
 
 @pytest.mark.usefixtures("_patch_weather")

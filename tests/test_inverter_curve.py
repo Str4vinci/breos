@@ -223,7 +223,7 @@ def test_app_runs_the_curve_cable_and_derating_and_reports_them(curved_inverter_
     app = App(curved_inverter_config)
     app.simulate()
     inverter = app.result()["pv_loss_waterfall"]["inverter"]
-    assert inverter["efficiency_curve"] == {"row_position": 1.0, "voltage_v": 400.0}
+    assert inverter["efficiency_curve"] == {"row_position": 1.0, "voltage_v": 400.0, "voltage_basis": "fixed"}
     assert inverter["ac_cable"]["conductor_temp_stated"] is False
     assert 0 < inverter["ac_cable"]["loss_kwh"] < inverter["conversion_loss_kwh"]
     assert inverter["temperature_derating"]["ambient"] == "weather"
@@ -252,3 +252,162 @@ def test_a_curve_needs_a_single_inverter(curved_inverter_config):
     curved_inverter_config["pv_strings"].append({"inverter": 1, "mppt": 0, "array": 1, "modules": 7})
     with pytest.raises(ValueError, match="needs a single inverter"):
         resolve_app_config(curved_inverter_config)
+
+
+# -- per-step operating voltage and night consumption ---------------------------------------------
+
+
+def test_the_pv_only_path_reads_each_steps_row():
+    dc = np.linspace(0.0, 6500.0, 211)
+    rows = np.linspace(0.0, 2.0, 211)
+    conversion = _conversion(1.0, cable_k=1e-6)
+    ac, loss, clipped = _calculate_dc_ac_power_arrays(dc, NAMEPLATE, 0.96, conversion=conversion, curve_rows=rows)
+    curve_ac, curve_eff, _, cable_k = conversion.kernel_arguments(1.0)
+    for i in range(len(dc)):
+        expected = _dc_ac(float(dc[i]), NAMEPLATE, 0.96, 1.0, 2.0, curve_ac, curve_eff, float(rows[i]), cable_k)
+        assert (ac[i], loss[i], clipped[i]) == expected
+
+
+def _rows(pv: pd.Series) -> pd.Series:
+    # A morning at the lowest voltage row, an afternoon at the highest.
+    return pd.Series(np.where(pv.index.hour < 12, 0.0, 2.0), index=pv.index)
+
+
+def _night_run(backend: str, *, conversion, rows: bool = False):
+    pv, load, temp, cfg, _ = build("discharge_limited", "h")
+    return simulate_energy_balance(
+        pv_dc=pv,
+        houseload=load,
+        battery_config=BatteryConfig(**{**cfg, "inverter_conversion": conversion}),
+        freq="h",
+        temperature_series=temp,
+        execution_backend=backend,
+        inverter_curve_row=_rows(pv) if rows else None,
+    )[0]
+
+
+def test_a_row_series_holding_the_conversions_row_changes_no_bit():
+    pv, load, temp, cfg, _ = build("discharge_limited", "h")
+    conversion = _conversion(1.3, cable_k=2e-6)
+    runs = [
+        simulate_energy_balance(
+            pv_dc=pv,
+            houseload=load,
+            battery_config=BatteryConfig(**{**cfg, "inverter_conversion": conversion}),
+            freq="h",
+            temperature_series=temp,
+            inverter_curve_row=rows,
+        )[0]
+        for rows in (None, pd.Series(1.3, index=pv.index))
+    ]
+    pd.testing.assert_frame_equal(runs[0], runs[1], check_exact=True)
+
+
+def test_each_steps_row_moves_the_conversion():
+    fixed = _night_run("python", conversion=_conversion(1.0))
+    moving = _night_run("python", conversion=_conversion(1.0), rows=True)
+    # Rows 0 and 2 are both below the middle row's efficiency at every point.
+    assert moving["Inverter_Loss"].sum() > fixed["Inverter_Loss"].sum()
+
+
+def test_the_inverter_draws_its_night_consumption_from_the_grid_while_it_converts_nothing():
+    night = InverterConversion(night_consumption_w=6.0)
+    plain = _night_run("python", conversion=NO_CONVERSION)
+    drawn = _night_run("python", conversion=night)
+    idle = (drawn["PV_DC"] <= 0) & (drawn["Battery_Charge_Input"] <= 0) & (drawn["Battery_Discharge_DC"] <= 0)
+    assert idle.any() and not idle.all()
+    np.testing.assert_array_equal(drawn["Inverter_Night_Consumption"], np.where(idle, 6.0, 0.0))
+    np.testing.assert_allclose(
+        drawn["Import_From_Grid"] - plain["Import_From_Grid"], drawn["Inverter_Night_Consumption"], atol=1e-9
+    )
+    # It is a draw on the grid, not a dispatch decision: the battery runs as before.
+    for column in ("Battery_Energy", "Battery_Discharge_DC", "PV_AC_Export", "Houseload"):
+        np.testing.assert_array_equal(drawn[column], plain[column], err_msg=column)
+
+
+def test_a_pv_only_run_draws_the_night_consumption_where_there_is_no_pv():
+    pv, load, _, _, _ = build("discharge_limited", "h")
+    config = BatteryConfig(nominal_energy_wh=0.0, inverter_ac_capacity_w=NAMEPLATE)
+    runs = {
+        name: simulate_energy_balance(pv_dc=pv, houseload=load, battery_config=replace_conversion(config, conversion))[
+            0
+        ]
+        for name, conversion in (("plain", NO_CONVERSION), ("drawn", InverterConversion(night_consumption_w=4.0)))
+    }
+    expected = np.where(runs["drawn"]["PV_DC"] <= 0, 4.0, 0.0)
+    np.testing.assert_array_equal(runs["drawn"]["Inverter_Night_Consumption"], expected)
+    np.testing.assert_allclose(runs["drawn"]["Import_From_Grid"] - runs["plain"]["Import_From_Grid"], expected)
+
+
+def replace_conversion(config: BatteryConfig, conversion: InverterConversion) -> BatteryConfig:
+    from dataclasses import replace
+
+    return replace(config, inverter_conversion=conversion)
+
+
+def test_numba_matches_python_with_each_steps_row_and_the_night_consumption():
+    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
+    conversion = InverterConversion(
+        np.asarray(CURVE.output_fraction), np.asarray(CURVE.efficiency), 1.0, 2e-6, night_consumption_w=7.5
+    )
+    python = _night_run("python", conversion=conversion, rows=True)
+    compiled = _night_run("numba", conversion=conversion, rows=True)
+    for column in python.columns:
+        if column == "Datetime":
+            continue
+        assert np.array_equal(python[column].to_numpy(), compiled[column].to_numpy()), column
+
+
+def test_night_consumption_is_validated():
+    with pytest.raises(ValueError, match="night_consumption_w"):
+        InverterSpec(nominal_power_w=5000, night_consumption_w=-1)
+    with pytest.raises(ValueError, match="night_consumption_w"):
+        InverterConversion(night_consumption_w=math.inf)
+
+
+def test_string_level_energy_reads_the_curve_at_each_steps_operating_voltage(
+    curved_inverter_config, _patch_weather, monkeypatch
+):
+    from breos import App, app_inputs
+
+    config = {**curved_inverter_config, "electrical_fidelity": "string"}
+    config["inverters"] = [{**config["inverters"][0], "night_consumption_w": 5.0}]
+    resolved = resolve_app_config(config)
+    inputs = app_inputs.prepare_simulation_inputs(resolved.cfg, resolved, App._runtime_dependencies())
+    voltage = inputs.pv_breakdown.dc_voltage
+    rows = inputs.inverter_curve_row
+    lit = voltage > 0
+    assert lit.any() and (~lit).any()
+    np.testing.assert_allclose(rows[lit], np.interp(voltage[lit], CURVE.voltages_v, [0.0, 1.0, 2.0]))
+    assert (rows[~lit] == resolved.inverter_conversion.curve_row).all()
+
+    app = App(config)
+    app.simulate()
+    result = app.result()
+    inverter = result["pv_loss_waterfall"]["inverter"]
+    curve = inverter["efficiency_curve"]
+    assert curve["voltage_basis"] == "operating"
+    # 7 modules at their operating point: below their STC 312 V on a warm day.
+    assert 200 < curve["operating_voltage_v"] < 7 * 44.6
+    night = inverter["night_consumption"]
+    assert night["power_w"] == 5.0 and night["hours"] > 0
+    assert night["energy_kwh"] == pytest.approx(5.0 * night["hours"] / 1000, abs=0.01)
+
+    # Without the per-step rows the same run converts differently.
+    monkeypatch.setattr(app_inputs, "build_inverter_curve_row", lambda *args, **kwargs: None)
+    fixed = App(config)
+    fixed.simulate()
+    assert fixed.result()["usable_ac_system_production_kwh"] != result["usable_ac_system_production_kwh"]
+
+
+def test_monte_carlo_years_carry_their_own_curve_rows(curved_inverter_config, synthetic_weather):
+    from breos.montecarlo import _build_pv_years
+
+    config = {**curved_inverter_config, "electrical_fidelity": "string"}
+    resolved = resolve_app_config(config)
+    dc, _, inverter = _build_pv_years(resolved.cfg, resolved, {2023: synthetic_weather})
+    rows = inverter[2023].curve_row
+    assert rows is not None and rows.index.equals(dc[2023].index)
+    assert rows[dc[2023] > 0].nunique() > 1
+    plain = resolve_app_config(curved_inverter_config)
+    assert _build_pv_years(plain.cfg, plain, {2023: synthetic_weather})[2][2023].curve_row is None

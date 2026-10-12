@@ -1,6 +1,7 @@
 """Tests for the Monte Carlo runner (weather + demand resampling)."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -95,8 +96,8 @@ def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch)
     monkeypatch.setattr(mc_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
     monkeypatch.setattr(
         mc_module,
-        "build_dc_system_base",
-        lambda *args, **kwargs: pd.Series([0.0, 1.0], index=index),
+        "build_pv_production_breakdown",
+        lambda *args, **kwargs: SimpleNamespace(dc_after_losses=pd.Series([0.0, 1.0], index=index), dc_voltage=None),
     )
 
     def temperature_builder(temp_config, **kwargs):
@@ -155,8 +156,8 @@ def test_montecarlo_records_transformed_runtime_weather_timing(monkeypatch):
     monkeypatch.setattr(montecarlo_module, "resample_to_15min", resample)
     monkeypatch.setattr(
         montecarlo_module,
-        "build_dc_system_base",
-        lambda *args, **kwargs: pd.Series(0.0, index=index),
+        "build_pv_production_breakdown",
+        lambda *args, **kwargs: SimpleNamespace(dc_after_losses=pd.Series(0.0, index=index), dc_voltage=None),
     )
     monkeypatch.setattr(
         montecarlo_module,

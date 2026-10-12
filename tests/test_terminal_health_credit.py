@@ -9,6 +9,7 @@ import pytest
 
 from breos import App
 from breos.app_config import resolve_app_config
+from breos.app_inputs import InverterSteps
 from breos.battery import align_simulation_inputs
 from breos.economics import terminal_health_credit
 from breos.montecarlo import MonteCarloSettings, _simulate_trajectory, _summarize, run_montecarlo
@@ -366,7 +367,8 @@ def test_montecarlo_values_each_trajectory_before_aggregation(monkeypatch):
     assert len({output[1]["terminal_health_credit"] for output in outputs}) == 3
     # Feed the actual per-trajectory valuations through study assembly and its statistics.
     monkeypatch.setattr(
-        "breos.montecarlo._precompute_year_caches", lambda *args, **kwargs: ({2025: pv}, {2025: temp}, {2025: None})
+        "breos.montecarlo._precompute_year_caches",
+        lambda *args, **kwargs: ({2025: pv}, {2025: temp}, {2025: InverterSteps(None, None)}),
     )
     monkeypatch.setattr("breos.montecarlo._run_trajectory_index", lambda i: outputs[i])
     result = run_montecarlo(resolved.cfg, settings)

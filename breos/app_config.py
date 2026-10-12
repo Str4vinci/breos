@@ -1455,6 +1455,10 @@ INVERTER_TABLE = TableSpec(
             "Allowed AC output against ambient: `ambient_temp_c` (°C, increasing) and `max_output_fraction` "
             "(of the nameplate). See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
         ),
+        "night_consumption_w": (
+            "What the inverter draws from the grid while it converts nothing (W), as its datasheet states; "
+            "unset, it is not modelled. See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
+        ),
     },
 )
 
@@ -3288,11 +3292,14 @@ def _inverter_conversion(
     pv_arrays: list[dict[str, Any]],
     pv_params: PVModuleParams,
 ) -> InverterConversion | None:
-    """The efficiency curve and AC cable the dispatch runs, or None for the PVWatts curve and no cable.
+    """The efficiency curve, AC cable and night consumption the dispatch runs, or None for none of them.
 
     Aggregate energy reads the curve at its middle row, the nominal voltage of
     a three-row curve. String-level energy reads it at the strings' STC
-    maximum power voltage, weighted by their STC power.
+    maximum power voltage, weighted by their STC power; that row stands for
+    the steps without PV, and each step with PV reads its own operating
+    voltage (:func:`breos.app_inputs.build_inverter_curve_row`). The night
+    consumption is every inverter's that states one.
     """
     inverters = electrical.inverters if electrical is not None else ()
     if len(inverters) > 1 and any(i.efficiency_curve or i.temperature_derating for i in inverters):
@@ -3301,7 +3308,9 @@ def _inverter_conversion(
             f"{len(inverters)} are configured"
         )
     curve = inverters[0].efficiency_curve if inverters else None
-    if curve is None and ac_cable is None:
+    stated = [i.night_consumption_w for i in inverters if i.night_consumption_w is not None]
+    night = sum(stated) if stated else None
+    if curve is None and ac_cable is None and night is None:
         return None
     voltage = None
     if curve is not None and electrical is not None and electrical.fidelity == "string":
@@ -3313,7 +3322,7 @@ def _inverter_conversion(
         ]
         power = sum(p for p, _ in weighted)
         voltage = sum(p * v for p, v in weighted) / power if power > 0 else None
-    return InverterConversion.build(curve, voltage_v=voltage, ac_cable=ac_cable)
+    return InverterConversion.build(curve, voltage_v=voltage, ac_cable=ac_cable, night_consumption_w=night)
 
 
 def _check_module_shading(

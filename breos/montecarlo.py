@@ -36,8 +36,10 @@ from breos.app import App
 from breos.app_config import ResolvedAppConfig, resolve_app_config
 from breos.app_inputs import (
     INPUT_INDEPENDENT_KEYS,
-    build_dc_system_base,
+    InverterSteps,
     build_inverter_ac_derate,
+    build_inverter_curve_row,
+    build_pv_production_breakdown,
     config_cache_key,
     load_consumption_profile,
     resample_hourly_weather,
@@ -253,7 +255,7 @@ def _load_weather_years(
     return indexed_by_year
 
 
-_PvYears = tuple[dict[int, pd.Series], dict[int, pd.Series], dict[int, pd.Series | None]]
+_PvYears = tuple[dict[int, pd.Series], dict[int, pd.Series], dict[int, InverterSteps]]
 
 
 def _build_pv_years(
@@ -261,25 +263,30 @@ def _build_pv_years(
     resolved: ResolvedAppConfig,
     weather_by_year: dict[int, pd.DataFrame],
 ) -> _PvYears:
-    """Build each year's undegraded DC production, battery temperature and inverter derating series.
+    """Build each year's undegraded DC production, battery temperature and inverter series.
 
     All read the weather frames without writing to them, which is what lets
     a :class:`MonteCarloYearCache` build them again from the frames it holds.
-    The derating is None for an inverter without one.
+    The inverter series are its temperature derating and its efficiency
+    curve's row at each step's operating voltage, each None when not modelled.
     """
     dc_by_year: dict[int, pd.Series] = {}
     temp_by_year: dict[int, pd.Series] = {}
-    derate_by_year: dict[int, pd.Series | None] = {}
+    inverter_by_year: dict[int, InverterSteps] = {}
     for year, weather in weather_by_year.items():
-        dc_by_year[year] = build_dc_system_base(cfg, resolved, weather)
+        breakdown = build_pv_production_breakdown(cfg, resolved, weather)
+        dc_by_year[year] = breakdown.dc_after_losses
         temp_by_year[year] = build_battery_temperature_series(
             cfg["battery_temperature"],
             index=dc_by_year[year].index,
             weather_df=weather,
             indoor_model=cfg["battery_indoor_model"],
         )
-        derate_by_year[year] = build_inverter_ac_derate(resolved, weather, dc_by_year[year].index)
-    return dc_by_year, temp_by_year, derate_by_year
+        inverter_by_year[year] = InverterSteps(
+            build_inverter_ac_derate(resolved, weather, dc_by_year[year].index),
+            build_inverter_curve_row(resolved, breakdown),
+        )
+    return dc_by_year, temp_by_year, inverter_by_year
 
 
 def _precompute_year_caches(
@@ -289,7 +296,7 @@ def _precompute_year_caches(
     *,
     runtime_weather: dict[str, Any] | None = None,
 ) -> _PvYears:
-    """Build per-year undegraded DC production, battery temperature and inverter derating series."""
+    """Build per-year undegraded DC production, battery temperature and inverter series."""
     weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
     return _build_pv_years(cfg, resolved, weather_by_year)
 
@@ -395,7 +402,7 @@ class MonteCarloYearCache:
         pv_key: str | None,
         dc_by_year: dict[int, pd.Series],
         temp_by_year: dict[int, pd.Series],
-        derate_by_year: dict[int, pd.Series | None],
+        inverter_by_year: dict[int, InverterSteps],
     ) -> None:
         self._weather_key = weather_key
         self._weather_by_year = weather_by_year
@@ -403,7 +410,7 @@ class MonteCarloYearCache:
         self._pv_key = pv_key
         self._dc_by_year = dc_by_year
         self._temp_by_year = temp_by_year
-        self._derate_by_year = derate_by_year
+        self._inverter_by_year = inverter_by_year
 
     @property
     def weather_key(self) -> dict[str, Any]:
@@ -425,8 +432,8 @@ class MonteCarloYearCache:
 
     def _years_for(
         self, cfg: dict[str, Any], resolved: ResolvedAppConfig, settings: MonteCarloSettings
-    ) -> tuple[dict[int, pd.Series], dict[int, pd.Series], dict[int, pd.Series | None], dict[str, Any]]:
-        """The DC, temperature and derating series and weather record for one study."""
+    ) -> tuple[dict[int, pd.Series], dict[int, pd.Series], dict[int, InverterSteps], dict[str, Any]]:
+        """The DC, temperature and inverter series and weather record for one study."""
         weather_key = _weather_cache_key(cfg, resolved, settings)
         if weather_key != self._weather_key:
             differing = ", ".join(name for name in weather_key if weather_key[name] != self._weather_key.get(name))
@@ -436,7 +443,7 @@ class MonteCarloYearCache:
             )
         pv_key = _pv_cache_key(cfg)
         if pv_key is None or pv_key != self._pv_key:
-            self._dc_by_year, self._temp_by_year, self._derate_by_year = _build_pv_years(
+            self._dc_by_year, self._temp_by_year, self._inverter_by_year = _build_pv_years(
                 cfg, resolved, self._weather_by_year
             )
             self._pv_key = pv_key
@@ -445,7 +452,7 @@ class MonteCarloYearCache:
         return (
             dict(self._dc_by_year),
             dict(self._temp_by_year),
-            dict(self._derate_by_year),
+            dict(self._inverter_by_year),
             deepcopy(self._runtime_weather),
         )
 
@@ -507,9 +514,9 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
     weather_key = _weather_cache_key(cfg, resolved, settings)
     runtime_weather: dict[str, Any] = {}
     weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
-    dc_by_year, temp_by_year, derate_by_year = _build_pv_years(cfg, resolved, weather_by_year)
+    dc_by_year, temp_by_year, inverter_by_year = _build_pv_years(cfg, resolved, weather_by_year)
     return MonteCarloYearCache(
-        weather_key, weather_by_year, runtime_weather, _pv_cache_key(cfg), dc_by_year, temp_by_year, derate_by_year
+        weather_key, weather_by_year, runtime_weather, _pv_cache_key(cfg), dc_by_year, temp_by_year, inverter_by_year
     )
 
 
@@ -518,7 +525,7 @@ def _align_years(
     base_load: pd.DataFrame,
     dc_by_year: dict[int, pd.Series],
     temp_by_year: dict[int, pd.Series],
-    derate_by_year: dict[int, pd.Series | None],
+    inverter_by_year: dict[int, InverterSteps],
     *,
     has_battery: bool,
 ) -> dict[int, AlignedSimulationInputs]:
@@ -543,7 +550,8 @@ def _align_years(
             base_load,
             temp_by_year[year] if has_battery else None,
             freq=freq,
-            inverter_ac_derate=derate_by_year.get(year),
+            inverter_ac_derate=inverter_by_year[year].ac_derate,
+            inverter_curve_row=inverter_by_year[year].curve_row,
         )
         for year, dc_power in dc_by_year.items()
     }
@@ -1005,14 +1013,14 @@ def run_montecarlo(
 
     if year_cache is None:
         runtime_weather: dict[str, Any] = {}
-        dc_by_year, temp_by_year, derate_by_year = _precompute_year_caches(
+        dc_by_year, temp_by_year, inverter_by_year = _precompute_year_caches(
             cfg,
             resolved,
             settings,
             runtime_weather=runtime_weather,
         )
     else:
-        dc_by_year, temp_by_year, derate_by_year, runtime_weather = year_cache._years_for(cfg, resolved, settings)
+        dc_by_year, temp_by_year, inverter_by_year, runtime_weather = year_cache._years_for(cfg, resolved, settings)
     available_years = np.array(sorted(dc_by_year.keys()))
 
     deps = App._runtime_dependencies()
@@ -1027,7 +1035,7 @@ def run_montecarlo(
         base_load,
         dc_by_year,
         temp_by_year,
-        derate_by_year,
+        inverter_by_year,
         has_battery=has_battery,
     )
     pv_chains = _prepare_pv_chains(cfg, resolved, aligned_by_year, settings, years_per_run)

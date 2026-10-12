@@ -319,6 +319,9 @@ _LEDGER_COLUMNS: Tuple[str, ...] = (
     "PV_Direct_Inverter_Loss",
     "Battery_Inverter_Loss",
     "Inverter_Loss",
+    # What the inverter draws from the grid while it converts nothing: no PV
+    # DC, no battery charge or discharge. Part of Import_From_Grid.
+    "Inverter_Night_Consumption",
     "Standby_Loss",
     "Capacity_Window_Loss",
     "Battery_Replacement_Energy_Removed",
@@ -385,6 +388,7 @@ L_BATTERY_AC_TO_LOAD = _ROW["Battery_AC_To_Load"]
 L_PV_DIRECT_INVERTER_LOSS = _ROW["PV_Direct_Inverter_Loss"]
 L_BATTERY_INVERTER_LOSS = _ROW["Battery_Inverter_Loss"]
 L_INVERTER_LOSS = _ROW["Inverter_Loss"]
+L_INVERTER_NIGHT_CONSUMPTION = _ROW["Inverter_Night_Consumption"]
 L_STANDBY_LOSS = _ROW["Standby_Loss"]
 L_CAPACITY_WINDOW_LOSS = _ROW["Capacity_Window_Loss"]
 L_REPLACEMENT_ENERGY_REMOVED = _ROW["Battery_Replacement_Energy_Removed"]
@@ -908,9 +912,10 @@ def _dispatch_day(
     grid_import_cap_wh: float,
     curve_ac: np.ndarray,
     curve_eff: np.ndarray,
-    curve_row: float,
+    curve_rows: np.ndarray,
     ac_derate: np.ndarray,
     cable_k: float,
+    night_wh: float,
 ) -> None:
     """Dispatch timesteps ``[lo, hi)`` at fixed health, writing rows of *matrix*.
 
@@ -925,9 +930,11 @@ def _dispatch_day(
     so the energy it names moves with temperature and health (A7).
 
     ``curve_ac``, ``curve_eff`` and ``cable_k`` are the inverter's conversion
-    (:func:`_dc_ac`), with ``curve_row`` the operating voltage's position among
-    the curve's rows. ``ac_derate`` is each step's AC rating as a fraction of
-    ``inv_cap_ac_wh``, indexed like the inputs.
+    (:func:`_dc_ac`), with ``curve_rows`` each step's operating voltage as a
+    position among the curve's rows. ``ac_derate`` is each step's AC rating
+    as a fraction of ``inv_cap_ac_wh``; both are indexed like the inputs.
+    ``night_wh`` is what the inverter draws from the grid in a step in which
+    it converts nothing: no PV DC and no battery charge or discharge.
 
     Nothing is returned: the state the next window and the day-close
     replacement path need is the final step's row of *matrix*.
@@ -1030,11 +1037,15 @@ def _dispatch_day(
             grid_import_cap_wh,
             curve_ac,
             curve_eff,
-            curve_row,
+            curve_rows[i],
             cable_k,
         )
         if battery_charge_input > 0.0 and battery_discharge_dc > 0.0:
             raise ValueError("a dispatch step both charged and discharged the battery")
+        night_consumption = 0.0
+        if night_wh > 0.0 and pv_dc_power <= 0.0 and battery_charge_input <= 0.0 and battery_discharge_dc <= 0.0:
+            night_consumption = night_wh
+            grid_import += night_consumption
         charge_stored = battery_charge_input * eff_charge
         # Each source's charge adds to its own origin: PV DC to PV, grid to grid.
         pv_charge_stored = pv_dc_to_battery * eff_charge
@@ -1107,6 +1118,7 @@ def _dispatch_day(
         matrix[L_PV_DIRECT_INVERTER_LOSS, i] = pv_direct_inverter_loss / hours_per_step
         matrix[L_BATTERY_INVERTER_LOSS, i] = battery_inverter_loss / hours_per_step
         matrix[L_INVERTER_LOSS, i] = (pv_direct_inverter_loss + battery_inverter_loss) / hours_per_step
+        matrix[L_INVERTER_NIGHT_CONSUMPTION, i] = night_consumption / hours_per_step
         matrix[L_STANDBY_LOSS, i] = battery_standby_loss / hours_per_step
         matrix[L_CAPACITY_WINDOW_LOSS, i] = capacity_window_loss / hours_per_step
         matrix[L_REPLACEMENT_ENERGY_REMOVED, i] = 0.0
@@ -1149,6 +1161,7 @@ def _day_arguments(
     cap_stored_wh: float = math.inf,
     instructions: Optional["DispatchInstructions"] = None,
     ac_derate: Optional[np.ndarray] = None,
+    curve_rows: Optional[np.ndarray] = None,
 ) -> Tuple[Any, ...]:
     """Pack one day's state into the positional arguments of :func:`_dispatch_day`.
 
@@ -1164,14 +1177,19 @@ def _day_arguments(
 
     ``ac_derate`` is the inverter's AC rating per step as a fraction of
     ``cap_wh``, over the whole run like ``instructions``; None is the full
-    rating. ``battery_config.inverter_conversion`` supplies the efficiency curve
-    and AC cable.
+    rating. ``curve_rows`` is each step's position among the efficiency
+    curve's voltage rows, likewise; None holds the conversion's own row.
+    ``battery_config.inverter_conversion`` supplies the efficiency curve, the
+    AC cable and the night consumption.
     """
     if instructions is None:
         instructions = DispatchInstructions.noop(len(pv_dc_vals))
     if ac_derate is None:
         ac_derate = np.ones(len(pv_dc_vals))
-    curve_ac, curve_eff, curve_row, cable_k = battery_config.conversion.kernel_arguments(hours_per_step)
+    conversion = battery_config.conversion
+    curve_ac, curve_eff, curve_row, cable_k = conversion.kernel_arguments(hours_per_step)
+    if curve_rows is None:
+        curve_rows = np.full(len(pv_dc_vals), curve_row)
     return (
         out.matrix,
         pv_dc_vals,
@@ -1205,9 +1223,10 @@ def _day_arguments(
         float(instructions.grid_import_limit_w * hours_per_step),
         curve_ac,
         curve_eff,
-        float(curve_row),
+        curve_rows,
         ac_derate,
         float(cable_k),
+        float(conversion.night_consumption_w * hours_per_step),
     )
 
 

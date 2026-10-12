@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -79,7 +80,11 @@ def test_montecarlo_records_the_offset_the_pv_model_applies(monkeypatch, spellin
     frame = pd.DataFrame({"date": pd.date_range("2025-01-01", periods=2, freq="h"), "temperature_2m": [10.0, 11.0]})
     index = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
     monkeypatch.setattr(montecarlo_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
-    monkeypatch.setattr(montecarlo_module, "build_dc_system_base", lambda *args, **kwargs: pd.Series(0.0, index=index))
+    monkeypatch.setattr(
+        montecarlo_module,
+        "build_pv_production_breakdown",
+        lambda *args, **kwargs: SimpleNamespace(dc_after_losses=pd.Series(0.0, index=index), dc_voltage=None),
+    )
     monkeypatch.setattr(
         montecarlo_module, "build_battery_temperature_series", lambda *args, **kwargs: pd.Series(25.0, index=index)
     )

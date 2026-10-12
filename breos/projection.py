@@ -745,6 +745,9 @@ class ProjectionYear:
     # The inverter's AC rating per step as a fraction of its nameplate, from
     # temperature derating, with the per-step series; None for none.
     inverter_ac_derate: pd.Series | None = None
+    # The efficiency curve's row position per step, from the operating DC
+    # voltage, with the per-step series; None reads the conversion's own row.
+    inverter_curve_row: pd.Series | None = None
 
 
 @dataclass(frozen=True)
@@ -1041,6 +1044,7 @@ def project_years(
                     houseload=year.houseload,
                     temperature_series=year.temperature_series if has_battery else None,
                     inverter_ac_derate=year.inverter_ac_derate,
+                    inverter_curve_row=year.inverter_curve_row,
                     instruction_planner=plan_year,
                     **core_kwargs,
                 )
@@ -1061,6 +1065,7 @@ def project_years(
                         houseload=year.houseload,
                         temperature_series=year.temperature_series if has_battery else None,
                         inverter_ac_derate=year.inverter_ac_derate,
+                        inverter_curve_row=year.inverter_curve_row,
                         **common,
                     ),
                 )
@@ -1073,6 +1078,7 @@ def project_years(
                     houseload=year.houseload,
                     temperature_series=year.temperature_series,
                     inverter_ac_derate=year.inverter_ac_derate,
+                    inverter_curve_row=year.inverter_curve_row,
                     day_controller=day_controller,
                     controller_tariff=tariff,
                     controller_carry=carry.controller_carry,

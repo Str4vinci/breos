@@ -221,15 +221,19 @@ def _bifacial_summary(
 
 def _inverter_model_fields(
     resolved: ResolvedAppConfig,
+    pv_breakdown: PVProductionBreakdown,
     first_year_results_df: pd.DataFrame,
     freq: str,
     inverter_ac_derate: pd.Series | None,
 ) -> dict[str, Any]:
-    """The inverter block's records of an efficiency curve, an AC cable and temperature derating.
+    """The inverter block's records of an efficiency curve, an AC cable, temperature derating and night draw.
 
     Each is present only when configured. The AC cable's loss is part of
     ``conversion_loss_kwh``; ``ac_cable.loss_kwh`` reports it alone, from the
-    inverter's delivered AC output at each step.
+    inverter's delivered AC output at each step. A curve read at each step's
+    operating voltage reports that voltage's mean, weighted by the DC; its
+    ``row_position`` and ``voltage_v`` are then the row of the steps
+    without PV.
     """
     fields: dict[str, Any] = {}
     conversion = resolved.inverter_conversion
@@ -243,7 +247,17 @@ def _inverter_model_fields(
             "voltage_v": None
             if voltages is None
             else _rounded(float(np.interp(position, np.arange(len(voltages)), voltages)), digits=1),
+            "voltage_basis": "fixed",
         }
+        operating = pv_breakdown.dc_voltage
+        if operating is not None and voltages is not None and len(voltages) > 1:
+            weights = pv_breakdown.dc_after_losses.to_numpy(dtype=float).clip(min=0.0)
+            weights = np.where(operating.to_numpy(dtype=float) > 0, weights, 0.0)
+            mean = float(np.average(operating, weights=weights)) if weights.sum() > 0 else None
+            fields["efficiency_curve"].update(
+                voltage_basis="operating",
+                operating_voltage_v=None if mean is None else _rounded(mean, digits=1),
+            )
     cable = resolved.ac_cable
     if cable is not None:
         k = cable.loss_coefficient_per_w
@@ -261,6 +275,14 @@ def _inverter_model_fields(
             "conductor_temp_stated": cable.conductor_temp_c is not None,
             "loss_kwh": _rounded(_series_energy_kwh(loss, freq)),
             "loss_pct_at_nameplate": _rounded(cable.loss_pct_at(resolved.inverter_ac_capacity_w or 0.0), digits=4),
+        }
+    if electrical is not None and any(i.night_consumption_w is not None for i in electrical.inverters):
+        assert conversion is not None
+        night = first_year_results_df["Inverter_Night_Consumption"]
+        fields["night_consumption"] = {
+            "power_w": conversion.night_consumption_w,
+            "energy_kwh": _rounded(_series_energy_kwh(night, freq)),
+            "hours": _rounded(float((night > 0).sum()) * get_hours_per_step(freq)),
         }
     if inverter_ac_derate is not None:
         assert electrical is not None
@@ -467,7 +489,7 @@ def _build_pv_loss_waterfall(
             "conversion_loss_kwh": _rounded(inverter_conversion),
             "direct_pv_conversion_loss_kwh": _rounded(direct_pv_conversion),
             "battery_discharge_conversion_loss_kwh": _rounded(battery_discharge_conversion),
-            **_inverter_model_fields(resolved, first_year_results_df, freq, inverter_ac_derate),
+            **_inverter_model_fields(resolved, pv_breakdown, first_year_results_df, freq, inverter_ac_derate),
         },
         "dispatch": dispatch,
         "energy_balance": {
@@ -559,6 +581,7 @@ def run_app_simulation(
             temperature_series=inputs.temperature_series,
             extra=extra,
             inverter_ac_derate=inputs.inverter_ac_derate,
+            inverter_curve_row=inputs.inverter_curve_row,
         )
 
     # Every project year replays the start-year calendar (ADR 0002 A2), so the

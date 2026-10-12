@@ -44,13 +44,15 @@ class InverterConversion:
     ``curve_row`` is the operating voltage's position among the rows. Empty
     arrays keep the PVWatts part-load curve. ``ac_cable_k_per_w`` is the AC
     cable's loss over the square of the AC output, in 1/W (:class:`AcCable`).
-    The default converts exactly as no conversion does.
+    ``night_consumption_w`` is what the inverter draws from the grid while it
+    converts nothing. The default converts exactly as no conversion does.
     """
 
     curve_ac: np.ndarray = field(default_factory=lambda: _NO_CURVE_AC)
     curve_eff: np.ndarray = field(default_factory=lambda: _NO_CURVE_EFF)
     curve_row: float = 0.0
     ac_cable_k_per_w: float = 0.0
+    night_consumption_w: float = 0.0
 
     def __post_init__(self) -> None:
         curve_ac = np.ascontiguousarray(self.curve_ac, dtype=np.float64).reshape(-1)
@@ -65,10 +67,14 @@ class InverterConversion:
         row = float(self.curve_row)
         if not math.isfinite(row) or row < 0.0:
             raise ValueError("curve_row must be a finite number of at least 0")
+        night = float(self.night_consumption_w)
+        if not math.isfinite(night) or night < 0.0:
+            raise ValueError("night_consumption_w must be a finite number of at least 0")
         object.__setattr__(self, "curve_ac", curve_ac)
         object.__setattr__(self, "curve_eff", curve_eff)
         object.__setattr__(self, "curve_row", row)
         object.__setattr__(self, "ac_cable_k_per_w", k)
+        object.__setattr__(self, "night_consumption_w", night)
 
     @classmethod
     def build(
@@ -77,25 +83,28 @@ class InverterConversion:
         *,
         voltage_v: Optional[float] = None,
         ac_cable: Optional["AcCable"] = None,
+        night_consumption_w: Optional[float] = None,
     ) -> "InverterConversion":
-        """The conversion for an efficiency curve read at DC voltage ``voltage_v``, and an AC cable.
+        """The conversion for an efficiency curve read at DC voltage ``voltage_v``, an AC cable and a night draw.
 
         Without ``voltage_v`` a curve is read at its middle row: the nominal
         voltage of a three-row curve.
         """
         k = 0.0 if ac_cable is None else ac_cable.loss_coefficient_per_w
+        night = 0.0 if night_consumption_w is None else night_consumption_w
         if curve is None:
-            return cls(ac_cable_k_per_w=k)
+            return cls(ac_cable_k_per_w=k, night_consumption_w=night)
         rows = len(curve.efficiency)
         position = (rows - 1) / 2.0 if voltage_v is None else curve.row_position(voltage_v)
-        return cls(np.asarray(curve.output_fraction), np.asarray(curve.efficiency), position, k)
+        return cls(np.asarray(curve.output_fraction), np.asarray(curve.efficiency), position, k, night)
 
     @property
     def is_default(self) -> bool:
+        """Whether DC converts to AC as the PVWatts curve with no cable does; the night draw is apart."""
         return self.curve_ac.size == 0 and self.ac_cable_k_per_w == 0.0
 
     def cache_key(self) -> tuple[Any, ...]:
-        """A hashable identity of the conversion, for memo keys."""
+        """A hashable identity of the DC-to-AC conversion, for memo keys; the night draw is not part of it."""
         return (tuple(self.curve_ac), tuple(map(tuple, self.curve_eff)), self.curve_row, self.ac_cable_k_per_w)
 
     def kernel_arguments(self, hours_per_step: float) -> tuple[np.ndarray, np.ndarray, float, float]:
@@ -311,6 +320,7 @@ def _calculate_dc_ac_power_arrays(
     *,
     conversion: InverterConversion = NO_CONVERSION,
     ac_derate: Optional[np.ndarray] = None,
+    curve_rows: Optional[np.ndarray] = None,
     hours_per_step: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Vectorized counterpart of :func:`calculate_dc_ac_power`.
@@ -321,17 +331,19 @@ def _calculate_dc_ac_power_arrays(
     With a non-default ``conversion`` or an ``ac_derate`` (each step's AC
     rating as a fraction of ``inverter_ac_power``), each step runs the
     dispatch kernels' scalar conversion, so the PV-only and battery paths
-    agree exactly. ``hours_per_step`` converts the cable coefficient to the
-    Wh the inputs are in.
+    agree exactly. ``curve_rows`` reads the efficiency curve at each step's
+    row position instead of the conversion's own. ``hours_per_step`` converts
+    the cable coefficient to the Wh the inputs are in.
     """
     pv_dc_power = np.maximum(0.0, np.asarray(pv_dc_power, dtype=np.float64))
     inverter_ac_power = max(0.0, float(inverter_ac_power))
     inverter_efficiency = min(1.0, max(0.0, float(inverter_efficiency)))
     ac_output_scale = _clamped_ac_output_scale(ac_output_scale)
 
-    if not conversion.is_default or ac_derate is not None:
+    if not conversion.is_default or ac_derate is not None or curve_rows is not None:
         curve_ac, curve_eff, curve_row, cable_k = conversion.kernel_arguments(hours_per_step)
         derate = np.ones(pv_dc_power.shape) if ac_derate is None else np.asarray(ac_derate, dtype=np.float64)
+        rows = np.full(pv_dc_power.shape, curve_row) if curve_rows is None else np.asarray(curve_rows, np.float64)
         ac_power = np.empty_like(pv_dc_power)
         conversion_loss = np.empty_like(pv_dc_power)
         clipping_loss_dc = np.empty_like(pv_dc_power)
@@ -344,7 +356,7 @@ def _calculate_dc_ac_power_arrays(
                 2.0,
                 curve_ac,
                 curve_eff,
-                curve_row,
+                float(rows[i]),
                 cable_k,
             )
         return ac_power, conversion_loss, clipping_loss_dc

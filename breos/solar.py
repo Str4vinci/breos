@@ -278,6 +278,10 @@ class PVProductionBreakdown:
     # its MPPT index.
     parallel_mismatch_loss: Optional[pd.Series] = None
     input_parallel_mismatch: Optional[Dict[int, pd.Series]] = None
+    # The inverter inputs' operating DC voltage with string-level energy,
+    # weighted by the power each input delivers, in V; 0 where none does.
+    # None otherwise.
+    dc_voltage: Optional[pd.Series] = None
 
 
 @dataclass(frozen=True)

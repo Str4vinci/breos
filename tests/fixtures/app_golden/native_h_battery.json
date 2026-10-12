@@ -534,7 +534,7 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "f5e6de22ef0d6f2f09128ce216b02534f7318732",
+  "breos_commit": "41d9619dc75280b8b76c31dd258f11c30676084c",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",

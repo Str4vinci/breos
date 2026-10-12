@@ -372,33 +372,44 @@ class ShadedStringCurve:
 
     # -- the solver's view ---------------------------------------------------------------------
 
-    def constrained_mpp(self, rows: np.ndarray, v_min: float, v_max: float, current_limit: float) -> np.ndarray:
-        """The string's best power on the steps ``rows`` (a boolean mask) with its terminal voltage in
-        ``[v_min, v_max]`` and its current at most ``current_limit``; 0 where no point qualifies."""
+    def constrained_mpp(
+        self, rows: np.ndarray, v_min: float, v_max: float, current_limit: float
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The string's best power, and its terminal voltage, on the steps ``rows`` (a boolean mask) with
+        the voltage in ``[v_min, v_max]`` and the current at most ``current_limit``; 0 where no point
+        qualifies."""
         selected = np.flatnonzero(rows)
         out = np.zeros(selected.size)
+        voltage = np.zeros(selected.size)
         mismatched = np.isin(selected, self.mismatched)
         if mismatched.any():
             select = np.searchsorted(self.mismatched, selected[mismatched])
             scale = self.scale[selected[mismatched]]
             with np.errstate(divide="ignore", invalid="ignore"):
                 limit = np.where(scale > 0, current_limit / scale, np.inf)
-            power, _ = self._refine(select, self._table_i[select], self._table_v[select], True, limit, v_min, v_max)
+            power, current = self._refine(
+                select, self._table_i[select], self._table_v[select], True, limit, v_min, v_max
+            )
             out[mismatched] = power
+            with np.errstate(divide="ignore", invalid="ignore"):
+                voltage[mismatched] = np.where(power > 0, power / (scale * current), 0.0)
         uniform = ~mismatched
         if uniform.any():
-            out[uniform] = self._uniform_constrained(selected[uniform], v_min, v_max, current_limit)
-        return out
+            out[uniform], voltage[uniform] = self._uniform_constrained(selected[uniform], v_min, v_max, current_limit)
+        return out, voltage
 
-    def _uniform_constrained(self, steps: np.ndarray, v_min: float, v_max: float, current_limit: float) -> np.ndarray:
+    def _uniform_constrained(
+        self, steps: np.ndarray, v_min: float, v_max: float, current_limit: float
+    ) -> tuple[np.ndarray, np.ndarray]:
         positions = np.searchsorted(self.uniform, steps)
         params = [p[positions] for p in self._uniform_params]
         scale = self.scale[steps]
         v_mp, i_mp = self.v_mp[steps], self.i_mp[steps]
         result = self.mpp[steps].copy()
+        operating_v = v_mp.copy()
         bound = (v_mp < v_min) | (v_mp > v_max) | (i_mp > current_limit)
         if not bound.any():
-            return result
+            return result, operating_v
         # One module's curve: the best point is the nearest edge of what the limits allow.
         p = [x[bound] for x in params]
         s = scale[bound]
@@ -414,7 +425,8 @@ class ShadedStringCurve:
         voltage = np.clip(v_mp[bound], lower, v_max)
         current = s * np.clip(np.nan_to_num(_quiet(pvlib.pvsystem.i_from_v, voltage / self.modules, *p)), 0.0, None)
         result[bound] = np.where(lower > v_max, 0.0, np.minimum(voltage * current, result[bound]))
-        return result
+        operating_v[bound] = np.where(result[bound] > 0, voltage, 0.0)
+        return result, operating_v
 
     def current(self, voltage: np.ndarray, rows: np.ndarray, signed: bool = False) -> np.ndarray:
         """The string's current at terminal ``voltage`` on the steps ``rows``, a boolean mask.
