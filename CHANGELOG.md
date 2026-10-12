@@ -259,6 +259,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   array's stated temperature, then its mounting's rise, then the
   `electrical_environment` values. Without these keys every result is
   unchanged.
+- DC cable losses from the string topology. A `pv_strings` entry may give
+  `cable_length_m`, `cable_cross_section_mm2` and `conductor` (copper or
+  aluminium), on every string or none, and `electrical_environment` may give
+  `conductor_temp_c`; 50 °C is assumed and reported when it is unstated. The
+  cables replace the flat `wiring` loss, whose default becomes 0. Aggregate
+  energy charges I²R at each string's maximum power current; string-level
+  energy solves the cable into the IV curve. The loss is the new `dc_wiring`
+  waterfall stage, and `electrical.dc_wiring` reports each string's resistance
+  and its STC loss. `breos.electrical.string_limited_dc` now also returns the
+  cable loss, and `string_cable_loss` gives the aggregate one. Without cable
+  data every result is unchanged.
 - `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
   only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
   coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.

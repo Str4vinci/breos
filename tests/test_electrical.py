@@ -7,10 +7,12 @@ import pytest
 
 from breos.electrical import (
     BIFACIAL_REAR_IRRADIANCE_RATIO,
+    DEFAULT_CONDUCTOR_TEMP_C,
     MOUNTING_TEMPERATURE_RISE_C,
     ArrayMounting,
     ElectricalEnvironment,
     PVString,
+    cable_summary,
     check_topology,
 )
 from breos.equipment import InverterSpec, MpptSpec
@@ -510,3 +512,48 @@ def test_the_most_specific_cell_temperature_wins():
     assert ArrayMounting(mounting="flush", hot_cell_temp_c=90).applied_to(site).hot_cell_c == 90
     with pytest.raises(ValueError, match="mounting must be one of"):
         ArrayMounting(mounting="roof")
+
+
+def test_a_string_cable_has_its_loop_resistance_at_the_conductor_temperature():
+    cable = PVString(0, 0, 0, 10, cable_length_m=10.0, cable_cross_section_mm2=4.0)
+    assert cable.cable_resistance_ohm(20.0) == pytest.approx(1.7241e-8 * 20 / 4e-6)
+    assert cable.cable_resistance_ohm(70.0) == pytest.approx(1.7241e-8 * 20 / 4e-6 * (1 + 0.00393 * 50))
+    assert PVString(0, 0, 0, 10).cable_resistance_ohm(50.0) == 0
+    assert ElectricalEnvironment(-5, 40).conductor_c == DEFAULT_CONDUCTOR_TEMP_C == 50
+    assert ElectricalEnvironment(-5, 40, conductor_temp_c=30).conductor_c == 30
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"cable_length_m": 10.0}, "together"),
+        ({"cable_cross_section_mm2": 4.0}, "together"),
+        ({"cable_length_m": -1.0, "cable_cross_section_mm2": 4.0}, "cable_length_m must be at least 0"),
+        ({"cable_length_m": 10.0, "cable_cross_section_mm2": 0.0}, "cable_cross_section_mm2 must be above 0"),
+        ({"cable_length_m": math.nan, "cable_cross_section_mm2": 4.0}, "finite"),
+        ({"conductor": "silver"}, "conductor must be one of"),
+    ],
+)
+def test_invalid_cables_are_refused(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        PVString(0, 0, 0, 10, **kwargs)
+
+
+def test_the_cable_summary_reports_each_string_and_the_assumed_temperature():
+    strings = [
+        PVString(0, 0, 0, 10, cable_length_m=10.0, cable_cross_section_mm2=4.0),
+        PVString(0, 1, 5, 10, cable_length_m=10.0, cable_cross_section_mm2=4.0),
+    ]
+    assert cable_summary([(TRINA_450, 10)], [PVString(0, 0, 0, 10)], PORTO) is None
+    summary = cable_summary([(TRINA_450, 10)], strings, PORTO)
+    ohm = strings[0].cable_resistance_ohm(50.0)
+    assert summary == {
+        "conductor_temp_c": 50.0,
+        "conductor_temp_stated": False,
+        "strings": [
+            {"string": 0, "resistance_ohm": round(ohm, 6), "stc_loss_pct": round(100 * 10.09**2 * ohm / 4500, 4)},
+            {"string": 1, "resistance_ohm": round(ohm, 6), "stc_loss_pct": None},
+        ],
+    }
+    stated = cable_summary([(TRINA_450, 10)], strings[:1], replace(PORTO, conductor_temp_c=30.0))
+    assert (stated["conductor_temp_c"], stated["conductor_temp_stated"]) == (30.0, True)

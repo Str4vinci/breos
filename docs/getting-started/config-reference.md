@@ -209,6 +209,9 @@ One entry per group of identical strings on one input, as `[[pv_strings]]` in TO
 | `inverter` | yes | 0-based position of the inverter in `inverters` |
 | `modules` | yes | Modules in series in each string |
 | `mppt` | yes | 0-based position of the input in that inverter's `mppts` |
+| `cable_cross_section_mm2` |  | Conductor cross-section (mm²) of each string's cable |
+| `cable_length_m` |  | One-way length (m) of each string's cable to the inverter input; with `cable_cross_section_mm2`, the cable's resistance replaces the flat `wiring` loss. Give it on every string or none |
+| `conductor` |  | Cable conductor, `"copper"` or `"aluminium"`; `"copper"` by default |
 | `parallel` |  | Identical strings in parallel on the input; 1 by default |
 
 ## electrical_environment
@@ -221,6 +224,7 @@ Design temperatures for the string check, as `[electrical_environment]` in TOML.
 | `min_design_temp_c` | yes | Extreme annual minimum ambient (°C) on the basis the jurisdiction or manufacturer requires; cold Voc is taken at it |
 | `bifacial_rear_irradiance_w_m2` |  | Rear irradiance behind 1000 W/m² front for a bifacial design Isc; 135 |
 | `cold_operating_cell_temp_c` |  | Coldest cell temperature while producing (°C), instead of `min_design_temp_c` plus the mounting rise |
+| `conductor_temp_c` |  | Operating temperature (°C) of the string cables' conductors; 50 °C is assumed, and reported as assumed, when unstated |
 | `hot_cell_temp_c` |  | Hottest cell temperature (°C), instead of `max_ambient_temp_c` plus the mounting rise |
 | `mounting` |  | Module mounting, which sets the screening cell temperature rise: `"flush"` (30 °C), `"tilted_rack"` (25 °C), `"ground_mount"` (20 °C); `"tilted_rack"` by default |
 

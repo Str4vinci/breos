@@ -30,10 +30,13 @@ voltage, current and power limits, the inverter's power limit and its start-up
 voltage to the production of the wired strings.
 """
 
+import dataclasses
 import math
+import warnings
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
+from functools import cached_property
 from numbers import Integral, Real
 from typing import Any, Literal
 
@@ -49,6 +52,20 @@ from breos.pv_modules import PVModuleParams
 #: every mounting and wind condition. State ``hot_cell_temp_c`` and
 #: ``cold_operating_cell_temp_c`` to override them.
 MOUNTING_TEMPERATURE_RISE_C = {"flush": 30.0, "tilted_rack": 25.0, "ground_mount": 20.0}
+
+#: Conductor resistivity at 20 °C in ohm·m: annealed copper per IEC 60028
+#: (1/58 ohm·mm²/m), aluminium per IEC 60889. Physical constants of the
+#: material, not cable datasheet values.
+CONDUCTOR_RESISTIVITY_20C_OHM_M = {"copper": 1.7241e-8, "aluminium": 2.8264e-8}
+
+#: The resistivity's temperature coefficient at 20 °C, per K, from the same
+#: standards.
+CONDUCTOR_TEMPERATURE_COEFFICIENT_PER_K = {"copper": 0.00393, "aluminium": 0.00403}
+
+#: Conductor temperature for cable resistance when the caller states none, in
+#: °C. An assumption, reported as one: the value PVsyst evaluates its wire
+#: resistivity at by default.
+DEFAULT_CONDUCTOR_TEMP_C = 50.0
 
 #: Default rear irradiance for a bifacial module's design Isc, as a fraction of
 #: 1000 W/m² front: 135 W/m², the bifacial nameplate irradiance of IEC TS
@@ -120,6 +137,8 @@ class ElectricalEnvironment:
     operating cell temperatures unless ``hot_cell_temp_c`` or
     ``cold_operating_cell_temp_c`` states them. ``bifacial_rear_irradiance_w_m2``
     is the rear irradiance behind 1000 W/m² front for a bifacial design Isc.
+    ``conductor_temp_c`` is the operating temperature of the strings' cables;
+    unstated, :data:`DEFAULT_CONDUCTOR_TEMP_C` is assumed.
     """
 
     min_design_temp_c: float
@@ -128,11 +147,12 @@ class ElectricalEnvironment:
     hot_cell_temp_c: float | None = None
     cold_operating_cell_temp_c: float | None = None
     bifacial_rear_irradiance_w_m2: float = 1000.0 * BIFACIAL_REAR_IRRADIANCE_RATIO
+    conductor_temp_c: float | None = None
 
     def __post_init__(self) -> None:
         for name in ("min_design_temp_c", "max_ambient_temp_c", "bifacial_rear_irradiance_w_m2"):
             _finite(name, getattr(self, name))
-        for name in ("hot_cell_temp_c", "cold_operating_cell_temp_c"):
+        for name in ("hot_cell_temp_c", "cold_operating_cell_temp_c", "conductor_temp_c"):
             if getattr(self, name) is not None:
                 _finite(name, getattr(self, name))
         if self.min_design_temp_c >= self.max_ambient_temp_c:
@@ -141,6 +161,11 @@ class ElectricalEnvironment:
             raise ValueError(f"mounting must be one of {sorted(MOUNTING_TEMPERATURE_RISE_C)}, got {self.mounting!r}")
         if self.bifacial_rear_irradiance_w_m2 < 0:
             raise ValueError("bifacial_rear_irradiance_w_m2 must be at least 0")
+
+    @property
+    def conductor_c(self) -> float:
+        """Cable conductor temperature: the stated one, else :data:`DEFAULT_CONDUCTOR_TEMP_C`."""
+        return float(DEFAULT_CONDUCTOR_TEMP_C if self.conductor_temp_c is None else self.conductor_temp_c)
 
     @property
     def cold_cell_c(self) -> float:
@@ -216,6 +241,11 @@ class PVString:
     ``array``, and connects to input ``mppt`` of inverter ``inverter``. An input
     is an independent tracker. The three references are 0-based positions in
     the arrays, the inverters and that inverter's ``mppts``.
+
+    ``cable_length_m`` is the one-way length of each string's cable from the
+    array to the inverter input, and ``cable_cross_section_mm2`` its conductor
+    cross-section; give both or neither. The string's cable has two such
+    conductors, of ``conductor`` (``"copper"`` or ``"aluminium"``).
     """
 
     inverter: int
@@ -223,6 +253,9 @@ class PVString:
     array: int
     modules: int
     parallel: int = 1
+    cable_length_m: float | None = None
+    cable_cross_section_mm2: float | None = None
+    conductor: str = "copper"
 
     def __post_init__(self) -> None:
         for name in ("inverter", "mppt", "array", "modules", "parallel"):
@@ -230,6 +263,32 @@ class PVString:
             minimum = 1 if name in ("modules", "parallel") else 0
             if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
                 raise ValueError(f"{name} must be an integer of at least {minimum}")
+        if (self.cable_length_m is None) != (self.cable_cross_section_mm2 is None):
+            raise ValueError("give cable_length_m and cable_cross_section_mm2 together")
+        if self.cable_length_m is not None:
+            _finite("cable_length_m", self.cable_length_m)
+            _finite("cable_cross_section_mm2", self.cable_cross_section_mm2)
+            if self.cable_length_m < 0:
+                raise ValueError("cable_length_m must be at least 0")
+            if self.cable_cross_section_mm2 is None or self.cable_cross_section_mm2 <= 0:
+                raise ValueError("cable_cross_section_mm2 must be above 0")
+        if self.conductor not in CONDUCTOR_RESISTIVITY_20C_OHM_M:
+            raise ValueError(
+                f"conductor must be one of {sorted(CONDUCTOR_RESISTIVITY_20C_OHM_M)}, got {self.conductor!r}"
+            )
+
+    @property
+    def has_cable(self) -> bool:
+        return self.cable_length_m is not None
+
+    def cable_resistance_ohm(self, conductor_c: float) -> float:
+        """One string's loop resistance, out and back, at conductor temperature ``conductor_c``; 0 without a cable."""
+        if self.cable_length_m is None or self.cable_cross_section_mm2 is None:
+            return 0.0
+        rho = CONDUCTOR_RESISTIVITY_20C_OHM_M[self.conductor] * (
+            1.0 + CONDUCTOR_TEMPERATURE_COEFFICIENT_PER_K[self.conductor] * (conductor_c - 20.0)
+        )
+        return float(rho * 2.0 * self.cable_length_m / (self.cable_cross_section_mm2 * 1e-6))
 
 
 @dataclass(frozen=True)
@@ -684,6 +743,40 @@ class ElectricalSetup:
     check: TopologyCheck
     # "aggregate", or "string" for energy per MPPT input.
     fidelity: str = "aggregate"
+    # The strings' cables, from cable_summary; None without them.
+    dc_wiring: dict[str, Any] | None = dataclasses.field(default=None, compare=False)
+
+
+def cable_summary(
+    arrays: Sequence[tuple[PVModuleParams, int]], strings: Sequence[PVString], environment: ElectricalEnvironment
+) -> dict[str, Any] | None:
+    """The ``dc_wiring`` record of the strings' cables, or None when no string has one.
+
+    ``conductor_temp_c`` is the temperature the resistances are taken at, and
+    ``conductor_temp_stated`` whether the caller stated it or
+    :data:`DEFAULT_CONDUCTOR_TEMP_C` was assumed. Each string with a cable has
+    its loop ``resistance_ohm`` and ``stc_loss_pct``, the share of its STC power
+    its cable dissipates at the STC maximum power current; a string naming no
+    existing array has no ``stc_loss_pct``.
+    """
+    if not any(string.has_cable for string in strings):
+        return None
+    conductor_c = environment.conductor_c
+    rows = []
+    for index, string in enumerate(strings):
+        if not string.has_cable:
+            continue
+        ohm = string.cable_resistance_ohm(conductor_c)
+        row: dict[str, Any] = {"string": index, "resistance_ohm": round(ohm, 6), "stc_loss_pct": None}
+        if string.array < len(arrays):
+            module = arrays[string.array][0]
+            row["stc_loss_pct"] = round(100.0 * module.Imp**2 * ohm / (string.modules * module.Mpp), 4)
+        rows.append(row)
+    return {
+        "conductor_temp_c": conductor_c,
+        "conductor_temp_stated": environment.conductor_temp_c is not None,
+        "strings": rows,
+    }
 
 
 def electrical_result(setup: ElectricalSetup | None) -> dict[str, Any]:
@@ -695,11 +788,14 @@ def electrical_result(setup: ElectricalSetup | None) -> dict[str, Any]:
     """
     if setup is None:
         return {"fidelity": "aggregate", "status": "not_evaluated", "findings": []}
-    return {
+    result: dict[str, Any] = {
         "fidelity": setup.fidelity,
         "status": setup.check.status,
         "findings": [asdict(finding) for finding in setup.check.findings],
     }
+    if setup.dc_wiring is not None:
+        result["dc_wiring"] = setup.dc_wiring
+    return result
 
 
 # Findings that leave the string model without a definite wiring.
@@ -746,8 +842,8 @@ def string_model_problems(setup: ElectricalSetup) -> list[str]:
     return problems
 
 
-def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd.Series, pd.Series]:
-    """DC power after each MPPT input's limits and the inverter's, in W.
+def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """DC power after the strings' cables, each MPPT input's limits and the inverter's, in W.
 
     ``arrays`` holds one :class:`~breos.solar.PVProductionBreakdown` per PV
     array, in order, each with its module operating point. Each input runs its
@@ -767,8 +863,13 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd
     which applies after the limits, so the unconstrained power equals the
     aggregate model's.
 
-    Returns the limited DC and the DC the limits cost. Where no limit binds,
-    the DC is the aggregate model's, bit for bit.
+    A string with a cable has the cable's loop resistance in series: the input
+    sees the string's voltage less the cable's drop, so the cable moves the
+    maximum power point and its I²R loss follows from the IV curve.
+
+    Returns the limited DC, the DC the limits cost and the DC the cables cost.
+    Where no cable is given and no limit binds, the DC is the aggregate
+    model's, bit for bit.
     """
     problems = string_model_problems(setup)
     if problems:
@@ -788,7 +889,9 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd
     # Powers before availability: delivered after the limits, and their cost.
     delivered = np.zeros(len(index))
     cost = np.zeros(len(index))
+    wiring = np.zeros(len(index))
     open_circuit = np.zeros(len(index))
+    conductor_c = setup.environment.conductor_c
     by_input: dict[int, list[PVString]] = defaultdict(list)
     for string in setup.strings:
         by_input[string.mppt].append(string)
@@ -796,10 +899,20 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd
         spec = inverter.mppts[mppt_index]
         assert spec.max_input_current_a is not None
         string_limit = spec.max_string_input_current_a
+        # Strings of one array with one cable resistance are identical.
+        resistance = {id(s): s.cable_resistance_ohm(conductor_c) for s in members}
         groups = [
-            _StringGroup(arrays[array], sum(s.parallel for s in members if s.array == array))
-            for array in sorted({s.array for s in members})
+            _StringGroup(
+                arrays[array],
+                sum(s.parallel for s in members if (s.array, resistance[id(s)]) == (array, ohm)),
+                ohm,
+                members[0].modules,
+            )
+            for array, ohm in sorted({(s.array, resistance[id(s)]) for s in members})
         ]
+        for group in groups:
+            if group.cable_ohm > 0:
+                wiring += np.clip(group.power_at_mpp(group.bare) - group.power_at_mpp(group.operating), 0.0, None)
         unconstrained, limited = _input_power(
             groups,
             members[0].modules,
@@ -824,19 +937,89 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd
 
     total = sum((b.dc_after_losses for b in arrays[1:]), arrays[0].dc_after_losses)
     loss_series = pd.Series(cost * availability, index=index, name="mppt_limit_loss_W")
-    return (total - loss_series).rename("dc_power_W"), loss_series
+    wiring_series = pd.Series(wiring * availability, index=index, name="dc_wiring_loss_W")
+    return (total - (loss_series + wiring_series)).rename("dc_power_W"), loss_series, wiring_series
+
+
+def string_cable_loss(setup: ElectricalSetup, arrays: Sequence[Any]) -> pd.Series:
+    """DC lost in the strings' cables at each array's maximum power current, in W.
+
+    The aggregate model's cable loss: each string carries its array's current
+    at the maximum power point, and loses I²R in its cable's loop resistance,
+    as PVsyst evaluates array wiring. String-level energy solves the cable
+    into the IV curve instead (:func:`string_limited_dc`). ``arrays`` holds one
+    :class:`~breos.solar.PVProductionBreakdown` per PV array, in order, each
+    with its module operating point. A string naming no existing array is
+    skipped; the check reports it.
+    """
+    for breakdown in arrays:
+        if breakdown.module_operating is None:
+            raise ValueError("The cable loss needs each array's module operating point")
+    index = arrays[0].dc_after_losses.index
+    loss = np.zeros(len(index))
+    conductor_c = setup.environment.conductor_c
+    for string in setup.strings:
+        ohm = string.cable_resistance_ohm(conductor_c)
+        if ohm == 0 or string.array >= len(arrays):
+            continue
+        breakdown = arrays[string.array]
+        current = _StringGroup(breakdown, string.parallel).string_scale * np.nan_to_num(breakdown.module_operating.i_mp)
+        loss += string.parallel * current * current * ohm * _in_service(breakdown)
+    total = np.asarray(sum((b.dc_after_losses for b in arrays[1:]), arrays[0].dc_after_losses), dtype=float)
+    return pd.Series(np.minimum(loss, total), index=index, name="dc_wiring_loss_W")
 
 
 @dataclass(frozen=True)
 class _StringGroup:
-    """``parallel`` strings of one array on one input."""
+    """``parallel`` strings of one array on one input, each with a cable of ``cable_ohm`` in series."""
 
     breakdown: Any
     parallel: int
+    cable_ohm: float = 0.0
+    modules: int = 1
 
     @property
-    def operating(self) -> Any:
+    def bare(self) -> Any:
+        """One module's operating point without the cable."""
         return self.breakdown.module_operating
+
+    @cached_property
+    def operating(self) -> Any:
+        """One module's operating point at the input's terminals, with its share of the cable in series.
+
+        A string of ``modules`` carries ``string_scale`` times one module's
+        current, so its cable drops as much voltage per module as a series
+        resistance of ``string_scale * cable_ohm / modules`` in each module.
+        """
+        bare = self.bare
+        if self.cable_ohm == 0:
+            return bare
+        resistance = np.asarray(bare.resistance_series, dtype=float) + self.string_scale * self.cable_ohm / self.modules
+        lit = np.nan_to_num(np.asarray(bare.photocurrent, dtype=float)) > 0
+        v_mp = np.array(bare.v_mp, dtype=float)
+        i_mp = np.array(bare.i_mp, dtype=float)
+        if lit.any():
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning)
+                mpp = pvlib.pvsystem.max_power_point(
+                    *(np.asarray(p, dtype=float)[lit] for p in _diode_params(bare)[:2]),
+                    resistance[lit],
+                    *(np.asarray(p, dtype=float)[lit] for p in _diode_params(bare)[3:]),
+                    method="newton",
+                )
+            v_mp[lit] = np.asarray(mpp["v_mp"], dtype=float)
+            i_mp[lit] = np.asarray(mpp["i_mp"], dtype=float)
+        return replace(bare, resistance_series=resistance, v_mp=v_mp, i_mp=i_mp)
+
+    def power_at_mpp(self, operating: Any) -> np.ndarray:
+        """The group's power at ``operating``'s maximum power point, before availability, in W."""
+        return (
+            self.modules
+            * self.parallel
+            * self.string_scale
+            * np.nan_to_num(operating.v_mp)
+            * np.nan_to_num(operating.i_mp)
+        )
 
     @property
     def string_scale(self) -> np.ndarray:

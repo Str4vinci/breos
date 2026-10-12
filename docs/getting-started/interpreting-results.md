@@ -273,6 +273,7 @@ and `tracking`, plus the resolved tracker geometry for a tracking array.
 | `fidelity` | How energy was modelled. `"aggregate"`: the array's DC output feeds one AC rating, whatever the string topology. `"string"`: each MPPT input's voltage range, current and power limits, the inverter's power limit and its start-up voltage applied (see [String-level energy](configuration.md#string-level-energy)) |
 | `status` | `"not_evaluated"` without a [string topology](configuration.md#string-topology-checks); otherwise `"fail"` on any error, `"incomplete"` on missing data, `"warning"` on any warning, else `"pass"` |
 | `findings` | One record per finding, in a stable order |
+| `dc_wiring` | Present with [DC cables](configuration.md#dc-cables): `conductor_temp_c`, the temperature the cable resistances are taken at; `conductor_temp_stated`, false when the 50 °C default was assumed; and one record per string with its `string` position, loop `resistance_ohm` and `stc_loss_pct`, the share of its STC power its cable dissipates at the STC maximum power current |
 
 Each finding has `code`, `severity` and `message`; `value` and `limit` in
 `unit`; `limit_field`, the datasheet value the limit came from; and the
@@ -325,7 +326,9 @@ built.
 `pv_loss_waterfall` reports the year 1 PV production chain in kWh. Its
 ordered `stages` cover only the linear PV-model chain: horizontal reference,
 transposition, front-side incidence-angle modifier, optional bifacial rear
-gain, cell temperature, and static PVWatts losses. There is no degradation
+gain, cell temperature, and static PVWatts losses, then `dc_wiring` with
+[DC cables](configuration.md#dc-cables) and `mppt_limits` with
+[string-level energy](configuration.md#string-level-energy). There is no degradation
 stage because year 1 has none (see [Module aging](../api/pv.md#module-aging)),
 so the last stage equals `energy_balance.pv_dc.generation_kwh`. Dispatch
 is a branching flow and is therefore reported under `energy_balance`, not

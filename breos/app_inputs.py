@@ -15,7 +15,7 @@ import pandas as pd
 from pvlib.location import Location
 
 from breos.app_config import ResolvedAppConfig, SimulationPeriod, resolve_app_config
-from breos.electrical import string_limited_dc
+from breos.electrical import string_cable_loss, string_limited_dc
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs
 from breos.solar import (
@@ -448,7 +448,10 @@ def build_pv_production_breakdown(
     model_kwargs = configured_pv_model_kwargs(cfg)
 
     electrical = resolved.electrical
-    if electrical is not None and electrical.fidelity == "string":
+    string_level = electrical is not None and electrical.fidelity == "string"
+    cabled = electrical is not None and any(string.has_cable for string in electrical.strings)
+    if string_level or cabled:
+        assert electrical is not None
         if resolved.pv_arrays:
             arrays = calculate_array_breakdowns(
                 weather_data=weather,
@@ -460,9 +463,23 @@ def build_pv_production_breakdown(
             )
         else:
             arrays = [_single_array_breakdown(cfg, resolved, weather, location, model_kwargs)]
-        dc, mppt_loss = string_limited_dc(electrical, arrays)
         total = _sum_pv_breakdowns(arrays) if len(arrays) > 1 else arrays[0]
-        return replace(total, dc_after_losses=dc, mppt_limit_loss=mppt_loss, module_operating=None)
+        if string_level:
+            dc, mppt_loss, wiring_loss = string_limited_dc(electrical, arrays)
+            return replace(
+                total,
+                dc_after_losses=dc,
+                mppt_limit_loss=mppt_loss,
+                dc_wiring_loss=wiring_loss if cabled else None,
+                module_operating=None,
+            )
+        wiring_loss = string_cable_loss(electrical, arrays)
+        return replace(
+            total,
+            dc_after_losses=(total.dc_after_losses - wiring_loss).rename("dc_power_W"),
+            dc_wiring_loss=wiring_loss,
+            module_operating=None,
+        )
 
     if resolved.pv_arrays:
         return calculate_multi_array_production_breakdown(

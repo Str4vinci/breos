@@ -269,10 +269,15 @@ def _build_pv_loss_waterfall(
         _waterfall_stage("temperature", "Cell temperature", module_dc, effective_dc),
         _waterfall_stage("pvwatts_static", "Static PVWatts losses", dc_after_static, module_dc),
     ]
+    after_wiring = dc_after_static
+    if pv_breakdown.dc_wiring_loss is not None:
+        # The strings' cables, when the topology gives them.
+        after_wiring = dc_after_static - _series_energy_kwh(pv_breakdown.dc_wiring_loss, freq)
+        stages.append(_waterfall_stage("dc_wiring", "DC cables", after_wiring, dc_after_static))
     if pv_breakdown.mppt_limit_loss is not None:
         # String-level energy: the inverter's input limits.
-        after_limits = dc_after_static - _series_energy_kwh(pv_breakdown.mppt_limit_loss, freq)
-        stages.append(_waterfall_stage("mppt_limits", "Inverter input limits", after_limits, dc_after_static))
+        after_limits = after_wiring - _series_energy_kwh(pv_breakdown.mppt_limit_loss, freq)
+        stages.append(_waterfall_stage("mppt_limits", "Inverter input limits", after_limits, after_wiring))
 
     battery_begin = float(first_year_results_df["Battery_Energy_Beginning"].iloc[0]) / 1000.0
     battery_end = float(first_year_results_df["Battery_Energy_End"].iloc[-1]) / 1000.0

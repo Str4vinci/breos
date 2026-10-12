@@ -109,6 +109,16 @@ check.status, [finding.code for finding in check.findings]
 
 .. autofunction:: breos.electrical.string_model_problems
 
+.. autofunction:: breos.electrical.string_cable_loss
+
+.. autofunction:: breos.electrical.cable_summary
+
+.. autodata:: breos.electrical.CONDUCTOR_RESISTIVITY_20C_OHM_M
+
+.. autodata:: breos.electrical.CONDUCTOR_TEMPERATURE_COEFFICIENT_PER_K
+
+.. autodata:: breos.electrical.DEFAULT_CONDUCTOR_TEMP_C
+
 .. autodata:: breos.electrical.MOUNTING_TEMPERATURE_RISE_C
 
 .. autodata:: breos.electrical.BIFACIAL_REAR_IRRADIANCE_RATIO

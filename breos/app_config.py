@@ -38,11 +38,13 @@ from breos.economics import (
     replacement_event_cost,
 )
 from breos.electrical import (
+    DEFAULT_CONDUCTOR_TEMP_C,
     MOUNTING_TEMPERATURE_RISE_C,
     ArrayMounting,
     ElectricalEnvironment,
     ElectricalSetup,
     PVString,
+    cable_summary,
     check_topology,
     string_model_problems,
 )
@@ -1453,6 +1455,12 @@ PV_STRING_TABLE = TableSpec(
         "array": "0-based position of the array in `pv_arrays`; 0 without `pv_arrays`",
         "modules": "Modules in series in each string",
         "parallel": "Identical strings in parallel on the input; 1 by default",
+        "cable_length_m": (
+            "One-way length (m) of each string's cable to the inverter input; with `cable_cross_section_mm2`, "
+            "the cable's resistance replaces the flat `wiring` loss. Give it on every string or none"
+        ),
+        "cable_cross_section_mm2": "Conductor cross-section (mm²) of each string's cable",
+        "conductor": 'Cable conductor, `"copper"` or `"aluminium"`; `"copper"` by default',
     },
 )
 
@@ -1471,6 +1479,10 @@ ELECTRICAL_ENVIRONMENT_TABLE = TableSpec(
             "Coldest cell temperature while producing (°C), instead of `min_design_temp_c` plus the mounting rise"
         ),
         "bifacial_rear_irradiance_w_m2": "Rear irradiance behind 1000 W/m² front for a bifacial design Isc; 135",
+        "conductor_temp_c": (
+            "Operating temperature (°C) of the string cables' conductors; "
+            f"{DEFAULT_CONDUCTOR_TEMP_C:g} °C is assumed, and reported as assumed, when unstated"
+        ),
         "mounting": (
             "Module mounting, which sets the screening cell temperature rise: "
             + ", ".join(f'`"{key}"` ({rise:g} °C)' for key, rise in MOUNTING_TEMPERATURE_RISE_C.items())
@@ -3082,6 +3094,12 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     cfg = {**cfg, "n_modules": n_modules}
     cost_params = resolve_costs(cfg)
     electrical = _resolve_electrical(cfg, pv_arrays, pv_params, n_modules)
+    if electrical is not None and electrical.dc_wiring is not None:
+        overrides = cfg["pv_loss_overrides"] or {}
+        if "wiring" not in overrides:
+            # The cables model the DC wiring. A stated wiring loss stays, as the
+            # AC side's until AC cables are modelled.
+            cfg["pv_loss_overrides"] = {**overrides, "wiring": 0.0}
     if electrical is not None:
         cfg["inverter_ac_rating_kw"] = sum(inverter.nominal_power_w for inverter in electrical.inverters) / 1000
         rated = [(i.nominal_power_w, i.inverter_efficiency) for i in electrical.inverters]
@@ -3140,12 +3158,19 @@ def _resolve_electrical(
         _built(ArrayMounting, {key: arr[key] for key in _PV_ARRAY_MOUNTING_KEYS if key in arr}, f"pv_arrays[{i}]")
         for i, arr in enumerate(pv_arrays)
     ] or None
+    cabled = [string.has_cable for string in strings]
+    if any(cabled) and not all(cabled):
+        raise ValueError(
+            "Give every 'pv_strings' entry cable_length_m and cable_cross_section_mm2, or none: the cables "
+            "replace the flat 'wiring' loss for the whole system"
+        )
     setup = ElectricalSetup(
         inverters,
         strings,
         environment,
         check_topology(arrays, inverters, strings, environment, mountings=mountings),
         fidelity=cfg["electrical_fidelity"],
+        dc_wiring=cable_summary(arrays, strings, environment),
     )
     if setup.fidelity == "string":
         problems = string_model_problems(setup)

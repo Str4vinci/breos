@@ -209,6 +209,9 @@ class PVProductionBreakdown:
     # (``electrical_fidelity = "string"``), already taken out of
     # ``dc_after_losses``; None otherwise.
     mppt_limit_loss: Optional[pd.Series] = None
+    # DC lost in the strings' cables when the topology gives them, already
+    # taken out of ``dc_after_losses``; None otherwise.
+    dc_wiring_loss: Optional[pd.Series] = None
 
 
 @dataclass(frozen=True)

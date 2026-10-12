@@ -248,3 +248,72 @@ def test_array_mounting_needs_a_string_topology(east_west):
     plain["pv_arrays"][0]["mounting"] = "flush"
     with pytest.raises(ValueError, match="applies to the string check"):
         resolve_app_config(plain)
+
+
+CABLE = {"cable_length_m": 15, "cable_cross_section_mm2": 4}
+
+
+def _simulated(cfg):
+    app = App(cfg)
+    app.simulate()
+    return app.result()
+
+
+def _stage(result, key):
+    return next((s for s in result["pv_loss_waterfall"]["stages"] if s["key"] == key), None)
+
+
+def test_string_cables_replace_the_flat_wiring_loss(east_west, _patch_weather):
+    flat = _simulated(east_west)
+    east_west["pv_strings"] = [{**string, **CABLE} for string in east_west["pv_strings"]]
+    resolved = resolve_app_config(east_west)
+    assert resolved.cfg["pv_loss_overrides"] == {"wiring": 0.0}
+    cabled = _simulated(east_west)
+
+    ohm = 1.7241e-8 * (1 + 0.00393 * 30) * 30 / 4e-6
+    assert cabled["electrical"]["dc_wiring"] == {
+        "conductor_temp_c": 50.0,
+        "conductor_temp_stated": False,
+        "strings": [
+            {
+                "string": i,
+                "resistance_ohm": pytest.approx(ohm, abs=1e-6),
+                "stc_loss_pct": pytest.approx(100 * 10.09**2 * ohm / 3150, abs=1e-4),
+            }
+            for i in range(2)
+        ],
+    }
+    assert cabled["pv_loss_waterfall"]["pvwatts"]["components_pct"]["wiring"] == 0
+    cable_stage = _stage(cabled, "dc_wiring")
+    assert cable_stage["label"] == "DC cables"
+    assert cable_stage["delta_kwh"] < 0
+    assert _stage(flat, "dc_wiring") is None
+    # 15 m of 4 mm² costs far less than the flat 2 %.
+    assert cabled["pv_dc_generation_kwh"] > flat["pv_dc_generation_kwh"]
+
+
+def test_string_level_energy_solves_the_cables_into_the_iv_curve(east_west, _patch_weather):
+    east_west["pv_strings"] = [{**string, **CABLE} for string in east_west["pv_strings"]]
+    aggregate = _simulated(east_west)
+    string = _simulated({**east_west, "electrical_fidelity": "string"})
+    # The aggregate model charges I²R at the maximum power current; the IV
+    # solve finds a slightly better point.
+    assert _stage(string, "dc_wiring")["delta_kwh"] == pytest.approx(
+        _stage(aggregate, "dc_wiring")["delta_kwh"], rel=0.02
+    )
+    assert _stage(string, "mppt_limits")["delta_kwh"] == 0
+
+
+def test_a_stated_wiring_loss_and_conductor_temperature_stay(east_west):
+    east_west["pv_strings"] = [{**string, **CABLE} for string in east_west["pv_strings"]]
+    east_west["pv_loss_overrides"] = {"wiring": 0.5}
+    east_west["electrical_environment"] = {**PORTO, "conductor_temp_c": 30}
+    resolved = resolve_app_config(east_west)
+    assert resolved.cfg["pv_loss_overrides"] == {"wiring": 0.5}
+    assert resolved.electrical.dc_wiring["conductor_temp_stated"] is True
+
+
+def test_cables_on_some_strings_only_are_refused(east_west):
+    east_west["pv_strings"][0].update(CABLE)
+    with pytest.raises(ValueError, match="or none"):
+        resolve_app_config(east_west)

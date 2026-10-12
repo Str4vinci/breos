@@ -1,6 +1,6 @@
 # 0007 — String topology and electrical checks
 
-- **Status:** Proposed. D1–D7 are implemented, D7 for one inverter; several
+- **Status:** Proposed. D1–D8 are implemented, D7 for one inverter; several
   inverters are the next step.
 - **Date:** 2026-10-11
 
@@ -271,14 +271,40 @@ diagnostic.
 Later years scale the first year's limited DC by module degradation, as the
 aggregate model does. A limit that binds in year 1 is assumed to bind as much
 later, which slightly understates later years when it binds on current. Partial
-shading of single modules, bypass diodes and cable losses are separate
-increments.
+shading of single modules and bypass diodes are separate increments.
+
+### D8. DC cables from the topology
+
+A `pv_strings` entry may give its strings' one-way `cable_length_m` and
+`cable_cross_section_mm2`, and their `conductor`, copper by default. Cable data
+go on every string or on none, because they replace the flat PVWatts `wiring`
+loss for the whole system: its default becomes 0, while a stated value stays,
+for the AC side. The loop resistance is ρ(T) × 2L / A, with the material's
+resistivity and temperature coefficient (IEC 60028 copper, IEC 60889
+aluminium) and `electrical_environment.conductor_temp_c`. Unstated, 50 °C is
+assumed, PVsyst's default, and `electrical.dc_wiring` says so.
+
+The aggregate model charges each string I²R at its array's maximum power
+current, as PVsyst does. String-level energy puts the cable in series with the
+string: a string of N modules carrying k times one module's current drops as
+much per module as a series resistance of k·R/N, so the module's single-diode
+curve with that resistance added is the curve the input sees. The cable thus
+moves the maximum power point, may push it out of the MPPT window, and its
+loss follows from the curve rather than from a percentage. The two models agree
+to within a few hundredths of the loss. A cable has no effect on the
+open-circuit voltage, so the check and the start-up voltage are unchanged.
+
+AC cables wait for the inverter efficiency curve. Their loss is quadratic in
+the inverter's AC output, which the dispatch kernels compute, so both changes
+go into the kernels together.
 
 ### Open items
 
 These are additive and do not change a field above:
 
 - Several inverters in string mode, after ADR 0004 (#419).
+- AC cables between the inverter and the meter, with the inverter efficiency
+  curve.
 
 ## Consequences
 

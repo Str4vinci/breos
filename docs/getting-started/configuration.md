@@ -665,7 +665,54 @@ current before the limits, except `availability`, which is time out of service
 and applies after them. Later years reuse the
 first year's limited production scaled by module degradation, so a limit that
 binds in year 1 is assumed to bind as much later. Partial shading of single
-modules, bypass diodes and cable losses are not modelled.
+modules and bypass diodes are not modelled.
+
+### DC cables
+
+The flat PVWatts `wiring` loss (2 %) stands in for cable resistance. With
+cable data, BREOS models the DC cables instead. Each `pv_strings` entry may
+give `cable_length_m`, the one-way length of each of its strings' cables from
+the array to the inverter input, and `cable_cross_section_mm2`. Give both on
+every string or on none. `conductor` is `"copper"` by default, or
+`"aluminium"`.
+
+```toml
+[[pv_strings]]
+inverter = 0
+mppt = 0
+array = 0
+modules = 7
+cable_length_m = 15
+cable_cross_section_mm2 = 4
+
+[electrical_environment]
+min_design_temp_c = -5
+max_ambient_temp_c = 40
+conductor_temp_c = 40
+```
+
+Each string's cable has two conductors, out and back, so its loop resistance
+is ρ(T) × 2 × length / cross-section. The resistivity at 20 °C and its
+temperature coefficient are the material's: annealed copper per IEC 60028,
+aluminium per IEC 60889. `electrical_environment.conductor_temp_c` is the
+conductors' operating temperature. When it is not stated, 50 °C is assumed,
+the temperature PVsyst evaluates wire resistivity at by default, and the
+result reports the assumption. A cable manufacturer's flexible, tinned
+conductors measure somewhat above the material's resistance for the nominal
+cross-section, so the model is the lower bound of a real cable's loss.
+
+The cables then replace the default `wiring` loss, which becomes 0. A
+`pv_loss_overrides.wiring` you state stays, for the AC wiring that is not
+yet modelled. With aggregate energy, each string loses I²R at its array's
+maximum power current, as PVsyst evaluates array wiring. With
+[string-level energy](#string-level-energy), the cable is a series resistance
+between the string and the input: the input sees the string's voltage less
+the cable's drop, so the cable moves the operating point and can push it out
+of the MPPT window, and the loss follows from the IV curve. The two agree to
+within a few hundredths of the loss. The loss appears as the `dc_wiring` stage
+of the [PV loss waterfall](interpreting-results.md#pv-loss-waterfall), and
+`electrical.dc_wiring` reports each string's resistance and the share of its
+STC power its cable dissipates.
 
 ## Sky-diffusion (transposition) model
 

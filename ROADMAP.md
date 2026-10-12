@@ -94,8 +94,8 @@ Not yet scheduled: switching the system's tariff from a given project year
   diffuse IAM, mount-appropriate thermal coefficients) to become the default
   at 1.0.
 - More pvlib physics behind the self-contained PV stage: extended
-  cell-temperature and IAM options, and optional DC-side loss models (ohmic,
-  soiling, snow).
+  cell-temperature and IAM options, and optional DC-side loss models
+  (soiling, snow). DC cable losses are modelled from the string topology.
 - String-aware inverter validation and modeling. See
   [design/architecture/string-inverter-sizing.md](design/architecture/string-inverter-sizing.md).
 
