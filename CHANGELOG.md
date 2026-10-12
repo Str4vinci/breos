@@ -300,6 +300,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   stated one stays. The loss is the new `near_shading` waterfall stage, and
   `pv_loss_waterfall.near_shading` reports each array's table. Without
   tables every result is unchanged.
+- Module-level shading (ADR 0008, level 2). With string-level energy, a
+  `pv_strings` entry may carry `module_shading`: each module's shaded
+  fraction table, whole or per bypass-diode substring, where a substring may
+  also give the shaded fraction of its most-shaded cell. BREOS builds each
+  string's curve from its substrings and bypass diodes
+  (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated) and
+  runs each input at the curve's global maximum within its limits
+  (`breos.pv.mismatch`). The array's irradiance stage is its modules' mean,
+  and the new `shading_mismatch` waterfall stage takes the electrical effect;
+  `pv_loss_waterfall.shading_mismatch` reports each string's own.
+  `breos.electrical.string_limited_dc` now also returns the mismatch.
 - `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
   only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
   coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.

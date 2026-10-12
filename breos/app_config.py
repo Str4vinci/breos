@@ -8,7 +8,7 @@ from dataclasses import dataclass, fields, replace
 from datetime import date, datetime
 from numbers import Real
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
@@ -54,6 +54,7 @@ from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, valid
 from breos.inverter import AcCable, InverterConversion, inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
 from breos.pv.horizon import normalise_horizon_profile
+from breos.pv.mismatch import DEFAULT_BYPASS_DIODE_VOLTAGE_V
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
 from breos.pv.shading import ShadingTable
 from breos.pv.temperature import validate_temperature_inputs
@@ -1491,6 +1492,11 @@ PV_STRING_TABLE = TableSpec(
         ),
         "cable_cross_section_mm2": "Conductor cross-section (mm²) of each string's cable",
         "conductor": 'Cable conductor, `"copper"` or `"aluminium"`; `"copper"` by default',
+        "module_shading": (
+            "Each module's own shading, for string-level energy: `azimuth_deg`, `elevation_deg`, optional "
+            "`bypass_diodes` (3) and `modules`, one entry per module in series order with a whole-module "
+            "`beam_shaded_fraction` or one `substrings` table per bypass diode; every string of an array or none"
+        ),
     },
 )
 
@@ -1512,6 +1518,10 @@ ELECTRICAL_ENVIRONMENT_TABLE = TableSpec(
         "inverter_ambient_temp_c": (
             "The inverter's ambient (°C) for its `temperature_derating`, for an inverter indoors; unstated, the "
             "weather's air temperature applies"
+        ),
+        "bypass_diode_voltage_v": (
+            "Forward voltage (V) of the modules' bypass diodes, for `module_shading`; "
+            f"{DEFAULT_BYPASS_DIODE_VOLTAGE_V:g} V is assumed, and reported as assumed, when unstated"
         ),
         "conductor_temp_c": (
             "Operating temperature (°C) of the string cables' conductors; "
@@ -2581,11 +2591,18 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
             )
             if "shading" in arr:
                 _validate_shading_table(arr["shading"], f"pv_arrays[{i}].shading")
-        shaded = ["shading" in arr for arr in cfg["pv_arrays"]]
+        by_modules = _module_shaded_arrays(cfg)
+        for i, arr in enumerate(cfg["pv_arrays"]):
+            if "shading" in arr and i in by_modules:
+                raise ValueError(
+                    f"'pv_arrays[{i}]' has a 'shading' table and strings with 'module_shading'; its modules' "
+                    "shading sets its irradiance, so give one or the other"
+                )
+        shaded = ["shading" in arr or i in by_modules for i, arr in enumerate(cfg["pv_arrays"])]
         if any(shaded) and not all(shaded):
             raise ValueError(
-                f"'pv_arrays[{shaded.index(False)}]' has no 'shading' table. Give every array a shading table, "
-                "or none; an unshaded array takes an all-zero table"
+                f"'pv_arrays[{shaded.index(False)}]' has no 'shading' table. Give every array a shading table "
+                "or strings with module_shading, or none; an unshaded array takes an all-zero table"
             )
     if _finite_real(cfg["annual_consumption_kwh"], "annual_consumption_kwh") <= 0:
         raise ValueError("'annual_consumption_kwh' must be > 0")
@@ -2615,6 +2632,16 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
             raise ValueError("'inverter_ac_rating_kw' must be > 0")
     elif cfg.get("inverters") is None and _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
         raise ValueError("'inverter_loading_ratio' must be > 0")
+
+
+def _module_shaded_arrays(cfg: Mapping[str, Any]) -> set[int]:
+    """The arrays some string gives ``module_shading`` for, from the raw ``pv_strings``."""
+    strings = cfg.get("pv_strings") or []
+    return {
+        entry["array"]
+        for entry in strings
+        if isinstance(entry, Mapping) and entry.get("module_shading") is not None and _is_int(entry.get("array"))
+    }
 
 
 def _validate_shading_table(value: Any, where: str) -> None:
@@ -3185,13 +3212,21 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     cfg = {**cfg, "n_modules": n_modules}
     cost_params = resolve_costs(cfg)
     electrical = _resolve_electrical(cfg, pv_arrays, pv_params, n_modules)
+    if electrical is not None and any(string.module_shading is not None for string in electrical.strings):
+        # The result echoes each module's tables as plain floats.
+        cfg["pv_strings"] = [
+            {**entry, "module_shading": string.module_shading.as_config()}
+            if string.module_shading is not None
+            else entry
+            for entry, string in zip(cfg["pv_strings"], electrical.strings, strict=True)
+        ]
     if electrical is not None and electrical.dc_wiring is not None:
         overrides = cfg["pv_loss_overrides"] or {}
         if "wiring" not in overrides:
             # The cables model the DC wiring. A stated wiring loss stays, as the
             # AC side's until AC cables are modelled.
             cfg["pv_loss_overrides"] = {**overrides, "wiring": 0.0}
-    if any("shading" in arr for arr in pv_arrays):
+    if any("shading" in arr for arr in pv_arrays) or _module_shaded_arrays(cfg):
         overrides = cfg["pv_loss_overrides"] or {}
         if "shading" not in overrides:
             # The tables model the near shading. A stated flat loss stays, on
@@ -3281,6 +3316,34 @@ def _inverter_conversion(
     return InverterConversion.build(curve, voltage_v=voltage, ac_cable=ac_cable)
 
 
+def _check_module_shading(
+    cfg: Mapping[str, Any], strings: Sequence[PVString], arrays: Sequence[tuple[PVModuleParams, int]]
+) -> None:
+    """Refuse module shading that string-level energy cannot run."""
+    shaded = [string.module_shading is not None for string in strings]
+    if not any(shaded):
+        return
+    n_arrays = len(cfg["pv_arrays"] or [])
+    for i, string in enumerate(strings):
+        if string.module_shading is not None and string.array < len(arrays):
+            problem = string.module_shading.inconsistency(arrays[string.array][0].N_Cells)
+            if problem:
+                raise ValueError(f"'pv_strings[{i}].module_shading': {problem}")
+    first = shaded.index(True)
+    if cfg["electrical_fidelity"] != "string":
+        raise ValueError(f"'pv_strings[{first}].module_shading' needs electrical_fidelity = 'string'")
+    if not n_arrays:
+        raise ValueError(f"'pv_strings[{first}].module_shading' needs 'pv_arrays'")
+    for array in sorted({string.array for string in strings}):
+        members = [i for i, string in enumerate(strings) if string.array == array]
+        flags = [shaded[i] for i in members]
+        if any(flags) and not all(flags):
+            raise ValueError(
+                f"'pv_strings[{members[flags.index(False)]}]' has no module_shading, but another string of "
+                f"array {array} does. Give every string of an array module_shading, or none"
+            )
+
+
 def _resolve_electrical(
     cfg: Mapping[str, Any], pv_arrays: list[dict[str, Any]], pv_params: PVModuleParams, n_modules: int
 ) -> ElectricalSetup | None:
@@ -3300,6 +3363,7 @@ def _resolve_electrical(
             "Give every 'pv_strings' entry cable_length_m and cable_cross_section_mm2, or none: the cables "
             "replace the flat 'wiring' loss for the whole system"
         )
+    _check_module_shading(cfg, strings, arrays)
     setup = ElectricalSetup(
         inverters,
         strings,

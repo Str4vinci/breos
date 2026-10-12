@@ -19,6 +19,7 @@ from breos.electrical import string_cable_loss, string_limited_dc
 from breos.inverter import ac_derate
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs
+from breos.pv.shading import ModuleMeanShading
 from breos.solar import (
     PVProductionBreakdown,
     _sum_pv_breakdowns,
@@ -443,6 +444,21 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
     return build_pv_production_breakdown(cfg, resolved, weather).dc_after_losses
 
 
+def arrays_with_module_shading(resolved: ResolvedAppConfig) -> list[dict[str, Any]]:
+    """The resolved arrays, each whose strings carry module shading with their mean as its ``shading``."""
+    arrays = [dict(arr) for arr in resolved.pv_arrays or []]
+    electrical = resolved.electrical
+    if electrical is None:
+        return arrays
+    for index, arr in enumerate(arrays):
+        strings = tuple(
+            s.module_shading for s in electrical.strings if s.array == index and s.module_shading is not None
+        )
+        if strings:
+            arr["shading"] = ModuleMeanShading(strings)
+    return arrays
+
+
 def build_pv_production_breakdown(
     cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame
 ) -> PVProductionBreakdown:
@@ -461,7 +477,7 @@ def build_pv_production_breakdown(
             arrays = calculate_array_breakdowns(
                 weather_data=weather,
                 location=location,
-                arrays=resolved.pv_arrays,
+                arrays=arrays_with_module_shading(resolved),
                 freq=freq,
                 loss_overrides=loss_overrides,
                 **model_kwargs,
@@ -470,13 +486,15 @@ def build_pv_production_breakdown(
             arrays = [_single_array_breakdown(cfg, resolved, weather, location, model_kwargs)]
         total = _sum_pv_breakdowns(arrays) if len(arrays) > 1 else arrays[0]
         if string_level:
-            dc, mppt_loss, wiring_loss = string_limited_dc(electrical, arrays)
+            dc, mppt_loss, wiring_loss, mismatch = string_limited_dc(electrical, arrays)
             return replace(
                 total,
                 dc_after_losses=dc,
                 mppt_limit_loss=mppt_loss,
                 dc_wiring_loss=wiring_loss if cabled else None,
                 module_operating=None,
+                shading_mismatch_loss=None if mismatch is None else mismatch.total,
+                string_shading_mismatch=None if mismatch is None else mismatch.strings,
             )
         wiring_loss = string_cable_loss(electrical, arrays)
         return replace(

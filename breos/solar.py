@@ -56,7 +56,7 @@ from breos.pv.model_options import (
 from breos.pv.model_options import (
     TRANSPOSITION_MODELS as TRANSPOSITION_MODELS,
 )
-from breos.pv.shading import CIRCUMSOLAR_MODELS, ShadingTable, as_shading_table
+from breos.pv.shading import CIRCUMSOLAR_MODELS, ArrayShading, ModuleMeanShading, ShadingTable, as_shading_table
 from breos.pv.temperature import calculate_cell_temperature
 from breos.pv_modules import PVModuleParams, get_module
 from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column
@@ -181,6 +181,53 @@ class ModuleOperatingPoint:
 
 
 @dataclass(frozen=True)
+class IrradianceParts:
+    """One array's front irradiance by how near shading reaches it, for module-level shading.
+
+    ``beam`` is the direct irradiance after the incidence-angle modifier and
+    ``circumsolar`` the sky diffuse from around the sun, both of which a
+    module's beam shaded fraction reduces; ``sky`` the rest of the sky
+    diffuse, which its sky view factor scales and which can be negative where
+    a Perez model's horizon term is; ``other`` the ground-reflected and rear
+    irradiance, which shading does not reach. All are unshaded, in W/m², with
+    the cell temperature and the sun's position at each step.
+    """
+
+    beam: np.ndarray
+    circumsolar: np.ndarray
+    sky: np.ndarray
+    other: np.ndarray
+    temp_cell: np.ndarray
+    sun_azimuth: np.ndarray
+    sun_elevation: np.ndarray
+    pv_params: PVModuleParams
+
+    def irradiance(self, beam_shaded: np.ndarray, sky_view: Any) -> np.ndarray:
+        """A module's effective irradiance at each step, from its beam shaded fraction and sky view factor.
+
+        The sky diffuse it keeps is clipped at 0, as the array's is.
+        """
+        sky = np.clip(self.circumsolar * (1.0 - beam_shaded) + self.sky * sky_view, 0.0, None)
+        return self.beam * (1.0 - beam_shaded) + sky + self.other
+
+    def diode_parameters(self, effective_irradiance: np.ndarray, rows: Any = None) -> tuple[np.ndarray, ...]:
+        """One module's single-diode parameters at ``effective_irradiance`` and the array's cell temperature.
+
+        ``effective_irradiance`` has the steps ``rows`` (all steps when None)
+        as its last axis.
+        """
+        I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust = _get_cec_params(self.pv_params)
+        temp_cell = self.temp_cell if rows is None else self.temp_cell[rows]
+        with warnings.catch_warnings(), np.errstate(all="ignore"):
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            cec = pvlib.pvsystem.calcparams_cec(
+                effective_irradiance, temp_cell, self.pv_params.alpha_sc, a_ref, I_L_ref, I_o_ref, R_sh_ref, R_s, Adjust
+            )
+        shape = np.shape(effective_irradiance)
+        return tuple(np.broadcast_to(np.asarray(value, dtype=float), shape) for value in cec)
+
+
+@dataclass(frozen=True)
 class PVProductionBreakdown:
     """Intermediate PV model stages for loss-waterfall reporting.
 
@@ -216,6 +263,15 @@ class PVProductionBreakdown:
     # The plane-of-array stage after near shading when the array has a
     # shading table; None otherwise. ``poa_global_dc`` stays unshaded.
     poa_shaded_dc: Optional[pd.Series] = None
+    # One array's irradiance by how near shading reaches it, when its strings
+    # carry module shading; None otherwise.
+    irradiance_parts: Optional[IrradianceParts] = None
+    # DC lost to the electrical effect of uneven shading on the strings'
+    # modules, already taken out of ``dc_after_losses``; None without module
+    # shading. ``string_shading_mismatch`` holds each such string's own, by
+    # its position in ``pv_strings``.
+    shading_mismatch_loss: Optional[pd.Series] = None
+    string_shading_mismatch: Optional[Dict[int, pd.Series]] = None
 
 
 @dataclass(frozen=True)
@@ -232,6 +288,8 @@ class _IrradianceModelResult:
     # without it.
     poa_global_unshaded: Optional[np.ndarray] = None
     effective_irradiance_unshaded: Optional[np.ndarray] = None
+    # The irradiance by how shading reaches it, for module-level shading.
+    parts: Optional[IrradianceParts] = None
 
 
 def _prepare_solarpos_and_weather(
@@ -287,7 +345,7 @@ def _compute_irradiance_and_cell_temp_detail(
     surface_azimuth,
     pv_params: PVModuleParams,
     model_options: PVModelOptions,
-    shading: Optional[ShadingTable] = None,
+    shading: Optional[ArrayShading] = None,
 ) -> _IrradianceModelResult:
     """Compute GHI, POA, effective irradiance, and cell temperature.
 
@@ -352,6 +410,7 @@ def _compute_irradiance_and_cell_temp_detail(
 
     poa_global_unshaded = None
     front_unshaded = None
+    components = None
     if shading is not None:
         poa_global_unshaded = np.nan_to_num(poa["poa_global"].values, nan=0.0)
         front_unshaded = calculate_front_effective_irradiance(
@@ -361,7 +420,7 @@ def _compute_irradiance_and_cell_temp_detail(
             model_options.diffuse_iam,
             model_options.iam_model,
         )
-        poa = _shaded_poa(
+        poa, components = _shaded_poa(
             poa,
             shading,
             solarpos,
@@ -440,6 +499,35 @@ def _compute_irradiance_and_cell_temp_detail(
         module_efficiency=pv_params.Module_Efficiency,
         noct=pv_params.NOCT,
     )
+    parts = None
+    if isinstance(shading, ModuleMeanShading):
+        assert components is not None
+        direct, circumsolar, sky_rest, ground = components
+
+        def effective(direct_part, sky_part, ground_part) -> np.ndarray:
+            frame = pd.DataFrame(
+                {
+                    "poa_direct": direct_part,
+                    "poa_diffuse": sky_part + ground_part,
+                    "poa_sky_diffuse": sky_part,
+                    "poa_ground_diffuse": ground_part,
+                }
+            )
+            return calculate_front_effective_irradiance(
+                frame, aoi, surface_tilt, model_options.diffuse_iam, model_options.iam_model
+            )
+
+        zeros = np.zeros_like(direct)
+        parts = IrradianceParts(
+            beam=effective(direct, zeros, zeros),
+            circumsolar=effective(zeros, circumsolar, zeros),
+            sky=effective(zeros, sky_rest, zeros),
+            other=effective(zeros, zeros, ground) + rear_effective_irradiance,
+            temp_cell=np.asarray(temp_cell, dtype=float),
+            sun_azimuth=np.asarray(solarpos.azimuth, dtype=float),
+            sun_elevation=90.0 - np.asarray(solarpos.apparent_zenith, dtype=float),
+            pv_params=pv_params,
+        )
     return _IrradianceModelResult(
         ghi=np.nan_to_num(np.asarray(ghi, dtype=float), nan=0.0),
         poa_global=poa_global,
@@ -449,12 +537,13 @@ def _compute_irradiance_and_cell_temp_detail(
         temp_cell=np.asarray(temp_cell, dtype=float),
         poa_global_unshaded=poa_global_unshaded,
         effective_irradiance_unshaded=(None if front_unshaded is None else front_unshaded + rear_effective_irradiance),
+        parts=parts,
     )
 
 
 def _shaded_poa(
     poa: pd.DataFrame,
-    shading: ShadingTable,
+    shading: ArrayShading,
     solarpos: pd.DataFrame,
     surface_tilt,
     surface_azimuth,
@@ -464,8 +553,12 @@ def _shaded_poa(
     dni_extra,
     airmass,
     model_options: PVModelOptions,
-) -> pd.DataFrame:
-    """The plane-of-array components after near shading from ``shading``."""
+) -> tuple[pd.DataFrame, tuple[np.ndarray, ...]]:
+    """The plane-of-array components after near shading from ``shading``, and the unshaded parts.
+
+    The parts are the direct, circumsolar, other sky diffuse and
+    ground-reflected irradiance before shading.
+    """
     elevation = 90.0 - np.asarray(solarpos.apparent_zenith, dtype=float)
     beam_shaded = shading.beam_fraction(np.asarray(solarpos.azimuth, dtype=float), elevation)
     direct = np.nan_to_num(poa["poa_direct"].to_numpy(dtype=float), nan=0.0)
@@ -497,7 +590,7 @@ def _shaded_poa(
         circumsolar = np.clip(np.nan_to_num(np.asarray(parts["poa_circumsolar"], dtype=float), nan=0.0), 0.0, None)
     shaded_direct = direct * (1.0 - beam_shaded)
     shaded_sky = np.clip((sky - circumsolar) * shading.sky_view_factor + circumsolar * (1.0 - beam_shaded), 0.0, None)
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         {
             "poa_global": shaded_direct + shaded_sky + ground,
             "poa_direct": shaded_direct,
@@ -507,6 +600,7 @@ def _shaded_poa(
         },
         index=poa.index,
     )
+    return frame, (direct, circumsolar, sky - circumsolar, ground)
 
 
 def _get_cec_params(pv_params: PVModuleParams):
@@ -810,6 +904,7 @@ def _build_pv_production_breakdown(
         age_degradation_loss=(dc_after_static - dc_after_losses).rename("age_degradation_loss_W"),
         module_operating=module_operating,
         poa_shaded_dc=poa_shaded_dc,
+        irradiance_parts=detail.parts,
     )
 
 

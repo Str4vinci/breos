@@ -1,7 +1,7 @@
 # 0008 — Shading as an input
 
-- **Status:** Accepted 2026-10-12. Level 1 with the shading table is
-  implemented; level 2 follows; the series form (S3) is deferred.
+- **Status:** Accepted 2026-10-12. Levels 1 and 2 are implemented with the
+  shading table; the series form (S3) is deferred.
 - **Date:** 2026-10-12
 
 ## Context
@@ -153,19 +153,78 @@ so that an unshaded array is stated as such (an all-zero table), not assumed.
 
 ### S6. Module level: a shaded fraction per module
 
-At level 2, the shading table or series is given per module rather than per
-array: `pv_strings[i].module_shading` lists, for each module of each string
-in series order, a beam shading table or series column of its own, with an
-optional `substrings` count (3 for a typical 60- or 120-half-cell module) and
-one table per substring, in the module's own substring order. Bypass-diode
-substrings run along the module's long axis, so where they lie on the roof
-depends on portrait or landscape mounting; the layout tool maps them, and
-BREOS assumes no geometry. BREOS then builds each module's IV curve from its own
-irradiance, adds the bypass-diode branch per substring (pvlib's `bishop88`
-with reverse-bias breakdown), sums the curves in series at equal current and
-in parallel at equal voltage, and tracks the input's maximum power point
-within the limits ADR 0007 D7 already applies. A string without
-`module_shading` takes its array's level-1 shading evenly on every module.
+At level 2, the shading is given per module rather than per array.
+`pv_strings[i].module_shading` holds one grid of sun positions for the
+string (`azimuth_deg`, `elevation_deg`, with S2's rules), an optional
+`bypass_diodes` count (3 when omitted, reported as assumed), and `modules`:
+one entry per module of the string, in series order. An entry gives either
+one `beam_shaded_fraction` table for the whole module, shaded evenly, or
+`substrings`, one table per bypass-diode substring in the module's own
+order. Bypass-diode substrings run along the module's long axis, so where
+they lie on the roof depends on portrait or landscape mounting; the layout
+tool maps them, and BREOS assumes no geometry. Each entry may also carry a
+`sky_view_factor`.
+
+A substring's `beam_shaded_fraction` is its area mean, and its optional
+`limiting_shaded_fraction` the shaded fraction of its most-shaded series
+cell. Series cells share one current, so the worst cell sets the
+substring's current: one fully shaded cell out of twenty bypasses the
+substring, about a third of the module, while the area mean says 5 %. The
+limiting fraction defaults to the mean, which is even shade; BREOS uses the
+mean where it is given lower. The worst cell alone shades its share of the
+substring's area, so the mean must be at least the limiting fraction over
+the substring's cell count at every node, and a substring that gives a
+limiting fraction needs at least two cells; BREOS refuses tables that break
+either. A layout tool that takes both values from the same cell samples
+meets the first. In a half-cell module the two halves run in
+parallel, so the limiting fraction is the mean of the two halves' worst
+cells.
+
+BREOS models each substring as its most-shaded cell at the limiting
+irradiance in series with its other cells at the irradiance that keeps the
+area mean, with `N_Cells / bypass_diodes` cells per substring. Each part is a
+single-diode curve with its share of the module's series resistance, shunt
+resistance and diode voltage, at the array's cell temperature. The bypass
+diode holds the substring at minus its forward voltage
+(`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated, the
+value pvlib's partial-shading example assumes, reported as assumed), so a
+shaded cell in reverse bias never sees more than the rest of its substring;
+before that its reverse characteristic is the shunt alone, without
+avalanche breakdown. The string's substrings carry one current and add
+their voltages, less the cable's drop. The input runs at the global maximum
+of its strings' summed curve within the limits ADR 0007 D7 applies: the
+maximum can be the lower peak, with a substring bypassed.
+
+Each substring sees the array's unshaded irradiance after the incidence-angle
+modifier: the beam and circumsolar part reduced by its shaded fraction, the
+other sky diffuse scaled by its module's sky view factor, and the ground and
+rear parts unchanged. The array's own irradiance stage is the mean of its
+modules', so `near_shading` stays the linear loss of level 1, and a new
+`shading_mismatch` stage takes what the uneven shading costs on top of it:
+the strings' power at their array's mean irradiance less their power from
+each module's own. Each string's own mismatch, measured from the string's
+own mean irradiance, is reported so a layout tool can compare stringings.
+
+Rules: module shading needs `electrical_fidelity = "string"` and
+`pv_arrays`; such a string has `parallel = 1`; every string of an array
+carries it or none; an array whose strings carry it takes no `shading`
+table; and every array has a table or module-shaded strings, or none does.
+
+Steps where every substring of a string sees the same irradiance use the
+module's own curve, exactly as without module shading; the others build the
+string's curve on a grid of currents, dense below each part's photocurrent
+where the curve has its knees. A lone string on its input is solved on its
+exact curve: its best local maxima within the voltage range and current
+limit, refined where a limit cuts them. Strings in parallel share the
+input's voltage and are solved on their tabled curves, within 0.01 % of a
+brute-force solve in the tests. Each search refines the best few local
+maxima of its table (four on a string's curve, six on an input's summed
+curve); a curve with more peaks than that, or a peak narrower than the
+table's spacing, can still be missed. The open-circuit voltage that starts
+the inverter is where the strings' signed currents cancel, the table
+reaching into reverse current down to 1.5 times the module's Isc for it.
+A substring holds at least one cell: `bypass_diodes` above `N_Cells` is
+refused.
 
 The per-module form is what the electrical effect needs, and it is also what
 MLPE needs (S7). A layout tool that knows each panel's shading, as the
@@ -254,18 +313,36 @@ What a table cannot hold, in the order of the gain expected from adding it:
 
 Level 1 reads the table once per step and array. On a one-year single-array
 run it added 3 to 5 ms to about 40 ms hourly, and 5 to 9 ms to about 140 ms
-at 15 minutes, for a 180 by 46 table (2026-10-12). Level 2 will be measured
-the same way, at both resolutions, before its defaults are set.
+at 15 minutes, for a 180 by 46 table (2026-10-12).
+
+Level 2 builds a curve for each string at each step where its substrings see
+different light. For one string of ten 144-half-cell modules at Porto, on an
+83 by 26 grid with a chimney's shadow crossing the modules in turn, a
+one-year run of the PV stage took (2026-10-12, one core):
+
+| Shading | Hourly | 15 minutes |
+|---|---|---|
+| None, string-level energy | 0.04 s | 0.13 s |
+| Level 1 table | 0.04 s | 0.14 s |
+| Level 2, whole modules | 0.20 s | 0.56 s |
+| Level 2, substrings with limiting cells | 0.84 s | 2.14 s |
+
+The two resolutions gave the same mismatch loss within 0.2 %, 95 kWh with
+whole modules and 142 kWh with limiting cells, so hourly runs are enough to
+size the loss and 15-minute runs add little for it. The cost grows with the
+number of distinct substrings and of steps where they differ; steps where a
+substring is lit like the string's brightest reuse that curve.
 
 ## Consequences
 
 - Aggregate runs gain hourly near shading per array without any change to the
   electrical model, and Monte Carlo keeps working through the table.
-- Results gain a `near_shading` waterfall stage and, at level 2, the
-  electrical mismatch of partial shading within the existing `mppt_limits`
-  cost, or in a stage of its own if the maintainer prefers.
+- Results gain a `near_shading` waterfall stage and, at level 2, a
+  `shading_mismatch` stage with each string's own mismatch. Where strings
+  in parallel on one input are shaded differently, the voltage they then
+  share costs within `mppt_limits`, as for parallel arrays (ADR 0007).
 - The flat 3 % shading default no longer double-counts when a shading input is
   given.
-- Level 2 is the expensive part: an IV curve per module and step for shaded
-  strings. It runs only where `module_shading` is given, and only for steps
-  where some module is shaded.
+- Level 2 is the expensive part: a curve per string and step from its
+  substrings. It runs only where `module_shading` is given, and only for
+  steps where the string's substrings see different irradiance.

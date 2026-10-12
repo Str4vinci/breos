@@ -402,6 +402,7 @@
   "pv_loss_waterfall.pvwatts.components_pct.snow": 0.0,
   "pv_loss_waterfall.pvwatts.components_pct.soiling": 2.0,
   "pv_loss_waterfall.pvwatts.components_pct.wiring": 2.0,
+  "pv_loss_waterfall.shading_mismatch": null,
   "pv_loss_waterfall.stages.__len__": 6,
   "pv_loss_waterfall.stages[0].energy_kwh": 5740.43,
   "pv_loss_waterfall.stages[0].key": "horizontal_reference_dc",
@@ -471,7 +472,7 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "e031d34812b840e63f96e3460bcd6231b0579a08",
+  "breos_commit": "879507a1300c8f54dba299366ffe168d7d6b2e06",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",

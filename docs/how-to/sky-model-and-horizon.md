@@ -118,3 +118,66 @@ loss came out 0.2 percentage points high on a 1-degree grid and more than
 doubled on a 5-degree one. Steps of 1 or 2 degrees around small objects, and
 values that are the shaded share of the array's area rather than a single
 point, keep the table close.
+
+## Model shading module by module
+
+A shadow across one cell costs more than its share of the light: the cells of
+a bypass-diode substring carry one current, so the most-shaded cell sets it,
+and the string's other modules share the string's current too. With
+string-level energy (`electrical_fidelity = "string"`), a string can carry
+each module's own shading instead of its array's table:
+
+```toml
+[[pv_strings]]
+inverter = 0
+mppt = 0
+array = 0
+modules = 3
+
+[pv_strings.module_shading]
+azimuth_deg = [0, 90, 180, 270]
+elevation_deg = [0, 30, 45]
+
+# Module 1: a chimney's shadow crosses its first substring in the morning.
+[[pv_strings.module_shading.modules]]
+[[pv_strings.module_shading.modules.substrings]]
+beam_shaded_fraction = [[0, 0.1, 0, 0], [0, 0.05, 0, 0], [0, 0, 0, 0]]
+limiting_shaded_fraction = [[0, 1, 0, 0], [0, 0.6, 0, 0], [0, 0, 0, 0]]
+[[pv_strings.module_shading.modules.substrings]]
+beam_shaded_fraction = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+[[pv_strings.module_shading.modules.substrings]]
+beam_shaded_fraction = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+
+# Modules 2 and 3: unshaded.
+[[pv_strings.module_shading.modules]]
+beam_shaded_fraction = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+[[pv_strings.module_shading.modules]]
+beam_shaded_fraction = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+```
+
+One grid of sun positions serves the string, with the rules of the array
+table above. Each module entry is either one `beam_shaded_fraction` table,
+for shade spread evenly over the module, or `substrings`, one entry per
+bypass diode (`bypass_diodes`, 3 when omitted). A substring's
+`beam_shaded_fraction` is the shaded share of its area, and its optional
+`limiting_shaded_fraction` the shaded share of its most-shaded cell; in a
+half-cell module, give the mean of the two halves' most-shaded cells. The
+most-shaded cell alone shades its share of the substring, so the mean must
+be at least the limiting fraction over the substring's cells (48 for a
+144-cell module with three diodes); taking both from the same cell samples
+keeps them consistent, and BREOS refuses tables that are not. Each entry may
+carry its own `sky_view_factor`.
+
+BREOS builds each substring from its most-shaded cell and its other cells,
+lets the bypass diode take the current a shaded substring cannot carry
+(`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated), and
+runs each input at the global maximum of its strings' curve. The array's
+irradiance stage, `near_shading`, is the mean of its modules, and the rest of
+the cost is the `shading_mismatch` stage. `pv_loss_waterfall.shading_mismatch`
+reports it, with each string's own loss measured from that string's mean
+irradiance, so stringings can be compared: a string whose modules are shaded
+alike loses little to mismatch.
+
+Every string of an array carries `module_shading` or none does, such a string
+has `parallel = 1`, and an array whose strings carry it takes no `shading`
+table of its own.

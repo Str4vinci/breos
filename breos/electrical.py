@@ -45,6 +45,8 @@ import pandas as pd
 import pvlib
 
 from breos.equipment import InverterSpec
+from breos.pv.mismatch import DEFAULT_BYPASS_DIODE_VOLTAGE_V, ShadedStringCurve
+from breos.pv.shading import ModuleShading
 from breos.pv_modules import PVModuleParams
 
 #: Cell temperature above ambient at full irradiance, by mounting, in °C.
@@ -141,7 +143,9 @@ class ElectricalEnvironment:
     unstated, :data:`DEFAULT_CONDUCTOR_TEMP_C` is assumed.
     ``inverter_ambient_temp_c`` is the inverter's ambient for its temperature
     derating, for an inverter indoors; unstated, the weather's air
-    temperature applies.
+    temperature applies. ``bypass_diode_voltage_v`` is the forward voltage of
+    the modules' bypass diodes, for module-level shading; unstated,
+    :data:`~breos.pv.mismatch.DEFAULT_BYPASS_DIODE_VOLTAGE_V` is assumed.
     """
 
     min_design_temp_c: float
@@ -152,6 +156,7 @@ class ElectricalEnvironment:
     bifacial_rear_irradiance_w_m2: float = 1000.0 * BIFACIAL_REAR_IRRADIANCE_RATIO
     conductor_temp_c: float | None = None
     inverter_ambient_temp_c: float | None = None
+    bypass_diode_voltage_v: float | None = None
 
     def __post_init__(self) -> None:
         for name in ("min_design_temp_c", "max_ambient_temp_c", "bifacial_rear_irradiance_w_m2"):
@@ -165,6 +170,17 @@ class ElectricalEnvironment:
             raise ValueError(f"mounting must be one of {sorted(MOUNTING_TEMPERATURE_RISE_C)}, got {self.mounting!r}")
         if self.bifacial_rear_irradiance_w_m2 < 0:
             raise ValueError("bifacial_rear_irradiance_w_m2 must be at least 0")
+        if self.bypass_diode_voltage_v is not None:
+            _finite("bypass_diode_voltage_v", self.bypass_diode_voltage_v)
+            if self.bypass_diode_voltage_v <= 0:
+                raise ValueError("bypass_diode_voltage_v must be above 0")
+
+    @property
+    def bypass_diode_v(self) -> float:
+        """Bypass-diode forward voltage: the stated one, else :data:`~breos.pv.mismatch.DEFAULT_BYPASS_DIODE_VOLTAGE_V`."""
+        if self.bypass_diode_voltage_v is None:
+            return DEFAULT_BYPASS_DIODE_VOLTAGE_V
+        return float(self.bypass_diode_voltage_v)
 
     @property
     def conductor_c(self) -> float:
@@ -250,6 +266,10 @@ class PVString:
     array to the inverter input, and ``cable_cross_section_mm2`` its conductor
     cross-section; give both or neither. The string's cable has two such
     conductors, of ``conductor`` (``"copper"`` or ``"aluminium"``).
+
+    ``module_shading`` gives each module's own shading (design record 0008,
+    level 2), for string-level energy; such a string is a single string, so
+    ``parallel`` is 1.
     """
 
     inverter: int
@@ -260,8 +280,11 @@ class PVString:
     cable_length_m: float | None = None
     cable_cross_section_mm2: float | None = None
     conductor: str = "copper"
+    module_shading: ModuleShading | None = dataclasses.field(default=None, compare=False)
 
     def __post_init__(self) -> None:
+        if isinstance(self.module_shading, dict):
+            object.__setattr__(self, "module_shading", ModuleShading.from_mapping(self.module_shading))
         for name in ("inverter", "mppt", "array", "modules", "parallel"):
             value = getattr(self, name)
             minimum = 1 if name in ("modules", "parallel") else 0
@@ -280,6 +303,17 @@ class PVString:
             raise ValueError(
                 f"conductor must be one of {sorted(CONDUCTOR_RESISTIVITY_20C_OHM_M)}, got {self.conductor!r}"
             )
+        if self.module_shading is not None:
+            if not isinstance(self.module_shading, ModuleShading):
+                raise ValueError("module_shading must be a table of azimuth_deg, elevation_deg and modules")
+            if self.parallel != 1:
+                raise ValueError(
+                    "a string with module_shading is a single string: list differently shaded strings apart"
+                )
+            if len(self.module_shading.modules) != self.modules:
+                raise ValueError(
+                    f"module_shading has {len(self.module_shading.modules)} module entries for {self.modules} modules"
+                )
 
     @property
     def has_cable(self) -> bool:
@@ -846,7 +880,24 @@ def string_model_problems(setup: ElectricalSetup) -> list[str]:
     return problems
 
 
-def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd.Series, pd.Series, pd.Series]:
+@dataclass(frozen=True)
+class ShadingMismatch:
+    """DC lost to uneven shading on the strings' modules, in W, after availability.
+
+    ``total`` is the strings' power at their array's mean irradiance less
+    their power from each module's own, the stage the system's DC loses to
+    the electrical effect of shading. ``strings`` holds each module-shaded
+    string's own share by its position in ``pv_strings``: its power with
+    every module at the string's own mean irradiance less its actual power.
+    """
+
+    total: pd.Series
+    strings: dict[int, pd.Series]
+
+
+def string_limited_dc(
+    setup: ElectricalSetup, arrays: Sequence[Any]
+) -> tuple[pd.Series, pd.Series, pd.Series, ShadingMismatch | None]:
     """DC power after the strings' cables, each MPPT input's limits and the inverter's, in W.
 
     ``arrays`` holds one :class:`~breos.solar.PVProductionBreakdown` per PV
@@ -871,9 +922,17 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd
     sees the string's voltage less the cable's drop, so the cable moves the
     maximum power point and its I²R loss follows from the IV curve.
 
-    Returns the limited DC, the DC the limits cost and the DC the cables cost.
-    Where no cable is given and no limit binds, the DC is the aggregate
-    model's, bit for bit.
+    A string with ``module_shading`` runs on its own curve, from each
+    module's substrings and bypass diodes (:mod:`breos.pv.mismatch`), and its
+    array's breakdown must carry the irradiance parts. Its input then solves
+    the summed curve of all its strings, the curve's global maximum within
+    the limits. The difference from the array's mean irradiance is the
+    shading mismatch.
+
+    Returns the limited DC, the DC the limits cost, the DC the cables cost and
+    the shading mismatch, or None when no string has module shading. Where no
+    cable or module shading is given and no limit binds, the DC is the
+    aggregate model's, bit for bit.
     """
     problems = string_model_problems(setup)
     if problems:
@@ -894,44 +953,82 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd
     delivered = np.zeros(len(index))
     cost = np.zeros(len(index))
     wiring = np.zeros(len(index))
+    mismatch = np.zeros(len(index))
+    string_mismatch: dict[int, np.ndarray] = {}
     open_circuit = np.zeros(len(index))
     conductor_c = setup.environment.conductor_c
+    position = {id(s): i for i, s in enumerate(setup.strings)}
     by_input: dict[int, list[PVString]] = defaultdict(list)
     for string in setup.strings:
         by_input[string.mppt].append(string)
     for mppt_index, members in sorted(by_input.items()):
         spec = inverter.mppts[mppt_index]
         assert spec.max_input_current_a is not None
-        string_limit = spec.max_string_input_current_a
-        # Strings of one array with one cable resistance are identical.
+        string_limit = math.inf if spec.max_string_input_current_a is None else spec.max_string_input_current_a
         resistance = {id(s): s.cable_resistance_ohm(conductor_c) for s in members}
+        plain = [s for s in members if s.module_shading is None]
+        shaded = [s for s in members if s.module_shading is not None]
+        # Strings of one array with one cable resistance are identical.
         groups = [
             _StringGroup(
                 arrays[array],
-                sum(s.parallel for s in members if (s.array, resistance[id(s)]) == (array, ohm)),
+                sum(s.parallel for s in plain if (s.array, resistance[id(s)]) == (array, ohm)),
                 ohm,
                 members[0].modules,
             )
-            for array, ohm in sorted({(s.array, resistance[id(s)]) for s in members})
+            for array, ohm in sorted({(s.array, resistance[id(s)]) for s in plain})
         ]
         for group in groups:
             if group.cable_ohm > 0:
                 wiring += np.clip(group.power_at_mpp(group.bare) - group.power_at_mpp(group.operating), 0.0, None)
-        unconstrained, limited = _input_power(
-            groups,
-            members[0].modules,
-            inverter.min_mppt_voltage_v,
-            inverter.max_mppt_voltage_v,
-            spec.max_input_current_a,
-            math.inf if string_limit is None else string_limit,
-        )
+        if shaded:
+            curves = []
+            for string in shaded:
+                assert string.module_shading is not None
+                breakdown = arrays[string.array]
+                if breakdown.irradiance_parts is None:
+                    raise ValueError("A string with module_shading needs its array's irradiance parts")
+                curve = ShadedStringCurve(
+                    string.module_shading,
+                    breakdown.irradiance_parts,
+                    _StringGroup(breakdown, 1).string_scale,
+                    string.modules,
+                    resistance[id(string)],
+                    setup.environment.bypass_diode_v,
+                )
+                reference = _StringGroup(breakdown, 1, 0.0, string.modules).power_at_mpp(breakdown.module_operating)
+                mismatch += reference - curve.mpp_bare
+                wiring += np.clip(curve.mpp_bare - curve.mpp, 0.0, None)
+                string_mismatch[position[id(string)]] = curve.own_mean_power() - curve.mpp_bare
+                curves.append(curve)
+            sources: list[Any] = [_GroupSource(group) for group in groups] + [_CurveSource(c) for c in curves]
+            unconstrained, limited = _curves_power(
+                sources,
+                inverter.min_mppt_voltage_v,
+                inverter.max_mppt_voltage_v,
+                spec.max_input_current_a,
+                string_limit,
+            )
+            input_open_circuit = _sources_open_circuit(sources)
+        else:
+            unconstrained, limited = _input_power(
+                groups,
+                members[0].modules,
+                inverter.min_mppt_voltage_v,
+                inverter.max_mppt_voltage_v,
+                spec.max_input_current_a,
+                string_limit,
+            )
+            input_open_circuit = None
         cost += np.clip(unconstrained - limited, 0.0, None)
         if spec.max_usable_dc_power_w is not None:
             cost += _excess(limited, spec.max_usable_dc_power_w)
             limited = np.minimum(limited, spec.max_usable_dc_power_w)
         delivered += limited
         if inverter.startup_voltage_v > 0:
-            open_circuit = np.maximum(open_circuit, members[0].modules * _open_circuit_voltage(groups))
+            if input_open_circuit is None:
+                input_open_circuit = members[0].modules * _open_circuit_voltage(groups)
+            open_circuit = np.maximum(open_circuit, input_open_circuit)
     if inverter.max_usable_dc_power_w is not None:
         cost += _excess(delivered, inverter.max_usable_dc_power_w)
         delivered = np.minimum(delivered, inverter.max_usable_dc_power_w)
@@ -942,7 +1039,18 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> tuple[pd
     total = sum((b.dc_after_losses for b in arrays[1:]), arrays[0].dc_after_losses)
     loss_series = pd.Series(cost * availability, index=index, name="mppt_limit_loss_W")
     wiring_series = pd.Series(wiring * availability, index=index, name="dc_wiring_loss_W")
-    return (total - (loss_series + wiring_series)).rename("dc_power_W"), loss_series, wiring_series
+    shading = None
+    removed = loss_series + wiring_series
+    if string_mismatch:
+        shading = ShadingMismatch(
+            total=pd.Series(mismatch * availability, index=index, name="shading_mismatch_loss_W"),
+            strings={
+                i: pd.Series(values * availability, index=index, name=f"string_{i}_shading_mismatch_W")
+                for i, values in sorted(string_mismatch.items())
+            },
+        )
+        removed = removed + shading.total
+    return (total - removed).rename("dc_power_W"), loss_series, wiring_series, shading
 
 
 def string_cable_loss(setup: ElectricalSetup, arrays: Sequence[Any]) -> pd.Series:
@@ -1186,6 +1294,158 @@ def _parallel_arrays_power(
     best_power = np.maximum(values[rows, best], power(0.5 * (a + b)))
     result[steps] = np.minimum(np.where(feasible, best_power, 0.0), unconstrained[steps])
     return unconstrained, result
+
+
+class _GroupSource:
+    """Identical unshaded strings of one array on an input, for the curve solver."""
+
+    def __init__(self, group: _StringGroup) -> None:
+        operating = group.operating
+        self.count = group.parallel
+        self.modules = group.modules
+        self.scale = group.string_scale
+        self.params = [np.asarray(p, dtype=float) for p in _diode_params(operating)]
+        self.mpp = group.power_at_mpp(operating)
+        with np.errstate(all="ignore"):
+            self.v_oc = self.modules * np.nan_to_num(pvlib.pvsystem.v_from_i(0.0, *self.params))
+
+    def current(self, voltage: np.ndarray, rows: np.ndarray, signed: bool = False) -> np.ndarray:
+        shape = (-1,) + (1,) * (voltage.ndim - 1)
+        params = [p[rows].reshape(shape) for p in self.params]
+        with np.errstate(all="ignore"):
+            module = np.nan_to_num(np.asarray(pvlib.pvsystem.i_from_v(voltage / self.modules, *params), dtype=float))
+        return self.scale[rows].reshape(shape) * (module if signed else np.clip(module, 0.0, None))
+
+
+class _CurveSource:
+    """One module-shaded string on an input, for the curve solver."""
+
+    def __init__(self, curve: ShadedStringCurve) -> None:
+        self.count = 1
+        self.curve = curve
+        self.mpp = curve.mpp
+        self.v_oc = curve.v_oc
+
+    def current(self, voltage: np.ndarray, rows: np.ndarray, signed: bool = False) -> np.ndarray:
+        return self.curve.current(voltage, rows, signed)
+
+
+# Points of the string-voltage grid that brackets the global maximum of an
+# input with module-shaded strings, whose curve can have several.
+_CURVE_GRID_POINTS = 256
+# Local maxima of the summed curve refined by golden section.
+_CURVE_PEAKS = 6
+
+
+def _curves_power(
+    sources: list[Any], v_min: float, v_max: float, current_limit: float, string_limit: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """An input's unconstrained and limited DC when a string has module shading, in W before availability.
+
+    The strings share the input's voltage; the input runs at the global
+    maximum of their summed curve within the voltage range and the current
+    limits. A lone shaded string whose own maximum power point is inside
+    every limit delivers that point exactly; otherwise it is solved on its
+    exact curve. Strings in parallel are solved on their tabled curves, each
+    of the best local maxima refined.
+    """
+    unconstrained = np.asarray(sum(source.mpp for source in sources), dtype=float)
+    result = unconstrained.copy()
+    solve = unconstrained > 0
+    if len(sources) == 1 and isinstance(sources[0], _CurveSource):
+        curve = sources[0].curve
+        free = (
+            (curve.v_mp >= v_min - _TOLERANCE)
+            & (curve.v_mp <= v_max + _TOLERANCE)
+            & (curve.i_mp <= min(current_limit, string_limit) + _TOLERANCE)
+        )
+        solve &= ~free
+        if solve.any():
+            result[solve] = np.minimum(
+                curve.constrained_mpp(solve, v_min, v_max, min(current_limit, string_limit)), unconstrained[solve]
+            )
+        return unconstrained, result
+    if not solve.any():
+        return unconstrained, result
+    index = np.flatnonzero(solve)
+    everywhere = np.ones(index.size, dtype=bool)
+
+    def mask(subset: np.ndarray) -> np.ndarray:
+        rows = np.zeros(len(unconstrained), dtype=bool)
+        rows[index[subset]] = True
+        return rows
+
+    def currents(voltage: np.ndarray, subset: np.ndarray = everywhere) -> list[np.ndarray]:
+        rows = mask(subset)
+        return [source.current(voltage, rows) for source in sources]
+
+    def input_current(voltage: np.ndarray) -> np.ndarray:
+        return sum(source.count * i for source, i in zip(sources, currents(voltage), strict=True))
+
+    def allowed(voltage: np.ndarray, subset: np.ndarray = everywhere) -> np.ndarray:
+        each = currents(voltage, subset)
+        total = sum(source.count * i for source, i in zip(sources, each, strict=True))
+        largest = np.max(each, axis=0)
+        return (total <= current_limit + _TOLERANCE) & (largest <= string_limit + _TOLERANCE)
+
+    v_oc = np.max([source.v_oc[index] for source in sources], axis=0)
+    lower = np.full(index.size, float(v_min))
+    upper = np.minimum(float(v_max), v_oc)
+    # The currents fall with voltage, so the allowed voltages start where they meet their limits.
+    blocked = ~allowed(np.minimum(lower, upper))
+    if blocked.any():
+        low, high = lower[blocked].copy(), upper[blocked].copy()
+        for _ in range(_BISECTION_STEPS):
+            middle = 0.5 * (low + high)
+            ok = allowed(middle, blocked)
+            high = np.where(ok, middle, high)
+            low = np.where(ok, low, middle)
+        lower[blocked] = high
+    feasible = (lower <= upper) & allowed(np.minimum(lower, upper))
+
+    def power(voltage: np.ndarray) -> np.ndarray:
+        return voltage * np.clip(input_current(voltage), 0.0, None)
+
+    span = (upper - lower).clip(min=0.0)
+    grid = lower[:, None] + span[:, None] * np.linspace(0.0, 1.0, _CURVE_GRID_POINTS)
+    values = power(grid)
+    rows = np.arange(index.size)
+    best_power = values.max(axis=1)
+    peak = np.zeros_like(values, dtype=bool)
+    peak[:, 1:-1] = (values[:, 1:-1] >= values[:, :-2]) & (values[:, 1:-1] >= values[:, 2:])
+    peak[:, 0], peak[:, -1] = values[:, 0] >= values[:, 1], values[:, -1] >= values[:, -2]
+    ranked = np.argsort(np.where(peak, values, -np.inf), axis=1)[:, ::-1][:, :_CURVE_PEAKS]
+    ratio = (math.sqrt(5.0) - 1.0) / 2.0
+    for j in range(ranked.shape[1]):
+        best = ranked[:, j]
+        if not np.isfinite(np.where(peak[rows, best], values[rows, best], -np.inf)).any():
+            continue
+        a = grid[rows, np.maximum(best - 1, 0)]
+        b = grid[rows, np.minimum(best + 1, _CURVE_GRID_POINTS - 1)]
+        for _ in range(_GOLDEN_STEPS):
+            c, d = b - ratio * (b - a), a + ratio * (b - a)
+            left = power(c) >= power(d)
+            a, b = np.where(left, a, c), np.where(left, d, b)
+        best_power = np.maximum(best_power, power(0.5 * (a + b)))
+    result[index] = np.minimum(np.where(feasible, best_power, 0.0), unconstrained[index])
+    return unconstrained, result
+
+
+def _sources_open_circuit(sources: list[Any]) -> np.ndarray:
+    """An input's open-circuit voltage at each step, in V: where its strings' currents cancel; 0 in the dark."""
+    own = np.asarray([source.v_oc for source in sources], dtype=float)
+    lit = np.all(own > 0, axis=0)
+    voltage = np.zeros(own.shape[1])
+    if len(sources) == 1 or not lit.any():
+        return np.where(lit, own.max(axis=0), 0.0) if len(sources) > 1 else own[0]
+    low, high = own[:, lit].min(axis=0), own[:, lit].max(axis=0)
+    for _ in range(_BISECTION_STEPS):
+        middle = 0.5 * (low + high)
+        current = sum(source.count * source.current(middle, lit, signed=True) for source in sources)
+        positive = np.asarray(current) > 0
+        low, high = np.where(positive, middle, low), np.where(positive, high, middle)
+    voltage[lit] = 0.5 * (low + high)
+    return voltage
 
 
 def _open_circuit_voltage(groups: list[_StringGroup]) -> np.ndarray:

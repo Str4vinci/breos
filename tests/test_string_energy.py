@@ -212,7 +212,7 @@ def test_the_operating_point_is_the_best_one_the_limits_allow(v_min, v_max, curr
     setup = ElectricalSetup(
         (inverter,), strings, environment, check_topology([(TRINA_450, modules)], [inverter], strings, environment)
     )
-    dc, loss, _ = string_limited_dc(setup, [breakdown])
+    dc, loss, _, _ = string_limited_dc(setup, [breakdown])
 
     op = breakdown.module_operating
     for step in range(len(irradiance)):
@@ -283,7 +283,7 @@ def test_no_feasible_operating_point_delivers_nothing():
     setup = ElectricalSetup(
         (inverter,), strings, environment, check_topology([(TRINA_450, 7)], [inverter], strings, environment)
     )
-    dc, loss, _ = string_limited_dc(setup, [breakdown])
+    dc, loss, _, _ = string_limited_dc(setup, [breakdown])
     assert dc.iloc[0] == pytest.approx(0.0, abs=1e-6)
     assert loss.iloc[0] == pytest.approx(breakdown.dc_after_losses.iloc[0])
 
@@ -301,8 +301,8 @@ def test_availability_does_not_lower_the_current_against_the_limit():
     )
     full = _breakdown(TRINA_450, 7, [1000.0], [25.0], 1.0)
     in_service = replace(_breakdown(TRINA_450, 7, [1000.0], [25.0], 0.97), pvwatts_components_pct={"availability": 3.0})
-    _, loss_full, _ = string_limited_dc(setup, [full])
-    _, loss_available, _ = string_limited_dc(setup, [in_service])
+    _, loss_full, _, _ = string_limited_dc(setup, [full])
+    _, loss_available, _, _ = string_limited_dc(setup, [in_service])
     assert loss_full.iloc[0] > 0
     assert loss_available.iloc[0] == pytest.approx(0.97 * loss_full.iloc[0])
 
@@ -335,12 +335,12 @@ def test_an_input_and_the_inverter_deliver_at_most_their_usable_dc_power():
     assert free.iloc[0] > 4000
 
     per_input = _inverter(MpptSpec(25, max_usable_dc_power_w=2000), MpptSpec(25))
-    dc, loss, _ = string_limited_dc(_setup(per_input, strings, arrays), [east, west])
+    dc, loss, _, _ = string_limited_dc(_setup(per_input, strings, arrays), [east, west])
     assert dc.iloc[0] == pytest.approx(2000 + free.iloc[0] / 2)
     assert dc.iloc[1] == free.iloc[1]
 
     whole = _inverter(MpptSpec(25), MpptSpec(25), max_usable_dc_power_w=3000)
-    dc, loss, _ = string_limited_dc(_setup(whole, strings, arrays), [east, west])
+    dc, loss, _, _ = string_limited_dc(_setup(whole, strings, arrays), [east, west])
     assert dc.iloc[0] == pytest.approx(3000)
     assert loss.iloc[0] == pytest.approx(free.iloc[0] - 3000)
     assert dc.iloc[1] == free.iloc[1]
@@ -388,7 +388,7 @@ def test_parallel_arrays_run_at_the_best_point_of_their_summed_curve(v_min, v_ma
         max_mppt_voltage_v=v_max,
     )
     strings = (PVString(0, 0, 0, 7), PVString(0, 0, 1, 7))
-    dc, loss, _ = string_limited_dc(_setup(inverter, strings, [(TRINA_450, 7), (TRINA_450, 7)]), [east, west])
+    dc, loss, _, _ = string_limited_dc(_setup(inverter, strings, [(TRINA_450, 7), (TRINA_450, 7)]), [east, west])
 
     grid = np.linspace(v_min, v_max, 400001)
     for step in range(3):
@@ -417,7 +417,7 @@ def test_the_inverter_starts_once_an_input_reaches_its_start_up_voltage():
     startup = 0.5 * (v_oc[0] + v_oc[1])
     assert v_oc[0] < startup < min(v_oc[1], v_oc[2], v_oc[6])
     inverter = _inverter(MpptSpec(25), startup_voltage_v=float(startup))
-    dc, loss, _ = string_limited_dc(_setup(inverter, [PVString(0, 0, 0, 3)], [(TRINA_450, 3)]), [breakdown])
+    dc, loss, _, _ = string_limited_dc(_setup(inverter, [PVString(0, 0, 0, 3)], [(TRINA_450, 3)]), [breakdown])
     free = breakdown.dc_after_losses
     # Below the start-up voltage before it has started; running once started,
     # down to the dim evening step; stopped overnight and waiting again.
@@ -476,7 +476,7 @@ def test_a_cable_moves_the_operating_point_and_costs_its_loss(v_min):
     ohm = cable.cable_resistance_ohm(50.0)
     assert ohm == pytest.approx(1.7241e-8 * (1 + 0.00393 * 30) * 80 / 2.5e-6)
     setup = _setup(_inverter(MpptSpec(25), min_mppt_voltage_v=v_min), [cable], [(TRINA_450, n)])
-    dc, limits, wiring = string_limited_dc(setup, [breakdown])
+    dc, limits, wiring, _ = string_limited_dc(setup, [breakdown])
 
     op = breakdown.module_operating
     for step in range(len(irradiance)):

@@ -13,6 +13,7 @@ from breos._daily_persistence import DailyPersistenceController, daily_persisten
 from breos.app_config import ResolvedAppConfig, SimulationPeriod
 from breos.app_inputs import (
     AppRuntimeDependencies,
+    arrays_with_module_shading,
     prepare_simulation_inputs,
     prepare_simulation_inputs_cached,
     unknown_source_metadata,
@@ -273,7 +274,7 @@ def _inverter_model_fields(
 
 def _near_shading_summary(resolved: ResolvedAppConfig, poa_dc: float, poa_shaded_dc: float) -> dict[str, Any] | None:
     """The arrays' near-shading inputs and their loss, or None when no array has a table."""
-    tables = [as_shading_table(arr.get("shading")) for arr in resolved.pv_arrays or []]
+    tables = [as_shading_table(arr.get("shading")) for arr in arrays_with_module_shading(resolved)]
     if not any(table is not None for table in tables):
         return None
     cfg = resolved.cfg
@@ -294,6 +295,26 @@ def _near_shading_summary(resolved: ResolvedAppConfig, poa_dc: float, poa_shaded
         "loss_pct_of_poa": _rounded(loss / poa_dc * 100.0 if poa_dc else 0.0),
         "flat_shading_pct": float((cfg["pv_loss_overrides"] or {}).get("shading", 0.0)),
         "arrays": arrays,
+    }
+
+
+def _shading_mismatch_summary(
+    resolved: ResolvedAppConfig, pv_breakdown: PVProductionBreakdown, freq: str
+) -> dict[str, Any] | None:
+    """The electrical effect of the modules' own shading, per string, or None without module shading."""
+    if pv_breakdown.shading_mismatch_loss is None or resolved.electrical is None:
+        return None
+    environment = resolved.electrical.environment
+    strings = []
+    for index, loss in sorted((pv_breakdown.string_shading_mismatch or {}).items()):
+        shading = resolved.electrical.strings[index].module_shading
+        assert shading is not None
+        strings.append({"string": index, "loss_kwh": _rounded(_series_energy_kwh(loss, freq)), **shading.as_dict()})
+    return {
+        "loss_kwh": _rounded(_series_energy_kwh(pv_breakdown.shading_mismatch_loss, freq)),
+        "bypass_diode_voltage_v": environment.bypass_diode_v,
+        "bypass_diode_voltage_stated": environment.bypass_diode_voltage_v is not None,
+        "strings": strings,
     }
 
 
@@ -361,11 +382,16 @@ def _build_pv_loss_waterfall(
         _waterfall_stage("temperature", "Cell temperature", module_dc, effective_dc),
         _waterfall_stage("pvwatts_static", "Static PVWatts losses", dc_after_static, module_dc),
     ]
-    after_wiring = dc_after_static
+    after_mismatch = dc_after_static
+    if pv_breakdown.shading_mismatch_loss is not None:
+        # The electrical effect of uneven shading on the strings' modules.
+        after_mismatch = dc_after_static - _series_energy_kwh(pv_breakdown.shading_mismatch_loss, freq)
+        stages.append(_waterfall_stage("shading_mismatch", "Shading mismatch", after_mismatch, dc_after_static))
+    after_wiring = after_mismatch
     if pv_breakdown.dc_wiring_loss is not None:
         # The strings' cables, when the topology gives them.
-        after_wiring = dc_after_static - _series_energy_kwh(pv_breakdown.dc_wiring_loss, freq)
-        stages.append(_waterfall_stage("dc_wiring", "DC cables", after_wiring, dc_after_static))
+        after_wiring = after_mismatch - _series_energy_kwh(pv_breakdown.dc_wiring_loss, freq)
+        stages.append(_waterfall_stage("dc_wiring", "DC cables", after_wiring, after_mismatch))
     if pv_breakdown.mppt_limit_loss is not None:
         # String-level energy: the inverter's input limits.
         after_limits = after_wiring - _series_energy_kwh(pv_breakdown.mppt_limit_loss, freq)
@@ -407,6 +433,7 @@ def _build_pv_loss_waterfall(
         "stages": stages,
         "bifacial": _bifacial_summary(resolved, front_effective_dc, rear_gain_dc),
         "near_shading": _near_shading_summary(resolved, poa_dc, poa_shaded_dc),
+        "shading_mismatch": _shading_mismatch_summary(resolved, pv_breakdown, freq),
         "pvwatts": {
             "components_pct": {name: float(value) for name, value in pv_breakdown.pvwatts_components_pct.items()},
             "components_kwh": pvwatts_components,
