@@ -76,13 +76,15 @@ cells side by side. One whose chains differ is solved as the chains' summed
 current at each voltage: each chain is its parts in series, its worst cell
 and its other cells, capped at its smallest part's short-circuit current,
 and the bypass diode clamps the substring
-(`breos.pv.mismatch._HalfSection`). Against a cell-level model of a 144
-half-cell module with explicit parallel chains (tests/test_half_cut_halves.py),
-portrait shade on one to twelve bottom rows came within 0.2 % of module
-power, and a ten-module string with three such modules within 0.1 %. A chain
-is described by its mean and its worst cell, so a shadow that darkens every
-other cell of a chain, as one landscape row along the long edge does, comes
-out 0.9 % high.
+(`breos.pv.mismatch._HalfSection`). Above its open circuit a chain takes
+current back from the others, up to the brightest one's. Against a
+cell-level model of a 144 half-cell module with explicit parallel chains
+(tests/cell_reference.py), portrait shade on one to seven bottom rows, or
+on all twelve, came within 0.25 % of module power, and a ten-module string
+with three such modules within 0.1 %. A chain is described by its mean and
+its worst cell, so a shadow that leaves a few of its cells lit among dark
+ones, as eight to eleven bottom rows do, or darkens every other cell, as one
+landscape row along the long edge does, comes out up to 1.1 % high.
 
 ### M3. An optional breakdown voltage
 

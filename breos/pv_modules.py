@@ -112,6 +112,10 @@ class PVModuleParams:
         elif name in ("N_Cells", "bypass_diodes", "cell_strings_in_parallel"):
             if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+            if name != "bypass_diodes" and self._module_params_ready:
+                cells = value if name == "N_Cells" else self.N_Cells
+                strings = value if name == "cell_strings_in_parallel" else self.cell_strings_in_parallel
+                self._check_cell_strings(int(cells), int(strings))
         elif name == "Module_Efficiency" and value is not None:
             self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
         elif name == "Max_System_Voltage" and value is not None:
@@ -207,12 +211,15 @@ class PVModuleParams:
 
     def __post_init__(self) -> None:
         self._validate_stc_point(self.Mpp, self.Vmp, self.Imp)
-        if self.N_Cells % self.cell_strings_in_parallel:
-            raise ValueError(
-                f"N_Cells ({self.N_Cells}) must divide into cell_strings_in_parallel ({self.cell_strings_in_parallel}) "
-                "strings of whole cells"
-            )
+        self._check_cell_strings(self.N_Cells, self.cell_strings_in_parallel)
         object.__setattr__(self, "_module_params_ready", True)
+
+    @staticmethod
+    def _check_cell_strings(cells: int, strings: int) -> None:
+        if cells % strings:
+            raise ValueError(
+                f"N_Cells ({cells}) must divide into cell_strings_in_parallel ({strings}) strings of whole cells"
+            )
 
     @property
     def cells_in_series(self) -> int:

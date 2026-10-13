@@ -10,6 +10,7 @@ from breos.pv.mismatch import ShadedStringCurve
 from breos.pv.shading import ModuleShading
 from breos.pv_modules import get_module
 from breos.solar import IrradianceParts, _get_cec_params
+from tests.cell_reference import Reference, breos_entry, breos_power, landscape, portrait
 
 BEAM, DIFFUSE, TEMP = 800.0, 200.0, 25.0
 MODULE = get_module("Generic_400W")
@@ -115,108 +116,37 @@ def test_shade_on_one_half_costs_less_than_on_both():
     assert both < one < lit
 
 
-# -- an independent cell-level reference ----------------------------------------------------------
-#
-# A 144 half-cell module of 6 columns and 24 rows. Each of its 3 substrings
-# is two columns: a top string of the upper 12 rows' 24 half-cells in
-# parallel with a bottom string of the lower 12 rows', under one bypass
-# diode. A half-cell takes the module's single-diode fit at 72 positions of 2
-# half-cells: half the photocurrent and saturation current, twice the
-# resistances over 72 and the thermal voltage over 72, which reproduces the
-# module's curve under even light. A cell carries at most its own
-# short-circuit current. Each string's voltage is the sum of its cells' over
-# a current grid; the two strings' currents add at each voltage; the diode
-# clamps the substring; the substrings and modules add in series.
+# -- an independent cell-level reference (tests/cell_reference.py) --------------------------------
 
-_CURRENT = np.linspace(0.0, 1.02 * MODULE.Isc, 20001)
-_VOLTAGE = np.linspace(-0.5, 30.0, 61001)
+_REFERENCE = Reference(MODULE)
 _FIT = _get_cec_params(MODULE)
 
 
-def _half_cell_voltage(irradiance: float) -> tuple[np.ndarray, float]:
-    il_ref, io_ref, rs, rsh_ref, a_ref, adjust = _FIT
-    il, io, rs_t, rsh, nv = (
-        float(np.asarray(x))
-        for x in pvlib.pvsystem.calcparams_cec(
-            irradiance, TEMP, MODULE.alpha_sc, a_ref, il_ref, io_ref, rsh_ref, rs, adjust
-        )
-    )
-    params = (il / 2, io / 2, rs_t * 2 / 72, rsh * 2 / 72, nv / 72)
-    isc = float(pvlib.pvsystem.i_from_v(0.0, *params))
-    current = _CURRENT / 2
-    voltage = np.asarray(pvlib.pvsystem.v_from_i(np.minimum(current, isc), *params), dtype=float)
-    return np.where(current > isc, -np.inf, voltage), isc
+@pytest.mark.parametrize("rows", range(1, 13))
+@pytest.mark.parametrize("columns", [list(range(6)), [0, 1]], ids=["every-section", "one-section"])
+def test_portrait_row_shade_matches_the_cell_level_reference(rows, columns):
+    shaded = portrait(rows, columns)
+    error = breos_power(MODULE, [breos_entry(shaded)]) / _REFERENCE.power(_REFERENCE.module_voltage(shaded)) - 1.0
+    if rows <= 7 or rows == 12:
+        assert abs(error) < 2.5e-3
+    else:
+        # A chain is its mean and its single most-shaded cell, so with most of
+        # its cells dark but a few lit, its other dark cells are spread over
+        # the lit ones: 1.1 % high at 11 of 12 rows.
+        assert 0.0 < error < 0.012
 
 
-def _string_current(irradiances: np.ndarray) -> np.ndarray:
-    voltage = np.zeros(_CURRENT.size)
-    cap = np.inf
-    for value in np.unique(irradiances):
-        cell, isc = _half_cell_voltage(float(value))
-        voltage = voltage + np.count_nonzero(irradiances == value) * cell
-        cap = min(cap, isc)
-    finite = np.isfinite(voltage)
-    current = np.interp(_VOLTAGE, voltage[finite][::-1], (_CURRENT / 2)[finite][::-1], left=cap, right=0.0)
-    return np.minimum(current, cap)
-
-
-def _reference_module_voltage(shaded: np.ndarray) -> np.ndarray:
-    irradiance = np.where(shaded, DIFFUSE, BEAM + DIFFUSE)
-    total = np.zeros(_CURRENT.size)
-    for s in range(3):
-        columns = irradiance[:, 2 * s : 2 * s + 2]
-        current = _string_current(columns[:12].ravel()) + _string_current(columns[12:].ravel())
-        voltage = np.interp(_CURRENT, current[::-1], _VOLTAGE[::-1], right=-np.inf)
-        total += np.maximum(np.where(_CURRENT > current[0], -np.inf, voltage), -0.5)
-    return total
-
-
-def _reference_power(voltage: np.ndarray) -> float:
-    return float(np.max(_CURRENT * voltage))
-
-
-def _breos_entry(shaded: np.ndarray) -> dict:
-    substrings = []
-    for s in range(3):
-        fraction = shaded[:, 2 * s : 2 * s + 2].astype(float)
-        halves = [_half(float(part.mean()), float(part.max())) for part in (fraction[:12], fraction[12:])]
-        substrings.append({"halves": halves})
-    return {"substrings": substrings}
-
-
-def _portrait(rows: int, columns: list[int]) -> np.ndarray:
-    shaded = np.zeros((24, 6), dtype=bool)
-    shaded[24 - rows :, columns] = True
-    return shaded
-
-
-def _landscape(rows: int) -> np.ndarray:
-    # On its side, the module's long edge is its first columns.
-    shaded = np.zeros((24, 6), dtype=bool)
-    shaded[:, :rows] = True
-    return shaded
-
-
-@pytest.mark.parametrize(
-    "shaded",
-    [
-        pytest.param(_portrait(1, list(range(6))), id="portrait-bottom-row"),
-        pytest.param(_portrait(6, list(range(6))), id="portrait-bottom-6-rows"),
-        pytest.param(_portrait(12, list(range(6))), id="portrait-bottom-half"),
-        pytest.param(_portrait(4, [0, 1]), id="portrait-corner"),
-        pytest.param(_landscape(2), id="landscape-2-rows"),
-    ],
-)
-def test_one_module_matches_the_cell_level_reference(shaded):
-    reference = _reference_power(_reference_module_voltage(shaded))
-    assert _power([_breos_entry(shaded)]) == pytest.approx(reference, rel=2e-3)
+def test_two_landscape_rows_match_the_cell_level_reference():
+    shaded = landscape(2)
+    reference = _REFERENCE.power(_REFERENCE.module_voltage(shaded))
+    assert breos_power(MODULE, [breos_entry(shaded)]) == pytest.approx(reference, rel=1e-3)
 
 
 def test_a_string_matches_the_cell_level_reference():
-    shaded, clear = _portrait(4, list(range(6))), np.zeros((24, 6), dtype=bool)
-    voltage = 3 * _reference_module_voltage(shaded) + 7 * _reference_module_voltage(clear)
-    power = _power([_breos_entry(shaded)] * 3 + [_breos_entry(clear)] * 7)
-    assert power == pytest.approx(_reference_power(voltage), rel=1e-3)
+    shaded, clear = portrait(4, list(range(6))), np.zeros((24, 6), dtype=bool)
+    voltage = 3 * _REFERENCE.module_voltage(shaded) + 7 * _REFERENCE.module_voltage(clear)
+    power = breos_power(MODULE, [breos_entry(shaded)] * 3 + [breos_entry(clear)] * 7)
+    assert power == pytest.approx(_REFERENCE.power(voltage), rel=1e-3)
 
 
 def test_one_landscape_row_is_overstated_by_the_worst_cell_approximation():
@@ -224,7 +154,59 @@ def test_one_landscape_row_is_overstated_by_the_worst_cell_approximation():
     # each of a string's rows. A half is described by its mean and its single
     # worst cell, so its other shaded cells are spread evenly over the rest;
     # here that overstates the module's power by under 1 %.
-    shaded = _landscape(1)
-    reference = _reference_power(_reference_module_voltage(shaded))
-    error = _power([_breos_entry(shaded)]) / reference - 1.0
+    shaded = landscape(1)
+    reference = _REFERENCE.power(_REFERENCE.module_voltage(shaded))
+    error = breos_power(MODULE, [breos_entry(shaded)]) / reference - 1.0
     assert 0.0 < error < 0.01
+
+
+# -- second review regressions --------------------------------------------------------------------
+
+
+def _chain_current(voltage: float, irradiance: float, strings: int = 2) -> float:
+    """A chain of 24 half-cells at one irradiance, its current at ``voltage`` from the diode equation alone."""
+    il_ref, io_ref, rs, rsh_ref, a_ref, adjust = _FIT
+    il, io, rs_t, rsh, nv = (
+        float(np.asarray(x))
+        for x in pvlib.pvsystem.calcparams_cec(
+            irradiance, TEMP, MODULE.alpha_sc, a_ref, il_ref, io_ref, rsh_ref, rs, adjust
+        )
+    )
+    return float(pvlib.pvsystem.i_from_v(voltage / 24, il / strings, io / strings, rs_t * strings / 72,
+                                         rsh * strings / 72, nv / 72))  # fmt: skip
+
+
+def test_a_shaded_chain_takes_the_lit_chains_current_back_at_open_circuit():
+    from scipy.optimize import brentq
+
+    sky = 20.0
+    parts = replace(PARTS, sky=sky * ONE)
+    halves = {"substrings": [{"halves": [_half(0.0), _half(1.0)]}] * 3}
+    shading = _raw([halves]).for_module(3, 2)
+    curve = ShadedStringCurve(shading, parts, ONE, 1)
+    section = brentq(lambda v: _chain_current(v, BEAM + sky) + _chain_current(v, sky), 0.0, 25.0, xtol=1e-9)
+    assert curve.v_oc[0] == pytest.approx(3 * section, rel=1e-3)
+
+
+def test_a_dark_section_reads_alike_on_its_own_and_beside_steps_with_differing_halves():
+    # With no diffuse light, a section whose halves are both fully shaded
+    # carries no current; at open circuit it holds 0 V, not the diode's drop.
+    two = np.ones(2)
+    dark = replace(PARTS, sky=0.0 * two, beam=BEAM * two, circumsolar=0.0 * two, other=0.0 * two,
+                   temp_cell=TEMP * two, sun_azimuth=np.array([90.0, 180.0]), sun_elevation=50.0 * two)  # fmt: skip
+    grid = {"azimuth_deg": [90, 180], "elevation_deg": [0]}
+    first = {"substrings": [{"halves": [{"beam_shaded_fraction": [[0.0, 1.0]]}, {"beam_shaded_fraction": [[1.0, 1.0]]}]},
+                            {"beam_shaded_fraction": [[0.0, 0.0]]}, {"beam_shaded_fraction": [[0.0, 0.0]]}]}  # fmt: skip
+    batched = ShadedStringCurve(ModuleShading.from_mapping({**grid, "modules": [first]}).for_module(3, 2), dark, two, 1)
+    alone_parts = replace(PARTS, sky=0.0 * ONE, other=0.0 * ONE)
+    alone = ShadedStringCurve(_raw([{"substrings": [_half(1.0), LIT, LIT]}]).for_module(3, 2), alone_parts, ONE, 1)
+    assert batched.v_oc[1] == pytest.approx(alone.v_oc[0], rel=1e-6)
+
+
+def test_a_cell_string_count_that_does_not_divide_the_cells_is_refused_on_edit():
+    module = replace(MODULE)
+    with pytest.raises(ValueError, match="must divide"):
+        module.cell_strings_in_parallel = 5
+    with pytest.raises(ValueError, match="must divide"):
+        module.N_Cells = 145
+    assert module.cell_strings_in_parallel == 2 and module.N_Cells == 144

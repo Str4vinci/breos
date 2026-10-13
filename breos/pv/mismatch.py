@@ -292,7 +292,7 @@ class ShadedStringCurve:
                 chains.append([element(low, 1.0), element(e_rest, per_substring - 1.0)])
             else:
                 chains.append([element(e_half_mean[m, k, h, rows], per_substring)])
-        return _HalfSection(chains, self.bypass_v)
+        return _HalfSection(chains, self.bypass_v, float(self.parts.pv_params.Isc) / strings)
 
     def _rest_irradiance(
         self, m: int, k: int, h: int, rows: np.ndarray, rest: np.ndarray, limited: np.ndarray
@@ -651,7 +651,8 @@ def _rowwise_interp(x: np.ndarray, y: np.ndarray, query: np.ndarray) -> np.ndarr
     offset = (np.arange(rows, dtype=float) * 2.0 * span)[:, None]
     clipped = np.clip(query, x[:, :1], x[:, -1:])
     flat = (x + offset).ravel()
-    position = np.searchsorted(flat, (clipped + offset).ravel(), side="right").reshape(query.shape)
+    # On a run of equal ``x`` this takes the first point's ``y``.
+    position = np.searchsorted(flat, (clipped + offset).ravel(), side="left").reshape(query.shape)
     index = np.clip(position - 1 - (np.arange(rows) * points)[:, None], 0, points - 2)
     x0, x1 = np.take_along_axis(x, index, 1), np.take_along_axis(x, index + 1, 1)
     y0, y1 = np.take_along_axis(y, index, 1), np.take_along_axis(y, index + 1, 1)
@@ -669,24 +670,23 @@ class _HalfSection:
     forward voltage once their sum falls short of the string's current.
     """
 
-    def __init__(self, chains: list[list[tuple[np.ndarray, ...]]], bypass_v: float) -> None:
+    def __init__(self, chains: list[list[tuple[np.ndarray, ...]]], bypass_v: float, chain_isc: float) -> None:
         self.bypass_v = bypass_v
         rows = chains[0][0][0].shape[0]
         unit = np.unique(
-            np.concatenate(
-                (
-                    -1.5 * np.geomspace(1e-4, 1.0, 24)[::-1],
-                    np.linspace(0.0, 1.0, _STRING_POINTS - 64),
-                    1.0 - np.geomspace(1e-7, 0.25, 40),
-                )
-            )
+            np.concatenate((np.linspace(0.0, 1.0, _STRING_POINTS - 64), 1.0 - np.geomspace(1e-7, 0.25, 40)))
         )
+        # Above its open circuit a chain takes current back from the others,
+        # up to what the brightest of them drives: at least a chain's
+        # short-circuit current at STC (``chain_isc``), whatever its own light.
+        caps = [np.min([p[5] for p in parts], axis=0) for parts in chains]
+        reach = np.maximum(np.max(caps, axis=0), chain_isc)
+        reverse = -1.5 * np.geomspace(1e-4, 1.0, 24)[::-1]
         tables = []
         knees = []
         top = np.full(rows, -np.inf)
-        for parts in chains:
-            cap = np.min([p[5] for p in parts], axis=0)
-            current = cap[:, None] * unit[None, :]
+        for parts, cap in zip(chains, caps, strict=True):
+            current = np.concatenate((reach[:, None] * reverse[None, :], cap[:, None] * unit[None, :]), axis=1)
             voltage = np.zeros(current.shape)
             for params in parts:
                 diode = [p[:, None] for p in params[:5]]

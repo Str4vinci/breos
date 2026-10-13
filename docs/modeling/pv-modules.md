@@ -77,13 +77,14 @@ their currents. When the shadow covers the bottom half only, as row-to-row
 shade does on modules mounted in portrait, the top chain keeps carrying its
 current while the shaded bottom one contributes little. The shading input
 may give each chain its own shaded fractions; a substring given without them
-is shaded alike in both. Against a cell-level model of a 144 half-cell
-module, portrait shade on one to twelve bottom rows came within 0.2 % of
-module power, and within 0.1 % for a string of ten modules with three
-shaded. Each chain is described by its mean and its single most-shaded cell,
-with its other cells taken as evenly shaded. A shadow that darkens every
-other cell of a chain, as one row of landscape shade does along the long
-edge, therefore comes out about 1 % high.
+is shaded alike in both. Each chain is described by its mean and its
+single most-shaded cell, with its other cells taken as evenly shaded.
+Against a cell-level model of a 144 half-cell module, portrait shade on one
+to seven bottom rows, or on all twelve, came within 0.25 % of module power,
+and a string of ten modules with three shaded within 0.1 %. Where most of a
+chain's cells are dark but a few are lit, as with eight to eleven bottom
+rows, or where every other cell is dark, as with one row of landscape shade
+along the long edge, the evenly shaded cells come out up to 1.1 % high.
 
 The temperature coefficients come from the module's datasheet, so the
 technology's temperature behaviour enters through them. `celltype` only seeds

@@ -325,7 +325,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   module) puts two chains of half-cells on each diode, a substring may give
   `halves`, each chain's own fractions, for shade that falls on one chain
   only (ADR 0009 M2). Against a cell-level model of a 144 half-cell module,
-  portrait row shade came within 0.2 % of module power. BREOS builds each
+  portrait row shade came within 0.25 % of module power, and within 1.1 %
+  where a few lit cells remain among dark ones. BREOS builds each
   string's curve from its substrings and bypass diodes
   (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated) and
   runs each input at the curve's global maximum within its limits
