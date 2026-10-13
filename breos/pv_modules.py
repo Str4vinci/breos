@@ -122,9 +122,7 @@ class PVModuleParams:
                     field: getattr(self, field) for field in ("N_Cells", "cell_strings_in_parallel", "bypass_diodes")
                 }
                 layout[name] = value
-                self._check_cell_strings(
-                    int(layout["N_Cells"]), int(layout["cell_strings_in_parallel"]), int(layout["bypass_diodes"])
-                )
+                self._check_cell_strings(layout["N_Cells"], layout["cell_strings_in_parallel"], layout["bypass_diodes"])
         elif name == "Module_Efficiency" and value is not None:
             self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
         elif name == "breakdown_voltage_v" and value is not None:
@@ -229,6 +227,8 @@ class PVModuleParams:
 
     @staticmethod
     def _check_cell_strings(cells: int, strings: int, diodes: int) -> None:
+        # Built-in ints: NumPy's fixed-width product can wrap.
+        cells, strings, diodes = int(cells), int(strings), int(diodes)
         if cells % (strings * diodes):
             raise ValueError(
                 f"N_Cells ({cells}) must divide into cell_strings_in_parallel ({strings}) strings on each of "

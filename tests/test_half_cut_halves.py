@@ -223,3 +223,6 @@ def test_every_section_holds_strings_of_whole_cells():
     module = replace(MODULE, bypass_diodes=4)
     module.bypass_diodes = 6
     assert module.bypass_diodes == 6
+    # 64 * 3 wraps to -64 in int8, which divides 128.
+    with pytest.raises(ValueError, match="must divide"):
+        replace(MODULE, N_Cells=np.int16(128), cell_strings_in_parallel=np.int8(64))
