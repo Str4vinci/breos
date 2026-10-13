@@ -1,0 +1,67 @@
+# Balcony system: two modules on a railing and one microinverter with an
+# input for each, the plug-in setup common in Germany, run with string-level
+# energy. The microinverter is one entry in `inverters` with two one-module
+# inputs, which represents its per-module tracking exactly; the inverter
+# values are typical of an 800 W two-input unit, so take yours from its
+# datasheet. With one module per input there is no series mismatch, so the
+# PVWatts `mismatch` loss is set to 0. The bundled module states no
+# Max_System_Voltage, so the electrical check reports the check that needs it
+# as not run.
+#
+#   breos run --config configs/examples/balcony-microinverter.toml
+
+location = "berlin"
+annual_consumption_kwh = 2500
+battery_kwh = 0
+
+load_profile = "demandlib_h0"
+cost_preset = "residential_de"
+emissions_country = "DE"
+projection_years = 20
+resolution = "h"
+
+electrical_fidelity = "string"
+pv_loss_overrides = { mismatch = 0.0 }
+
+# Hung on a south-facing railing at 70 degrees.
+[[pv_arrays]]
+modules = 2
+module = "Erlangen_445W"
+tilt = 70
+azimuth = 180
+
+[[inverters]]
+nominal_power_w = 800
+inverter_efficiency = 0.965
+max_dc_voltage_v = 60
+min_mppt_voltage_v = 16
+max_mppt_voltage_v = 60
+startup_voltage_v = 20
+isc_comparison_factor = 1.0
+
+[[inverters.mppts]]
+max_input_current_a = 20
+max_short_circuit_current_a = 25
+max_strings = 1
+
+[[inverters.mppts]]
+max_input_current_a = 20
+max_short_circuit_current_a = 25
+max_strings = 1
+
+# One module on each input.
+[[pv_strings]]
+inverter = 0
+mppt = 0
+array = 0
+modules = 1
+
+[[pv_strings]]
+inverter = 0
+mppt = 1
+array = 0
+modules = 1
+
+[electrical_environment]
+min_design_temp_c = -15
+max_ambient_temp_c = 35

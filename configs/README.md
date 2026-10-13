@@ -84,6 +84,7 @@ breos list load-profiles
 | [`germany-berlin.toml`](examples/germany-berlin.toml) | Swapping location + cost preset + emissions factor together, on flat prices |
 | [`east-west-roof.toml`](examples/east-west-roof.toml) | Multiple `[[pv_arrays]]` (split east/west roof) |
 | [`bifacial-ground-mount.toml`](examples/bifacial-ground-mount.toml) | Opt-in infinite-sheds rear gain with explicit row geometry |
+| [`balcony-microinverter.toml`](examples/balcony-microinverter.toml) | Two balcony modules on one microinverter with an input each, with string-level energy |
 | [`recommended-pv.toml`](examples/recommended-pv.toml) | Higher-fidelity rooftop PV-model choices, set explicitly; the defaults stay unchanged |
 | [`sweep.toml`](examples/sweep.toml) | Parameter grid over module count and battery size (`breos sweep`) |
 | [`time-of-use-portugal.toml`](examples/time-of-use-portugal.toml) | Time-of-use `[tariff]` on a bundled Portuguese schedule; the battery dispatch is unchanged |

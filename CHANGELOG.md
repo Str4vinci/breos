@@ -457,6 +457,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   ADR 0008 records the same limits, ADR 0007 and
   0008 the one-microinverter mapping, and the configuration page no longer
   says that partial shading of single modules is not modelled.
+- A new example, `configs/examples/balcony-microinverter.toml`, runs a
+  two-module balcony system on one microinverter with an input for each,
+  with string-level energy and the PVWatts mismatch loss set to 0.
 
 ## [0.7.0] - 2026-10-02
 

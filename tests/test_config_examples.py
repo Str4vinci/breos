@@ -59,3 +59,27 @@ def test_example_comments_state_the_real_defaults(name, defaults, minimum):
         if defaults.get(key, object()) != value
     }
     assert wrong == {}
+
+
+def test_the_balcony_example_runs_each_module_on_its_own_input():
+    from unittest import mock
+
+    from breos import App
+    from tools.generate_app_golden import _fake_fetch
+
+    config = tomllib.loads((EXAMPLES / "balcony-microinverter.toml").read_text(encoding="utf-8"))
+    with (
+        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
+        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
+    ):
+        app = App(config)
+        app.simulate()
+    result = app.result()
+    # Every limit of the microinverter holds; only the module's unstated
+    # system voltage leaves a check not run.
+    assert [(f["code"], f["field"]) for f in result["electrical"]["findings"]] == [
+        ("missing_value", "Max_System_Voltage")
+    ]
+    stages = {stage["key"]: stage for stage in result["pv_loss_waterfall"]["stages"]}
+    assert stages["mppt_limits"]["delta_kwh"] == 0.0
+    assert app.timeseries()["PV_Production"].sum() > 0

@@ -156,5 +156,7 @@ whose inputs each hold a one-module string. String-level energy represents one
 such microinverter directly: one entry in `inverters`, one MPPT input per
 module, and `modules = 1` on each string. With one module per input there is
 no series mismatch, so set the PVWatts `mismatch` loss to 0
-(`pv_loss_overrides = {"mismatch": 0.0}`). Systems with
-several microinverters, and power optimizers, are not represented.
+(`pv_loss_overrides = {"mismatch": 0.0}`). The example
+`configs/examples/balcony-microinverter.toml` sets up a two-module balcony
+system this way. Systems with several microinverters, and power optimizers,
+are not represented.
