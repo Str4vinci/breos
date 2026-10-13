@@ -99,6 +99,17 @@ def test_soft_shade_around_a_dark_cell_breaks_down_too_soon():
     assert breos_power(BASE, [breos_entry(shaded)]) == pytest.approx(expected, rel=1e-3)
 
 
+def test_a_diagonal_edge_around_a_dark_cell_is_understated():
+    # A diagonal edge leaves one dark cell with two half-shaded neighbours; the
+    # chain is concentrated into two dark cells, which break down together.
+    shaded = np.zeros((24, 6))
+    shaded[23, 0], shaded[22, 0], shaded[23, 1] = 1.0, 0.5, 0.5
+    module = _with(-5.5)
+    reference = Reference(module, -5.5)
+    error = breos_power(module, [breos_entry(shaded)]) / reference.power(reference.module_voltage(shaded)) - 1.0
+    assert -0.095 < error < -0.075
+
+
 # -- review regressions ---------------------------------------------------------------------------
 
 

@@ -104,8 +104,8 @@ string power lower. Against the cell-level model of M2 with the same hard
 breakdown (tests/test_cell_breakdown.py), one dark cell per chain came
 within 0.05 %.
 
-A hard shadow that darkens several cells of a chain breaks them down
-together (M6): one to four portrait rows at -3 V come within 0.05 %. Soft
+A straight-edged shadow that darkens several cells of a chain breaks them
+down together (M6): one to four portrait rows at -3 V come within 0.05 %. Soft
 shade around a dark cell does not; see M6.
 
 ### M4. Not represented
@@ -136,8 +136,9 @@ out 26 % high.
 
 A chain of n cells is now `floor(n * mean / limiting)` cells at the limiting
 fraction, one cell at the remainder, `n * mean` less the dark cells' share,
-and the other cells clear (`breos.pv.mismatch._concentrated`). A hard-edged
-shadow, every cell lit, dark or cut by its edge, is described exactly: every
+and the other cells clear (`breos.pv.mismatch._concentrated`). A shadow that
+leaves at most one cell of a chain partly shaded, every other cell lit or
+dark, is described exactly: every
 portrait and landscape case of the cell-level model, with or without
 breakdown, comes within 0.05 %. The input format is unchanged.
 
@@ -148,7 +149,9 @@ breakdown, soft shade around a dark cell is concentrated into several dark
 cells that break down together: three rows shaded by half and one dark cell
 come out 15 % low at -3 V, where the first form was within 0.6 %; a dark cell
 with two half-shaded neighbours comes out 8.5 % low at -5.5 V, where the
-first form was 9.5 % high. Two numbers per chain cannot describe both; a
+first form was 9.5 % high. A diagonal edge leaves cells like that last
+case, so it is the straight edge along the cell rows, not every hard
+shadow, that is exact. Two numbers per chain cannot describe both; a
 third, such as the count of cells above half shade, would, and waits for a
 caller that needs it.
 

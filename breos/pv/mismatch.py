@@ -3,8 +3,8 @@
 Each module splits into bypass-diode substrings. A substring is its cells in
 series, its shade concentrated: as many cells as its area mean allows at the
 irradiance its limiting shaded fraction leaves, one cell at the remainder of
-the mean, and the others clear. A hard-edged shadow, every cell lit or dark
-or one cut by its edge, is described exactly. In a module of several cell strings per substring, such as a
+the mean, and the others clear. A shadow that leaves at most one cell partly
+shaded, every other cell lit or dark, is described exactly. In a module of several cell strings per substring, such as a
 half-cut one (design record 0009), each cell position is that many cells in
 parallel; strings shaded alike behave as one string of positions, and
 strings shaded differently share the substring's voltage and add their

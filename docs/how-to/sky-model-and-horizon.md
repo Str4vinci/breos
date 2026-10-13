@@ -198,7 +198,8 @@ and a full-cell module takes none.
 
 BREOS builds each substring with its shade concentrated: as many cells as
 the mean allows at the limiting fraction, one at the remainder and the rest
-clear, which describes a hard-edged shadow exactly. It
+clear, which describes exactly a shadow that leaves at most one cell of a
+chain partly shaded, as a straight edge along the cell rows does. It
 lets the bypass diode take the current a shaded substring cannot carry
 (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated), and
 runs each input at the global maximum of its strings' curve. The array's

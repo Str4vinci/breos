@@ -332,7 +332,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   diode's clamp (ADR 0009 M3). Each chain's shade is concentrated: as many
   cells as its mean allows at its most-shaded cell's fraction, one at the
   remainder and the rest clear (ADR 0009 M6). Against a cell-level model of
-  a 144 half-cell module, hard-edged portrait and landscape shade came
+  a 144 half-cell module, portrait and landscape row shade came
   within 0.05 % of module power, with or without breakdown, and soft shade
   within 0.15 % without it; with breakdown, soft shade around a dark cell
   is understated, by 15 % in the worst case tested. BREOS builds each

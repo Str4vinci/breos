@@ -126,7 +126,7 @@ _FIT = _get_cec_params(MODULE)
 @pytest.mark.parametrize("columns", [list(range(6)), [0, 1]], ids=["every-section", "one-section"])
 def test_portrait_row_shade_matches_the_cell_level_reference(rows, columns):
     # A chain's shade is concentrated in as many cells as its mean allows, so
-    # a hard-edged shadow is described exactly, however many cells it darkens.
+    # row shade, every cell lit or dark, is described exactly, however many cells it darkens.
     shaded = portrait(rows, columns)
     reference = _REFERENCE.power(_REFERENCE.module_voltage(shaded))
     assert breos_power(MODULE, [breos_entry(shaded)]) == pytest.approx(reference, rel=1e-3)
