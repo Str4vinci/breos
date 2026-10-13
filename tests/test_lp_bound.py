@@ -449,3 +449,18 @@ def test_an_invalid_floor_health_is_a_usage_error(tmp_path, capsys):
             main(["--config", str(config), "--floor-soh", value])
         assert exit_info.value.code == 2
         assert "--floor-soh" in capsys.readouterr().err
+
+
+def test_an_ac_coupled_battery_is_refused_rather_than_bounded_as_dc():
+    config = BatteryConfig(nominal_energy_wh=5000.0, coupling="ac", battery_inverter_efficiency=0.95)
+    with pytest.raises(NotImplementedError, match="DC-coupled battery only"):
+        LpBoundProblem(
+            pv_dc_w=np.zeros(24),
+            load_w=np.full(24, 500.0),
+            temperature_c=np.full(24, 25.0),
+            import_price_per_kwh=np.full(24, 0.2),
+            export_price_per_kwh=np.full(24, 0.05),
+            battery_config=config,
+            hours_per_step=1.0,
+            grid_charge_efficiency=None,
+        )

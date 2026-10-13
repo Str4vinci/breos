@@ -261,7 +261,8 @@ def _nested_rows(spec: TableSpec, name: str) -> tuple[tuple[str, ...], list[tupl
 
 
 def generate() -> str:
-    sectioned = {id(spec) for _, spec, _ in TABLES}
+    # The AC-coupled variant of [smart_charging] has the same keys and docs.
+    sectioned = {id(spec) for _, spec, _ in TABLES} | {id(app_config.AC_SMART_CHARGING_TABLE)}
     specs = [
         *NESTED_TABLE_SPECS.values(),
         *(value for value in vars(app_config).values() if isinstance(value, TableSpec)),

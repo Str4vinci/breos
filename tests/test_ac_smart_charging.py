@@ -9,10 +9,13 @@ import pytest
 from breos._controller import _InstructionBuffer
 from breos._daily_targets import _DayEvaluator, daily_target_instructions, solve_daily_targets, target_grid
 from breos.app_config import resolve_app_config
-from breos.battery import _pv_inverter_conversion, _step_energy_cap
+from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
+from breos.inverter import InverterConversion
+from breos.optimization_config import resolve_optimization_config
 from breos.smart_charging import SmartChargingSpec
 from tests.test_daily_targets import OFF_PEAK, _pack, _priced_run, _problem
+from tests.test_inverter_curve import CURVE
 
 AC_PACK = {"coupling": "ac", "battery_inverter_efficiency": 0.9, "battery_inverter_ac_capacity_w": 3000.0}
 TOU = {
@@ -72,6 +75,15 @@ def test_ac_refuses_a_grid_charge_efficiency_and_dc_still_needs_one(table):
         resolve_app_config({**BASE, "smart_charging": table})
 
 
+def test_a_dc_table_reports_its_missing_efficiency_first_as_before():
+    # The requirement stays in the DC table check, ahead of the overlap check.
+    table = {**FIXED, "discharge_periods": ["peak", "off_peak"]}
+    with pytest.raises(ValueError, match="needs smart_charging.grid_charge_efficiency"):
+        resolve_app_config({**BASE, "smart_charging": table})
+    with pytest.raises(ValueError, match="needs smart_charging.grid_charge_efficiency"):
+        resolve_optimization_config({"location": {"latitude": 41.15, "longitude": -8.61}, "smart_charging": FIXED})
+
+
 def test_discharge_only_is_the_same_for_both_couplings():
     table = {"mode": "discharge_only", "discharge_periods": ["peak"]}
     assert resolve_app_config({**BASE, **APP_AC, "smart_charging": table}).smart_charging is not None
@@ -112,32 +124,79 @@ def test_an_ac_coupled_app_run_grid_charges_through_its_battery_inverter(table):
 # --- the daily-target planner (M7) ----------------------------------------------
 
 
-def test_the_evaluator_converts_the_forecast_pv_once_on_the_scalar_row():
-    problem = _ac_problem(n_days=2)
-    evaluator = _DayEvaluator(problem, target_grid(2), "python")
-    config = problem.battery_config
-    hours = problem.hours_per_step
-    expected = _pv_inverter_conversion(
-        np.maximum(0.0, np.asarray(problem.pv_dc_w) * hours),
-        battery_config=config,
-        hours_per_step=hours,
-        cap_wh=_step_energy_cap(config.inverter_ac_capacity_w, hours),
+def _conversion(night_w):
+    # A curve on a non-default row, a cable and, when asked, a night draw.
+    return InverterConversion(
+        np.asarray(CURVE.output_fraction), np.asarray(CURVE.efficiency), 1.4, 2e-6, night_consumption_w=night_w
     )
-    chain = evaluator.state["pv_chain"]
-    for got, want in zip(chain[:3], expected[:3]):
-        np.testing.assert_array_equal(got, want)
-    np.testing.assert_array_equal(chain[3], np.zeros(len(problem.pv_dc_w)))
-    dc = _DayEvaluator(_problem(n_days=2), target_grid(2), "python")
-    assert dc.state["pv_chain"] is None
 
 
-def test_an_ac_plan_is_the_dispatch_production_gives():
-    problem = _ac_problem(n_days=1)
+def _rich_problem(steps_per_day, night_w, pv_rating_w=2500.0):
+    """An AC problem whose PV inverter has its own finite rating, curve, cable, output scale and night draw."""
+    config = _pack(
+        **{**AC_PACK, "battery_inverter_ac_capacity_w": 1800.0},
+        inverter_ac_capacity_w=pv_rating_w,
+        ac_output_scale=0.97,
+        inverter_conversion=_conversion(night_w),
+    )
+    return _problem(n_days=1, config=config, efficiency=None, steps_per_day=steps_per_day)
+
+
+def _run(problem, instructions, battery_config=None, **kwargs):
+    """Production physics over ``problem`` at its own step, priced at its tariff."""
+    freq = "h" if problem.hours_per_step == 1.0 else "15min"
+    index = pd.date_range("2026-03-02", periods=len(problem.pv_dc_w), freq=freq, tz="UTC")
+    results, *_ = simulate_energy_balance(
+        pv_dc=pd.Series(problem.pv_dc_w, index=index),
+        houseload=pd.DataFrame({"Load": problem.load_w}, index=index),
+        battery_config=problem.battery_config if battery_config is None else battery_config,
+        freq=freq,
+        temperature_series=pd.Series(problem.temperature_c, index=index),
+        dispatch_instructions=instructions,
+        **kwargs,
+    )
+    cost = (
+        (
+            results["Import_From_Grid"].to_numpy() @ problem.import_price_per_kwh
+            - results["PV_AC_Export"].to_numpy() @ problem.export_price_per_kwh
+        )
+        * problem.hours_per_step
+        / 1000
+    )
+    return results, cost
+
+
+@pytest.mark.parametrize("steps_per_day", [24, 96], ids=["h", "15min"])
+def test_the_evaluators_forecast_chain_is_the_pv_only_conversion_without_night_draw(steps_per_day):
+    # M7: the PV inverter converts the forecast as the PV-only system does, on
+    # the scalar row at its full rating, and the planner leaves out its night draw.
+    problem = _rich_problem(steps_per_day, night_w=7.5, pv_rating_w=450.0)
+    chain = _DayEvaluator(problem, target_grid(2), "python").state["pv_chain"]
+    config = problem.battery_config
+    pv_only = BatteryConfig(
+        nominal_energy_wh=0.0,
+        inverter_efficiency=config.inverter_efficiency,
+        inverter_ac_capacity_w=config.inverter_ac_capacity_w,
+        ac_output_scale=config.ac_output_scale,
+        inverter_conversion=_conversion(0.0),
+    )
+    frame, _ = _run(problem, None, battery_config=pv_only)
+    hours = problem.hours_per_step
+    for got, column in zip(chain[:3], ("PV_Production", "PV_Direct_Inverter_Loss", "PV_DC_Curtailed")):
+        np.testing.assert_allclose(got, frame[column].to_numpy() * hours, rtol=1e-12, atol=1e-9, err_msg=column)
+    assert chain[2].sum() > 0.0, "the PV inverter's rating must clip"
+    assert not chain[3].any()
+
+
+@pytest.mark.parametrize("steps_per_day", [24, 96], ids=["h", "15min"])
+def test_an_ac_plan_is_the_dispatch_production_gives(steps_per_day):
+    problem = _rich_problem(steps_per_day, night_w=0.0)
     plan = solve_daily_targets(problem, initial_energy_wh=1200.0, target_levels=[0.6])
-    results, cost = _priced_run(
+    results, cost = _run(
         problem, daily_target_instructions(problem.instructions, problem.day_starts, [0.6]), initial_energy_wh=1200.0
     )
     assert results["Grid_AC_To_Battery"].sum() > 0.0
+    assert results["PV_AC_To_Battery"].sum() > 0.0
     assert plan.stage_cost == pytest.approx(cost, rel=1e-12)
     assert plan.end_energy_wh == results["Battery_Energy_End"].iloc[-1]
 
@@ -155,13 +214,13 @@ def test_an_ac_refill_is_priced_through_the_battery_inverter():
 # --- day controllers (C11) --------------------------------------------------------
 
 
-def _decision(n, efficiency, target=0.5):
+def _decision(n, efficiency, target=0.5, limit_w=math.inf):
     return DispatchInstructions(
         discharge_allowed=np.zeros(n, dtype=bool),
         reserve_fraction=np.zeros(n),
         grid_target_fraction=np.full(n, target),
         grid_charge_efficiency=efficiency,
-        grid_import_limit_w=math.inf,
+        grid_import_limit_w=limit_w,
     )
 
 
@@ -172,10 +231,20 @@ def test_the_controller_binds_an_ac_none_and_reports_what_it_executed():
     buffer.write(0, _decision(2, None), 0, 2)
     executed = buffer.executed()
     assert executed is not None and executed.grid_charge_efficiency is None
-    # None still compares equal with None on the next decision, and a float differs.
+    # None still compares equal with None on the next decision; a changed
+    # import limit does not, and a float efficiency is refused outright.
     buffer.bind_scalars(_decision(2, None))
+    with pytest.raises(ValueError, match="must keep grid_charge_efficiency and grid_import_limit_w"):
+        buffer.bind_scalars(_decision(2, None, limit_w=3000.0))
     with pytest.raises(ValueError, match="take grid_charge_efficiency = None"):
         buffer.bind_scalars(_decision(2, 0.95))
+
+
+def test_a_dc_controller_still_requires_equal_scalars():
+    buffer = _InstructionBuffer(2)
+    buffer.bind_scalars(_decision(2, 0.95))
+    with pytest.raises(ValueError, match="must keep grid_charge_efficiency"):
+        buffer.bind_scalars(_decision(2, 0.96))
 
 
 def test_an_ac_controller_accepts_a_no_op_efficiency_without_grid_targets():

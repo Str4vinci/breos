@@ -6,6 +6,7 @@ import math
 import re
 from dataclasses import dataclass, fields, replace
 from datetime import date, datetime
+from functools import partial
 from numbers import Real
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -2342,11 +2343,13 @@ def resolve_reference_tariff_spec(cfg: dict[str, Any], timezone: str, currency: 
     )
 
 
-# Keys each mode must set. daily_persistence plans its target, so it sets
-# none; discharge_only never charges from the grid, so it sets its discharge
-# periods alone. grid_charge_efficiency depends on the battery's coupling,
-# which the table does not see, so _checked_smart_charging checks it.
-_COMMON_REQUIRED = ("charge_periods", "discharge_periods")
+# Keys each mode must set. grid_charge_efficiency has no default: a
+# DC-coupled battery's inverter model has no AC-to-DC path to derive one from
+# (ADR 0002 A6); an AC-coupled battery's own inverter replaces it (ADR 0004
+# C7), so AC_SMART_CHARGING_TABLE refuses it instead.
+# daily_persistence plans its target, so it sets none; discharge_only never
+# charges from the grid, so it sets its discharge periods alone.
+_COMMON_REQUIRED = ("charge_periods", "discharge_periods", "grid_charge_efficiency")
 _MODE_REQUIRED = {
     "fixed_target": ("target_usable_fraction", *_COMMON_REQUIRED),
     "daily_persistence": _COMMON_REQUIRED,
@@ -2363,7 +2366,7 @@ _MODE_REFUSED = {
 }
 
 
-def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
+def _check_smart_charging_keys(table: dict[str, Any], where: str, coupling: str = "dc") -> None:
     mode = table["mode"]
     check_overlap_policy(mode, table.get("overlap_policy", "reject"))
     if mode == "disabled":
@@ -2384,7 +2387,12 @@ def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
         raise ValueError(
             f"'{where}.mode' = '{mode}' does not take {', '.join(f'{where}.{k}' for k in refused)}: {reason}"
         )
-    missing = [key for key in _MODE_REQUIRED[mode] if key not in table]
+    required = _MODE_REQUIRED[mode]
+    if coupling == "ac":
+        if "grid_charge_efficiency" in table:
+            raise ValueError(AC_GRID_CHARGE_EFFICIENCY_REFUSAL)
+        required = tuple(key for key in required if key != "grid_charge_efficiency")
+    missing = [key for key in required if key not in table]
     if missing:
         raise ValueError(f"'{where}' needs {', '.join(f'{where}.{k}' for k in missing)} for mode = '{mode}'")
     overlap = sorted(set(table.get("charge_periods", ())) & set(table["discharge_periods"]))
@@ -2471,6 +2479,14 @@ SMART_CHARGING_TABLE = TableSpec(
         ),
     },
 )
+# The same table for an AC-coupled battery, which refuses grid_charge_efficiency.
+AC_SMART_CHARGING_TABLE = replace(SMART_CHARGING_TABLE, check=partial(_check_smart_charging_keys, coupling="ac"))
+
+
+def smart_charging_table(coupling: str) -> TableSpec:
+    """The [smart_charging] table for a battery with ``coupling``."""
+    return AC_SMART_CHARGING_TABLE if coupling == "ac" else SMART_CHARGING_TABLE
+
 
 TERMINAL_VALUE_TABLE = TableSpec(
     "terminal_value",
@@ -2508,20 +2524,13 @@ def _checked_smart_charging(
     """Check a [smart_charging] table against the configured tariff schedule and battery.
 
     ``battery_key`` names the setting ``battery_kwh`` came from, for the error.
-    A grid-charging mode needs ``grid_charge_efficiency`` with a DC-coupled
-    battery, which has no AC-to-DC path to derive it from (ADR 0002 A6), and
-    refuses it with an AC-coupled one, whose own inverter converts grid
-    charge (ADR 0004 C7).
+    ``coupling`` selects the table: an AC-coupled battery refuses
+    ``grid_charge_efficiency`` where a DC-coupled one needs it (ADR 0004 C7).
     """
-    table = SMART_CHARGING_TABLE.validate(value)
+    table = smart_charging_table(coupling).validate(value)
     mode = table["mode"]
     if mode == "disabled":
         return table
-    if mode not in DISCHARGE_ONLY_MODES:
-        if coupling == "ac" and "grid_charge_efficiency" in table:
-            raise ValueError(AC_GRID_CHARGE_EFFICIENCY_REFUSAL)
-        if coupling == "dc" and "grid_charge_efficiency" not in table:
-            raise ValueError(f"'smart_charging' needs smart_charging.grid_charge_efficiency for mode = '{mode}'")
     if schedule is None:
         raise ValueError(
             f"'smart_charging.mode' = '{mode}' needs a [tariff]: its charge and discharge periods are tariff periods"

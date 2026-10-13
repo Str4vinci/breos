@@ -332,6 +332,9 @@ class LpBoundProblem:
         if not (math.isfinite(self.hours_per_step) and self.hours_per_step > 0.0):
             raise ValueError("'hours_per_step' must be finite and positive")
         efficiency = self.grid_charge_efficiency
+        if self.battery_config.coupling != "dc":
+            # Its physics is the hybrid inverter's; None would read as no grid charge.
+            raise NotImplementedError("the LP bound models a DC-coupled battery only (ADR 0004)")
         if efficiency is not None and not (math.isfinite(efficiency) and 0.0 < efficiency <= 1.0):
             raise ValueError("'grid_charge_efficiency' must be between 0 (exclusive) and 1 (inclusive), or None")
         if math.isnan(self.grid_import_limit_w) or self.grid_import_limit_w <= 0.0:
