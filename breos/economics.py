@@ -103,11 +103,6 @@ class CostParams:
     dc_ac_ratio: float = 1.25  # DC/AC sizing ratio for inverter CAPEX
     inverter_cost_per_kw: float = 102.58  # currency/kW (with battery)
     inverter_cost_per_kw_nobatt: float = 48.37  # currency/kW (without battery)
-    # An AC-coupled battery's own inverter, currency/kW of its AC rating (ADR
-    # 0004 C9). No default: BREOS has no sourced price, and a missing price
-    # must never price as zero. An explicit 0 states that another price, such
-    # as a bundled battery price per kWh, already includes it.
-    battery_inverter_cost_per_kw: Optional[float] = None
     installation_cost_per_module: float = 350.0  # currency/module
     battery_installation_cost: float = 350.0  # currency, fixed
     other_cost_per_module: float = 50.0  # currency/module: cables, etc.
@@ -124,6 +119,13 @@ class CostParams:
     sell_price_inflation: float = 0.0
     discount_rate: float = DEFAULT_DISCOUNT_RATE
     pv_degradation_rate: float = 0.005
+
+    # An AC-coupled battery's own inverter, currency/kW of its AC rating (ADR
+    # 0004 C9). It comes last so positional construction keeps its order. No
+    # default: BREOS has no sourced price, and a missing price must never
+    # price as zero. An explicit 0 states that another price, such as a
+    # bundled battery price per kWh, already includes it.
+    battery_inverter_cost_per_kw: Optional[float] = None
 
 
 def cost_params_from_config(

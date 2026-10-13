@@ -408,11 +408,13 @@ def test_the_c_rate_limits_stored_energy_both_ways(backend):
 
 @pytest.mark.parametrize("backend", _BACKENDS)
 def test_a_binding_discharge_floor_lands_exactly(backend):
-    # A14: reserve and target share 0.5, so hold_target lands on 5000 Wh.
-    instructions = _charge_target(1, discharge=True, reserve=0.5, target=0.5)
-    frame = _run([0], [3000], 5100.0, instructions=instructions, backend=backend)
-    assert frame["Battery_Energy"].iloc[0] == 5000.0
-    _check(frame, {"Battery_Discharge_DC": 100.0, "Battery_AC_To_Load": 100.0 * EFF * ETA})
+    # A14: reserve and target share a fraction whose floor the unheld
+    # arithmetic misses by a few ULPs, so only hold_target lands on it.
+    fraction = 0.123456789
+    instructions = _charge_target(1, discharge=True, reserve=fraction, target=fraction)
+    frame = _run([0], [10000], 5100.0, instructions=instructions, backend=backend)
+    assert frame["Battery_Energy"].iloc[0] == 1234.56789
+    _check(frame, {"Battery_Discharge_DC": 5100.0 - 1234.56789})
 
 
 def test_a_dc_coupled_run_refuses_a_missing_efficiency_even_without_dispatch():

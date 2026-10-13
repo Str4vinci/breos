@@ -1,5 +1,6 @@
 """Pricing an AC-coupled battery's inverter (ADR 0004 C9)."""
 
+import dataclasses
 import math
 
 import pytest
@@ -8,6 +9,40 @@ from breos.economics import CostParams, calculate_costs
 
 SYSTEM = dict(n_modules=10, module_power_w=400.0, inverter_ac_capacity_w=3200.0)
 PRICES = CostParams(battery_inverter_cost_per_kw=120.0)
+
+
+# CostParams' fields before the battery inverter price joined them.
+FIELDS_BEFORE_AC = (
+    "electricity_cost",
+    "electricity_sold_cost",
+    "daily_power_cost",
+    "module_cost_per_w",
+    "battery_cost_per_kwh",
+    "dc_ac_ratio",
+    "inverter_cost_per_kw",
+    "inverter_cost_per_kw_nobatt",
+    "installation_cost_per_module",
+    "battery_installation_cost",
+    "other_cost_per_module",
+    "other_cost_fixed",
+    "land_cost",
+    "maintenance_cost_per_panel",
+    "maintenance_cost_fixed",
+    "operation_cost",
+    "inflation_rate",
+    "sell_price_inflation",
+    "discount_rate",
+    "pv_degradation_rate",
+)
+
+
+def test_positional_cost_params_keep_their_order():
+    names = tuple(field.name for field in dataclasses.fields(CostParams))
+    assert names == (*FIELDS_BEFORE_AC, "battery_inverter_cost_per_kw")
+    values = [float(position) for position in range(len(FIELDS_BEFORE_AC))]
+    params = CostParams(*values)
+    assert [getattr(params, name) for name in FIELDS_BEFORE_AC] == values
+    assert params.battery_inverter_cost_per_kw is None
 
 
 def test_dc_coupled_pricing_is_unchanged():
@@ -78,13 +113,30 @@ def test_ac_coupling_without_a_battery_prices_no_battery_inverter():
         assert costs["total_initial_cost"] == pv_only["total_initial_cost"]
 
 
-def test_dc_coupling_refuses_a_battery_inverter_rating():
+def test_ac_coupling_without_a_battery_needs_no_rating():
+    costs = calculate_costs(battery_coupling="ac", **SYSTEM)
+    assert costs["battery_inverter_cost"] == 0.0
+    assert costs["total_initial_cost"] == calculate_costs(**SYSTEM)["total_initial_cost"]
+
+
+@pytest.mark.parametrize("battery_capacity_wh", [10000.0, 0.0])
+def test_dc_coupling_refuses_a_battery_inverter_rating(battery_capacity_wh):
     with pytest.raises(ValueError, match="this one is DC-coupled"):
-        calculate_costs(battery_capacity_wh=10000.0, battery_inverter_ac_capacity_w=5000.0, **SYSTEM)
+        calculate_costs(battery_capacity_wh=battery_capacity_wh, battery_inverter_ac_capacity_w=5000.0, **SYSTEM)
 
 
 @pytest.mark.parametrize(
-    ("price", "rating"), [(-1.0, 5000.0), (math.nan, 5000.0), (math.inf, 5000.0), (True, 5000.0), (120.0, -1.0)]
+    ("price", "rating"),
+    [
+        (-1.0, 5000.0),
+        (math.nan, 5000.0),
+        (math.inf, 5000.0),
+        (True, 5000.0),
+        (120.0, -1.0),
+        (120.0, math.nan),
+        (120.0, math.inf),
+        (120.0, True),
+    ],
 )
 def test_battery_inverter_price_and_rating_must_be_finite_and_non_negative(price, rating):
     with pytest.raises(ValueError, match="must be a finite non-negative number"):
