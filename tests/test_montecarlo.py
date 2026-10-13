@@ -369,7 +369,7 @@ def test_run_montecarlo_run_streams_are_spawned_from_the_base_seed(tmp_path, wri
             assert row["Weather_Year"] == year
             assert row["Load_Scale"] == scale
     assert "SeedSequence(base_seed).spawn(n_runs)" in result.provenance["random_stream"]
-    assert result.provenance["ledger_schema_version"] == "3.0"
+    assert result.provenance["ledger_schema_version"] == "3.1"
     assert result.provenance["result_schema_version"] == RESULT_SCHEMA_VERSION
     assert result.provenance["currency"] == "EUR"
     assert result.runs.attrs["currency"] == "EUR"

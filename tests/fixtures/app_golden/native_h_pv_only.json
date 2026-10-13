@@ -221,7 +221,7 @@
   "provenance.economics.om_escalation": 0.02,
   "provenance.economics.real_discount_rate": 0.009803921568627416,
   "provenance.economics.replacement_cost_learning": 0.0,
-  "provenance.ledger_schema_version": "3.0",
+  "provenance.ledger_schema_version": "3.1",
   "provenance.load_profile.column": "Electrical Consumption [W]",
   "provenance.load_profile.file": "h0SLP_demandlib_1000kwh_hourly.csv",
   "provenance.load_profile.key": "demandlib_h0",
@@ -380,7 +380,7 @@
   "pv_loss_waterfall.inverter.conversion_loss_kwh": 187.42,
   "pv_loss_waterfall.inverter.direct_pv_conversion_loss_kwh": 187.42,
   "pv_loss_waterfall.inverter.efficiency_pct": 96.0,
-  "pv_loss_waterfall.ledger_schema_version": "3.0",
+  "pv_loss_waterfall.ledger_schema_version": "3.1",
   "pv_loss_waterfall.near_shading": null,
   "pv_loss_waterfall.parallel_mismatch": null,
   "pv_loss_waterfall.pvwatts.combined_kwh": 661.93,
@@ -473,7 +473,7 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "41d9619dc75280b8b76c31dd258f11c30676084c",
+  "breos_commit": "72a48c0f912c048260451a97a2a148361061bbcc",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",

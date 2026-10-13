@@ -272,7 +272,14 @@ def _dc_for_ac(
 # Replacement_Cost becomes Battery_Replaced_Capacity_Wh, the nominal capacity
 # swapped in at that step, and the summary row's Replacement_Cost becomes
 # Replaced_Capacity_kWh. The economics prices replacements.
-LEDGER_SCHEMA_VERSION = "3.0"
+# 3.1 adds, without changing a field 3.0 consumers read: the
+# Inverter_Night_Consumption column (within Import_From_Grid); the
+# near_shading, shading_mismatch, dc_wiring, parallel_mismatch and
+# mppt_limits loss-waterfall stages, present only when their inputs are; the
+# waterfall's near_shading, shading_mismatch, parallel_mismatch and dc_wiring
+# blocks; and the inverter block's AC cable, efficiency curve, temperature
+# derating and night consumption entries.
+LEDGER_SCHEMA_VERSION = "3.1"
 
 # Per-step state columns, by results-frame name, in their row order inside the
 # shared buffer matrix. Stored-energy columns are Wh; every other column is

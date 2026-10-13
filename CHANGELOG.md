@@ -350,6 +350,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- The ledger schema is now "3.1" (`ledger_schema_version` in the results,
+  the PV loss waterfall and `SimulationSummary`). It adds without changing a
+  3.0 field: the `Inverter_Night_Consumption` column; the `near_shading`,
+  `shading_mismatch`, `dc_wiring`, `parallel_mismatch` and `mppt_limits`
+  waterfall stages, present only when their inputs are; the waterfall's
+  `near_shading`, `shading_mismatch`, `parallel_mismatch` and `dc_wiring`
+  blocks; and the inverter block's AC cable, efficiency curve, temperature
+  derating and night consumption entries.
 - CI runs less on PRs that cannot need it. Draft PRs run nothing until they
   are marked ready for review. A PR that changes only documentation runs the
   test suite, checks and docs build on Python 3.12 alone, and skips the other

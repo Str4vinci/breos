@@ -773,7 +773,7 @@
   "unit": "kWh",
   "flow_unit": "kWh per year",
   "state_unit": "kWh at period boundary",
-  "ledger_schema_version": "3.0",
+  "ledger_schema_version": "3.1",
   "stages": [
    {
     "key": "horizontal_reference_dc",
@@ -913,7 +913,7 @@
  },
  "provenance": {
   "breos_version": "0.7.0",
-  "ledger_schema_version": "3.0",
+  "ledger_schema_version": "3.1",
   "currency": "EUR",
   "resolved_config": {
    "battery_kwh": 5.0,
