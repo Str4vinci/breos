@@ -89,6 +89,11 @@ class PVModuleParams:
     # section's strings hold N_Cells / (cell_strings_in_parallel *
     # bypass_diodes) cells in series each.
     cell_strings_in_parallel: int = 1
+    # The cell's reverse breakdown voltage, negative, in V; None when unknown.
+    # A shaded cell driven past its short-circuit current holds there and
+    # passes the current; unknown, it carries no more and its bypass diode
+    # takes the section. Datasheets do not state it.
+    breakdown_voltage_v: Optional[float] = None
 
     _POSITIVE_FIELDS = frozenset({"Mpp", "Vmp", "Imp", "Voc", "Isc"})
     _STC_POINT_FIELDS = ("Mpp", "Vmp", "Imp")
@@ -118,6 +123,10 @@ class PVModuleParams:
                 self._check_cell_strings(int(cells), int(strings))
         elif name == "Module_Efficiency" and value is not None:
             self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
+        elif name == "breakdown_voltage_v" and value is not None:
+            self._validate_number(name, value)
+            if float(value) >= 0:
+                raise ValueError("breakdown_voltage_v must be negative")
         elif name == "Max_System_Voltage" and value is not None:
             self._validate_number(name, value, minimum=0.0, minimum_strict=True)
         elif name == "NOCT" and value is not None:

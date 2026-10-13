@@ -51,8 +51,10 @@ SAM cell-temperature models, and `noct-sam` refuses to run without both it and a
 3 by default, is the number of bypass diodes, each across one substring of
 cells, and `cell_strings_in_parallel`, 1 by default, the chains of cells in
 parallel on each diode: 2 for a half-cut module. `N_Cells` must divide
-evenly among them. Module-level shading reads both (see
-[How BREOS models PV modules](../modeling/pv-modules.md)).
+evenly among them. `breakdown_voltage_v`, negative and unset by default, is
+the cell's reverse breakdown voltage, for cells that break down at a few
+volts, as some back-contact cells do. Module-level shading reads all three
+(see [How BREOS models PV modules](../modeling/pv-modules.md)).
 
 To confirm the registration took effect, resolve the same config in the current
 Python process before running a full simulation. Ten 540 W modules give 5.4

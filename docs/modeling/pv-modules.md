@@ -39,7 +39,8 @@ the bypass diode take the current a shaded substring cannot carry.
 How much current a shaded cell passes in reverse before its bypass diode takes
 over decides how much a small shadow costs. BREOS lets each part of a substring
 carry at most its own short-circuit current; beyond it, the bypass diode
-conducts. Reverse leakage and avalanche breakdown are not modelled.
+conducts. Reverse leakage is not modelled, and breakdown only where the module
+record states the cell's `breakdown_voltage_v`.
 
 Whether that holds depends on the cell's reverse characteristic, which
 datasheets rarely state. In a 20-cell substring the diode holds a fully shaded
@@ -52,8 +53,23 @@ back-contact cells (IBC and its variants) are designed to break down at a few
 volts ([Calcabrini et al., 2022](https://doi.org/10.1016/j.xcrp.2022.101155)):
 a shaded cell then passes the current itself before its substring's diode is
 needed, and the module loses that cell's generation and the power it
-dissipates in breakdown rather than the whole substring. For modules with such
-cells BREOS overstates the shading loss.
+dissipates in breakdown rather than the whole substring.
+
+A module record may state the cell's breakdown voltage as
+`breakdown_voltage_v`, negative. Past its short-circuit current a shaded part
+of a substring then holds at its cells' breakdown voltage and passes the
+current, where that keeps the substring above the bypass diode's clamp.
+Datasheets do not publish the value; module makers and test reports
+sometimes do. Unstated, a cell does not break down, which for modules with
+low-breakdown cells overstates the shading loss. Against a cell-level model
+with a hard breakdown, one dark cell in a chain comes within 0.05 % of module
+power at -3 to -15 V. BREOS breaks down only a chain's most-shaded cell,
+though: its other shaded cells are spread over the rest, so where a shadow
+darkens several cells of a chain, the module keeps a substring working that
+their summed breakdown voltages would bypass. One row of shade across a
+half-cut module in portrait darkens two cells of each bottom chain, and at
+-3 V that comes out 26 % high. Against PVMismatch's avalanche model, a hard
+breakdown comes within 0.3 % of string power from -2 to -5.5 V.
 
 ## Module layouts and technologies
 
@@ -65,7 +81,7 @@ can have front-contact or back-contact cells.
 |---|---|---|
 | Full-cell (60 or 72 cells) | One chain, three substrings, three diodes | Represented |
 | Half-cut (120 or 144 half-cells) | Two half-chains in parallel on each diode, top and bottom | Represented, each half with its own shade: see below |
-| Back-contact with low breakdown voltage (some IBC and variants) | Either of the above | Represented as cells without breakdown; losses overstated |
+| Back-contact with low breakdown voltage (some IBC and variants) | Either of the above | With `breakdown_voltage_v`: one dark cell per chain represented, several overstated. Without: losses overstated |
 | Shingled | Cell strips overlapped into parallel strip-strings | Not represented |
 | Thin film (CdTe, CIGS) | Long narrow cells across the module, few or no diodes | Not represented |
 

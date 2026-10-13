@@ -203,8 +203,9 @@ module's shunt resistance is a fit to its forward curve, and split per cell
 (Erlangen_445W: 195 Ω at reference, 1.4 Ω a cell, scaled by 1000/E) it
 would pass amperes through a shaded cell that the rest of its substring
 holds in reverse bias, so the substring would deliver voltage at a current
-its shaded cell cannot generate. Reverse leakage and avalanche breakdown
-are not modelled. The string's substrings carry one current and add
+its shaded cell cannot generate. Reverse leakage is not modelled, and
+breakdown only where the module states its cells' breakdown voltage (ADR
+0009 M3). The string's substrings carry one current and add
 their voltages, less the cable's drop. The input runs at the global maximum
 of its strings' summed curve within the limits ADR 0007 D7 applies: the
 maximum can be the lower peak, with a substring bypassed. A tracker that

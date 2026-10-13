@@ -224,7 +224,7 @@ def test_a_substring_matches_pvlibs_partial_shading_example():
         photo, saturation, series, shunt, diode = cell(irradiance)
         params = (photo, saturation, series * cells, shunt * cells, diode * cells)
         short_circuit = float(pvlib.pvsystem.i_from_v(0.0, *params))
-        return tuple(np.array([p]) for p in params + (short_circuit,))
+        return tuple(np.array([p]) for p in params + (short_circuit, -np.inf))
 
     curve = _curve([LIT])
     rows = np.zeros(1, dtype=int)

@@ -25,6 +25,7 @@ grid of currents refined to its global maximum power point.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -99,6 +100,10 @@ class ShadedStringCurve:
                 f"{shading.cell_strings_in_parallel} cell strings; the module has {diodes} of {parallel}"
             )
         self.parts = parts
+        # A shaded cell's breakdown voltage, or -inf: it then carries at most
+        # its short-circuit current and its bypass diode takes the substring.
+        breakdown = parts.pv_params.breakdown_voltage_v
+        self.breakdown_v = -np.inf if breakdown is None else float(breakdown)
         self.scale = np.asarray(scale, dtype=float)
         self.modules = modules
         self.cable_ohm = float(cable_ohm)
@@ -214,9 +219,9 @@ class ShadedStringCurve:
         def element(irradiance: np.ndarray, share: float) -> tuple[np.ndarray, ...]:
             photo, saturation, series, shunt, diode = self.parts.diode_parameters(irradiance, rows)
             params = (photo, saturation, series * share, shunt * share, diode * share)
-            # The most current the part carries before it needs its bypass diode.
+            # The most current the part carries before it breaks down or needs its bypass diode.
             short_circuit = np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.i_from_v, 0.0, *params), dtype=float))
-            return params + (short_circuit,)
+            return params + (short_circuit, np.full(rows.size, share * cells * self.breakdown_v))
 
         # Most substrings are lit like the brightest on most steps: they share
         # its curve there, and only the others are solved.
@@ -278,7 +283,7 @@ class ShadedStringCurve:
                 diode * share,
             )
             short_circuit = np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.i_from_v, 0.0, *params), dtype=float))
-            return params + (short_circuit,)
+            return params + (short_circuit, np.full(rows.size, count * self.breakdown_v))
 
         chains = []
         for h in range(strings):
@@ -312,10 +317,7 @@ class ShadedStringCurve:
         shape = (-1,) + (1,) * (current.ndim - 1)
         voltage = np.zeros(current.shape)
         for params in parts:
-            *diode, short_circuit = (p[rows].reshape(shape) for p in params)
-            part = _quiet(pvlib.pvsystem.v_from_i, current, *diode)
-            part = np.nan_to_num(np.asarray(part, dtype=float), nan=-np.inf, posinf=np.inf, neginf=-np.inf)
-            voltage += np.where(current > short_circuit, -np.inf, part)
+            voltage += _part_voltage(current, [p[rows].reshape(shape) for p in params])
         return np.maximum(voltage, -self.bypass_v)
 
     def _voltage(self, current: np.ndarray, select: np.ndarray | None = None) -> np.ndarray:
@@ -610,6 +612,20 @@ class ShadedStringCurve:
         return power
 
 
+def _part_voltage(current: np.ndarray, params: Sequence[np.ndarray]) -> np.ndarray:
+    """A part's voltage at ``current``: its forward curve up to its short-circuit current, its breakdown beyond.
+
+    ``params`` are its single-diode parameters, its short-circuit current and
+    its cells' summed breakdown voltage, broadcastable against ``current``.
+    Without a breakdown voltage (-inf) the part carries no more than its
+    short-circuit current.
+    """
+    *diode, short_circuit, breakdown = params
+    part = _quiet(pvlib.pvsystem.v_from_i, current, *diode)
+    part = np.nan_to_num(np.asarray(part, dtype=float), nan=-np.inf, posinf=np.inf, neginf=-np.inf)
+    return np.where(current > short_circuit, breakdown, part)
+
+
 def _table_current(table_v: np.ndarray, table_i: np.ndarray, voltage: np.ndarray, signed: bool = False) -> np.ndarray:
     """Each row's current at ``voltage`` on its curve, the voltages falling along the row.
 
@@ -684,16 +700,47 @@ class _HalfSection:
         reverse = -1.5 * np.geomspace(1e-4, 1.0, 24)[::-1]
         tables = []
         knees = []
+        brightest: list[np.ndarray] = []
+        corners = []
         top = np.full(rows, -np.inf)
         for parts, cap in zip(chains, caps, strict=True):
-            current = np.concatenate((reach[:, None] * reverse[None, :], cap[:, None] * unit[None, :]), axis=1)
+            part_caps = np.asarray([p[5] for p in parts])
+            breaks = np.isfinite(parts[0][6]).any()
+            pieces = [reach[:, None] * reverse[None, :]]
+            if breaks:
+                # Past its short-circuit current a part holds at its breakdown
+                # voltage, so the chain carries current up to its largest
+                # part's, each part's jump tabled on both sides.
+                pieces.append(part_caps.max(axis=0)[:, None] * unit[None, :])
+                edges = (
+                    part_caps[:, :, None]
+                    * np.concatenate((1.0 - np.geomspace(1e-7, 0.25, 40), 1.0 + np.array([_EDGE, 1e-4])))[None, None, :]
+                )
+                pieces.append(edges.transpose(1, 0, 2).reshape(rows, -1))
+                current = np.sort(np.concatenate(pieces, axis=1), axis=1)
+            else:
+                pieces.append(cap[:, None] * unit[None, :])
+                current = np.concatenate(pieces, axis=1)
             voltage = np.zeros(current.shape)
-            for params in parts:
-                diode = [p[:, None] for p in params[:5]]
-                voltage += np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.v_from_i, current, *diode), dtype=float))
+            if not breaks:
+                for params in parts:
+                    diode = [p[:, None] for p in params[:5]]
+                    voltage += np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.v_from_i, current, *diode), dtype=float))
+            else:
+                for params in parts:
+                    voltage += _part_voltage(current, [p[:, None] for p in params])
+                # The voltages on both sides of each jump, for the substring's voltage grid.
+                for part_cap in part_caps:
+                    for side in (1.0 - _EDGE, 1.0 + _EDGE):
+                        at = sum(
+                            _part_voltage((part_cap * side)[:, None], [p[:, None] for p in q])[:, 0] for q in parts
+                        )
+                        corners.append(at)
             # The voltage falls as the current rises: tabled against falling voltage, it rises.
             tables.append((-voltage, current))
             knees.append(np.min([p[0] for p in parts], axis=0))
+            if breaks:
+                brightest.append(np.max([p[0] for p in parts], axis=0))
             top = np.maximum(top, voltage[:, 0])
         # The substring's current over a grid of voltages from its bypass clamp up past open circuit.
         levels = np.concatenate(
@@ -704,6 +751,10 @@ class _HalfSection:
             ],
             axis=1,
         )
+        if corners:
+            levels = np.concatenate(
+                [levels] + [((np.asarray(c) + bypass_v) / (top + bypass_v))[:, None] for c in corners], axis=1
+            )
         volts = np.sort(-bypass_v + np.clip(levels, 0.0, 1.0) * (top + bypass_v)[:, None], axis=1)
         total = np.zeros(volts.shape)
         for falling, current in tables:
@@ -713,7 +764,7 @@ class _HalfSection:
         self._voltage = volts[:, ::-1]
         # Where the diode takes over: the most the strings carry together.
         self.caps = [self._current[:, -1]]
-        self.knees = [sum(knees)]
+        self.knees = [sum(knees)] + ([sum(brightest)] if brightest else [])
 
     def voltage(self, current: np.ndarray, rows: Any) -> np.ndarray:
         """The substring's voltage at ``current`` on the steps ``rows`` of its table."""

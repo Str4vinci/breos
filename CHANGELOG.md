@@ -326,16 +326,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `halves`, each chain's own fractions, for shade that falls on one chain
   only (ADR 0009 M2). Against a cell-level model of a 144 half-cell module,
   portrait row shade came within 0.25 % of module power, and within 1.1 %
-  where a few lit cells remain among dark ones. BREOS builds each
+  where a few lit cells remain among dark ones. A module may state its
+  cell's `breakdown_voltage_v`, for cells that break down at a few volts,
+  as some back-contact cells do: a shaded part then passes the current at
+  its cells' breakdown voltage where that keeps its substring above the
+  bypass diode's clamp (ADR 0009 M3). Only a chain's most-shaded cell breaks
+  down, so shade that darkens several cells of a chain is overstated.
+  BREOS builds each
   string's curve from its substrings and bypass diodes
   (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated) and
   runs each input at the curve's global maximum within its limits
   (`breos.pv.mismatch`). A substring carries at most its most-shaded cell's
   short-circuit current before its bypass diode conducts; the module's
   forward-fit shunt resistance is not used as the cell's reverse
-  characteristic, and reverse breakdown is not modelled. The array's
-  irradiance stage is its modules' mean, and the new `shading_mismatch`
-  waterfall stage takes the electrical effect;
+  characteristic, and reverse breakdown is modelled only where the module
+  states it. The array's irradiance stage is its modules' mean, and the new
+  `shading_mismatch` waterfall stage takes the electrical effect;
   `pv_loss_waterfall.shading_mismatch` reports each string's own.
   `breos.electrical.string_limited_dc` now also returns the mismatch.
 - With string-level energy, what strings on different curves lose by sharing

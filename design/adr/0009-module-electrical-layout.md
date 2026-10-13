@@ -1,6 +1,6 @@
 # 0009 — Module electrical layout
 
-- **Status:** Accepted 2026-10-13. M1 and M2 are implemented; M3 is next.
+- **Status:** Accepted 2026-10-13. M1, M2 and M3 are implemented.
 - **Date:** 2026-10-13
 
 ## Context
@@ -92,8 +92,27 @@ landscape row along the long edge does, comes out up to 1.1 % high.
 voltage. A shaded group of k cells then clamps at k times it, where that is
 reached before the bypass diode's clamp. Unstated, the no-leakage curve
 applies, which overstates the loss of modules with low-breakdown cells; the
-documentation says so. The implementation is validated against an
-independent model with breakdown.
+documentation says so.
+
+The breakdown is hard: past its short-circuit current a part's voltage is
+its cells' breakdown voltage (`breos.pv.mismatch._part_voltage`), and a
+half-cut chain's table runs up to its largest part's short-circuit current.
+Against PVMismatch 4.1's avalanche model (Bishop) with no leakage before it,
+on ten 72-cell modules with one cell at 0.05 to 0.5 suns in 1, 3 or 30
+substrings, the hard breakdown came within 0.3 % of string power from -2 to
+-5.5 V; at -15 V, where breakdown and the bypass clamp nearly meet, the
+avalanche model's earlier onset made it up to 0.8 percentage points of
+string power lower. Against the cell-level model of M2 with the same hard
+breakdown (tests/test_cell_breakdown.py), one dark cell per chain came
+within 0.05 %.
+
+A chain is described by its mean and its most-shaded cell, so only that cell
+breaks down; its other shaded cells are spread over the rest at the
+irradiance that keeps the mean. Where a shadow darkens several cells of a
+chain, BREOS keeps the substring working where their summed breakdown
+voltages would bypass it: one portrait row across a half-cut module darkens
+two cells of each bottom chain, and at -3 V came out 26 % high. Without a
+breakdown voltage the same description is within 0.25 % for that shade.
 
 ### M4. Not represented
 
