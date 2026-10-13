@@ -103,6 +103,11 @@ class CostParams:
     dc_ac_ratio: float = 1.25  # DC/AC sizing ratio for inverter CAPEX
     inverter_cost_per_kw: float = 102.58  # currency/kW (with battery)
     inverter_cost_per_kw_nobatt: float = 48.37  # currency/kW (without battery)
+    # An AC-coupled battery's own inverter, currency/kW of its AC rating (ADR
+    # 0004 C9). No default: BREOS has no sourced price, and a missing price
+    # must never price as zero. An explicit 0 states that another price, such
+    # as a bundled battery price per kWh, already includes it.
+    battery_inverter_cost_per_kw: Optional[float] = None
     installation_cost_per_module: float = 350.0  # currency/module
     battery_installation_cost: float = 350.0  # currency, fixed
     other_cost_per_module: float = 50.0  # currency/module: cables, etc.
@@ -192,6 +197,8 @@ def calculate_costs(
     cost_params: Optional[CostParams] = None,
     replacement_cost_each: Optional[float] = None,
     inverter_ac_capacity_w: Optional[float] = None,
+    battery_coupling: str = "dc",
+    battery_inverter_ac_capacity_w: Optional[float] = None,
 ) -> Dict[str, float]:
     """
     Calculate system costs (CAPEX) and return cost dictionary.
@@ -207,13 +214,30 @@ def calculate_costs(
         inverter_ac_capacity_w: The inverter AC rating to price, in W, the one
             the dispatch clips at. ``None`` sizes it as the DC peak over
             ``cost_params.dc_ac_ratio``.
+        battery_coupling: ``"dc"`` for a hybrid inverter, priced at
+            ``inverter_cost_per_kw`` with a battery; ``"ac"`` for a battery
+            inverter of its own (ADR 0004 C9). With ``"ac"`` the PV inverter
+            is priced at ``inverter_cost_per_kw_nobatt``, battery or not.
+        battery_inverter_ac_capacity_w: The AC-coupled battery inverter's AC
+            rating, in W, priced at
+            ``cost_params.battery_inverter_cost_per_kw``. Required with
+            ``"ac"`` and a battery, priced at nothing without one, and
+            refused with ``"dc"``.
 
     Returns:
         Dictionary with cost breakdown and totals. ``replacement_cost_each``
-        is what the projection prices each simulated replacement at.
+        is what the projection prices each simulated replacement at, and
+        ``battery_inverter_cost``, part of ``total_initial_cost``, is 0 unless
+        an AC-coupled battery is priced.
+
+    Raises:
+        ValueError: If an AC-coupled battery has no battery inverter price or
+            rating, or a value is not a finite non-negative number.
     """
     if cost_params is None:
         cost_params = CostParams()
+    if battery_coupling not in ("dc", "ac"):
+        raise ValueError(f"battery_coupling must be 'dc' or 'ac', got {battery_coupling!r}")
 
     total_power_kw = n_modules * module_power_w / 1000
     if inverter_ac_capacity_w is not None:
@@ -233,12 +257,37 @@ def calculate_costs(
         installation_cost += cost_params.battery_installation_cost
 
     # Battery costs
+    ac_battery = has_battery and battery_coupling == "ac"
     if has_battery:
         battery_cost = (battery_capacity_wh / 1000) * cost_params.battery_cost_per_kwh
-        inverter_cost = cost_params.inverter_cost_per_kw * inverter_power_kw
     else:
         battery_cost = 0.0
+    if has_battery and not ac_battery:
+        inverter_cost = cost_params.inverter_cost_per_kw * inverter_power_kw
+    else:
+        # A PV-only system's inverter, and an AC-coupled system's PV inverter.
         inverter_cost = cost_params.inverter_cost_per_kw_nobatt * inverter_power_kw
+    battery_inverter_cost = 0.0
+    if ac_battery:
+        price = cost_params.battery_inverter_cost_per_kw
+        if price is None:
+            raise ValueError(
+                "an AC-coupled battery needs battery_inverter_cost_per_kw, the price of its own inverter per kW of "
+                "AC rating; it has no default. Set 0 if another price already includes it"
+            )
+        if battery_inverter_ac_capacity_w is None:
+            raise ValueError("an AC-coupled battery needs battery_inverter_ac_capacity_w to price its inverter")
+        for name, value in (
+            ("battery_inverter_cost_per_kw", price),
+            ("battery_inverter_ac_capacity_w", battery_inverter_ac_capacity_w),
+        ):
+            if isinstance(value, bool) or not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be a finite non-negative number")
+        battery_inverter_cost = float(price) * float(battery_inverter_ac_capacity_w) / 1000
+    elif battery_coupling == "dc" and battery_inverter_ac_capacity_w is not None:
+        raise ValueError(
+            "battery_inverter_ac_capacity_w prices an AC-coupled battery's inverter; this one is DC-coupled"
+        )
 
     # Other costs
     other_costs = (cost_params.other_cost_per_module * n_modules) + cost_params.other_cost_fixed
@@ -254,6 +303,8 @@ def calculate_costs(
     total_initial_cost = (
         pv_cost + inverter_cost + battery_cost + installation_cost + cost_params.land_cost + other_costs
     )
+    if ac_battery:
+        total_initial_cost += battery_inverter_cost
 
     return {
         "electricity_cost": cost_params.electricity_cost,
@@ -264,6 +315,7 @@ def calculate_costs(
         "pv_cost": pv_cost,
         "inverter_cost": inverter_cost,
         "battery_cost": battery_cost,
+        "battery_inverter_cost": battery_inverter_cost,
         "installation_cost": installation_cost,
         "other_costs": other_costs,
         "replacement_cost_each": (
