@@ -312,4 +312,50 @@ def test_an_app_keeps_the_module_it_resolved_after_the_catalogue_changes(monkeyp
     name = first.pv_module_key
     monkeypatch.setitem(MODULES, name, replace(MODULES[name], gamma_pmp=-0.5))
     second = App(BASE)._resolved
-    assert _input_cache_key(first.cfg, first.pv_params) != _input_cache_key(second.cfg, second.pv_params)
+    assert _input_cache_key(first.cfg, first) != _input_cache_key(second.cfg, second)
+
+
+def test_the_inverter_curve_row_an_app_resolved_is_part_of_the_cache_key(monkeypatch):
+    # Each array's module sets the curve row of steps without PV when the App
+    # is built, so two Apps around different catalogue entries for the second
+    # module must not share prepared inputs.
+    from breos.app_inputs import prepare_simulation_inputs_cached
+
+    inverter = {
+        "nominal_power_w": 5000,
+        "max_dc_voltage_v": 1000,
+        "min_mppt_voltage_v": 80,
+        "max_mppt_voltage_v": 800,
+        "startup_voltage_v": 80,
+        "mppts": [{"max_input_current_a": 25, "max_short_circuit_current_a": 40, "max_strings": 1}] * 2,
+        "efficiency_curve": {
+            "output_fraction": [0.5, 1.0],
+            "efficiency": [[0.95, 0.94], [0.97, 0.96], [0.96, 0.95]],
+            "voltages_v": [250.0, 400.0, 550.0],
+        },
+    }
+    config = {
+        **{k: v for k, v in BASE.items() if k != "n_modules"},
+        "electrical_fidelity": "string",
+        "pv_arrays": [
+            {"modules": 7, "module": "Generic_400W", "tilt": 30, "azimuth": 180},
+            {"modules": 7, "module": "Erlangen_445W", "tilt": 30, "azimuth": 90},
+        ],
+        "inverters": [inverter],
+        "electrical_environment": {"min_design_temp_c": -5, "max_ambient_temp_c": 40},
+        "pv_strings": [
+            {"inverter": 0, "mppt": 0, "array": 0, "modules": 7},
+            {"inverter": 0, "mppt": 1, "array": 1, "modules": 7},
+        ],
+    }
+    first = App(config)._resolved
+    monkeypatch.setitem(MODULES, "Erlangen_445W", replace(MODULES["Erlangen_445W"], Vmp=30.0, Imp=14.8))
+    second = App(config)._resolved
+    assert second.inverter_conversion.curve_row != first.inverter_conversion.curve_row
+
+    def prepare(cfg, resolved, deps):
+        return resolved.inverter_conversion.curve_row
+
+    with reuse_prepared_inputs():
+        cached = [prepare_simulation_inputs_cached(r.cfg, r, None, prepare=prepare) for r in (first, second)]
+    assert cached == [first.inverter_conversion.curve_row, second.inverter_conversion.curve_row]

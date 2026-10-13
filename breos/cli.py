@@ -581,7 +581,7 @@ def _sweep(args: argparse.Namespace) -> int:
     for varied, run_config in _sweep_run_configs(config, grid):
         resolved = resolve_app_config(run_config)
         runs.append((varied, run_config, _config_summary(resolved)))
-        input_keys.append(_input_cache_key(resolved.cfg, resolved.pv_params))
+        input_keys.append(_input_cache_key(resolved.cfg, resolved))
     first_seen: dict[str | None, int] = {}
     for index, key in enumerate(input_keys):
         first_seen.setdefault(key, index)
