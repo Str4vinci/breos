@@ -9,7 +9,6 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from numbers import Integral, Real
-from types import MappingProxyType
 from typing import Any
 
 
@@ -176,9 +175,9 @@ class InverterSpec:
     mappings of their fields. ``night_consumption_w`` is what the inverter
     draws from the grid while it converts nothing, as datasheets state it;
     unset, it is not modelled and not reported missing. ``ac_cable`` is
-    the inverter's own AC cable, as the fields of
-    :class:`~breos.inverter.AcCable`, for string-level energy with several
-    inverters. No prices, product identities, certifications or sizing
+    the inverter's own AC cable, given as a mapping of the fields of
+    :class:`~breos.inverter.AcCable` and held as their sorted
+    ``(field, value)`` pairs. No prices, product identities, certifications or sizing
     presets live here.
     """
 
@@ -198,14 +197,20 @@ class InverterSpec:
     efficiency_curve: EfficiencyCurve | None = None
     temperature_derating: TemperatureDerating | None = None
     night_consumption_w: float | None = None
-    ac_cable: Mapping[str, Any] | None = None
+    ac_cable: tuple[tuple[str, Any], ...] | None = None
 
     def __post_init__(self) -> None:
         _positive("nominal_power_w", self.nominal_power_w)
         if self.ac_cable is not None:
-            if not isinstance(self.ac_cable, Mapping):
+            # Held as sorted (field, value) pairs, so the spec stays hashable and picklable.
+            cable = self.ac_cable
+            if isinstance(cable, Mapping):
+                cable = tuple(sorted(cable.items()))
+            elif isinstance(cable, (list, tuple)):
+                cable = tuple(sorted(tuple(pair) for pair in cable))
+            else:
                 raise ValueError("ac_cable must be a mapping of AcCable's fields")
-            object.__setattr__(self, "ac_cable", MappingProxyType(dict(self.ac_cable)))
+            object.__setattr__(self, "ac_cable", cable)
         for name, kind in (("efficiency_curve", EfficiencyCurve), ("temperature_derating", TemperatureDerating)):
             value = getattr(self, name)
             if isinstance(value, Mapping):

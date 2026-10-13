@@ -708,7 +708,7 @@ def build_inverter_units(
     ambient = None
     conversions, shares, derates, rows = [], {}, {}, {}
     for number, inverter in enumerate(electrical.inverters):
-        own = None if inverter.ac_cable is None else AcCable(**inverter.ac_cable)
+        own = None if inverter.ac_cable is None else AcCable(**dict(inverter.ac_cable))
         curve = inverter.efficiency_curve
         voltage = None
         if curve is not None:
@@ -743,9 +743,10 @@ def build_inverter_units(
             rows[number] = np.where(values > 0, position, conversion.curve_row)
     return InverterUnits(
         ac_capacity_w=tuple(float(i.nominal_power_w) for i in electrical.inverters),
+        # Unstated efficiencies stay None: the run's inverter_efficiency is not part of
+        # the prepared inputs' cache key, so the dispatch supplies it.
         efficiency=tuple(
-            float(cfg["inverter_efficiency"] if i.inverter_efficiency is None else i.inverter_efficiency)
-            for i in electrical.inverters
+            None if i.inverter_efficiency is None else float(i.inverter_efficiency) for i in electrical.inverters
         ),
         conversions=tuple(conversions),
         shares=pd.DataFrame(shares, index=index),

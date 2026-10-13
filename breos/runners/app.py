@@ -307,19 +307,22 @@ def _inverter_units_summary(
         return None
     hours = get_hours_per_step(freq)
     aligned = units.aligned(pd.DatetimeIndex(pv_dc.index))
+    battery_config = build_pv_only_battery_config(resolved.cfg, resolved)
     converted = convert_units(
         np.maximum(0.0, pv_dc.to_numpy(dtype=float)) * hours,
         aligned,
-        ac_output_scale=build_pv_only_battery_config(resolved.cfg, resolved).ac_output_scale,
+        inverter_efficiency=battery_config.inverter_efficiency,
+        ac_output_scale=battery_config.ac_output_scale,
         hours_per_step=hours,
     )
+    efficiencies = units.efficiencies(battery_config.inverter_efficiency)
     rows = []
     for number, (inverter, flows) in enumerate(zip(resolved.electrical.inverters, converted.inverters, strict=True)):
         derate = aligned.ac_derate.iloc[:, number].to_numpy(dtype=float)
         row: dict[str, Any] = {
             "inverter": number,
             "ac_capacity_kw": _rounded(units.ac_capacity_w[number] / 1000.0, digits=3),
-            "efficiency_pct": _rounded(units.efficiency[number] * 100.0),
+            "efficiency_pct": _rounded(efficiencies[number] * 100.0),
             "dc_input_kwh": _rounded(float(flows["dc"].sum()) / 1000.0),
             "clipping_kwh": _rounded(float(flows["clipping"].sum()) / 1000.0),
             "conversion_loss_kwh": _rounded(float(flows["conversion_loss"].sum()) / 1000.0),

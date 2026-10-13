@@ -1292,7 +1292,11 @@ def _dispatch_no_battery_vectorized(
     if units is not None:
         assert steps == slice(None) and pv_chain is None
         converted = convert_units(
-            pv_dc_wh, units, ac_output_scale=battery_config.ac_output_scale, hours_per_step=hours_per_step
+            pv_dc_wh,
+            units,
+            inverter_efficiency=battery_config.inverter_efficiency,
+            ac_output_scale=battery_config.ac_output_scale,
+            hours_per_step=hours_per_step,
         )
         ac_wh, conversion_loss_wh, clipping_loss_dc_wh = converted.ac, converted.conversion_loss, converted.clipping
     elif pv_chain is None:

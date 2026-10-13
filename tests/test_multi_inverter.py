@@ -1,11 +1,15 @@
 """String-level energy with several inverters, for systems without a battery (ADR 0007 D10)."""
 
+import copy
+import pickle
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from breos import App
 from breos.app_config import resolve_app_config
+from breos.app_inputs import reuse_prepared_inputs
 from breos.inverter import InverterConversion, InverterUnits, _calculate_dc_ac_power_arrays, convert_units
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.pv_modules import MODULES
@@ -198,3 +202,31 @@ def test_temperature_derating_lowers_only_its_own_inverters_rating(trina, _patch
     rows = result["pv_loss_waterfall"]["inverter"]["inverters"]
     assert rows[0]["temperature_derating"]["min_output_fraction"] == 0.8
     assert "temperature_derating" not in rows[1]
+
+
+def test_reused_inputs_take_each_runs_own_inverter_efficiency(trina, _patch_weather):
+    unstated = {k: v for k, v in SMALL.items() if k != "inverter_efficiency"}
+    cfg = {
+        **TWO_INVERTERS,
+        "inverters": [unstated, {k: v for k, v in FRONIUS_GEN24_6.items() if k != "inverter_efficiency"}],
+    }
+
+    def production(efficiency):
+        app = App({**cfg, "inverter_efficiency": efficiency})
+        app.simulate()
+        return app.result()["usable_ac_system_production_kwh"]
+
+    alone = [production(0.90), production(0.99)]
+    with reuse_prepared_inputs():
+        reused = [production(0.90), production(0.99)]
+    assert reused == alone
+    assert alone[1] > alone[0]
+
+
+def test_an_inverter_with_its_own_cable_pickles_and_hashes(trina):
+    cable = {"length_m": 30, "cross_section_mm2": 4, "phases": 1, "voltage_v": 230}
+    resolved = resolve_app_config({**TWO_INVERTERS, "inverters": [{**SMALL, "ac_cable": cable}, FRONIUS_GEN24_6]})
+    spec = resolved.electrical.inverters[0]
+    assert dict(spec.ac_cable) == cable
+    assert pickle.loads(pickle.dumps(resolved)).electrical.inverters[0] == spec
+    assert hash(spec) == hash(copy.deepcopy(spec))

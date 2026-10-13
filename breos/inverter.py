@@ -391,8 +391,9 @@ class InverterUnits:
 
     String-level energy without a battery (ADR 0007 D10). Entry ``i`` of
     ``ac_capacity_w``, ``efficiency`` and ``conversions`` is inverter ``i``'s
-    AC nameplate, single efficiency and conversion: its efficiency curve, its
-    own AC cable and its night draw. ``shares`` holds each step's share of
+    AC nameplate, single efficiency (None for the run's own, which the
+    conversion is given) and conversion: its efficiency curve, its own AC
+    cable and its night draw. ``shares`` holds each step's share of
     the system DC per inverter, one column per inverter; ``ac_derate`` each
     inverter's AC rating as a fraction of its nameplate, 1 without
     temperature derating; and ``curve_rows`` each inverter's efficiency-curve
@@ -401,7 +402,7 @@ class InverterUnits:
     """
 
     ac_capacity_w: tuple[float, ...]
-    efficiency: tuple[float, ...]
+    efficiency: tuple[float | None, ...]
     conversions: tuple[InverterConversion, ...]
     shares: pd.DataFrame
     ac_derate: pd.DataFrame
@@ -428,6 +429,10 @@ class InverterUnits:
                 raise ValueError(f"InverterUnits.{name} must hold a finite value at every simulated step")
             frames.append(frame)
         return replace(self, shares=frames[0], ac_derate=frames[1], curve_rows=frames[2])
+
+    def efficiencies(self, default: float) -> tuple[float, ...]:
+        """Each inverter's single efficiency, ``default`` where it states none."""
+        return tuple(default if value is None else value for value in self.efficiency)
 
 
 @dataclass(frozen=True)
@@ -459,7 +464,12 @@ def _cable_loss_from_net(net: np.ndarray, cable_k: float) -> np.ndarray:
 
 
 def convert_units(
-    pv_dc: np.ndarray, units: InverterUnits, *, ac_output_scale: float = 1.0, hours_per_step: float = 1.0
+    pv_dc: np.ndarray,
+    units: InverterUnits,
+    *,
+    inverter_efficiency: float = 0.96,
+    ac_output_scale: float = 1.0,
+    hours_per_step: float = 1.0,
 ) -> UnitsConversion:
     """Convert the system DC ``pv_dc`` (energy per step) through each inverter of ``units`` on its own.
 
@@ -468,7 +478,8 @@ def convert_units(
     its own curve, past its own AC cable; it draws its night consumption on
     the steps it receives no DC. The shared cable then takes its loss from
     the summed AC, and ``ac_output_scale`` applies last, as in the single
-    inverter's conversion.
+    inverter's conversion. ``inverter_efficiency`` is the single efficiency
+    of the inverters that state none.
     """
     pv_dc = np.maximum(0.0, np.asarray(pv_dc, dtype=np.float64))
     shares = units.shares.to_numpy(dtype=np.float64)
@@ -478,6 +489,7 @@ def convert_units(
     clipping = np.zeros_like(pv_dc)
     night = np.zeros_like(pv_dc)
     inverters = []
+    efficiencies = units.efficiencies(inverter_efficiency)
     for i, conversion in enumerate(units.conversions):
         dc = pv_dc * shares[:, i]
         derate = derates[:, i]
@@ -485,7 +497,7 @@ def convert_units(
         ac, _, clip = _calculate_dc_ac_power_arrays(
             dc,
             _step_cap(units.ac_capacity_w[i], hours_per_step),
-            units.efficiency[i],
+            efficiencies[i],
             1.0,
             conversion=conversion,
             ac_derate=None if (derate == 1.0).all() else derate,
