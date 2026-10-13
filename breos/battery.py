@@ -2254,6 +2254,16 @@ def _simulate_core(
             f"dispatch_instructions cover {len(dispatch_instructions)} steps; the simulation has {n_steps}"
         )
     if (
+        battery_config.coupling == "dc"
+        and dispatch_instructions is not None
+        and dispatch_instructions.grid_charge_efficiency is None
+    ):
+        # Checked here, before a PV-only or retired run skips the day loop.
+        raise ValueError(
+            "a DC-coupled battery needs a grid_charge_efficiency in its dispatch instructions; "
+            "only an AC-coupled battery converts grid charge in its own inverter"
+        )
+    if (
         ac_coupled
         and dispatch_instructions is not None
         and dispatch_instructions.grid_charge_efficiency is not None

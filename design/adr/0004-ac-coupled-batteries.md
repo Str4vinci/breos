@@ -942,7 +942,10 @@ differ from the sections above, they apply. Line references above stay at
   temperature derating, the AC cable and `ac_output_scale`, and with several
   inverters each inverter's conversion of its own share (ADR 0007 D9). The
   chain also carries that run's night draw (M3). P1, P3 and P4 compare
-  against this PV-only run.
+  against this PV-only run, bit for bit apart from the sign of a zero: the
+  step's scalar `min` and `max` and NumPy's vectorised ones break a tie
+  between `0.0` and `-0.0` differently, so a `-0.0` PV or load value can
+  give `0.0` on one side and `-0.0` on the other.
 - **M3. The PV inverter's night draw is grid import.** With `"ac"` the PV
   inverter draws its `night_consumption_w` on every step on which it
   receives no PV DC, whatever the battery does, and the grid supplies it, as

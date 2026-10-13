@@ -343,6 +343,91 @@ def test_ac7_at_15_minutes_takes_the_rating_per_step(backend):
             np.testing.assert_allclose(quarter[column].iloc[0], 4.0 * hourly[column].iloc[0], rtol=1e-12, atol=1e-9)
 
 
+# --- the battery's own limits (flat inverters, so every value is by hand) --------
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+def test_the_charge_input_limit_binds_pv_charging(backend):
+    frame = _run([3000], [0], 2000.0, max_charge_power_w=1000.0, backend=backend)
+    _check(
+        frame,
+        {
+            "PV_AC_To_Battery": 1000.0 / ETA,
+            "Battery_Charge_Input": 1000.0,
+            "Battery_Charge_Stored": 1000.0 * EFF,
+            "PV_AC_Export": 3000.0 * ETA - 1000.0 / ETA,
+        },
+    )
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+def test_the_charge_input_limit_is_shared_by_pv_and_grid(backend):
+    # PV's 460 W of surplus AC comes first; the grid gets what is left of 1 kW DC.
+    instructions = _charge_target(1, discharge=False, reserve=0.0, target=0.9)
+    frame = _run([1000], [500], 2000.0, instructions=instructions, max_charge_power_w=1000.0, backend=backend)
+    surplus = 1000.0 * ETA - 500.0
+    _check(
+        frame,
+        {
+            "PV_AC_To_Battery": surplus,
+            "Grid_AC_To_Battery": 1000.0 / ETA - surplus,
+            "Battery_Charge_Input": 1000.0,
+            "PV_Origin_Battery_Charge_Stored": surplus * ETA * EFF,
+            "Battery_Energy": 2000.0 + 1000.0 * EFF,
+        },
+    )
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+def test_the_discharge_limit_binds_battery_ac(backend):
+    frame = _run([0], [3000], 5000.0, max_discharge_power_w=800.0, backend=backend)
+    _check(
+        frame,
+        {
+            "Battery_AC_To_Load": 800.0,
+            "Battery_Discharge_DC": 800.0 / ETA / EFF,
+            "Import_From_Grid": 2200.0,
+        },
+    )
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+def test_the_c_rate_limits_stored_energy_both_ways(backend):
+    # 0.1 C on 10 kWh: at most 1000 Wh stored or released in the hour.
+    charging = _run([5000], [0], 2000.0, power_limit_c_rate=0.1, backend=backend)
+    _check(
+        charging,
+        {"Battery_Charge_Stored": 1000.0, "Battery_Charge_Input": 1000.0 / EFF, "PV_AC_To_Battery": 1000.0 / EFF / ETA},
+    )
+    discharging = _run([0], [3000], 5000.0, power_limit_c_rate=0.1, backend=backend)
+    _check(
+        discharging,
+        {"Battery_Discharge_DC": 1000.0, "Battery_AC_To_Load": 1000.0 * EFF * ETA, "Battery_Energy": 4000.0},
+    )
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+def test_a_binding_discharge_floor_lands_exactly(backend):
+    # A14: reserve and target share 0.5, so hold_target lands on 5000 Wh.
+    instructions = _charge_target(1, discharge=True, reserve=0.5, target=0.5)
+    frame = _run([0], [3000], 5100.0, instructions=instructions, backend=backend)
+    assert frame["Battery_Energy"].iloc[0] == 5000.0
+    _check(frame, {"Battery_Discharge_DC": 100.0, "Battery_AC_To_Load": 100.0 * EFF * ETA})
+
+
+def test_a_dc_coupled_run_refuses_a_missing_efficiency_even_without_dispatch():
+    instructions = _charge_target(24, discharge=False, reserve=0.0)
+    pv, load, temp, _cfg, _sim = build("baseline", "h")
+    pv, load, temp = pv.iloc[:24], load.iloc[:24], temp.iloc[:24]
+    kwargs = dict(pv_dc=pv, houseload=load, freq="h", temperature_series=temp, dispatch_instructions=instructions)
+    for battery, extra in (
+        (BatteryConfig(nominal_energy_wh=0.0), {}),
+        (BatteryConfig(nominal_energy_wh=10000.0), {"battery_retired": True, "initial_energy_wh": 0.0}),
+    ):
+        with pytest.raises(ValueError, match="DC-coupled battery needs a grid_charge_efficiency"):
+            simulate_energy_balance(battery_config=battery, **kwargs, **extra)
+
+
 # --- the site limit and the PV inverter's night draw ------------------------
 
 
