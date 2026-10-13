@@ -365,6 +365,7 @@ def test_three_year_tariff_design_reproduces_through_app(
         key: getattr(params, field)
         for key, field in COST_CONFIG_KEY_TO_PARAM.items()
         if key not in ("electricity_cost", "electricity_sold_cost", "daily_power_cost")
+        and getattr(params, field) is not None
     }
     costs["dc_ac_ratio"] = cfg["inverter_loading_ratio"]
     config = {

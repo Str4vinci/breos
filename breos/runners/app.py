@@ -445,6 +445,21 @@ def _build_pv_loss_waterfall(
     inverter_conversion = e("Inverter_Loss")
     direct_pv_conversion = e("PV_Direct_Inverter_Loss")
     battery_discharge_conversion = e("Battery_Inverter_Loss")
+    # An AC-coupled battery has its own inverter (ADR 0004 C8): the inverter
+    # block stays the PV inverter's, and the battery's conversion is reported
+    # in a block of its own.
+    battery_inverter: dict[str, Any] | None = None
+    if resolved.battery_inverter_ac_capacity_w is not None:
+        charge_conversion = e("PV_Charge_Conversion_Loss") + e("Grid_Charge_Conversion_Loss")
+        battery_inverter = {
+            "ac_capacity_kw": _rounded(resolved.battery_inverter_ac_capacity_w / 1000.0, digits=3),
+            "efficiency_pct": _rounded(cfg["battery_inverter_efficiency"] * 100.0),
+            "conversion_loss_kwh": _rounded(charge_conversion + battery_discharge_conversion),
+            "charge_conversion_loss_kwh": _rounded(charge_conversion),
+            "discharge_conversion_loss_kwh": _rounded(battery_discharge_conversion),
+        }
+        inverter_conversion = direct_pv_conversion
+        battery_discharge_conversion = 0.0
 
     pvwatts_components = {
         name: _rounded(_series_energy_kwh(loss, freq)) for name, loss in pv_breakdown.pvwatts_component_losses.items()
@@ -553,6 +568,7 @@ def _build_pv_loss_waterfall(
                 }
             ),
         },
+        **({} if battery_inverter is None else {"battery_inverter": battery_inverter}),
         "dispatch": dispatch,
         "energy_balance": {
             "pv_dc": {
@@ -568,6 +584,7 @@ def _build_pv_loss_waterfall(
                 "battery_to_load_all_origins_kwh": _rounded(battery_ac),
                 "export_kwh": _rounded(export_ac),
                 "usable_system_production_kwh": _rounded(direct_pv_ac + pv_origin_battery_ac + export_ac),
+                **({} if battery_inverter is None else {"pv_to_battery_kwh": _rounded(e("PV_AC_To_Battery"))}),
             },
             "battery_stored_energy": {
                 "beginning_kwh": _rounded(battery_begin),

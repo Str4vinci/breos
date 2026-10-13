@@ -39,6 +39,7 @@ COST_CONFIG_KEY_TO_PARAM: dict[str, str] = {
     "storage_cost_per_kwh": "battery_cost_per_kwh",
     "inverter_cost_per_kw_hybrid": "inverter_cost_per_kw",
     "inverter_cost_per_kw_simple": "inverter_cost_per_kw_nobatt",
+    "battery_inverter_cost_per_kw": "battery_inverter_cost_per_kw",
     "installation_cost_per_module": "installation_cost_per_module",
     "installation_cost_battery": "battery_installation_cost",
     "other_cost_per_module": "other_cost_per_module",
@@ -57,6 +58,7 @@ BATTERY_COST_KEYS: tuple[str, ...] = (
     "storage_cost_per_kwh",
     "installation_cost_battery",
     "inverter_cost_per_kw_hybrid",
+    "battery_inverter_cost_per_kw",
 )
 PV_ONLY_COST_KEYS: tuple[str, ...] = ("inverter_cost_per_kw_simple",)
 
@@ -76,8 +78,11 @@ def default_amount_cost_keys(*, tariff: bool, battery: bool | None) -> tuple[str
         skipped.update(PV_ONLY_COST_KEYS)
     elif battery is False:
         skipped.update(BATTERY_COST_KEYS)
+    # A key with no default (None) is never read from a default.
     return tuple(
-        key for key, param in COST_CONFIG_KEY_TO_PARAM.items() if key not in skipped and getattr(defaults, param) != 0
+        key
+        for key, param in COST_CONFIG_KEY_TO_PARAM.items()
+        if key not in skipped and getattr(defaults, param) not in (0, None)
     )
 
 

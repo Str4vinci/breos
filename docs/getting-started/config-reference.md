@@ -24,15 +24,20 @@ is a `breos run` option that overrides the config file.
 | `azimuth` | `None` | `--azimuth` | Surface azimuth (degrees). `None` faces the equator: 180 in the northern hemisphere |
 | `backtrack` | `True` | — | Whether single-axis trackers backtrack to avoid row shading |
 | `battery_allow_terminal_replacement` | `True` | — | Whether a battery that reaches end of life in the horizon's final degradation period is replaced. That period ends on the last simulated step: the last whole day, a trailing partial day, or a span shorter than a day. `false` skips only that replacement and its cost; the period is still aged. See [Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon) |
+| `battery_coupling` | `"dc"` | `--battery-coupling` | `"dc"` for a hybrid inverter that PV and the battery share, `"ac"` for a battery with its own bidirectional inverter on the AC bus beside the PV inverter. With `"ac"` the `inverter_*` keys describe the PV inverter only. One of `"dc"`, `"ac"` |
 | `battery_enable_replacement` | `True` | — | Whether a battery that reaches end of life is replaced. `false` skips every replacement: the battery keeps ageing below its threshold, or is retired, as `battery_skipped_replacement_action` says. See [Running without replacement](configuration.md#running-without-replacement) |
 | `battery_eol_percentage` | `0.7` | — | SOH fraction at which the battery reaches end of life: it is replaced, or, when the replacement is skipped, kept or retired |
 | `battery_indoor_model` | `None` | — | Indoor-temperature model settings. `None` applies the default indoor buffering; `{enabled = false}` uses `battery_temperature` without remapping. See [`[battery_indoor_model]`](#battery_indoor_model) |
+| `battery_inverter_ac_rating_kw` | `None` | `--battery-inverter-ac-rating-kw` | The AC-coupled battery inverter's AC rating in kW: its AC output discharging and AC input charging. With `battery_coupling = "ac"` and a battery, set this or `battery_inverter_kw_per_kwh` |
+| `battery_inverter_efficiency` | `None` | `--battery-inverter-efficiency` | The AC-coupled battery inverter's nominal efficiency, from a source for the product. It has no default and is required with `battery_coupling = "ac"` and a battery. Both directions use the PVWatts part-load curve; the charging direction is an assumption |
+| `battery_inverter_kw_per_kwh` | `None` | `--battery-inverter-kw-per-kwh` | The AC-coupled battery inverter's AC rating per kWh of nominal capacity, so a capacity sweep keeps one ratio. Instead of `battery_inverter_ac_rating_kw` |
 | `battery_kwh` | `0.0` | `--battery-kwh` | Nominal battery capacity in kWh (`0` = no battery). The SOC window sets the usable share; see [Battery capacity and the SOC window](configuration.md#battery-capacity-and-the-soc-window) |
 | `battery_max_charge_power_w` | `None` | `--battery-max-charge-power-w` | Maximum DC power entering the battery charge path; `None` is unlimited |
 | `battery_max_discharge_power_w` | `None` | `--battery-max-discharge-power-w` | Maximum battery AC power delivered to load; `None` is unlimited |
 | `battery_max_soc` | `0.9` | — | Battery SOC ceiling, on the same basis as `battery_min_soc` |
 | `battery_min_soc` | `0.1` | — | Battery SOC floor, as a fraction of nominal SOH-derated capacity |
 | `battery_power_limit_c_rate` | `None` | `--battery-power-limit-c-rate` | Charge and discharge limit on the stored energy, as a multiple of capacity (1.0 = 1 C). It scales with `battery_kwh` and cannot be combined with `battery_max_charge_power_w` or `battery_max_discharge_power_w` |
+| `battery_replacement_cost` | `None` | `--battery-replacement-cost` | The price of one battery replacement at t = 0, such as a unit sold as pack and inverter. `None` prices the pack at `storage_cost_per_kwh`. The terminal credit stays the pack's |
 | `battery_replacement_min_remaining_years` | `0.0` | — | Fewest project years a replacement battery must have left to serve. A battery that reaches end of life with less than this left before the end of the horizon is not replaced; it keeps ageing below its end-of-life threshold. `0` replaces at every end of life. See [Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon) |
 | `battery_rte` | `None` | — | Battery round-trip efficiency, split evenly across charge and discharge; `None` is 0.95 |
 | `battery_skipped_replacement_action` | `"keep"` | — | What happens to a battery whose end-of-life replacement is skipped. `"keep"` leaves it in service below its threshold until its state of health reaches 0, when it is retired; `"retire"` switches it off, and the project finishes PV-only. Applies only when `battery_enable_replacement`, `battery_replacement_min_remaining_years` or `battery_allow_terminal_replacement` skips a swap. See [Retiring the battery instead of keeping it](configuration.md#retiring-the-battery-instead-of-keeping-it) |
@@ -108,13 +113,14 @@ Cost overrides, as `[costs]` in TOML. A key you omit comes from `cost_preset`, a
 
 | Key | Default | Description |
 |---|---|---|
+| `battery_inverter_cost_per_kw` | `None` | An AC-coupled battery inverter's price per kW of its AC rating, required with `battery_coupling = "ac"` and a battery. It has no default; 0 states that another price, such as `storage_cost_per_kwh`, already includes it |
 | `daily_power_cost` | `0.3` | Fixed grid-connection charge per day, at year-1 prices |
 | `electricity_cost` | `0.27` | Flat import price, per kWh at year-1 prices |
 | `electricity_sold_cost` | `0.06` | Flat export price, per kWh at year-1 prices |
 | `installation_cost_battery` | `350.0` | Fixed battery installation cost, for a system with a battery |
 | `installation_cost_per_module` | `350.0` | Installation cost per PV module |
-| `inverter_cost_per_kw_hybrid` | `102.58` | Hybrid inverter price per kW of AC rating, for a system with a battery |
-| `inverter_cost_per_kw_simple` | `48.37` | Inverter price per kW of AC rating, for a PV-only system |
+| `inverter_cost_per_kw_hybrid` | `102.58` | Hybrid inverter price per kW of AC rating, for a DC-coupled system with a battery (`battery_coupling = "dc"`) |
+| `inverter_cost_per_kw_simple` | `48.37` | PV inverter price per kW of AC rating, for a PV-only system and, with `battery_coupling = "ac"`, for the PV inverter whether or not there is a battery |
 | `land_cost` | `0.0` | Land cost, part of the initial investment |
 | `maintenance_cost` | `0.0` | Fixed O&M cost per year, at year-1 prices |
 | `maintenance_cost_per_panel` | `10.0` | O&M cost per PV module per year, at year-1 prices |
@@ -122,7 +128,7 @@ Cost overrides, as `[costs]` in TOML. A key you omit comes from `cost_preset`, a
 | `operation_cost` | `0.0` | Further operation cost per year, at year-1 prices |
 | `other_cost_per_module` | `50.0` | Other cost per PV module, such as cabling |
 | `other_costs` | `0.0` | Fixed other initial cost |
-| `storage_cost_per_kwh` | `500.0` | Battery price per kWh of nominal capacity; also the t = 0 price of each replacement |
+| `storage_cost_per_kwh` | `500.0` | Battery price per kWh of nominal capacity; also the t = 0 price of each replacement, unless `battery_replacement_cost` sets one |
 
 ## battery_indoor_model
 

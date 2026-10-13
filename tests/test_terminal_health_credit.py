@@ -182,12 +182,14 @@ def test_final_installed_pack_is_credited_without_changing_any_outlay_or_state(b
     else:
         assert run.carry.soh_pct / 100 <= EVERY_PERIOD_EOL
         assert credit.nominal == credit.npv == 0
-    # The same routine must inherit a resolved full-pack price override, without any independent price setting.
-    with mock.patch("breos.projection.build_costs_dict", return_value={**value.costs, "replacement_cost_each": 1234.0}):
-        override = value_projection(cfg, resolved, run).terminal_health
+    # A replacement price override prices the outlays but never the credit,
+    # which stays the pack's (ADR 0004 C9 amends ADR 0003 E10).
+    priced = value_projection({**cfg, "battery_replacement_cost": 1234.0}, resolved, run)
+    override = priced.terminal_health
     assert override is not None
-    assert override.provenance["replacement_cost_each_t0_prices"] == 1234.0
-    assert override.nominal == pytest.approx(credit.nominal * 1234 / 2000)
+    assert priced.total_replacement_cost == (9 if allow else 8) * 1234.0
+    assert override.provenance["replacement_cost_each_t0_prices"] == 2000.0
+    assert override.nominal == credit.nominal
 
 
 @pytest.mark.parametrize("engine", [{}, BLAST], ids=["native", "blast"])

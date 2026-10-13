@@ -947,6 +947,22 @@ The accepted keys follow the packaged cost-catalogue names; the
 [key reference](config-reference.md#costs) lists them with their defaults.
 Unknown keys and negative or non-finite values are rejected before simulation.
 
+The inverter price depends on the battery's coupling:
+
+| System | PV inverter | Battery inverter |
+|---|---|---|
+| PV only | `inverter_cost_per_kw_simple` | none |
+| `battery_coupling = "dc"` with a battery | `inverter_cost_per_kw_hybrid` | none; the hybrid inverter serves both |
+| `battery_coupling = "ac"`, battery or not | `inverter_cost_per_kw_simple` | `battery_inverter_cost_per_kw` × its AC rating, with a battery |
+
+Each price is per kW of the inverter's AC rating. `battery_inverter_cost_per_kw`
+has no default: an AC-coupled battery without it is refused before
+simulation. Set it to 0 when another price, such as `storage_cost_per_kwh`,
+already includes the inverter. A replacement prices the pack at
+`storage_cost_per_kwh` unless `battery_replacement_cost` gives the price of
+one replacement, such as a unit sold as pack and inverter. The terminal
+health credit always values the pack alone.
+
 For full control, build a {py:class}`~breos.economics.CostParams` and
 {py:class}`~breos.emissions.EmissionsParams` yourself and call the lower-level
 functions documented in the [Cost and emissions API](../api/cost-analysis.md).

@@ -920,7 +920,10 @@ def test_sweep_resolves_a_season_price_that_the_season_never_uses(tmp_path, caps
             r"'tariff\.import_prices\.winter\.peak'",
         ),
         ("tariff.export_prices.all.x.y", r"as in 'tariff\.export_prices\.all'"),
-        ("costs", r"Unknown sweep key 'costs'\. Available: costs\.daily_power_cost"),
+        (
+            "costs",
+            r"Unknown sweep key 'costs'\. Available: costs\.battery_inverter_cost_per_kw, costs\.daily_power_cost",
+        ),
         ("battery_indoor_model.setpoint", r"Available: battery_indoor_model\.ceiling_c"),
     ],
 )

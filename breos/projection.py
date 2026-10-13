@@ -43,6 +43,7 @@ from breos.economics import (
     cost_analysis_projection,
     price_year_rows,
     projection_rates_record,
+    replacement_event_cost,
     replacement_fraction_from_steps,
     terminal_health_credit,
 )
@@ -90,7 +91,19 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
         enable_resistance_fade=cfg.get("enable_resistance_fade", False),
         inverter_conversion=resolved.inverter_conversion,
         **efficiency,
+        **_battery_inverter(cfg, resolved),
     )
+
+
+def _battery_inverter(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[str, Any]:
+    """An AC-coupled battery's BatteryConfig fields (ADR 0004 C2), none for a DC-coupled one."""
+    if cfg.get("battery_coupling", "dc") != "ac":
+        return {}
+    return {
+        "coupling": "ac",
+        "battery_inverter_ac_capacity_w": resolved.battery_inverter_ac_capacity_w,
+        "battery_inverter_efficiency": cfg["battery_inverter_efficiency"],
+    }
 
 
 def build_pv_only_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> BatteryConfig:
@@ -219,6 +232,8 @@ _DIAGNOSTIC_COLUMNS = {
     "Battery_Charge_Input_kWh": "Battery_Charge_Input",
     "Grid_AC_To_Battery_kWh": "Grid_AC_To_Battery",
     "Grid_Charge_Conversion_Loss_kWh": "Grid_Charge_Conversion_Loss",
+    "PV_AC_To_Battery_kWh": "PV_AC_To_Battery",
+    "PV_Charge_Conversion_Loss_kWh": "PV_Charge_Conversion_Loss",
     "Battery_Discharge_DC_kWh": "Battery_Discharge_DC",
     "Battery_AC_To_Load_kWh": "Battery_AC_To_Load",
     "Battery_Charge_Loss_kWh": "Battery_Charge_Loss",
@@ -1299,7 +1314,9 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         terminal = terminal_health_credit(
             final_soh_fraction=run.carry.soh_pct / 100 if config_has_battery(cfg) else None,
             threshold=cfg["battery_eol_percentage"],
-            replacement_cost_each=costs["replacement_cost_each"],
+            # The pack alone, whatever battery_replacement_cost prices a
+            # replacement at (ADR 0004 C9 amends ADR 0003 E10).
+            replacement_cost_each=replacement_event_cost(cfg["battery_kwh"], resolved.cost_params.battery_cost_per_kwh),
             inflation_rate=cfg["inflation_rate"],
             replacement_cost_learning=cfg.get("replacement_cost_learning", 0.0),
             discount_rate=cfg["discount_rate"],

@@ -15,6 +15,7 @@ import pandas as pd
 
 from breos.config_schema import TableSpec, anything, boolean, choice, integer, list_of, mapping_of, number, text
 from breos.constants import (
+    BATTERY_COUPLINGS,
     DEFAULT_CHARGE_EFFICIENCY,
     DEFAULT_DISCHARGE_EFFICIENCY,
     DEFAULT_EOL_PERCENTAGE,
@@ -273,6 +274,63 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "`battery_max_discharge_power_w`"
         ),
         summary="battery.power_limit_c_rate",
+    ),
+    "battery_coupling": AppConfigField(
+        default="dc",
+        cli_flags=("--battery-coupling",),
+        cli_choices=("dc", "ac"),
+        cli_help="Battery topology: 'dc' for a hybrid inverter, 'ac' for a battery inverter of its own.",
+        doc=(
+            '`"dc"` for a hybrid inverter that PV and the battery share, `"ac"` for a battery with its own '
+            'bidirectional inverter on the AC bus beside the PV inverter. With `"ac"` the `inverter_*` keys '
+            "describe the PV inverter only"
+        ),
+        summary="battery.coupling",
+    ),
+    "battery_inverter_ac_rating_kw": AppConfigField(
+        default=None,
+        cli_flags=("--battery-inverter-ac-rating-kw",),
+        cli_type=float,
+        cli_help="AC-coupled battery inverter's AC rating in kW.",
+        doc=(
+            "The AC-coupled battery inverter's AC rating in kW: its AC output discharging and AC input charging. "
+            'With `battery_coupling = "ac"` and a battery, set this or `battery_inverter_kw_per_kwh`'
+        ),
+        summary="battery.inverter_ac_rating_kw",
+    ),
+    "battery_inverter_kw_per_kwh": AppConfigField(
+        default=None,
+        cli_flags=("--battery-inverter-kw-per-kwh",),
+        cli_type=float,
+        cli_help="AC-coupled battery inverter's AC rating per kWh of nominal battery capacity.",
+        doc=(
+            "The AC-coupled battery inverter's AC rating per kWh of nominal capacity, so a capacity sweep keeps one "
+            "ratio. Instead of `battery_inverter_ac_rating_kw`"
+        ),
+        summary="battery.inverter_kw_per_kwh",
+    ),
+    "battery_inverter_efficiency": AppConfigField(
+        default=None,
+        cli_flags=("--battery-inverter-efficiency",),
+        cli_type=float,
+        cli_help="AC-coupled battery inverter's nominal efficiency (no default).",
+        doc=(
+            "The AC-coupled battery inverter's nominal efficiency, from a source for the product. It has no default "
+            'and is required with `battery_coupling = "ac"` and a battery. Both directions use the PVWatts '
+            "part-load curve; the charging direction is an assumption"
+        ),
+        summary="battery.inverter_efficiency",
+    ),
+    "battery_replacement_cost": AppConfigField(
+        default=None,
+        cli_flags=("--battery-replacement-cost",),
+        cli_type=float,
+        cli_help="Price of one battery replacement at t = 0 (default: the pack at storage_cost_per_kwh).",
+        doc=(
+            "The price of one battery replacement at t = 0, such as a unit sold as pack and inverter. `None` prices "
+            "the pack at `storage_cost_per_kwh`. The terminal credit stays the pack's"
+        ),
+        summary="battery.replacement_cost",
     ),
     "cost_preset": AppConfigField(
         default=None,
@@ -1034,9 +1092,22 @@ COSTS_TABLE = TableSpec(
         "electricity_sold_cost": "Flat export price, per kWh at year-1 prices",
         "daily_power_cost": "Fixed grid-connection charge per day, at year-1 prices",
         "module_cost_per_w": "PV module price per W of module rating",
-        "storage_cost_per_kwh": "Battery price per kWh of nominal capacity; also the t = 0 price of each replacement",
-        "inverter_cost_per_kw_hybrid": "Hybrid inverter price per kW of AC rating, for a system with a battery",
-        "inverter_cost_per_kw_simple": "Inverter price per kW of AC rating, for a PV-only system",
+        "storage_cost_per_kwh": (
+            "Battery price per kWh of nominal capacity; also the t = 0 price of each replacement, unless "
+            "`battery_replacement_cost` sets one"
+        ),
+        "inverter_cost_per_kw_hybrid": (
+            'Hybrid inverter price per kW of AC rating, for a DC-coupled system with a battery (`battery_coupling = "dc"`)'
+        ),
+        "inverter_cost_per_kw_simple": (
+            'PV inverter price per kW of AC rating, for a PV-only system and, with `battery_coupling = "ac"`, for '
+            "the PV inverter whether or not there is a battery"
+        ),
+        "battery_inverter_cost_per_kw": (
+            'An AC-coupled battery inverter\'s price per kW of its AC rating, required with `battery_coupling = "ac"` '
+            "and a battery. It has no default; 0 states that another price, such as `storage_cost_per_kwh`, "
+            "already includes it"
+        ),
         "installation_cost_per_module": "Installation cost per PV module",
         "installation_cost_battery": "Fixed battery installation cost, for a system with a battery",
         "other_cost_per_module": "Other cost per PV module, such as cabling",
@@ -1277,6 +1348,9 @@ class ResolvedAppConfig:
     # (:func:`breos.pv_modules.catalogue_snapshot`): every field above that
     # names or describes a module was taken from it.
     module_catalogue: str = ""
+    # An AC-coupled battery's own inverter rating (W), resolved against the
+    # nominal capacity, or None for a DC-coupled or PV-only system.
+    battery_inverter_ac_capacity_w: float | None = None
 
 
 def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -1763,6 +1837,7 @@ def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
         battery=cfg["battery_kwh"] * 1000 > 1,
     )
     _validate_battery_and_degradation(cfg)
+    _validate_battery_coupling(cfg)
     _validate_period(cfg)
     _validate_smart_charging(cfg, tariff_spec)
     _validate_reachable_gcr(cfg, has_arrays)
@@ -2871,6 +2946,75 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
         raise ValueError("'blast_model' requires 'degradation_engine=blast'; native degradation remains the default")
 
 
+# An AC-coupled battery's own inverter (ADR 0004 C2): "dc" refuses them all.
+BATTERY_INVERTER_KEYS: tuple[str, ...] = (
+    "battery_inverter_ac_rating_kw",
+    "battery_inverter_kw_per_kwh",
+    "battery_inverter_efficiency",
+)
+
+
+def _validate_battery_coupling(cfg: dict[str, Any]) -> None:
+    """Validate the battery topology and an AC-coupled battery's inverter (ADR 0004 C2, C9).
+
+    ``"dc"`` refuses the battery inverter keys and its price, so no setting
+    is silently ignored. ``"ac"`` with a battery needs one rating key and
+    the efficiency; without a battery it takes them and needs neither, so a
+    capacity sweep from 0 keeps one config. Its price is checked when the
+    costs resolve, since a preset could carry it.
+    """
+    coupling = cfg["battery_coupling"]
+    if coupling not in BATTERY_COUPLINGS:
+        raise ValueError(f"'battery_coupling' must be one of: {', '.join(BATTERY_COUPLINGS)}; got {coupling!r}")
+    if coupling == "dc":
+        given = [key for key in BATTERY_INVERTER_KEYS if cfg[key] is not None]
+        if "battery_inverter_cost_per_kw" in (cfg.get("costs") or {}):
+            given.append("costs.battery_inverter_cost_per_kw")
+        if given:
+            raise ValueError(
+                f"{', '.join(repr(key) for key in given)} describe an AC-coupled battery's own inverter; "
+                "set battery_coupling = 'ac' or remove them"
+            )
+    for key in ("battery_inverter_ac_rating_kw", "battery_inverter_kw_per_kwh"):
+        if cfg[key] is not None and _finite_real(cfg[key], key) <= 0:
+            raise ValueError(f"'{key}' must be > 0")
+    if cfg["battery_inverter_ac_rating_kw"] is not None and cfg["battery_inverter_kw_per_kwh"] is not None:
+        raise ValueError(
+            "'battery_inverter_ac_rating_kw' and 'battery_inverter_kw_per_kwh' both size the battery inverter; "
+            "set one of them"
+        )
+    efficiency = cfg["battery_inverter_efficiency"]
+    if efficiency is not None and not 0 < _finite_real(efficiency, "battery_inverter_efficiency") <= 1:
+        raise ValueError("'battery_inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
+    if coupling == "ac" and config_has_battery(cfg):
+        if cfg["battery_inverter_ac_rating_kw"] is None and cfg["battery_inverter_kw_per_kwh"] is None:
+            raise ValueError(
+                "An AC-coupled battery needs its inverter's rating: set 'battery_inverter_ac_rating_kw' or "
+                "'battery_inverter_kw_per_kwh'"
+            )
+        if efficiency is None:
+            raise ValueError(
+                "An AC-coupled battery needs 'battery_inverter_efficiency', from a source for the product; "
+                "it has no default"
+            )
+    replacement = cfg["battery_replacement_cost"]
+    if replacement is not None and _finite_real(replacement, "battery_replacement_cost") < 0:
+        raise ValueError("'battery_replacement_cost' must be >= 0")
+
+
+def battery_inverter_ac_capacity_w(cfg: Mapping[str, Any]) -> float | None:
+    """An AC-coupled battery's inverter rating in W, or None without one.
+
+    ``battery_inverter_kw_per_kwh`` resolves against the nominal capacity, so
+    the rating is fixed for the project (ADR 0004 C2).
+    """
+    if cfg["battery_coupling"] != "ac" or not config_has_battery(cfg):
+        return None
+    if cfg["battery_inverter_ac_rating_kw"] is not None:
+        return float(cfg["battery_inverter_ac_rating_kw"]) * 1000
+    return float(cfg["battery_inverter_kw_per_kwh"]) * float(cfg["battery_kwh"]) * 1000
+
+
 def _is_int(value: Any) -> bool:
     """Return whether *value* is an integer, excluding booleans."""
     return isinstance(value, int) and not isinstance(value, bool)
@@ -3147,7 +3291,8 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
     """Build the cost-analysis input dictionary for the resolved system.
 
     A replacement is priced at the storage cost per kWh of the configured
-    capacity (ADR 0003 E4), the price the optimizer uses too.
+    capacity (ADR 0003 E4), the price the optimizer uses too, unless
+    ``battery_replacement_cost`` states the price of one (ADR 0004 C9).
     """
     return calculate_costs(
         n_modules=cfg["n_modules"],
@@ -3156,7 +3301,11 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
         cost_params=resolved.cost_params,
         # The rating that clips production is the one CAPEX prices (#181).
         inverter_ac_capacity_w=resolved.inverter_ac_capacity_w,
-        replacement_cost_each=replacement_event_cost(cfg["battery_kwh"], resolved.cost_params.battery_cost_per_kwh),
+        replacement_cost_each=replacement_event_cost(
+            cfg["battery_kwh"], resolved.cost_params.battery_cost_per_kwh, cfg.get("battery_replacement_cost")
+        ),
+        battery_coupling=cfg.get("battery_coupling", "dc"),
+        battery_inverter_ac_capacity_w=resolved.battery_inverter_ac_capacity_w,
     )
 
 
@@ -3186,6 +3335,8 @@ EXCLUSIVE_ALTERNATIVES: Mapping[str, str] = {
     "inverter_loading_ratio": "inverter_ac_rating_kw",
     "weather_file": "weather_source",
     "weather_source": "weather_file",
+    "battery_inverter_ac_rating_kw": "battery_inverter_kw_per_kwh",
+    "battery_inverter_kw_per_kwh": "battery_inverter_ac_rating_kw",
 }
 
 
@@ -3236,6 +3387,12 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     # into a fresh dict rather than mutating the merged config in place.
     cfg = {**cfg, "n_modules": n_modules}
     cost_params = resolve_costs(cfg)
+    battery_inverter_w = battery_inverter_ac_capacity_w(cfg)
+    if battery_inverter_w is not None and cost_params.battery_inverter_cost_per_kw is None:
+        raise ValueError(
+            "An AC-coupled battery needs '[costs] battery_inverter_cost_per_kw', the price of its own inverter per "
+            "kW; BREOS has no default for it. Set 0 if another price already includes the inverter"
+        )
     electrical = _resolve_electrical(cfg, pv_arrays, pv_params, n_modules)
     if electrical is not None and any(string.module_shading is not None for string in electrical.strings):
         # The result echoes each module's tables as plain floats.
@@ -3318,6 +3475,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         ac_cable=ac_cable,
         inverter_conversion=_inverter_conversion(electrical, ac_cable, pv_arrays, pv_params),
         module_catalogue=module_catalogue,
+        battery_inverter_ac_capacity_w=battery_inverter_w,
     )
 
 
