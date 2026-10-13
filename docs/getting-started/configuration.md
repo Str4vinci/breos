@@ -818,7 +818,10 @@ points and held beyond them. The ambient is the weather's air temperature,
 for an inverter outdoors, or `electrical_environment.inverter_ambient_temp_c`
 when you state it, for one indoors. DC above the derated rating is clipped,
 and a battery may still store it. With several inverters, both keys need
-string-level energy, which applies each to its own inverter.
+string-level energy, which applies each to its own inverter. The planned
+charging targets of `daily_persistence` are chosen on one row, the row of
+the strings' STC maximum power voltage with string-level energy, and the
+full rating; dispatch then applies the per-step row and the derating.
 
 `night_consumption_w` is what the inverter draws from the grid while it
 converts nothing: a step with no PV DC and no battery charge or discharge.

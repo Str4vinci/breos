@@ -339,6 +339,17 @@ with no PV DC and no battery charge or discharge. It is taken from the grid,
 as `Inverter_Night_Consumption` within `Import_From_Grid`, and leaves dispatch
 unchanged. Unset, it is not modelled and not reported missing.
 
+The daily-target planner plans on the scalar row, the middle one in
+aggregate energy and the strings' STC voltage in string-level energy, at
+the full AC rating and with no night consumption (decided 2026-10-13). It only chooses each day's
+grid-charging target; dispatch then runs every step on the per-step row and
+the derating, so the energy and cost a run reports are exact either way, and
+only the choice of target can differ where they bind. The planner's PV is
+already what it believes, a forecast for a controller, and the per-step
+series would add fields to `DailyTargetProblem`. ADR 0004's AC-coupled
+batteries (#419) change how the battery reaches the inverter, so this is
+revisited there.
+
 ### D10. Several inverters without a battery (added 2026-10-13)
 
 An inverter clips at its own nameplate and converts at its own part-load
@@ -382,10 +393,6 @@ These are additive and do not change a field above:
 - Several inverters with a battery, after ADR 0004 (#419), and in Monte Carlo.
 - The DC link's voltage while only the battery discharges, for the curve row
   of those steps.
-- The daily-target planner reads the curve at the fixed row, at the full AC
-  rating and without the night consumption. It plans on these; dispatch then
-  runs on the per-step rows and derating, so a plan can be slightly off where
-  they differ.
 
 ## Consequences
 
