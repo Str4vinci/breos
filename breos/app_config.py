@@ -63,7 +63,7 @@ from breos.pv.mismatch import DEFAULT_BYPASS_DIODE_VOLTAGE_V
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
 from breos.pv.shading import ShadingTable
 from breos.pv.temperature import validate_temperature_inputs
-from breos.pv_modules import MODULES, PVModuleParams, get_module
+from breos.pv_modules import MODULES, PVModuleParams, catalogue_snapshot, get_module
 from breos.resources import load_config_json
 from breos.smart_charging import (
     DECISION_BOUNDARIES,
@@ -1273,6 +1273,10 @@ class ResolvedAppConfig:
     # The inverter's efficiency curve and AC cable as the dispatch runs them,
     # or None for the PVWatts curve and no cable.
     inverter_conversion: InverterConversion | None = None
+    # The module catalogue when the configuration was resolved
+    # (:func:`breos.pv_modules.catalogue_snapshot`): every field above that
+    # names or describes a module was taken from it.
+    module_catalogue: str = ""
 
 
 def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -3204,6 +3208,7 @@ def _check_one_inverter_sizing(config: Mapping[str, Any]) -> None:
 
 def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     """Merge, validate, and resolve App configuration."""
+    module_catalogue = catalogue_snapshot()
     normalized = normalize_config_keys(config)
     _check_one_inverter_sizing(normalized)
     _check_electrical_sizing(normalized)
@@ -3312,6 +3317,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         electrical=electrical,
         ac_cable=ac_cable,
         inverter_conversion=_inverter_conversion(electrical, ac_cable, pv_arrays, pv_params),
+        module_catalogue=module_catalogue,
     )
 
 

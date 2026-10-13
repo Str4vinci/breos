@@ -359,3 +359,36 @@ def test_the_inverter_curve_row_an_app_resolved_is_part_of_the_cache_key(monkeyp
     with reuse_prepared_inputs():
         cached = [prepare_simulation_inputs_cached(r.cfg, r, None, prepare=prepare) for r in (first, second)]
     assert cached == [first.inverter_conversion.curve_row, second.inverter_conversion.curve_row]
+
+
+def test_an_inherited_array_module_is_the_one_the_app_resolved():
+    # An array without a module takes the catalogue's first, so reordering the
+    # catalogue changes it for an App built afterwards only.
+    config = {
+        **{k: v for k, v in BASE.items() if k != "n_modules"},
+        "pv_arrays": [{"modules": 4, "module": "Generic_400W"}, {"modules": 4, "azimuth": 90}],
+    }
+    first = App(config)._resolved
+    saved = dict(MODULES)
+    try:
+        MODULES.clear()
+        MODULES.update({"Erlangen_445W": saved["Erlangen_445W"], **saved})
+        second = App(config)._resolved
+    finally:
+        MODULES.clear()
+        MODULES.update(saved)
+    assert first.pv_arrays[1]["module"] != second.pv_arrays[1]["module"]
+    assert _input_cache_key(first.cfg, first) != _input_cache_key(second.cfg, second)
+
+
+def test_a_second_modules_diodes_are_part_of_the_cache_key(monkeypatch):
+    # A string's shading is bound to its array's module's bypass diodes when
+    # the App is built.
+    config = {
+        **{k: v for k, v in BASE.items() if k != "n_modules"},
+        "pv_arrays": [{"modules": 4, "module": "Generic_400W"}, {"modules": 4, "module": "Erlangen_445W"}],
+    }
+    first = App(config)._resolved
+    monkeypatch.setitem(MODULES, "Erlangen_445W", replace(MODULES["Erlangen_445W"], bypass_diodes=2))
+    second = App(config)._resolved
+    assert _input_cache_key(first.cfg, first) != _input_cache_key(second.cfg, second)

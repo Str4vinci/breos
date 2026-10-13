@@ -874,16 +874,14 @@ def _input_cache_key(cfg: dict[str, Any], resolved: ResolvedAppConfig | None = N
 
     ``resolved`` carries what an App took from the module catalogue when it
     was built, which preparation uses even if the catalogue changed since:
-    the module of the single-array path, and the inverter curve's row for
-    steps without PV, which every array's module sets.
+    each array's module, the bypass diodes its shading is bound to, and the
+    inverter curve's row for steps without PV. The catalogue as it was then
+    stands for all of them.
     """
     key = config_cache_key(cfg, INPUT_INDEPENDENT_KEYS)
     if key is None or resolved is None:
         return key
-    conversion = resolved.inverter_conversion
-    row = None if conversion is None else conversion.curve_row
-    module = json.loads(json.dumps(asdict(resolved.pv_params), default=str))
-    return json.dumps([key, module, row], sort_keys=True)
+    return json.dumps([key, resolved.module_catalogue], sort_keys=True)
 
 
 def input_configuration_key(config: dict[str, Any]) -> str | None:

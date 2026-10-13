@@ -22,9 +22,10 @@ Usage:
     resized = replace(custom, Mpp=560, Vmp=42.4, Imp=13.21)
 """
 
+import json
 import math
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from numbers import Integral, Real
 from typing import Any, ClassVar, Dict, List, Optional
 
@@ -370,6 +371,15 @@ Efficiency: {f"{m.Module_Efficiency * 100:.1f} %" if m.Module_Efficiency is not 
 Bifaciality: {f"{m.bifaciality * 100:.1f} %" if m.bifaciality is not None else "n/a"}
 NOCT:       {f"{m.NOCT:.1f} °C" if m.NOCT is not None else "n/a (not sourced in bundled catalog)"}
 """
+
+
+def catalogue_snapshot() -> str:
+    """The catalogue's modules and parameters, in its order, as canonical JSON.
+
+    The order matters because the first module is the default.
+    """
+    entries = [[name, asdict(module)] for name, module in MODULES.items()]
+    return json.dumps(entries, sort_keys=True, default=str)
 
 
 def add_module(name: str, params: PVModuleParams) -> None:
