@@ -254,7 +254,8 @@ def _battery_inverter_ac_capacity_w(batt_spec: Mapping[str, Any], battery_kwh: f
     ``inverter_kw_per_kwh`` follows the candidate's nominal capacity;
     ``inverter_ac_rating_kw`` is fixed for the study.
     """
-    if batt_spec.get("coupling", "dc") != "ac" or not battery_kwh > 0.0:
+    # The 1 Wh cutoff calculate_costs prices a battery from.
+    if batt_spec.get("coupling", "dc") != "ac" or not float(battery_kwh) * 1000.0 > 1.0:
         return None
     if batt_spec.get("inverter_ac_rating_kw") is not None:
         return float(batt_spec["inverter_ac_rating_kw"]) * 1000.0
@@ -279,11 +280,11 @@ def _build_battery_config_from_spec(
     battery inverter; without one it runs the PV-only path either way.
     """
     configured = {key: batt_spec[key] for key in _BATTERY_SPEC_KEYS if key in batt_spec}
-    battery_kwh = nominal_energy_wh / 1000.0
-    if batt_spec.get("coupling", "dc") == "ac" and nominal_energy_wh > 0.0:
+    battery_inverter_w = _battery_inverter_ac_capacity_w(batt_spec, nominal_energy_wh / 1000.0)
+    if battery_inverter_w is not None:
         configured.update(
             coupling="ac",
-            battery_inverter_ac_capacity_w=_battery_inverter_ac_capacity_w(batt_spec, battery_kwh),
+            battery_inverter_ac_capacity_w=battery_inverter_w,
             battery_inverter_efficiency=batt_spec["inverter_efficiency"],
         )
     return BatteryConfig(
@@ -306,16 +307,20 @@ _PROJECTED_END_OF_LIFE_METRICS = {
 }
 
 
-def _battery_replacement_treatment(battery: Mapping[str, Any]) -> Dict[str, Any]:
+def _battery_replacement_treatment(
+    battery: Mapping[str, Any], costs: Optional[Mapping[str, Any]] = None
+) -> Dict[str, Any]:
     """How projected scoring treats battery replacement, for the provenance.
 
     ``allow_terminal_replacement`` is the configured policy for the final
     period; the earlier years' internal permission is not the user's setting.
     ``replacement_min_remaining_years`` is the configured minimum service
     time of a new pack, measured to the end of the project.
-    ``enable_replacement = false`` skips every swap.
+    ``enable_replacement = false`` skips every swap. An AC-coupled study
+    also records its battery inverter's settings and price from ``costs``
+    (ADR 0004 C14); each candidate's resolved rating is a result column.
     """
-    return {
+    treatment: Dict[str, Any] = {
         "method": "simulated_yearly_state_propagation",
         "description": "Projected scoring simulates every year and records actual replacement events.",
         "higher_fidelity_basis": "App multiyear SOH propagation",
@@ -337,6 +342,17 @@ def _battery_replacement_treatment(battery: Mapping[str, Any]) -> Dict[str, Any]
             'project ("retire"), as skipped_replacement_action says.'
         ),
     }
+    if treatment["coupling"] == "ac":
+        per_kwh = battery.get("inverter_kw_per_kwh")
+        treatment["battery_inverter"] = {
+            "inverter_ac_rating_kw": battery.get("inverter_ac_rating_kw"),
+            "inverter_kw_per_kwh": per_kwh,
+            "rating_basis": "per kWh of each candidate's nominal capacity" if per_kwh is not None else "fixed",
+            "inverter_efficiency": battery.get("inverter_efficiency"),
+            "cost_per_kw": (costs or {}).get("battery_inverter_cost_per_kw"),
+            "rating_column": "Battery_Inverter_AC_Rating_kW",
+        }
+    return treatment
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float:
@@ -943,7 +959,7 @@ def evaluate_projected_design(
         "simulation": dict(config["simulation"]),
         "weather": weather_metadata(tmy_data),
         **({"weather_by_year": [weather_metadata(frame) for frame in frames]} if frames is not None else {}),
-        "battery_replacement_treatment": _battery_replacement_treatment(battery),
+        "battery_replacement_treatment": _battery_replacement_treatment(battery, config["costs"]),
     }
     return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=provenance)
 
@@ -1079,7 +1095,7 @@ try:
             self.ac_output_scale = _validated_ac_output_scale(config)
             self.dc_output_scale = _validated_dc_output_scale(config)
 
-            self.battery_replacement_treatment = _battery_replacement_treatment(config["battery"])
+            self.battery_replacement_treatment = _battery_replacement_treatment(config["battery"], config["costs"])
 
             self.fixed_azimuth = config["mode"]["fixed_azimuth"]
             # The layouts searched, in LAYOUTS order, and the fixed tilt of
@@ -1466,7 +1482,9 @@ def optimize_system_multi_objective(
             key
             for individual in result.opt
             for key in individual.data
-            if key.startswith("Projected_") or key.startswith("Objective_") or key == "ZEB_Ratio"
+            if key.startswith("Projected_")
+            or key.startswith("Objective_")
+            or key in ("ZEB_Ratio", "Battery_Inverter_AC_Rating_kW")
         }
     )
     diagnostics_df = pd.DataFrame({key: result.opt.get(key) for key in diagnostic_keys})

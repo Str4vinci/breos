@@ -452,3 +452,50 @@ def test_search_records_its_resolved_bounds_and_scores_emissions(tariff_case):
     assert provenance["constraints"]["max_modules"] == 60
     # [emissions] reaches the search, not only the fixed-design evaluator.
     assert result.details["pareto"]["Projected_CO2_Avoided_Total_kg"].gt(0).all()
+
+
+AC_STUDY = {
+    "battery": {"temperature": 20.0, "coupling": "ac", "inverter_kw_per_kwh": 0.5, "inverter_efficiency": 0.95},
+    "costs": {"battery_inverter_cost_per_kw": 120.0},
+}
+
+
+def test_an_ac_search_exports_each_candidates_battery_inverter_and_its_settings(tariff_case):
+    pytest.importorskip("pymoo")
+    weather, load, config = tariff_case
+    config = {**config, **AC_STUDY, "optimization": {"pop_size": 4, "seed": 42}}
+    result = optimization.optimize_system_multi_objective(weather, load, config, n_gen=1)
+    pareto = result.details["pareto"]
+    battery = pareto["Battery_kWh"].to_numpy()
+    rating = pareto["Battery_Inverter_AC_Rating_kW"].to_numpy()
+    # The rating follows each candidate's nominal capacity; no battery, no inverter.
+    np.testing.assert_allclose(rating, np.where(battery * 1000.0 > 1.0, 0.5 * battery, 0.0), rtol=1e-12)
+    np.testing.assert_allclose(pareto["Projected_Battery_Inverter_Cost"], 120.0 * rating, rtol=1e-12)
+    treatment = result.details["provenance"]["battery_replacement_treatment"]
+    assert treatment["coupling"] == "ac"
+    assert treatment["battery_inverter"] == {
+        "inverter_ac_rating_kw": None,
+        "inverter_kw_per_kwh": 0.5,
+        "rating_basis": "per kWh of each candidate's nominal capacity",
+        "inverter_efficiency": 0.95,
+        "cost_per_kw": 120.0,
+        "rating_column": "Battery_Inverter_AC_Rating_kW",
+    }
+
+
+def test_a_fixed_ac_design_records_its_settings_and_prices_no_inverter_below_one_wh(tariff_case):
+    weather, load, config = tariff_case
+    config = {**config, **AC_STUDY}
+    design = optimization.evaluate_projected_design(
+        weather, load, config, n_modules=4, battery_kwh=4.0, tilt=30.0, azimuth=180.0
+    )
+    assert design.metrics["Battery_Inverter_AC_Rating_kW"] == 2.0
+    assert design.provenance["battery_replacement_treatment"]["battery_inverter"]["inverter_efficiency"] == 0.95
+    for tiny in (0.0005, 0.001):
+        small = optimization.evaluate_projected_design(
+            weather, load, config, n_modules=4, battery_kwh=tiny, tilt=30.0, azimuth=180.0
+        )
+        assert small.metrics["Battery_Inverter_AC_Rating_kW"] == 0.0
+        assert small.metrics["Projected_Battery_Inverter_Cost"] == 0.0
+    dc = evaluate(tariff_case, battery_kwh=4.0)
+    assert "battery_inverter" not in dc.provenance["battery_replacement_treatment"]

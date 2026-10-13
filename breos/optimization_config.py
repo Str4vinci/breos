@@ -508,7 +508,9 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
             # The battery's coupling decides whether grid_charge_efficiency is
             # needed or refused (ADR 0004 C7); [battery] checks the value.
             raw_battery = config.get("battery")
-            coupling = raw_battery.get("coupling", "dc") if isinstance(raw_battery, Mapping) else "dc"
+            raw = raw_battery.get("coupling", "dc") if isinstance(raw_battery, Mapping) else "dc"
+            # Spelled as [battery] accepts it; a bad value fails there.
+            coupling = raw.strip().lower() if isinstance(raw, str) else "dc"
             checked = smart_charging_table(coupling).validate(value, key)
         else:
             checked = OPTIMIZATION_TABLES[key].validate(value, key)

@@ -119,3 +119,19 @@ def test_each_candidate_runs_its_battery_inverter_and_the_treatment_records_the_
     assert pv_only.coupling == "dc"
     assert _battery_replacement_treatment(battery)["coupling"] == "ac"
     assert _battery_replacement_treatment(resolve_optimization_config(LOCATION)["battery"])["coupling"] == "dc"
+
+
+@pytest.mark.parametrize("spelling", ["AC", " ac "])
+def test_a_normalised_coupling_spelling_selects_the_ac_smart_charging_table(spelling):
+    config = {**AC, "battery": {**AC_BATTERY, "coupling": spelling}, "tariff": TARIFF, "smart_charging": FIXED}
+    assert resolve_optimization_config(config)["battery"]["coupling"] == "ac"
+
+
+def test_no_battery_inverter_below_the_one_wh_cutoff():
+    battery = resolve_optimization_config(
+        {**AC, "battery": {**AC_BATTERY, "inverter_kw_per_kwh": None, "inverter_ac_rating_kw": 3.0}}
+    )["battery"]
+    for tiny in (0.0005, 0.001):
+        assert _battery_inverter_ac_capacity_w(battery, tiny) is None
+        assert _build_battery_config_from_spec(battery, nominal_energy_wh=tiny * 1000.0).coupling == "dc"
+    assert _battery_inverter_ac_capacity_w(battery, 0.0011) == 3000.0
