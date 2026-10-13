@@ -718,7 +718,7 @@ not both. The `inverter` block of the PV loss waterfall lists each inverter's
 year-1 DC input, clipping, conversion loss, cable loss, AC output and night
 draw, and `parallel_mismatch` names each input by its inverter and MPPT. The
 electrical check warns when an inverter's DC/AC ratio, its modules' STC power
-over its nameplate, lies outside 0.8 to 1.5.
+over its nameplate, lies outside 0.8 to 1.6.
 
 A battery behind one of several inverters needs the other inverters' AC to
 reach it, which AC coupling will model; until then, string-level energy with

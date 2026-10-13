@@ -3388,7 +3388,7 @@ def _check_module_shading(
 
 
 # The DC/AC ratio range outside which the electrical check warns, per inverter.
-DC_AC_RATIO_RANGE = (0.8, 1.5)
+DC_AC_RATIO_RANGE = (0.8, 1.6)
 
 
 def _resolve_electrical(

@@ -369,7 +369,7 @@ rating. String mode with several inverters therefore runs each on its own:
    through one inverter, refuses several inverters in string mode. Aggregate
    mode keeps one inverter of the combined nameplate (D5) and refuses
    per-inverter curves, derating and cables.
-6. The check warns when an inverter's DC/AC ratio lies outside 0.8 to 1.5.
+6. The check warns when an inverter's DC/AC ratio lies outside 0.8 to 1.6.
 
 With several inverters, string mode differs from aggregate mode even where
 no limit binds: per-inverter clipping and part-load efficiency are not

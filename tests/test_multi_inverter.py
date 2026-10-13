@@ -230,3 +230,11 @@ def test_an_inverter_with_its_own_cable_pickles_and_hashes(trina):
     assert dict(spec.ac_cable) == cable
     assert pickle.loads(pickle.dumps(resolved)).electrical.inverters[0] == spec
     assert hash(spec) == hash(copy.deepcopy(spec))
+
+
+@pytest.mark.parametrize(("nameplate_w", "warns"), [(3150 / 1.6, False), (3150 / 1.65, True), (3150 / 0.75, True)])
+def test_the_check_warns_on_a_dc_ac_ratio_outside_0_8_to_1_6(trina, nameplate_w, warns):
+    inverter = {**SMALL, "nominal_power_w": nameplate_w}
+    resolved = resolve_app_config(config([EAST], [inverter], [{"inverter": 0, "mppt": 0, "array": 0, "modules": 7}]))
+    codes = {f.code for f in resolved.electrical.check.findings}
+    assert ("dc_ac_ratio_outside_range" in codes) is warns

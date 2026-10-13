@@ -19,7 +19,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `parallel_mismatch` names each input by its inverter and MPPT. Several
   inverters with a battery, and in Monte Carlo, are refused until AC coupling
   is modelled. The electrical check now warns when an inverter's DC/AC ratio
-  lies outside 0.8 to 1.5. Runs with one inverter are unchanged, apart from
+  lies outside 0.8 to 1.6. Runs with one inverter are unchanged, apart from
   that warning.
 - `weather_file` names the App's weather file directly
   ([#394](https://github.com/Str4vinci/breos/issues/394)). The App reads that
