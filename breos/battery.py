@@ -34,6 +34,7 @@ from breos.constants import (
     A_R,
     B_Q,
     B_R,
+    BATTERY_COUPLINGS,
     C_DOC_Q,
     C_DOC_R,
     D_DOC_Q,
@@ -101,11 +102,16 @@ class BatteryConfig:
     """
     Configuration parameters for battery simulation.
 
-    Only DC-coupled systems (hybrid inverters) are modelled:
-    - PV → Battery: No inverter loss (stays in DC)
-    - Battery → Load: Inverter loss applies (DC to AC)
-
-    AC-coupled dispatch is not implemented.
+    ``coupling`` selects the topology (ADR 0004). ``"dc"``, the default, is a
+    hybrid inverter: PV and the battery share one DC bus and one inverter, so
+    PV charges the battery as DC and battery discharge crosses the shared
+    inverter. ``"ac"`` gives the battery its own bidirectional inverter on the
+    AC bus beside the PV inverter, described by
+    ``battery_inverter_ac_capacity_w`` and ``battery_inverter_efficiency``;
+    the inverter fields above then describe the PV inverter only. ``"dc"``
+    refuses the battery inverter fields, and ``"ac"`` requires the
+    efficiency. AC-coupled dispatch is not implemented yet: a run with an
+    AC-coupled battery stops before its first step.
 
     Power limits are nameplate powers and therefore scale with the timestep:
     ``max_charge_power_w`` limits DC input to the battery path, while
@@ -232,6 +238,15 @@ class BatteryConfig:
     # The inverter's measured efficiency curve and AC cable; None keeps the
     # PVWatts part-load curve and no cable. A mapping of its fields is accepted.
     inverter_conversion: Optional[InverterConversion] = None
+    # Battery topology (ADR 0004): "dc" for a hybrid inverter, "ac" for a
+    # battery inverter of its own on the AC bus.
+    coupling: str = "dc"
+    # The AC-coupled battery inverter: its AC rating (W), the AC output when
+    # discharging and the AC input when charging, None for flat unclipped
+    # conversion; and its nominal efficiency, which has no default. Both are
+    # refused with "dc".
+    battery_inverter_ac_capacity_w: Optional[float] = None
+    battery_inverter_efficiency: Optional[float] = None
 
     def __post_init__(self):
         def finite(name: str, value: float) -> float:
@@ -292,7 +307,25 @@ class BatteryConfig:
             if getattr(self, name) < 0.0:
                 raise ValueError(f"{name} must be non-negative")
 
-        for name in ("inverter_ac_capacity_w", "max_charge_power_w", "max_discharge_power_w"):
+        if self.coupling not in BATTERY_COUPLINGS:
+            raise ValueError(f"coupling must be one of: {', '.join(BATTERY_COUPLINGS)}; got {self.coupling!r}")
+        if self.coupling == "dc":
+            for name in ("battery_inverter_ac_capacity_w", "battery_inverter_efficiency"):
+                if getattr(self, name) is not None:
+                    raise ValueError(f"{name} describes an AC-coupled battery's own inverter; it needs coupling = 'ac'")
+        else:
+            if self.battery_inverter_efficiency is None:
+                raise ValueError("an AC-coupled battery needs battery_inverter_efficiency; it has no default")
+            self.battery_inverter_efficiency = finite("battery_inverter_efficiency", self.battery_inverter_efficiency)
+            if not 0.0 < self.battery_inverter_efficiency <= 1.0:
+                raise ValueError("battery_inverter_efficiency must be greater than 0 and at most 1")
+
+        for name in (
+            "inverter_ac_capacity_w",
+            "max_charge_power_w",
+            "max_discharge_power_w",
+            "battery_inverter_ac_capacity_w",
+        ):
             value = getattr(self, name)
             if value is not None:
                 if isinstance(value, (bool, np.bool_)):

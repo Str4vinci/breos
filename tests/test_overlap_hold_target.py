@@ -299,9 +299,11 @@ def test_default_reject_preserves_the_existing_ledger_bits(name, freq, digest):
         execution_backend="python",
         **kwargs,
     )[0]
-    # No inverter night consumption is configured: its column is 0 and the rest keep their bits.
-    assert (frame["Inverter_Night_Consumption"] == 0.0).all()
-    ledger = frame.drop(columns=["Datetime", "Inverter_Night_Consumption"])
+    # No inverter night consumption is configured and the battery is DC-coupled:
+    # the columns added since are 0 and the rest keep their bits.
+    added = ["Inverter_Night_Consumption", "PV_AC_To_Battery", "PV_Charge_Conversion_Loss"]
+    assert (frame[added] == 0.0).all().all()
+    ledger = frame.drop(columns=["Datetime", *added])
     assert hashlib.sha256(ledger.to_numpy(dtype=np.float64).tobytes()).hexdigest() == digest
 
 

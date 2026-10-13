@@ -347,8 +347,8 @@ the derating, so the energy and cost a run reports are exact either way, and
 only the choice of target can differ where they bind. The planner's PV is
 already what it believes, a forecast for a controller, and the per-step
 series would add fields to `DailyTargetProblem`. ADR 0004's AC-coupled
-batteries (#419) change how the battery reaches the inverter, so this is
-revisited there.
+batteries (#419) change how the battery reaches the inverter; ADR 0004 M7
+keeps the same rule for their PV inverter.
 
 ### D10. Several inverters without a battery (added 2026-10-13)
 

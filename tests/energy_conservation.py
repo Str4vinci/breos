@@ -16,6 +16,9 @@ import pandas as pd
 # Absent columns count as zero.
 GRID_TO_BATTERY = "Grid_AC_To_Battery"
 GRID_CHARGE_COLUMNS = (GRID_TO_BATTERY, "Grid_DC_To_Battery", "Grid_Charge_Conversion_Loss")
+# PV inverter AC an AC-coupled battery inverter takes in, and that inverter's
+# charging loss on it (ADR 0004 C8). Internal flows: zero unless AC-coupled.
+PV_AC_CHARGE_COLUMNS = ("PV_AC_To_Battery", "PV_Charge_Conversion_Loss")
 
 
 # Every column the identities read, apart from the optional grid charging.
@@ -63,7 +66,8 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
     ``config`` is the run's :class:`breos.battery.BatteryConfig`, for the
     charge efficiency, which is fixed unless resistance fade is enabled.
     """
-    columns = [*LEDGER_COLUMNS, *(column for column in GRID_CHARGE_COLUMNS if column in results.columns)]
+    optional = (*GRID_CHARGE_COLUMNS, *PV_AC_CHARGE_COLUMNS)
+    columns = [*LEDGER_COLUMNS, *(column for column in optional if column in results.columns)]
     ledger = results[columns].to_numpy(dtype=float)
     # assert_allclose treats NaN as equal to NaN, so a NaN row would pass
     # every identity.
@@ -79,11 +83,21 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
     grid_dc_to_battery = _column(results, "Grid_DC_To_Battery")
     grid_conversion_loss = _column(results, "Grid_Charge_Conversion_Loss")
     _assert_balanced(grid_to_battery, grid_dc_to_battery + grid_conversion_loss, atol, "grid-charge conversion")
+    pv_ac_to_battery = _column(results, "PV_AC_To_Battery")
+    pv_charge_conversion_loss = _column(results, "PV_Charge_Conversion_Loss")
     _assert_balanced(
         results["Battery_Charge_Input"],
-        results["PV_DC_To_Battery"] + grid_dc_to_battery,
+        results["PV_DC_To_Battery"] + pv_ac_to_battery - pv_charge_conversion_loss + grid_dc_to_battery,
         atol,
         "charge input split",
+    )
+    # What the PV inverter takes in and loses leaves it as AC: to the load,
+    # to export, or to an AC-coupled battery inverter.
+    _assert_balanced(
+        results["PV_DC_To_Inverter"] - results["PV_Direct_Inverter_Loss"],
+        results["PV_AC_To_Load"] + results["PV_AC_Export"] + pv_ac_to_battery,
+        atol,
+        "PV inverter output",
     )
     _assert_balanced(
         results["PV_DC"],
@@ -135,6 +149,8 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
         "inverter loss split",
     )
     # PV, grid charging and replacement-added energy are the external inputs.
+    # PV_AC_To_Battery is internal: it leaves the PV inverter and enters the
+    # battery inverter, so it is in neither side.
     # Delivered energy, losses, net battery movement, and energy removed with
     # a replaced pack are outputs.
     outputs = (
@@ -147,6 +163,7 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
         + results["PV_Direct_Inverter_Loss"]
         + results["Battery_Inverter_Loss"]
         + grid_conversion_loss
+        + pv_charge_conversion_loss
         + results["Standby_Loss"]
         + results["Capacity_Window_Loss"]
         + results["Battery_Replacement_Energy_Removed"]

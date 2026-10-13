@@ -278,7 +278,10 @@ def _dc_for_ac(
 # mppt_limits loss-waterfall stages, present only when their inputs are; the
 # waterfall's near_shading, shading_mismatch, parallel_mismatch and dc_wiring
 # blocks; and the inverter block's AC cable, efficiency curve, temperature
-# derating and night consumption entries.
+# derating and night consumption entries. It also adds PV_AC_To_Battery and
+# PV_Charge_Conversion_Loss, the PV inverter's AC that an AC-coupled battery
+# inverter takes in and that inverter's charging loss on it (ADR 0004 C8);
+# both are zero in a DC-coupled or PV-only run.
 LEDGER_SCHEMA_VERSION = "3.1"
 
 # Per-step state columns, by results-frame name, in their row order inside the
@@ -321,6 +324,11 @@ _LEDGER_COLUMNS: Tuple[str, ...] = (
     "Grid_AC_To_Battery",
     "Grid_DC_To_Battery",
     "Grid_Charge_Conversion_Loss",
+    # AC coupling (ADR 0004 C8): PV inverter AC into the battery inverter and
+    # that inverter's charging loss on it. Their difference is part of
+    # Battery_Charge_Input. Zero when PV reaches the battery as DC.
+    "PV_AC_To_Battery",
+    "PV_Charge_Conversion_Loss",
     "Battery_Discharge_DC",
     "Battery_AC_To_Load",
     "PV_Direct_Inverter_Loss",
@@ -390,6 +398,8 @@ L_BATTERY_CHARGE_STORED = _ROW["Battery_Charge_Stored"]
 L_GRID_AC_TO_BATTERY = _ROW["Grid_AC_To_Battery"]
 L_GRID_DC_TO_BATTERY = _ROW["Grid_DC_To_Battery"]
 L_GRID_CHARGE_CONVERSION_LOSS = _ROW["Grid_Charge_Conversion_Loss"]
+L_PV_AC_TO_BATTERY = _ROW["PV_AC_To_Battery"]
+L_PV_CHARGE_CONVERSION_LOSS = _ROW["PV_Charge_Conversion_Loss"]
 L_BATTERY_DISCHARGE_DC = _ROW["Battery_Discharge_DC"]
 L_BATTERY_AC_TO_LOAD = _ROW["Battery_AC_To_Load"]
 L_PV_DIRECT_INVERTER_LOSS = _ROW["PV_Direct_Inverter_Loss"]
@@ -1120,6 +1130,8 @@ def _dispatch_day(
         matrix[L_GRID_AC_TO_BATTERY, i] = grid_ac / hours_per_step
         matrix[L_GRID_DC_TO_BATTERY, i] = grid_dc / hours_per_step
         matrix[L_GRID_CHARGE_CONVERSION_LOSS, i] = (grid_ac - grid_dc) / hours_per_step
+        matrix[L_PV_AC_TO_BATTERY, i] = 0.0
+        matrix[L_PV_CHARGE_CONVERSION_LOSS, i] = 0.0
         matrix[L_BATTERY_DISCHARGE_DC, i] = battery_discharge_dc / hours_per_step
         matrix[L_BATTERY_AC_TO_LOAD, i] = battery_ac_to_load / hours_per_step
         matrix[L_PV_DIRECT_INVERTER_LOSS, i] = pv_direct_inverter_loss / hours_per_step
@@ -1188,7 +1200,14 @@ def _day_arguments(
     curve's voltage rows, likewise; None holds the conversion's own row.
     ``battery_config.inverter_conversion`` supplies the efficiency curve, the
     AC cable and the night consumption.
+
+    An AC-coupled ``battery_config`` is refused here, before any step runs:
+    the day loop has only the DC-coupled step so far (ADR 0004).
     """
+    if battery_config.coupling != "dc":
+        raise NotImplementedError(
+            "AC-coupled battery dispatch is not implemented yet; use coupling = 'dc' or a run without a battery"
+        )
     if instructions is None:
         instructions = DispatchInstructions.noop(len(pv_dc_vals))
     if ac_derate is None:
