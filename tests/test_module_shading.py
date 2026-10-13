@@ -158,6 +158,37 @@ def test_cells_shaded_alike_cap_the_string_at_their_short_circuit_current():
     assert (curve.i_mp < 0.75 * _curve([LIT] * 8).i_mp).all()
 
 
+def _cap_jump(curve: ShadedStringCurve) -> tuple[float, float, float]:
+    """The first step's lowest part cap and the string's voltage just below and above it."""
+    cap = float(curve._short_circuits[:, 0].min())
+    below, above = curve._terminal_voltage(np.array([cap * (1 - 1e-9), cap * (1 + 1e-9)]), np.zeros(2, dtype=int), True)
+    return cap, float(below), float(above)
+
+
+def test_a_window_inside_the_voltage_jump_at_a_cap_has_no_operating_point():
+    curve = _curve([_one_cell(0.5)] * 8)
+    _, below, above = _cap_jump(curve)
+    assert below - above > 50.0
+    first = np.array([True, False, False])
+    # No point of the curve lies between the jump's two voltages.
+    gap = (above + 0.25 * (below - above), above + 0.75 * (below - above))
+    power, voltage = curve.constrained_mpp(first, gap[0], gap[1], 50.0)
+    assert power[0] == 0.0 and voltage[0] == 0.0
+    # A window that ends inside the jump keeps the bypassed peak below it.
+    power, voltage = curve.constrained_mpp(first, 0.0, gap[1], 50.0)
+    assert voltage[0] <= gap[1]
+    assert power[0] == pytest.approx(_brute_force(curve, 0.0, gap[1]), rel=1e-5)
+
+
+def test_the_tabled_current_holds_the_cap_across_its_jump():
+    curve = _curve([_one_cell(0.5)] * 8)
+    cap, below, above = _cap_jump(curve)
+    first = np.array([True, False, False])
+    middle = np.array([0.5 * (below + above)])
+    for signed in (False, True):
+        assert curve.current(middle, first, signed=signed)[0] == pytest.approx(cap, rel=1e-6)
+
+
 def test_a_substring_matches_pvlibs_partial_shading_example():
     """pvlib's example cell, 23 lit and one shaded, with reverse breakdown, against no leakage."""
     from scipy.constants import e, k
@@ -404,8 +435,10 @@ def _brute_force(curve: ShadedStringCurve, v_min: float, v_max: float) -> float:
     currents = np.linspace(0.0, curve._table_i[0, -1], 40001)
     voltages = curve._terminal_voltage(currents, np.zeros(currents.size, dtype=int), True)
     inside = (voltages >= v_min) & (voltages <= v_max)
-    best = float((curve.scale[0] * currents * voltages)[inside].max())
-    # Where the curve is steep, the window's edge falls between grid points: solve it.
+    best = float((curve.scale[0] * currents * voltages)[inside].max(initial=0.0))
+    # Where the curve is steep, the window's edge falls between grid points:
+    # solve it, keeping only a side inside the window, since the voltage can
+    # also jump across the edge at a part's short-circuit current.
     for edge in (v_min, v_max):
         crossings = np.flatnonzero((voltages[:-1] > edge) & (voltages[1:] <= edge))
         for k in crossings:
@@ -413,7 +446,9 @@ def _brute_force(curve: ShadedStringCurve, v_min: float, v_max: float) -> float:
             for _ in range(80):
                 middle = 0.5 * (low + high)
                 low, high = (middle, high) if voltage(middle) > edge else (low, middle)
-            best = max(best, curve.scale[0] * low * voltage(low))
+            for current in (low, high):
+                if v_min <= voltage(current) <= v_max:
+                    best = max(best, curve.scale[0] * current * voltage(current))
     return best
 
 

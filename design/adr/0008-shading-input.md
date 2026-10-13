@@ -222,7 +222,10 @@ module's own curve, exactly as without module shading; the others build the
 string's curve on a grid of currents, dense below each part's photocurrent
 where the curve has its knees. A lone string on its input is solved on its
 exact curve: its best local maxima within the voltage range and current
-limit, refined where a limit cuts them. Strings in parallel share the
+limit, refined where a limit cuts them. At a part's short-circuit current
+the voltage jumps down to the bypass diode's branch; the search counts only
+points inside the limits, and the table holds a point on each side of the
+jump, so strings in parallel read the cap's current across it. Strings in parallel share the
 input's voltage and are solved on their tabled curves, within 0.01 % of a
 brute-force solve in the tests. Each search refines the best few local
 maxima of its table (four on a string's curve, six on an input's summed

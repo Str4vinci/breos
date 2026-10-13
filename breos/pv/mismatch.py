@@ -43,8 +43,8 @@ _BISECTION_STEPS = 40
 # Local maxima of each step's tabled curve refined on the exact curve.
 _REFINED_PEAKS = 4
 _GOLDEN_RATIO = (5.0**0.5 - 1.0) / 2.0
-# Relative distance below a part's short-circuit current of the grid point
-# that stays on the part's own curve.
+# Relative distance of the grid points either side of a part's short-circuit
+# current, on its own curve below it and on the bypass diode above it.
 _EDGE = 1e-7
 
 
@@ -235,10 +235,12 @@ class ShadedStringCurve:
         pieces = [top[:, None] * unit[None, :], np.broadcast_to(reverse, (len(top), reverse.size))]
         for j in range(levels.shape[1]):
             pieces.append(levels[:, j : j + 1] * np.concatenate((unit[:: max(_CURVE_POINTS // 24, 1)], knee))[None, :])
-        # Every part's own knee, and the last current before its substring
-        # drops to the bypass diode.
+        # Every part's own knee, and both sides of its short-circuit current,
+        # where its substring drops to the bypass diode: the table then reads
+        # the voltage's jump there at that current.
         pieces.append((currents.T[:, :, None] * knee[None, None, :]).reshape(len(top), -1))
         pieces.append(self._short_circuits.T * (1.0 - _EDGE))
+        pieces.append(self._short_circuits.T * (1.0 + _EDGE))
         return np.sort(np.concatenate(pieces, axis=1), axis=1)
 
     def _mismatched_curve(self) -> None:
@@ -334,15 +336,20 @@ class ShadedStringCurve:
             brackets.append((k - 1, k, np.isfinite(current_limit) & (grid[:, -1] > current_limit)))
 
         def at(current: np.ndarray) -> np.ndarray:
-            return scale * current * self._terminal_voltage(current, select, cabled)
+            # The power at ``current``; -inf where the limits do not allow it,
+            # as where the voltage jumps across the range at a part's cap.
+            voltage = self._terminal_voltage(current, select, cabled)
+            allowed = (voltage >= v_min) & (voltage <= v_max) & (current <= current_limit)
+            return np.where(allowed, scale * current * voltage, -np.inf)
 
-        def bisect(low: np.ndarray, high: np.ndarray, target: float) -> np.ndarray:
-            # The voltage falls with current: the current where it crosses ``target``.
+        def bisect(low: np.ndarray, high: np.ndarray, target: float) -> tuple[np.ndarray, np.ndarray]:
+            # The voltage falls with current: the currents just above and just
+            # below ``target`` where it crosses or jumps across it.
             for _ in range(_BISECTION_STEPS):
                 middle = 0.5 * (low + high)
                 above = self._terminal_voltage(middle, select, cabled) > target
                 low, high = np.where(above, middle, low), np.where(above, high, middle)
-            return 0.5 * (low + high)
+            return low, high
 
         for lo_k, hi_k, usable in brackets:
             if not usable.any():
@@ -353,11 +360,11 @@ class ShadedStringCurve:
             if np.isfinite(v_max):
                 cut = ok & (v_low > v_max)
                 if cut.any():
-                    low = np.where(cut, bisect(low.copy(), high.copy(), v_max), low)
+                    low = np.where(cut, bisect(low.copy(), high.copy(), v_max)[1], low)
             if np.isfinite(v_min):
                 cut = ok & (v_high < v_min)
                 if cut.any():
-                    high = np.where(cut, bisect(low.copy(), high.copy(), v_min), high)
+                    high = np.where(cut, bisect(low.copy(), high.copy(), v_min)[0], high)
             high = np.minimum(high, current_limit)
             ok &= low <= high
             if not ok.any():
