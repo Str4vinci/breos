@@ -3,6 +3,7 @@
 import json
 
 import numpy as np
+import pvlib
 import pytest
 
 from breos.app_config import resolve_app_config
@@ -23,7 +24,9 @@ def _shading(modules: list[dict], **extra) -> ModuleShading:
     return ModuleShading.from_mapping({"azimuth_deg": [0], "elevation_deg": [0], "modules": modules, **extra})
 
 
-def _parts(beam: float = 800.0, sky: float = 100.0, other: float = 20.0) -> IrradianceParts:
+def _parts(
+    beam: float = 800.0, sky: float = 100.0, other: float = 20.0, module: str = "Generic_400W"
+) -> IrradianceParts:
     full = np.full(STEPS, 1.0)
     return IrradianceParts(
         beam=beam * full,
@@ -33,7 +36,7 @@ def _parts(beam: float = 800.0, sky: float = 100.0, other: float = 20.0) -> Irra
         temp_cell=40.0 * full,
         sun_azimuth=180.0 * full,
         sun_elevation=50.0 * full,
-        pv_params=get_module("Generic_400W"),
+        pv_params=get_module(module),
     )
 
 
@@ -116,6 +119,89 @@ def test_a_higher_bypass_diode_voltage_costs_more():
     low = _curve(module, bypass_diode_voltage_v=0.3)
     high = _curve(module, bypass_diode_voltage_v=0.8)
     assert (high.mpp < low.mpp).all()
+
+
+def _one_cell(limiting: float) -> dict:
+    """A module whose first substring has one of its 48 cells at ``limiting``."""
+    return {
+        "substrings": [
+            {"beam_shaded_fraction": _table(limiting / 48), "limiting_shaded_fraction": _table(limiting)},
+            LIT,
+            LIT,
+        ]
+    }
+
+
+def test_a_half_shaded_cell_does_not_carry_the_string_current():
+    # A module with a low forward-fit shunt (195 ohm, 1.4 ohm a cell), which
+    # would pass amperes through the shaded cell in reverse bias.
+    parts = _parts(module="Erlangen_445W")
+
+    def curve(modules: list[dict]) -> ShadedStringCurve:
+        return ShadedStringCurve(_shading(modules), parts, np.ones(STEPS), len(modules))
+
+    lit = curve([LIT] * 10)
+    half = curve([_one_cell(0.5)] + [LIT] * 9)
+    full = curve([_one_cell(1.0)] + [LIT] * 9)
+    # The string runs at the lit modules' current, above what the half-shaded
+    # cell can carry: its substring is bypassed as if the cell were dark.
+    np.testing.assert_allclose(half.mpp, full.mpp, rtol=1e-6)
+    np.testing.assert_allclose(half.mpp / lit.mpp, 29 / 30, atol=0.005)
+
+
+def test_cells_shaded_alike_cap_the_string_at_their_short_circuit_current():
+    curve = _curve([_one_cell(0.5)] * 8)
+    # Every substring is current-limited alike: the string runs at the shaded
+    # cell's short-circuit current, the most it carries without reverse bias.
+    shaded = curve._short_circuits.min(axis=0)
+    np.testing.assert_allclose(curve.i_mp, shaded, rtol=1e-5)
+    assert (curve.i_mp < 0.75 * _curve([LIT] * 8).i_mp).all()
+
+
+def test_a_substring_matches_pvlibs_partial_shading_example():
+    """pvlib's example cell, 23 lit and one shaded, with reverse breakdown, against no leakage."""
+    from scipy.constants import e, k
+
+    thermal = k * (273.15 + 25.0) / e
+    breakdown = {"breakdown_factor": 2e-3, "breakdown_exp": 3, "breakdown_voltage": -15.0}
+
+    def cell(irradiance: float) -> tuple[float, ...]:
+        params = pvlib.pvsystem.calcparams_desoto(
+            irradiance, 25.0, 0.0042, 1.3 * thermal, 8.24, 2.36e-9, 1000.0, 0.00181, EgRef=1.121, dEgdT=-0.0002677
+        )
+        return tuple(float(p) for p in params)
+
+    current = np.linspace(0.0, 8.2, 4001)
+
+    def reference(irradiance: float, cells: int) -> np.ndarray:
+        # Each cell's whole curve, forward and reverse, combined in series at
+        # one current, then the bypass diode, as pvlib's example builds it.
+        diode = np.linspace(0.99 * breakdown["breakdown_voltage"], 0.75, 20000)
+        i, v, _ = pvlib.singlediode.bishop88(diode, *cell(irradiance), **breakdown)
+        return cells * np.interp(current, i[::-1], v[::-1], right=-np.inf)
+
+    def part(irradiance: float, cells: int) -> tuple[np.ndarray, ...]:
+        photo, saturation, series, shunt, diode = cell(irradiance)
+        params = (photo, saturation, series * cells, shunt * cells, diode * cells)
+        short_circuit = float(pvlib.pvsystem.i_from_v(0.0, *params))
+        return tuple(np.array([p]) for p in params + (short_circuit,))
+
+    curve = _curve([LIT])
+    rows = np.zeros(1, dtype=int)
+    shaded = curve._substring_voltage(current[None, :], [part(200.0, 1), part(1000.0, 23)], rows)[0]
+    lit = curve._substring_voltage(current[None, :], [part(1000.0, 24)], rows)[0]
+    shaded_reference = np.maximum(reference(200.0, 1) + reference(1000.0, 23), -0.5)
+    lit_reference = np.maximum(reference(1000.0, 24), -0.5)
+    # Forward bias: the same curve.
+    forward = current < part(200.0, 1)[5][0]
+    np.testing.assert_allclose(shaded[forward], shaded_reference[forward], atol=5e-3)
+    # The 23 lit cells hold the shaded one past -15 V, so it breaks down and
+    # its substring keeps a volt or two where this model bypasses it. A string
+    # of 10 substrings still finds the same maximum power to 0.2 %.
+    for count in (1, 3, 10):
+        power = np.max(current * (count * shaded + (10 - count) * lit))
+        expected = np.max(current * (count * shaded_reference + (10 - count) * lit_reference))
+        assert power == pytest.approx(expected, rel=2e-3)
 
 
 # -- App -----------------------------------------------------------------------------------------

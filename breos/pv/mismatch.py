@@ -4,12 +4,14 @@ Each module splits into bypass-diode substrings. A substring is its cells in
 series: the most-shaded cell at the irradiance its limiting shaded fraction
 leaves, and the other cells at the irradiance that keeps the substring's
 area mean. Each part is a single-diode curve with its share of the module's
-series and shunt resistance and diode voltage. Below the bypass diode's
-forward voltage the diode conducts and holds the substring there, so a
-shaded cell in reverse bias sees no more than the rest of its substring; the
-reverse characteristic before that is the shunt alone, with no avalanche
-breakdown. The string carries one current through every substring, and its
-voltage is their sum, less the cable's drop.
+series and shunt resistance and diode voltage, used in forward bias. A part
+carries no more than its own short-circuit current: the module's shunt is a
+fit to the forward curve, and split per cell it would pass amperes in
+reverse bias, so above that current the part's voltage falls without limit
+and the bypass diode conducts, holding the substring at the diode's forward
+voltage. Reverse leakage and avalanche breakdown are not modelled. The
+string carries one current through every substring, and its voltage is
+their sum, less the cable's drop.
 
 Steps where every substring of the string sees the same light use the
 module's own curve exactly; only the others build the string's curve, on a
@@ -41,6 +43,9 @@ _BISECTION_STEPS = 40
 # Local maxima of each step's tabled curve refined on the exact curve.
 _REFINED_PEAKS = 4
 _GOLDEN_RATIO = (5.0**0.5 - 1.0) / 2.0
+# Relative distance below a part's short-circuit current of the grid point
+# that stays on the part's own curve.
+_EDGE = 1e-7
 
 
 def _newton_mpp(*params):
@@ -158,7 +163,10 @@ class ShadedStringCurve:
 
         def element(irradiance: np.ndarray, share: float) -> tuple[np.ndarray, ...]:
             photo, saturation, series, shunt, diode = self.parts.diode_parameters(irradiance, rows)
-            return (photo, saturation, series * share, shunt * share, diode * share)
+            params = (photo, saturation, series * share, shunt * share, diode * share)
+            # The most current the part carries before it needs its bypass diode.
+            short_circuit = np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.i_from_v, 0.0, *params), dtype=float))
+            return params + (short_circuit,)
 
         # Most substrings are lit like the brightest on most steps: they share
         # its curve there, and only the others are solved.
@@ -180,6 +188,8 @@ class ShadedStringCurve:
             substrings.append((len(members), parts, own))
         # Each part's photocurrent: the curve's knees lie just below them.
         self._photocurrents = np.asarray([p[0] for _, parts, _ in substrings for p in parts] + [self._reference[0][0]])
+        # Each part's short-circuit current, where its substring drops to the bypass diode.
+        self._short_circuits = np.asarray([p[5] for _, parts, _ in substrings for p in parts] + [self._reference[0][5]])
         return substrings
 
     def _substring_voltage(self, current: np.ndarray, parts: list[tuple[np.ndarray, ...]], rows: Any) -> np.ndarray:
@@ -187,8 +197,10 @@ class ShadedStringCurve:
         shape = (-1,) + (1,) * (current.ndim - 1)
         voltage = np.zeros(current.shape)
         for params in parts:
-            part = _quiet(pvlib.pvsystem.v_from_i, current, *(p[rows].reshape(shape) for p in params))
-            voltage += np.nan_to_num(np.asarray(part, dtype=float), nan=-np.inf, posinf=np.inf, neginf=-np.inf)
+            *diode, short_circuit = (p[rows].reshape(shape) for p in params)
+            part = _quiet(pvlib.pvsystem.v_from_i, current, *diode)
+            part = np.nan_to_num(np.asarray(part, dtype=float), nan=-np.inf, posinf=np.inf, neginf=-np.inf)
+            voltage += np.where(current > short_circuit, -np.inf, part)
         return np.maximum(voltage, -self.bypass_v)
 
     def _voltage(self, current: np.ndarray, select: np.ndarray | None = None) -> np.ndarray:
@@ -223,8 +235,10 @@ class ShadedStringCurve:
         pieces = [top[:, None] * unit[None, :], np.broadcast_to(reverse, (len(top), reverse.size))]
         for j in range(levels.shape[1]):
             pieces.append(levels[:, j : j + 1] * np.concatenate((unit[:: max(_CURVE_POINTS // 24, 1)], knee))[None, :])
-        # Every part's own knee, where a substring starts to need its bypass diode.
+        # Every part's own knee, and the last current before its substring
+        # drops to the bypass diode.
         pieces.append((currents.T[:, :, None] * knee[None, None, :]).reshape(len(top), -1))
+        pieces.append(self._short_circuits.T * (1.0 - _EDGE))
         return np.sort(np.concatenate(pieces, axis=1), axis=1)
 
     def _mismatched_curve(self) -> None:

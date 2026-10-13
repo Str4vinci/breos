@@ -307,8 +307,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   string's curve from its substrings and bypass diodes
   (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated) and
   runs each input at the curve's global maximum within its limits
-  (`breos.pv.mismatch`). The array's irradiance stage is its modules' mean,
-  and the new `shading_mismatch` waterfall stage takes the electrical effect;
+  (`breos.pv.mismatch`). A substring carries at most its most-shaded cell's
+  short-circuit current before its bypass diode conducts; the module's
+  forward-fit shunt resistance is not used as the cell's reverse
+  characteristic, and reverse breakdown is not modelled. The array's
+  irradiance stage is its modules' mean, and the new `shading_mismatch`
+  waterfall stage takes the electrical effect;
   `pv_loss_waterfall.shading_mismatch` reports each string's own.
   `breos.electrical.string_limited_dc` now also returns the mismatch.
 - With string-level energy, what strings on different curves lose by sharing

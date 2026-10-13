@@ -188,9 +188,16 @@ resistance and diode voltage, at the array's cell temperature. The bypass
 diode holds the substring at minus its forward voltage
 (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated, the
 value pvlib's partial-shading example assumes, reported as assumed), so a
-shaded cell in reverse bias never sees more than the rest of its substring;
-before that its reverse characteristic is the shunt alone, without
-avalanche breakdown. The string's substrings carry one current and add
+shaded cell in reverse bias never sees more than the rest of its substring.
+Each part carries at most its own short-circuit current; above it, its
+voltage falls without limit and the bypass diode takes the substring
+(amended 2026-10-13). The shunt share is used in forward bias only: the
+module's shunt resistance is a fit to its forward curve, and split per cell
+(Erlangen_445W: 195 Ω at reference, 1.4 Ω a cell, scaled by 1000/E) it
+would pass amperes through a shaded cell that the rest of its substring
+holds in reverse bias, so the substring would deliver voltage at a current
+its shaded cell cannot generate. Reverse leakage and avalanche breakdown
+are not modelled. The string's substrings carry one current and add
 their voltages, less the cable's drop. The input runs at the global maximum
 of its strings' summed curve within the limits ADR 0007 D7 applies: the
 maximum can be the lower peak, with a substring bypassed.
@@ -288,6 +295,27 @@ What a table cannot hold, in the order of the gain expected from adding it:
    construction. A table per season, or the series, carries it.
 4. Interpolation error at sharp edges, which a finer grid removes.
 
+The level 2 substring is the worst-cell bound in reverse bias: it carries
+its most-shaded cell's short-circuit current, or its bypass diode conducts
+(amended 2026-10-13). A real cell leaks a little in reverse, and a cell that
+breaks down before the rest of its substring can push it to the diode's
+clamp keeps the substring at a volt or two at higher currents. Against
+pvlib's partial-shading example (bishop88 with breakdown at −15 V, one
+shaded cell among 24), a string of ten such substrings, one, three or all
+of them shaded, finds the same maximum power within 0.2 % (pinned in the
+tests). PVMismatch 4.1, with its cell given the same reverse terms and ten
+72-cell modules, agrees within 0.9 %, and by the same margin without
+breakdown, so the gap there is not the reverse characteristic. Cells that break down at a few volts, as with the defaults pvlib's
+bishop88 and PVMismatch share (−5.5 V), keep far more, with the cell as a
+hot spot; BREOS does not model that regime. Until 2026-10-13 the shaded
+part kept its share of the forward-fit shunt in reverse bias. On the Porto
+cell-grid case (two strings of six Erlangen_445W modules, isotropic sky)
+that understated the year's mismatch by 15 %: 722 kWh against 850 kWh. The
+error was largest where one substring of a string was shaded and the
+string ran at its lit modules' current. Where every substring is shaded
+alike, the string already ran at the shaded cells' current and the two
+models agree within 0.1 percentage points.
+
 ## Questions for the maintainer (answered above)
 
 1. **Table first, series second, or both at once?** The table serves Monte
@@ -331,7 +359,11 @@ The two resolutions gave the same mismatch loss within 0.2 %, 95 kWh with
 whole modules and 142 kWh with limiting cells, so hourly runs are enough to
 size the loss and 15-minute runs add little for it. The cost grows with the
 number of distinct substrings and of steps where they differ; steps where a
-substring is lit like the string's brightest reuse that curve.
+substring is lit like the string's brightest reuse that curve. Capping each
+part at its short-circuit current (2026-10-13) adds one solve per part and
+a grid point at each cap; on one string of ten modules with limiting cells,
+hourly, the curve work stayed within run-to-run noise (2.3 to 5.2 s before,
+2.8 to 2.9 s after).
 
 ## Consequences
 
