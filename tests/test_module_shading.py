@@ -502,8 +502,8 @@ def test_inconsistent_mean_and_limiting_fractions_are_refused(trina):
         resolve_app_config(config)
     module[0]["substrings"][0]["beam_shaded_fraction"] = [[v / 48 for v in row] for row in CHIMNEY]
     resolve_app_config(config)
-    MODULES[trina] = replace(MODULES[trina], bypass_diodes=100)
-    module[0]["substrings"] += [{"beam_shaded_fraction": CLEAR}] * 97
+    MODULES[trina] = replace(MODULES[trina], bypass_diodes=144)
+    module[0]["substrings"] += [{"beam_shaded_fraction": CLEAR}] * 141
     for other in config["pv_strings"][0]["module_shading"]["modules"][1:]:
         other["beam_shaded_fraction"] = CLEAR
     with pytest.raises(ValueError, match="fewer than 2 cells per string"):
@@ -614,12 +614,17 @@ def test_repeated_grid_currents_do_not_hide_the_peak():
 
 
 def test_more_bypass_diodes_than_cells_is_refused(trina):
-    config = _module_shaded_config(trina, CLEAR)
-    MODULES[trina] = replace(MODULES[trina], bypass_diodes=145)
-    shading = config["pv_strings"][0]["module_shading"]
-    shading["modules"][0] = {"substrings": [{"beam_shaded_fraction": CLEAR}] * 145}
-    with pytest.raises(ValueError, match="bypass_diodes \\(145\\) leave fewer than one of its 144 cells per string"):
-        resolve_app_config(config)
+    with pytest.raises(ValueError, match="must divide"):
+        replace(MODULES[trina], bypass_diodes=145)
+    raw = ModuleShading.from_mapping(
+        {
+            "azimuth_deg": [0],
+            "elevation_deg": [0],
+            "modules": [{"substrings": [{"beam_shaded_fraction": [[0.0]]}] * 145}],
+        }
+    )
+    problem = raw.for_module(145).inconsistency(144)
+    assert problem is not None and "bypass_diodes (145) leave fewer than one of its 144 cells per string" in problem
 
 
 def test_the_substrings_follow_the_modules_bypass_diodes(trina):

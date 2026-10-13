@@ -87,7 +87,7 @@ class PVModuleParams:
     # Cell strings in parallel within each section: 1 for a full-cell module,
     # 2 for a half-cut one, whose top and bottom halves share each diode. A
     # section's strings hold N_Cells / (cell_strings_in_parallel *
-    # bypass_diodes) cells in series each.
+    # bypass_diodes) cells in series each, a whole number.
     cell_strings_in_parallel: int = 1
     # The cell's reverse breakdown voltage, negative, in V; None when unknown.
     # A shaded cell driven past its short-circuit current holds there and
@@ -117,10 +117,14 @@ class PVModuleParams:
         elif name in ("N_Cells", "bypass_diodes", "cell_strings_in_parallel"):
             if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
-            if name != "bypass_diodes" and self._module_params_ready:
-                cells = value if name == "N_Cells" else self.N_Cells
-                strings = value if name == "cell_strings_in_parallel" else self.cell_strings_in_parallel
-                self._check_cell_strings(int(cells), int(strings))
+            if self._module_params_ready:
+                layout = {
+                    field: getattr(self, field) for field in ("N_Cells", "cell_strings_in_parallel", "bypass_diodes")
+                }
+                layout[name] = value
+                self._check_cell_strings(
+                    int(layout["N_Cells"]), int(layout["cell_strings_in_parallel"]), int(layout["bypass_diodes"])
+                )
         elif name == "Module_Efficiency" and value is not None:
             self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
         elif name == "breakdown_voltage_v" and value is not None:
@@ -220,14 +224,15 @@ class PVModuleParams:
 
     def __post_init__(self) -> None:
         self._validate_stc_point(self.Mpp, self.Vmp, self.Imp)
-        self._check_cell_strings(self.N_Cells, self.cell_strings_in_parallel)
+        self._check_cell_strings(self.N_Cells, self.cell_strings_in_parallel, self.bypass_diodes)
         object.__setattr__(self, "_module_params_ready", True)
 
     @staticmethod
-    def _check_cell_strings(cells: int, strings: int) -> None:
-        if cells % strings:
+    def _check_cell_strings(cells: int, strings: int, diodes: int) -> None:
+        if cells % (strings * diodes):
             raise ValueError(
-                f"N_Cells ({cells}) must divide into cell_strings_in_parallel ({strings}) strings of whole cells"
+                f"N_Cells ({cells}) must divide into cell_strings_in_parallel ({strings}) strings on each of "
+                f"bypass_diodes ({diodes}) sections, every string of whole cells"
             )
 
     @property

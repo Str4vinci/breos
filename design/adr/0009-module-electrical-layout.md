@@ -48,7 +48,8 @@ be given different diode counts in different strings.
 technology label: `N_Cells`, the total count a datasheet prints;
 `bypass_diodes`, 3 by default; and, with M2, `cell_strings_in_parallel`, 1 by
 default and 2 for half-cut. Cells in series per substring are
-`N_Cells / (cell_strings_in_parallel * bypass_diodes)`. `celltype` stays the
+`N_Cells / (cell_strings_in_parallel * bypass_diodes)`, a whole number: a
+record where it is not is refused. `celltype` stays the
 cell material that seeds the single-diode fit; temperature coefficients come
 from the datasheet, so the technology's thermal behaviour enters through
 them. A caller's equipment data maps its own labels onto these fields.

@@ -209,4 +209,17 @@ def test_a_cell_string_count_that_does_not_divide_the_cells_is_refused_on_edit()
         module.cell_strings_in_parallel = 5
     with pytest.raises(ValueError, match="must divide"):
         module.N_Cells = 145
-    assert module.cell_strings_in_parallel == 2 and module.N_Cells == 144
+    with pytest.raises(ValueError, match="must divide"):
+        module.bypass_diodes = 5
+    assert module.cell_strings_in_parallel == 2 and module.N_Cells == 144 and module.bypass_diodes == 3
+
+
+def test_every_section_holds_strings_of_whole_cells():
+    # 88 half-cells under the default 3 diodes would put 14.7 cells in each chain.
+    with pytest.raises(ValueError, match=r"bypass_diodes \(3\) sections"):
+        replace(MODULE, N_Cells=88)
+    four = replace(MODULE, N_Cells=88, bypass_diodes=4)
+    assert four.cells_in_series == 44
+    module = replace(MODULE, bypass_diodes=4)
+    module.bypass_diodes = 6
+    assert module.bypass_diodes == 6

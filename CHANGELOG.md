@@ -324,7 +324,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `cell_strings_in_parallel` (also new, 1 by default; 2 on every bundled
   module) puts two chains of half-cells on each diode, a substring may give
   `halves`, each chain's own fractions, for shade that falls on one chain
-  only (ADR 0009 M2). Against a cell-level model of a 144 half-cell module,
+  only (ADR 0009 M2). A module whose `N_Cells` does not divide into whole
+  chains on every diode is refused. Against a cell-level model of a 144 half-cell module,
   portrait row shade came within 0.25 % of module power, and within 1.1 %
   where a few lit cells remain among dark ones. A module may state its
   cell's `breakdown_voltage_v`, for cells that break down at a few volts,
