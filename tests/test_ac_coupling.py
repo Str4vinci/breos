@@ -7,8 +7,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import breos.battery as battery_module
 from breos._dispatch import _LEDGER_COLUMNS, LEDGER_SCHEMA_VERSION
-from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.battery import BatteryConfig, simulate_energy_balance, simulate_energy_balance_summary
 from tests.energy_conservation import assert_energy_conservation
 
 _BACKENDS = [
@@ -83,13 +84,13 @@ def test_ac_coupling_requires_the_battery_inverter_efficiency():
         BatteryConfig(nominal_energy_wh=10000.0, coupling="ac")
 
 
-@pytest.mark.parametrize("value", [0.0, -0.1, 1.01, float("nan"), float("inf"), True])
+@pytest.mark.parametrize("value", [0.0, -0.1, 1.01, float("nan"), float("inf"), True, np.bool_(True), "high"])
 def test_battery_inverter_efficiency_must_be_a_fraction(value):
     with pytest.raises(ValueError, match="battery_inverter_efficiency"):
         _ac(battery_inverter_efficiency=value)
 
 
-@pytest.mark.parametrize("value", [-1.0, float("nan"), float("inf"), True])
+@pytest.mark.parametrize("value", [-1.0, float("nan"), float("inf"), True, np.bool_(False), "big"])
 def test_battery_inverter_rating_must_be_finite_and_non_negative(value):
     with pytest.raises(ValueError, match="battery_inverter_ac_capacity_w must be a finite non-negative number"):
         _ac(battery_inverter_ac_capacity_w=value)
@@ -130,3 +131,39 @@ def test_ac_coupling_without_a_battery_is_the_pv_only_run():
     pd.testing.assert_frame_equal(dc, ac, check_exact=True)
     for column in AC_COLUMNS:
         assert (ac[column] == 0.0).all()
+
+
+def test_ac_coupling_accepts_the_boundaries():
+    config = _ac(battery_inverter_ac_capacity_w=0.0, battery_inverter_efficiency=1.0)
+    assert config.battery_inverter_ac_capacity_w == 0.0
+    assert config.battery_inverter_efficiency == 1.0
+
+
+def test_pv_only_summary_and_retired_pack_report_the_ac_columns_as_zero():
+    pv, load, temperature = _day()
+    kwargs = {"pv_dc": pv, "houseload": load, "freq": "h", "temperature_series": temperature}
+    summary = simulate_energy_balance_summary(battery_config=BatteryConfig(nominal_energy_wh=0.0), **kwargs)
+    retired = simulate_energy_balance(
+        battery_config=BatteryConfig(nominal_energy_wh=10000.0), battery_retired=True, initial_energy_wh=0.0, **kwargs
+    )[0]
+    for column in AC_COLUMNS:
+        assert summary.column_sums[column] == 0.0
+        assert (retired[column] == 0.0).all()
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+def test_every_buffer_row_is_written_whatever_the_buffer_held(monkeypatch, backend):
+    # The matrix comes from np.empty: poison it so an unwritten row shows.
+    original = battery_module._ResultBuffers.__init__
+
+    def poisoned(self, n_steps):
+        original(self, n_steps)
+        self.matrix.fill(np.nan)
+
+    monkeypatch.setattr(battery_module._ResultBuffers, "__init__", poisoned)
+    config = BatteryConfig(nominal_energy_wh=10000.0, inverter_ac_capacity_w=3000.0)
+    frame = _simulate(config, backend)
+    numeric = frame.drop(columns=["Datetime"]).to_numpy(dtype=float)
+    assert np.isfinite(numeric).all()
+    for column in AC_COLUMNS:
+        assert (frame[column] == 0.0).all()
