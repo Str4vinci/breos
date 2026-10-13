@@ -669,7 +669,10 @@ current before the limits, except `availability`, which is time out of service
 and applies after them. Later years reuse the
 first year's limited production scaled by module degradation, so a limit that
 binds in year 1 is assumed to bind as much later. Partial shading of single
-modules and bypass diodes are not modelled.
+modules and bypass diodes are modelled when strings carry `module_shading`
+(see [Model shading module by module](../how-to/sky-model-and-horizon.md#model-shading-module-by-module)).
+[How BREOS models PV modules](../modeling/pv-modules.md) explains the physics
+and its limits.
 
 ### DC cables
 

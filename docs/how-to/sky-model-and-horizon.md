@@ -161,7 +161,9 @@ for shade spread evenly over the module, or `substrings`, one entry per
 bypass diode (`bypass_diodes`, 3 when omitted). A substring's
 `beam_shaded_fraction` is the shaded share of its area, and its optional
 `limiting_shaded_fraction` the shaded share of its most-shaded cell; in a
-half-cell module, give the mean of the two halves' most-shaded cells. The
+half-cell module, give the mean of the two halves' most-shaded cells; for
+shade on one half only, this overstates the module's power (see
+[Module layouts and technologies](../modeling/pv-modules.md#module-layouts-and-technologies)). The
 most-shaded cell alone shades its share of the substring, so the mean must
 be at least the limiting fraction over the substring's cells (48 for a
 144-cell module with three diodes); taking both from the same cell samples

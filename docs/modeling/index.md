@@ -16,6 +16,14 @@ Plane-of-array irradiance, module performance, losses, arrays, tracking, and
 inverter conversion.
 :::
 
+:::{grid-item-card} PV modules and strings
+:link: pv-modules
+:link-type: doc
+
+Cells, bypass diodes, module technologies, strings and inverter inputs at
+string-level detail, and where the model errs.
+:::
+
 :::{grid-item-card} Energy balance
 :link: ../api/energy-balance
 :link-type: doc
@@ -76,6 +84,7 @@ supports this model choice?”.
 ```{toctree}
 :hidden:
 
+pv-modules
 validation
 ../resources
 ```

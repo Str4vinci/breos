@@ -136,7 +136,9 @@ the sky view factor.
 
 `horizon_profile` still applies first: a sun behind the terrain is not
 shaded again. A table or series given with `horizon_profile` must therefore
-hold near shading only; one that also includes the terrain counts it twice. A bifacial array's rear irradiance is not shaded by this input.
+hold near shading only; one that also includes the terrain counts it twice. A bifacial array's rear irradiance is not shaded by this input,
+and no loss is applied for rear structure shading or rear mismatch, so the
+bifacial gain is an upper estimate (amended 2026-10-13).
 The loss appears as a new `near_shading` stage of the PV loss waterfall,
 between transposition and the incidence-angle modifier.
 
@@ -178,7 +180,16 @@ limiting fraction needs at least two cells; BREOS refuses tables that break
 either. A layout tool that takes both values from the same cell samples
 meets the first. In a half-cell module the two halves run in
 parallel, so the limiting fraction is the mean of the two halves' worst
-cells.
+cells. That convention reproduces the substring's current limit, but it
+behaves as if each top half-cell were tied in parallel with its bottom
+partner (amended 2026-10-13). Against a cell-level model of a 144 half-cell
+module with explicit parallel halves, shade on one to six bottom rows in
+portrait, which leaves the top halves clear, came out 12 to 15 % high in
+module power with every substring shaded and 6 to 7 % high with one; with
+half the module shaded it was within 1 %, and landscape shade, which crosses
+both halves alike, was exact. A ten-module string with three such modules
+came out 2 % high, and with all ten 15 % high. A later record models the
+halves explicitly.
 
 BREOS models each substring as its most-shaded cell at the limiting
 irradiance in series with its other cells at the irradiance that keeps the
@@ -200,7 +211,11 @@ its shaded cell cannot generate. Reverse leakage and avalanche breakdown
 are not modelled. The string's substrings carry one current and add
 their voltages, less the cable's drop. The input runs at the global maximum
 of its strings' summed curve within the limits ADR 0007 D7 applies: the
-maximum can be the lower peak, with a substring bypassed.
+maximum can be the lower peak, with a substring bypassed. A tracker that
+climbs towards the nearest peak can stop on a lower one, and inverters that
+sweep the whole curve do so every few minutes; hourly and 15-minute steps
+cannot resolve what happens between sweeps, so the global maximum is an
+assumption, stated as such (amended 2026-10-13).
 
 Each substring sees the array's unshaded irradiance after the incidence-angle
 modifier: the beam and circumsolar part reduced by its shaded fraction, the
