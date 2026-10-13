@@ -305,3 +305,11 @@ def test_a_registered_modules_parameters_are_part_of_the_cache_key(monkeypatch):
     key = _input_cache_key(resolved.cfg)
     monkeypatch.setitem(MODULES, resolved.pv_module_key, replace(MODULES[resolved.pv_module_key], bypass_diodes=2))
     assert _input_cache_key(App(BASE)._resolved.cfg) != key
+
+
+def test_an_app_keeps_the_module_it_resolved_after_the_catalogue_changes(monkeypatch):
+    first = App(BASE)._resolved
+    name = first.pv_module_key
+    monkeypatch.setitem(MODULES, name, replace(MODULES[name], gamma_pmp=-0.5))
+    second = App(BASE)._resolved
+    assert _input_cache_key(first.cfg, first.pv_params) != _input_cache_key(second.cfg, second.pv_params)

@@ -869,9 +869,16 @@ def _module_parameters(cfg: dict[str, Any]) -> list[Any]:
     return out
 
 
-def _input_cache_key(cfg: dict[str, Any]) -> str | None:
-    """The resolved config without the input-independent keys, as canonical JSON, or None."""
-    return config_cache_key(cfg, INPUT_INDEPENDENT_KEYS)
+def _input_cache_key(cfg: dict[str, Any], pv_params: Any = None) -> str | None:
+    """The resolved config without the input-independent keys, as canonical JSON, or None.
+
+    ``pv_params`` is the module an App resolved when it was built, which the
+    single-array preparation uses even if the catalogue entry changed since.
+    """
+    key = config_cache_key(cfg, INPUT_INDEPENDENT_KEYS)
+    if key is None or pv_params is None:
+        return key
+    return json.dumps([key, json.loads(json.dumps(asdict(pv_params), default=str))], sort_keys=True)
 
 
 def input_configuration_key(config: dict[str, Any]) -> str | None:
@@ -879,7 +886,8 @@ def input_configuration_key(config: dict[str, Any]) -> str | None:
 
     Two configs with the same key get the same prepared inputs.
     """
-    return _input_cache_key(resolve_app_config(config).cfg)
+    resolved = resolve_app_config(config)
+    return _input_cache_key(resolved.cfg, resolved.pv_params)
 
 
 def prepare_simulation_inputs_cached(
@@ -898,7 +906,7 @@ def prepare_simulation_inputs_cached(
     reference, which tests replace.
     """
     cache = _PREPARED_INPUTS_CACHE.get()
-    key = _input_cache_key(cfg) if cache is not None else None
+    key = _input_cache_key(cfg, resolved.pv_params) if cache is not None else None
     if cache is None or key is None:
         return prepare(cfg, resolved, deps)
     entry = (key, deps, prepare)
