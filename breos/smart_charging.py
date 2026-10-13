@@ -46,6 +46,7 @@ import numpy as np
 
 from breos._controller import ControllerDayDecision, ControllerDayInput
 from breos._daily_targets import DEFAULT_HORIZON_DAYS, DEFAULT_SOC_STATES, DEFAULT_TARGET_LEVELS, check_wear_cost
+from breos.constants import BATTERY_COUPLINGS
 from breos.dispatch_instructions import DispatchInstructions
 from breos.tariffs import ResolvedTariff
 
@@ -75,6 +76,11 @@ PLANNER_KEYS = (*PLANNER_SETTINGS, WEAR_COST_KEY, DECISION_BOUNDARY_KEY)
 # Normal App runs carry stored energy, origin shares and degradation from one
 # project year into the next (ADR 0002, boundary and terminal conventions).
 TERMINAL_CONVENTION = "physical_carry"
+# ADR 0004 C7: a value the AC-coupled step would ignore is never accepted.
+AC_GRID_CHARGE_EFFICIENCY_REFUSAL = (
+    "'smart_charging.grid_charge_efficiency' is for a DC-coupled battery; an AC-coupled battery converts grid "
+    "charge in its own inverter, at battery_inverter_efficiency. Remove it"
+)
 
 
 @dataclass(frozen=True)
@@ -112,10 +118,15 @@ class SmartChargingSpec:
     overlap_policy: str = "reject"
     wear_cost_per_kwh: float | None = None
     decision_boundary: str | None = None
+    # The battery's topology (ADR 0004 C7): an AC-coupled battery converts
+    # grid charge in its own inverter, so it takes no grid_charge_efficiency.
+    battery_coupling: str = "dc"
 
     def __post_init__(self) -> None:
         if self.mode not in SMART_CHARGING_MODES:
             raise ValueError(f"'smart_charging.mode' must be one of: {', '.join(SMART_CHARGING_MODES)}")
+        if self.battery_coupling not in BATTERY_COUPLINGS:
+            raise ValueError(f"'battery_coupling' must be one of: {', '.join(BATTERY_COUPLINGS)}")
         check_overlap_policy(self.mode, self.overlap_policy)
         object.__setattr__(self, "charge_periods", tuple(self.charge_periods))
         object.__setattr__(self, "discharge_periods", tuple(self.discharge_periods))
@@ -152,7 +163,11 @@ class SmartChargingSpec:
                     f"discharge_periods; remove {', '.join(f'smart_charging.{name}' for name in given)}"
                 )
             return
-        required = ["charge_periods", "discharge_periods", "grid_charge_efficiency"]
+        if self.battery_coupling == "ac" and self.grid_charge_efficiency is not None:
+            raise ValueError(AC_GRID_CHARGE_EFFICIENCY_REFUSAL)
+        required = ["charge_periods", "discharge_periods"]
+        if self.battery_coupling == "dc":
+            required.append("grid_charge_efficiency")
         if self.mode == "fixed_target":
             required.insert(0, "target_usable_fraction")
         missing = [name for name in required if getattr(self, name) in (None, ())]
@@ -266,7 +281,8 @@ def period_layout(spec: SmartChargingSpec, period_labels: Any, target_usable_fra
     :func:`breos._daily_targets.daily_target_instructions` moves the target
     and that reserve together to each day's target (A18).
     """
-    assert spec.grid_charge_efficiency is not None
+    # None for an AC-coupled battery, whose own inverter converts grid charge.
+    assert spec.grid_charge_efficiency is not None or spec.battery_coupling == "ac"
     labels = np.asarray(period_labels, dtype=object)
     charge = np.isin(labels, spec.charge_periods)
     discharge = np.isin(labels, spec.discharge_periods)

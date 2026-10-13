@@ -70,6 +70,7 @@ from breos._dispatch import L_BATTERY_DISCHARGE_DC, L_PV_AC_EXPORT, R_GRID_IMPOR
 from breos.battery import (
     BatteryConfig,
     _dispatch_no_battery_vectorized,
+    _pv_inverter_conversion,
     _resolve_dispatch_day,
     _ResultBuffers,
     _step_energy_cap,
@@ -369,10 +370,6 @@ class _DayEvaluator:
         wear_cost_per_kwh: float = 0.0,
     ) -> None:
         config = problem.battery_config
-        if config.coupling != "dc":
-            raise NotImplementedError(
-                "the daily-target planner does not plan for an AC-coupled battery yet; use fixed dispatch_instructions"
-            )
         hours = problem.hours_per_step
         self.problem = problem
         self.wear_cost_per_kwh = wear_cost_per_kwh
@@ -388,6 +385,18 @@ class _DayEvaluator:
             # The inverter's night draw is a cost of the system, not of a
             # target: planned without it, it cannot change dispatch.
             config = replace(config, inverter_conversion=replace(config.conversion, night_consumption_w=0.0))
+        cap_wh = _step_energy_cap(config.inverter_ac_capacity_w, hours)
+        pv_chain = None
+        if config.coupling == "ac" and not is_pv_only_dispatch(
+            config.nominal_energy_wh, config.max_soc, config.min_soc
+        ):
+            # An AC-coupled battery's PV inverter does not depend on it, so the
+            # forecast PV converts once, on the scalar curve row at the full
+            # rating, as the dispatch below runs (ADR 0004 M7, ADR 0007 D9).
+            ac, loss, clip, _night = _pv_inverter_conversion(
+                np.maximum(0.0, self.series[0] * hours), battery_config=config, hours_per_step=hours, cap_wh=cap_wh
+            )
+            pv_chain = (ac, loss, clip, np.zeros(len(ac)))
         self.state = {
             "battery_config": config,
             "battery_soh_decimal": soh,
@@ -398,10 +407,11 @@ class _DayEvaluator:
             "eff_discharge": eff_discharge,
             "hours_per_step": hours,
             "standby_loss_per_step_wh": config.standby_loss_wh * hours,
-            "cap_wh": _step_energy_cap(config.inverter_ac_capacity_w, hours),
+            "cap_wh": cap_wh,
             "cap_charge_wh": _step_energy_cap(config.max_charge_power_w, hours),
             "cap_discharge_wh": _step_energy_cap(config.max_discharge_power_w, hours),
             "cap_stored_wh": _step_energy_cap(config.stored_power_limit_w, hours),
+            "pv_chain": pv_chain,
         }
 
     def run(self, day: int, energy_wh: float, level: int) -> tuple[float, float]:
@@ -511,9 +521,14 @@ def solve_daily_targets(
     )
     chargeable = ~np.isnan(problem.instructions.grid_target_fraction)
     refill_prices = problem.import_price_per_kwh[chargeable] if chargeable.any() else problem.import_price_per_kwh
-    refill_per_wh = (
-        float(refill_prices.min(initial=math.inf)) / 1000.0 / (problem.instructions.grid_charge_efficiency * eff_charge)
+    # Stored energy refilled from the grid passes the grid-charge conversion:
+    # the instructions' efficiency for a DC-coupled battery, the battery
+    # inverter's nominal efficiency for an AC-coupled one (ADR 0004 C11).
+    grid_charge_efficiency = (
+        problem.instructions.grid_charge_efficiency if config.coupling == "dc" else config.battery_inverter_efficiency
     )
+    assert grid_charge_efficiency is not None
+    refill_per_wh = float(refill_prices.min(initial=math.inf)) / 1000.0 / (grid_charge_efficiency * eff_charge)
 
     def terminal_cost(end_wh: Any) -> Any:
         shortfall = np.maximum(0.0, target - np.asarray(end_wh, dtype=np.float64))

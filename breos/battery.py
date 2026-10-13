@@ -1921,14 +1921,21 @@ def _simulate_core(
     Simulate energy balance with battery storage and degradation.
 
     This function processes PV DC production and load profiles to calculate
-    grid interaction, battery state, and degradation for DC-coupled hybrid
-    inverter systems. AC-coupled battery dispatch is not implemented.
+    grid interaction, battery state, and degradation, for a DC-coupled
+    battery behind a hybrid inverter or an AC-coupled one behind its own
+    inverter (``battery_config.coupling``, ADR 0004).
 
     Energy flow for DC-coupled (hybrid inverter) systems:
     - PV -> Load: DC -> Inverter -> AC (one inverter loss)
     - PV -> Battery: DC -> Battery (charge efficiency only)
     - Battery -> Load: DC -> Inverter -> AC (discharge efficiency + inverter loss)
     - Grid -> Load: AC (no conversion)
+
+    For AC-coupled systems PV converts in the PV inverter as in a PV-only
+    run, and the battery inverter converts both ways:
+    - PV -> Battery: DC -> PV inverter -> AC -> battery inverter -> DC
+    - Battery -> Load: DC -> battery inverter -> AC
+    - Grid -> Battery: AC -> battery inverter -> DC
 
     Args:
         pv_dc: Series with PV DC power production (W) - before inverter.
@@ -2224,11 +2231,6 @@ def _simulate_core(
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
     ac_coupled = has_battery and battery_config.coupling == "ac"
-    if ac_coupled and (instruction_planner is not None or day_controller is not None):
-        raise NotImplementedError(
-            "an AC-coupled battery takes fixed dispatch_instructions for now; "
-            "instruction planners and daily controllers do not plan for it yet"
-        )
     if instruction_planner is not None:
         if dispatch_instructions is not None or day_controller is not None:
             raise ValueError("pass one of dispatch_instructions, an instruction planner or a daily controller")

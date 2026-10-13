@@ -112,7 +112,13 @@ from breos._daily_targets import (
     target_grid,
 )
 from breos.app_inputs import reuse_prepared_inputs
-from breos.battery import _resolve_dispatch_day, _ResultBuffers, _step_energy_cap, align_simulation_inputs
+from breos.battery import (
+    _pv_inverter_conversion,
+    _resolve_dispatch_day,
+    _ResultBuffers,
+    _step_energy_cap,
+    align_simulation_inputs,
+)
 from breos.dispatch_instructions import DispatchInstructions
 from breos.projection import YearStart
 from breos.smart_charging import DECISION_BOUNDARIES
@@ -311,6 +317,17 @@ def fixed_health_state(problem: DailyTargetProblem) -> dict[str, Any]:
     soh, eff_charge, eff_discharge = problem.health()
     config = problem.battery_config
     hours = problem.hours_per_step
+    cap_wh = _step_energy_cap(config.inverter_ac_capacity_w, hours)
+    pv_chain = None
+    if config.coupling == "ac" and config.nominal_energy_wh > 0.0:
+        # ADR 0004 M7: forecast PV on the scalar curve row, at the full rating.
+        ac, loss, clip, _night = _pv_inverter_conversion(
+            np.maximum(0.0, np.asarray(problem.pv_dc_w) * hours),
+            battery_config=config,
+            hours_per_step=hours,
+            cap_wh=cap_wh,
+        )
+        pv_chain = (ac, loss, clip, np.zeros(len(ac)))
     return {
         "battery_config": config,
         "battery_soh_decimal": soh,
@@ -320,10 +337,11 @@ def fixed_health_state(problem: DailyTargetProblem) -> dict[str, Any]:
         "eff_discharge": eff_discharge,
         "hours_per_step": hours,
         "standby_loss_per_step_wh": config.standby_loss_wh * hours,
-        "cap_wh": _step_energy_cap(config.inverter_ac_capacity_w, hours),
+        "cap_wh": cap_wh,
         "cap_charge_wh": _step_energy_cap(config.max_charge_power_w, hours),
         "cap_discharge_wh": _step_energy_cap(config.max_discharge_power_w, hours),
         "cap_stored_wh": _step_energy_cap(config.stored_power_limit_w, hours),
+        "pv_chain": pv_chain,
     }
 
 

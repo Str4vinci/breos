@@ -5,14 +5,12 @@ import math
 import pickle
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from breos._daily_targets import _DayEvaluator
-from breos.battery import BatteryConfig, _simulate_core, simulate_energy_balance
+from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
 from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 
@@ -654,25 +652,3 @@ def test_an_ac_coupled_battery_refuses_a_grid_charge_efficiency_it_would_ignore(
     # Without a grid target the scalar is never read, as in the no-op set.
     discharge_only = _charge_target(1, discharge=True, reserve=0.0, efficiency=1.0, target=np.nan)
     _run([0], [500], 2000.0, instructions=discharge_only)
-
-
-@pytest.mark.parametrize("keyword", ["day_controller", "instruction_planner"])
-def test_planners_and_controllers_refuse_an_ac_coupled_battery_for_now(keyword):
-    pv, load, temp, cfg, _sim = build_ac("ac_baseline", "h")
-    with pytest.raises(NotImplementedError, match="do not plan for it yet"):
-        _simulate_core(
-            pv_dc=pv,
-            houseload=load,
-            battery_config=BatteryConfig(**cfg),
-            freq="h",
-            temperature_series=temp,
-            **{keyword: object()},
-        )
-
-
-def test_the_daily_target_evaluator_refuses_an_ac_coupled_battery():
-    problem = SimpleNamespace(
-        battery_config=BatteryConfig(**{**REFERENCE, "coupling": "ac", "battery_inverter_efficiency": ETA})
-    )
-    with pytest.raises(NotImplementedError, match="does not plan for an AC-coupled battery yet"):
-        _DayEvaluator(problem, np.array([0.5]), "python")  # type: ignore[arg-type]

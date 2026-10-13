@@ -67,6 +67,7 @@ from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, catalogue_snapshot, get_module
 from breos.resources import load_config_json
 from breos.smart_charging import (
+    AC_GRID_CHARGE_EFFICIENCY_REFUSAL,
     DECISION_BOUNDARIES,
     DECISION_BOUNDARY_KEY,
     DISCHARGE_ONLY_MODES,
@@ -2341,11 +2342,11 @@ def resolve_reference_tariff_spec(cfg: dict[str, Any], timezone: str, currency: 
     )
 
 
-# Keys each mode must set. grid_charge_efficiency has no default: the
-# inverter model has no AC-to-DC path to derive one from (ADR 0002 A6).
-# daily_persistence plans its target, so it sets none; discharge_only never
-# charges from the grid, so it sets its discharge periods alone.
-_COMMON_REQUIRED = ("charge_periods", "discharge_periods", "grid_charge_efficiency")
+# Keys each mode must set. daily_persistence plans its target, so it sets
+# none; discharge_only never charges from the grid, so it sets its discharge
+# periods alone. grid_charge_efficiency depends on the battery's coupling,
+# which the table does not see, so _checked_smart_charging checks it.
+_COMMON_REQUIRED = ("charge_periods", "discharge_periods")
 _MODE_REQUIRED = {
     "fixed_target": ("target_usable_fraction", *_COMMON_REQUIRED),
     "daily_persistence": _COMMON_REQUIRED,
@@ -2461,7 +2462,8 @@ SMART_CHARGING_TABLE = TableSpec(
         ),
         "grid_charge_efficiency": (
             "AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. "
-            "No default. Not with `discharge_only`"
+            'No default. Not with `discharge_only`, nor with `battery_coupling = "ac"`, whose battery inverter '
+            "converts grid charge at `battery_inverter_efficiency`"
         ),
         "grid_import_limit_w": (
             "Site import limit in W for grid charging, which may import up to the limit minus the load's import. "
@@ -2497,16 +2499,29 @@ NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
 
 
 def _checked_smart_charging(
-    value: Any, schedule: TariffSchedule | None, battery_kwh: float, battery_key: str = "battery_kwh"
+    value: Any,
+    schedule: TariffSchedule | None,
+    battery_kwh: float,
+    battery_key: str = "battery_kwh",
+    coupling: str = "dc",
 ) -> dict[str, Any]:
     """Check a [smart_charging] table against the configured tariff schedule and battery.
 
     ``battery_key`` names the setting ``battery_kwh`` came from, for the error.
+    A grid-charging mode needs ``grid_charge_efficiency`` with a DC-coupled
+    battery, which has no AC-to-DC path to derive it from (ADR 0002 A6), and
+    refuses it with an AC-coupled one, whose own inverter converts grid
+    charge (ADR 0004 C7).
     """
     table = SMART_CHARGING_TABLE.validate(value)
     mode = table["mode"]
     if mode == "disabled":
         return table
+    if mode not in DISCHARGE_ONLY_MODES:
+        if coupling == "ac" and "grid_charge_efficiency" in table:
+            raise ValueError(AC_GRID_CHARGE_EFFICIENCY_REFUSAL)
+        if coupling == "dc" and "grid_charge_efficiency" not in table:
+            raise ValueError(f"'smart_charging' needs smart_charging.grid_charge_efficiency for mode = '{mode}'")
     if schedule is None:
         raise ValueError(
             f"'smart_charging.mode' = '{mode}' needs a [tariff]: its charge and discharge periods are tariff periods"
@@ -2529,7 +2544,7 @@ def _validate_smart_charging(cfg: dict[str, Any], tariff_spec: TariffSpec | None
     if cfg["smart_charging"] is None:
         return
     schedule = tariff_spec.definition.schedule if tariff_spec is not None else None
-    _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"])
+    _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"], coupling=cfg["battery_coupling"])
 
 
 def resolve_smart_charging_spec(
@@ -2545,7 +2560,8 @@ def resolve_smart_charging_spec(
     if cfg.get("smart_charging") is None:
         return None
     schedule = tariff_spec.definition.schedule if tariff_spec is not None else None
-    table = _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"], battery_key)
+    coupling = cfg.get("battery_coupling", "dc")
+    table = _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"], battery_key, coupling)
     if table["mode"] == "disabled":
         return SmartChargingSpec(mode="disabled")
     return SmartChargingSpec(
@@ -2560,6 +2576,7 @@ def resolve_smart_charging_spec(
         # Omitted planner settings take the planner's defaults, which the
         # spec then records.
         **{name: table[name] for name in PLANNER_KEYS if name in table},
+        battery_coupling=coupling,
     )
 
 
