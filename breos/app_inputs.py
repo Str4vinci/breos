@@ -21,7 +21,7 @@ from breos.inverter import AcCable, InverterConversion, InverterUnits, ac_derate
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs
 from breos.pv.shading import ModuleMeanShading
-from breos.pv_modules import get_module
+from breos.pv_modules import catalogue_snapshot, get_module
 from breos.solar import (
     PVProductionBreakdown,
     _sum_pv_breakdowns,
@@ -876,12 +876,13 @@ def _input_cache_key(cfg: dict[str, Any], resolved: ResolvedAppConfig | None = N
     was built, which preparation uses even if the catalogue changed since:
     each array's module, the bypass diodes its shading is bound to, and the
     inverter curve's row for steps without PV. The catalogue as it was then
-    stands for all of them.
+    stands for all of them, and the catalogue now for the modules
+    preparation reads again by those names.
     """
     key = config_cache_key(cfg, INPUT_INDEPENDENT_KEYS)
     if key is None or resolved is None:
         return key
-    return json.dumps([key, resolved.module_catalogue], sort_keys=True)
+    return json.dumps([key, resolved.module_catalogue, catalogue_snapshot()], sort_keys=True)
 
 
 def input_configuration_key(config: dict[str, Any]) -> str | None:

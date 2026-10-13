@@ -392,3 +392,24 @@ def test_a_second_modules_diodes_are_part_of_the_cache_key(monkeypatch):
     monkeypatch.setitem(MODULES, "Erlangen_445W", replace(MODULES["Erlangen_445W"], bypass_diodes=2))
     second = App(config)._resolved
     assert _input_cache_key(first.cfg, first) != _input_cache_key(second.cfg, second)
+
+
+def test_a_module_an_app_inherited_before_a_reorder_is_read_as_it_is_now(monkeypatch):
+    config = {
+        **{k: v for k, v in BASE.items() if k != "n_modules"},
+        "pv_arrays": [{"modules": 4, "module": "Generic_400W"}, {"modules": 4, "azimuth": 90}],
+    }
+    resolved = App(config)._resolved
+    inherited = resolved.pv_arrays[1]["module"]
+    saved = dict(MODULES)
+    try:
+        MODULES.clear()
+        MODULES.update({"Erlangen_445W": saved["Erlangen_445W"], **saved})
+        before = _input_cache_key(resolved.cfg, resolved)
+        MODULES[inherited] = replace(saved[inherited], gamma_pmp=-0.5)
+        after = _input_cache_key(resolved.cfg, resolved)
+    finally:
+        MODULES.clear()
+        MODULES.update(saved)
+    assert inherited != "Erlangen_445W"
+    assert before != after
