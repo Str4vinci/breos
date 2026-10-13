@@ -36,8 +36,10 @@ cells as the mean allows at the most-shaded cell's share, one cell at what is
 left, and the rest clear. Each group of cells is a single-diode curve with
 its share of the module's parameters, and the bypass diode takes the current
 a shaded substring cannot carry. A shadow that leaves at most one cell of a
-substring partly shaded, every other cell lit or dark, as a straight edge
-along the cell rows does, is described exactly.
+substring partly shaded, every other cell lit or dark, as one whose edge
+falls between cell rows does, is described exactly. An edge that cuts
+through two or more cells of a substring, along a row or diagonally, is
+not.
 
 ## Reverse bias
 
@@ -88,7 +90,7 @@ can have front-contact or back-contact cells.
 |---|---|---|
 | Full-cell (60 or 72 cells) | One chain, three substrings, three diodes | Represented |
 | Half-cut (120 or 144 half-cells) | Two half-chains in parallel on each diode, top and bottom | Represented, each half with its own shade: see below |
-| Back-contact with low breakdown voltage (some IBC and variants) | Either of the above | With `breakdown_voltage_v`: straight-edged shadows represented, partly shaded cells around a dark one understated. Without: losses overstated |
+| Back-contact with low breakdown voltage (some IBC and variants) | Either of the above | With `breakdown_voltage_v`: shade with at most one partly shaded cell per chain represented, partly shaded cells around a dark one understated. Without: losses overstated |
 | Shingled | Cell strips overlapped into parallel strip-strings | Not represented |
 | Thin film (CdTe, CIGS) | Long narrow cells across the module, few or no diodes | Not represented |
 

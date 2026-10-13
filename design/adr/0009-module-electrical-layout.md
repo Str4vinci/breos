@@ -104,8 +104,8 @@ string power lower. Against the cell-level model of M2 with the same hard
 breakdown (tests/test_cell_breakdown.py), one dark cell per chain came
 within 0.05 %.
 
-A straight-edged shadow that darkens several cells of a chain breaks them
-down together (M6): one to four portrait rows at -3 V come within 0.05 %. Soft
+Row shade whose edge falls between cell rows darkens several cells of a
+chain, and they break down together (M6): one to four portrait rows at -3 V come within 0.05 %. Soft
 shade around a dark cell does not; see M6.
 
 ### M4. Not represented
@@ -150,8 +150,9 @@ cells that break down together: three rows shaded by half and one dark cell
 come out 15 % low at -3 V, where the first form was within 0.6 %; a dark cell
 with two half-shaded neighbours comes out 8.5 % low at -5.5 V, where the
 first form was 9.5 % high. A diagonal edge leaves cells like that last
-case, so it is the straight edge along the cell rows, not every hard
-shadow, that is exact. Two numbers per chain cannot describe both; a
+case, and so does an edge that cuts through a row of a half-cut chain, two
+cells wide: only shade with at most one partly shaded cell per chain is
+exact, not every hard shadow. Two numbers per chain cannot describe both; a
 third, such as the count of cells above half shade, would, and waits for a
 caller that needs it.
 
