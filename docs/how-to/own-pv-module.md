@@ -49,7 +49,9 @@ SAM cell-temperature models, and `noct-sam` refuses to run without both it and a
 `NOCT` value. Set `bifaciality` if you also plan to turn on
 `bifacial_model`, because the metadata alone changes nothing. `bypass_diodes`,
 3 by default, is the number of bypass diodes, each across one substring of
-cells; module-level shading reads it (see
+cells, and `cell_strings_in_parallel`, 1 by default, the chains of cells in
+parallel on each diode: 2 for a half-cut module. `N_Cells` must divide
+evenly among them. Module-level shading reads both (see
 [How BREOS models PV modules](../modeling/pv-modules.md)).
 
 To confirm the registration took effect, resolve the same config in the current

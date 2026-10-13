@@ -179,22 +179,16 @@ substring's area, so the mean must be at least the limiting fraction over
 the substring's cell count at every node, and a substring that gives a
 limiting fraction needs at least two cells; BREOS refuses tables that break
 either. A layout tool that takes both values from the same cell samples
-meets the first. In a half-cell module the two halves run in
-parallel, so the limiting fraction is the mean of the two halves' worst
-cells. That convention reproduces the substring's current limit, but it
-behaves as if each top half-cell were tied in parallel with its bottom
-partner (amended 2026-10-13). Against a cell-level model of a 144 half-cell
-module with explicit parallel halves, shade on one to six bottom rows in
-portrait, which leaves the top halves clear, came out 12 to 15 % high in
-module power with every substring shaded and 6 to 7 % high with one; with
-half the module shaded it was within 1 %, and landscape shade, which crosses
-both halves alike, was exact. A ten-module string with three such modules
-came out 2 % high, and with all ten 15 % high. A later record models the
-halves explicitly.
+meets the first. In a half-cut module each substring is two chains of
+half-cells in parallel; ADR 0009 M2 gives each chain its own fractions and
+replaces the convention this record first used, the mean of the two halves'
+worst cells in one chain of half-cells, which overstated module power by 12
+to 15 % under portrait row shade (amended 2026-10-13).
 
 BREOS models each substring as its most-shaded cell at the limiting
 irradiance in series with its other cells at the irradiance that keeps the
-area mean, with `N_Cells / bypass_diodes` cells per substring. Each part is a
+area mean, with `N_Cells / (cell_strings_in_parallel * bypass_diodes)`
+cells per chain (ADR 0009). Each part is a
 single-diode curve with its share of the module's series resistance, shunt
 resistance and diode voltage, at the array's cell temperature. The bypass
 diode holds the substring at minus its forward voltage

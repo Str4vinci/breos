@@ -161,15 +161,40 @@ for shade spread evenly over the module, or `substrings`, one entry per
 bypass diode of the module (its `bypass_diodes`, 3 unless the module states
 otherwise). A substring's
 `beam_shaded_fraction` is the shaded share of its area, and its optional
-`limiting_shaded_fraction` the shaded share of its most-shaded cell; in a
-half-cell module, give the mean of the two halves' most-shaded cells; for
-shade on one half only, this overstates the module's power (see
-[Module layouts and technologies](../modeling/pv-modules.md#module-layouts-and-technologies)). The
-most-shaded cell alone shades its share of the substring, so the mean must
-be at least the limiting fraction over the substring's cells (48 for a
-144-cell module with three diodes); taking both from the same cell samples
-keeps them consistent, and BREOS refuses tables that are not. Each entry may
-carry its own `sky_view_factor`.
+`limiting_shaded_fraction` the shaded share of its most-shaded cell. In a
+half-cut module (`cell_strings_in_parallel = 2`, as every bundled module
+is) each substring is two chains of half-cells in parallel, and these values
+describe each chain alike: the limiting fraction is each chain's most-shaded
+cell. The most-shaded cell alone shades its share of its chain, so the mean
+must be at least the limiting fraction over the chain's cells (24 for a
+144-cell half-cut module with three diodes, 48 for a full-cell one with as
+many cells); taking both from the same cell samples keeps them consistent,
+and BREOS refuses tables that are not. Each entry may carry its own
+`sky_view_factor`.
+
+Where the two chains of a substring see different shade, as when a row of
+modules in portrait shades the next row's bottom halves, give the substring
+`halves` instead, one entry per chain in the module's order, each with its
+own `beam_shaded_fraction` and optional `limiting_shaded_fraction`:
+
+```toml
+[[pv_strings.module_shading.modules]]
+[[pv_strings.module_shading.modules.substrings]]
+[[pv_strings.module_shading.modules.substrings.halves]]
+beam_shaded_fraction = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+[[pv_strings.module_shading.modules.substrings.halves]]
+beam_shaded_fraction = [[0, 0.5, 0, 0], [0, 0.2, 0, 0], [0, 0, 0, 0]]
+limiting_shaded_fraction = [[0, 1, 0, 0], [0, 0.6, 0, 0], [0, 0, 0, 0]]
+[[pv_strings.module_shading.modules.substrings]]
+beam_shaded_fraction = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+[[pv_strings.module_shading.modules.substrings]]
+beam_shaded_fraction = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+```
+
+The order carries no top or bottom meaning, since portrait and landscape
+mounting swap them; it only has to be the same in every substring that pairs
+them with cells. A substring with `halves` gives no fractions of its own,
+and a full-cell module takes none.
 
 BREOS builds each substring from its most-shaded cell and its other cells,
 lets the bypass diode take the current a shaded substring cannot carry

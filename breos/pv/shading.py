@@ -205,7 +205,8 @@ def _weights(axis: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.ndarray, n
 #: ``modules`` and of each module's ``substrings``.
 MODULE_SHADING_KEYS = ("azimuth_deg", "elevation_deg", "modules")
 MODULE_ENTRY_KEYS = ("beam_shaded_fraction", "substrings", "sky_view_factor")
-SUBSTRING_KEYS = ("beam_shaded_fraction", "limiting_shaded_fraction")
+SUBSTRING_KEYS = ("beam_shaded_fraction", "limiting_shaded_fraction", "halves")
+HALF_KEYS = ("beam_shaded_fraction", "limiting_shaded_fraction")
 
 
 def _keys(value: Any, allowed: Sequence[str], where: str) -> Mapping[str, Any]:
@@ -225,7 +226,9 @@ class ModuleShade:
     ``limiting`` the shaded fraction of its most-shaded series cell, or None
     where the shade is even over the substring. ``whole`` records that the
     caller gave one table for the whole module, which every substring then
-    shares.
+    shares. ``halves`` holds, per substring, the mean and limiting tables of
+    each of its parallel cell strings in the module's order, or None where
+    they are shaded alike; the substring's ``mean`` is then their mean.
     """
 
     mean: tuple[ShadingTable, ...]
@@ -233,6 +236,11 @@ class ModuleShade:
     sky_view_factor: float = 1.0
     whole: bool = False
     sky_view_factor_stated: bool = False
+    halves: tuple[tuple[tuple[ShadingTable, ShadingTable | None], ...] | None, ...] = ()
+
+    def substring_halves(self, k: int) -> tuple[tuple[ShadingTable, ShadingTable | None], ...] | None:
+        """Substring ``k``'s parallel strings' tables, or None where they are shaded alike."""
+        return self.halves[k] if self.halves else None
 
 
 @dataclass(frozen=True)
@@ -241,11 +249,14 @@ class ModuleShading:
 
     Each module's tables follow :class:`ShadingTable`'s rules on the shared
     axes. ``bypass_diodes`` is the module's number of bypass-diode
-    substrings, which :meth:`for_module` binds; None until then.
+    substrings and ``cell_strings_in_parallel`` its cell strings per
+    substring, which :meth:`for_module` binds; ``bypass_diodes`` is None
+    until then.
     """
 
     modules: tuple[ModuleShade, ...]
     bypass_diodes: int | None = None
+    cell_strings_in_parallel: int = 1
 
     @classmethod
     def from_mapping(cls, value: Any) -> ModuleShading:
@@ -280,23 +291,65 @@ class ModuleShading:
             substrings = entry["substrings"]
             if not isinstance(substrings, Sequence) or isinstance(substrings, (str, bytes)) or not substrings:
                 raise ValueError(f"'{where}.substrings' must hold one table per bypass diode of the module")
-            means, limits = [], []
+            means: list[ShadingTable] = []
+            limits: list[ShadingTable | None] = []
+            halves: list[tuple[tuple[ShadingTable, ShadingTable | None], ...] | None] = []
             for k, raw_sub in enumerate(substrings):
                 sub_where = f"{where}.substrings[{k}]"
                 sub = _keys(raw_sub, SUBSTRING_KEYS, sub_where)
+                if "halves" in sub:
+                    if set(sub) != {"halves"}:
+                        raise ValueError(f"'{sub_where}' gives halves; give its fractions in them only")
+                    raw_halves = sub["halves"]
+                    if (
+                        not isinstance(raw_halves, Sequence)
+                        or isinstance(raw_halves, (str, bytes))
+                        or len(raw_halves) < 2
+                    ):
+                        raise ValueError(f"'{sub_where}.halves' must hold one table per parallel cell string")
+                    pairs = []
+                    for h, raw_half in enumerate(raw_halves):
+                        half_where = f"{sub_where}.halves[{h}]"
+                        half = _keys(raw_half, HALF_KEYS, half_where)
+                        if "beam_shaded_fraction" not in half:
+                            raise ValueError(f"'{half_where}' needs beam_shaded_fraction")
+                        limit = half.get("limiting_shaded_fraction")
+                        pairs.append(
+                            (
+                                grid(half["beam_shaded_fraction"], f"{half_where}.beam_shaded_fraction"),
+                                None if limit is None else grid(limit, f"{half_where}.limiting_shaded_fraction"),
+                            )
+                        )
+                    # The substring's area mean is its strings' mean.
+                    mean = np.mean([np.asarray(m.beam_shaded_fraction, dtype=float) for m, _ in pairs], axis=0)
+                    means.append(grid(mean.tolist(), f"{sub_where}.halves"))
+                    limits.append(None)
+                    halves.append(tuple(pairs))
+                    continue
                 if "beam_shaded_fraction" not in sub:
-                    raise ValueError(f"'{sub_where}' needs beam_shaded_fraction")
+                    raise ValueError(f"'{sub_where}' needs beam_shaded_fraction or halves")
                 means.append(grid(sub["beam_shaded_fraction"], f"{sub_where}.beam_shaded_fraction"))
                 limit = sub.get("limiting_shaded_fraction")
                 limits.append(None if limit is None else grid(limit, f"{sub_where}.limiting_shaded_fraction"))
-            modules.append(ModuleShade(tuple(means), tuple(limits), float(view), False, "sky_view_factor" in entry))
+                halves.append(None)
+            modules.append(
+                ModuleShade(
+                    tuple(means),
+                    tuple(limits),
+                    float(view),
+                    False,
+                    "sky_view_factor" in entry,
+                    tuple(halves) if any(h is not None for h in halves) else (),
+                )
+            )
         return cls(tuple(modules))
 
-    def for_module(self, bypass_diodes: int) -> ModuleShading:
-        """These tables for a module of ``bypass_diodes`` substrings: one table per substring.
+    def for_module(self, bypass_diodes: int, cell_strings_in_parallel: int = 1) -> ModuleShading:
+        """These tables for a module of ``bypass_diodes`` substrings of ``cell_strings_in_parallel`` cell strings.
 
         A module given as one table shares it among its substrings; one given
-        by substrings must hold one table per bypass diode.
+        by substrings must hold one table per bypass diode, and a substring's
+        ``halves`` one entry per parallel cell string.
         """
         modules = []
         for m, module in enumerate(self.modules):
@@ -307,8 +360,26 @@ class ModuleShading:
                     f"modules[{m}].substrings holds {len(module.mean)} tables; the module has {bypass_diodes} "
                     "bypass diodes, one table each"
                 )
+            for k, halves in enumerate(module.halves):
+                if halves is None:
+                    continue
+                if cell_strings_in_parallel == 1:
+                    raise ValueError(
+                        f"modules[{m}].substrings[{k}] gives halves, but the module has one cell string per "
+                        "substring (cell_strings_in_parallel = 1)"
+                    )
+                if len(halves) != cell_strings_in_parallel:
+                    raise ValueError(
+                        f"modules[{m}].substrings[{k}].halves holds {len(halves)} entries; the module has "
+                        f"{cell_strings_in_parallel} cell strings in parallel, one entry each"
+                    )
             modules.append(module)
-        return replace(self, modules=tuple(modules), bypass_diodes=int(bypass_diodes))
+        return replace(
+            self,
+            modules=tuple(modules),
+            bypass_diodes=int(bypass_diodes),
+            cell_strings_in_parallel=int(cell_strings_in_parallel),
+        )
 
     @property
     def diodes(self) -> int:
@@ -318,33 +389,43 @@ class ModuleShading:
         return self.bypass_diodes
 
     def inconsistency(self, cells: int) -> str | None:
-        """Why these tables cannot describe a module of ``cells`` series cells, or None when they can.
+        """Why these tables cannot describe a module of ``cells`` cells, or None when they can.
 
-        A substring holds ``cells / bypass_diodes`` cells, at least one, and
-        at least two when a limiting fraction is given; its most-shaded cell alone shades
-        that share of its area: its mean shaded fraction is at least its
-        limiting fraction over its cell count, at every node.
+        Each of a substring's parallel cell strings holds ``cells /
+        (cell_strings_in_parallel * bypass_diodes)`` cells in series, at least
+        one, and at least two when a limiting fraction is given; its
+        most-shaded cell alone shades that share of its area: its mean shaded
+        fraction is at least its limiting fraction over its cell count, at
+        every node. A substring without ``halves`` gives each string its own
+        fractions.
         """
-        per_substring = cells / self.diodes
-        if per_substring < 1:
-            return f"the module's bypass_diodes ({self.diodes}) are more than its {cells} cells"
+        per_string = cells / (self.cell_strings_in_parallel * self.diodes)
+        if per_string < 1:
+            return f"the module's bypass_diodes ({self.diodes}) leave fewer than one of its {cells} cells per string"
         for m, module in enumerate(self.modules):
             for k, (mean, limit) in enumerate(zip(module.mean, module.limiting, strict=True)):
-                if limit is None:
-                    continue
-                where = f"modules[{m}].substrings[{k}]"
-                if per_substring < 2:
-                    return (
-                        f"{where} gives a limiting_shaded_fraction, but {cells} cells over "
-                        f"{self.diodes} bypass diodes leave fewer than 2 cells per substring"
-                    )
-                low = np.asarray(limit.beam_shaded_fraction) / per_substring - np.asarray(mean.beam_shaded_fraction)
-                if (low > 1e-9).any():
-                    return (
-                        f"{where}: its beam_shaded_fraction is below limiting_shaded_fraction / "
-                        f"{per_substring:g} at some node, so its most-shaded cell would shade more than its area "
-                        "mean allows; take the mean over the same cells as the limiting value"
-                    )
+                halves = module.substring_halves(k)
+                checks = (
+                    [("", mean, limit)]
+                    if halves is None
+                    else [(f".halves[{h}]", half_mean, half_limit) for h, (half_mean, half_limit) in enumerate(halves)]
+                )
+                for suffix, table, cap in checks:
+                    if cap is None:
+                        continue
+                    where = f"modules[{m}].substrings[{k}]{suffix}"
+                    if per_string < 2:
+                        return (
+                            f"{where} gives a limiting_shaded_fraction, but {cells} cells over "
+                            f"{self.diodes} bypass diodes leave fewer than 2 cells per string"
+                        )
+                    low = np.asarray(cap.beam_shaded_fraction) / per_string - np.asarray(table.beam_shaded_fraction)
+                    if (low > 1e-9).any():
+                        return (
+                            f"{where}: its beam_shaded_fraction is below limiting_shaded_fraction / "
+                            f"{per_string:g} at some node, so its most-shaded cell would shade more than its area "
+                            "mean allows; take the mean over the same cells as the limiting value"
+                        )
         return None
 
     @property
@@ -369,6 +450,32 @@ class ModuleShading:
                     limiting[m, k] = np.maximum(read_grid(np.asarray(table.beam_shaded_fraction), weights), mean[m, k])
         return mean, limiting
 
+    def half_fractions(self, weights: GridWeights) -> tuple[np.ndarray, np.ndarray] | None:
+        """Each substring's parallel strings' mean and limiting beam shaded fractions at each sun position.
+
+        Both have shape ``(modules, bypass_diodes, cell_strings_in_parallel,
+        steps)``; a substring without ``halves`` gives each string its own
+        fractions. None when no substring gives ``halves``.
+        """
+        if not any(module.halves for module in self.modules):
+            return None
+        mean, limiting = self.substring_fractions(weights)
+        strings = self.cell_strings_in_parallel
+        half_mean = np.repeat(mean[:, :, None, :], strings, axis=2)
+        half_limiting = np.repeat(limiting[:, :, None, :], strings, axis=2)
+        for m, module in enumerate(self.modules):
+            for k, halves in enumerate(module.halves):
+                if halves is None:
+                    continue
+                for h, (table, cap) in enumerate(halves):
+                    half_mean[m, k, h] = read_grid(np.asarray(table.beam_shaded_fraction), weights)
+                    half_limiting[m, k, h] = half_mean[m, k, h]
+                    if cap is not None:
+                        half_limiting[m, k, h] = np.maximum(
+                            read_grid(np.asarray(cap.beam_shaded_fraction), weights), half_mean[m, k, h]
+                        )
+        return half_mean, half_limiting
+
     @property
     def sky_view_factors(self) -> np.ndarray:
         """Each module's sky view factor."""
@@ -386,7 +493,19 @@ class ModuleShading:
                 }
             else:
                 substrings = []
-                for mean, limit in zip(module.mean, module.limiting, strict=True):
+                for k, (mean, limit) in enumerate(zip(module.mean, module.limiting, strict=True)):
+                    halves = module.substring_halves(k)
+                    if halves is not None:
+                        echoed = []
+                        for table, cap in halves:
+                            half: dict[str, Any] = {
+                                "beam_shaded_fraction": [list(row) for row in table.beam_shaded_fraction]
+                            }
+                            if cap is not None:
+                                half["limiting_shaded_fraction"] = [list(row) for row in cap.beam_shaded_fraction]
+                            echoed.append(half)
+                        substrings.append({"halves": echoed})
+                        continue
                     sub: dict[str, Any] = {"beam_shaded_fraction": [list(row) for row in mean.beam_shaded_fraction]}
                     if limit is not None:
                         sub["limiting_shaded_fraction"] = [list(row) for row in limit.beam_shaded_fraction]
@@ -406,9 +525,13 @@ class ModuleShading:
             "elevation_points": len(axes.elevation_deg),
             "azimuth_periodic": axes.periodic,
             "bypass_diodes": self.diodes,
+            "cell_strings_in_parallel": self.cell_strings_in_parallel,
+            "substrings_by_halves": sum(h is not None for module in self.modules for h in module.halves),
             "modules_by_substring": sum(not module.whole for module in self.modules),
             "modules_with_limiting_cells": sum(
-                any(table is not None for table in module.limiting) for module in self.modules
+                any(table is not None for table in module.limiting)
+                or any(cap is not None for halves in module.halves if halves for _, cap in halves)
+                for module in self.modules
             ),
         }
 

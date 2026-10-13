@@ -320,7 +320,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   fraction table, whole or per bypass-diode substring, where a substring may
   also give the shaded fraction of its most-shaded cell. The substrings
   follow the module's `bypass_diodes`, a new `PVModuleParams` field, 3 by
-  default (ADR 0009 M1). BREOS builds each
+  default (ADR 0009 M1). On a half-cut module, whose
+  `cell_strings_in_parallel` (also new, 1 by default; 2 on every bundled
+  module) puts two chains of half-cells on each diode, a substring may give
+  `halves`, each chain's own fractions, for shade that falls on one chain
+  only (ADR 0009 M2). Against a cell-level model of a 144 half-cell module,
+  portrait row shade came within 0.2 % of module power. BREOS builds each
   string's curve from its substrings and bypass diodes
   (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated) and
   runs each input at the curve's global maximum within its limits
@@ -438,12 +443,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Documentation
 - A new page, How BREOS models PV modules, explains string-level detail:
   cells, bypass diodes and reverse bias; which module technologies it
-  represents (full-cell; half-cut, approximated; back-contact cells with a low
+  represents (full-cell; half-cut; back-contact cells with a low
   breakdown voltage, with overstated shading losses; shingled and thin film
   not represented); strings, inverter inputs and the global-peak assumption;
-  bifacial rear losses; and one microinverter as a string-level inverter. It
-  states that the half-cut convention overstates module power by 12 to 15 %
-  under portrait row shade. ADR 0008 records the same limits, ADR 0007 and
+  bifacial rear losses; and one microinverter as a string-level inverter.
+  ADR 0008 records the same limits, ADR 0007 and
   0008 the one-microinverter mapping, and the configuration page no longer
   says that partial shading of single modules is not modelled.
 

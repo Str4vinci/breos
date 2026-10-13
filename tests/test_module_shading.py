@@ -21,10 +21,11 @@ def _table(value: float) -> list[list[float]]:
     return [[value]]
 
 
-def _shading(modules: list[dict], diodes: int = 3, **extra) -> ModuleShading:
+def _shading(modules: list[dict], diodes: int = 3, parallel: int = 2, **extra) -> ModuleShading:
+    # The bundled modules are half-cut: two cell strings per substring.
     return ModuleShading.from_mapping(
         {"azimuth_deg": [0], "elevation_deg": [0], "modules": modules, **extra}
-    ).for_module(diodes)
+    ).for_module(diodes, parallel)
 
 
 def _parts(
@@ -156,10 +157,13 @@ def test_a_half_shaded_cell_does_not_carry_the_string_current():
 
 def test_cells_shaded_alike_cap_the_string_at_their_short_circuit_current():
     curve = _curve([_one_cell(0.5)] * 8)
-    # Every substring is current-limited alike: the string runs at the shaded
-    # cell's short-circuit current, the most it carries without reverse bias.
+    # Every substring is current-limited alike: the string runs at most at the
+    # shaded cell's short-circuit current, the most it carries without reverse
+    # bias. In a half-cut module's 24 cell positions per substring, the shaded
+    # cell's own voltage puts the maximum just below it.
     shaded = curve._short_circuits.min(axis=0)
-    np.testing.assert_allclose(curve.i_mp, shaded, rtol=1e-5)
+    assert (curve.i_mp <= shaded * (1 + 1e-9)).all()
+    np.testing.assert_allclose(curve.i_mp, shaded, rtol=0.01)
     assert (curve.i_mp < 0.75 * _curve([LIT] * 8).i_mp).all()
 
 
@@ -502,7 +506,7 @@ def test_inconsistent_mean_and_limiting_fractions_are_refused(trina):
     module[0]["substrings"] += [{"beam_shaded_fraction": CLEAR}] * 97
     for other in config["pv_strings"][0]["module_shading"]["modules"][1:]:
         other["beam_shaded_fraction"] = CLEAR
-    with pytest.raises(ValueError, match="fewer than 2 cells per substring"):
+    with pytest.raises(ValueError, match="fewer than 2 cells per string"):
         resolve_app_config(config)
 
 
@@ -527,7 +531,7 @@ def test_reusing_the_brightest_substring_matches_solving_each():
                 {"beam_shaded_fraction": [[0.0, 0.0]]},
             ],
         }
-    ).for_module(3)  # fmt: skip
+    ).for_module(3, 2)  # fmt: skip
     curve = ShadedStringCurve(shading, parts, np.ones(STEPS), 3)
     assert curve.mismatched.size == STEPS
     reused = curve._voltage(curve._table_i)
@@ -614,7 +618,7 @@ def test_more_bypass_diodes_than_cells_is_refused(trina):
     MODULES[trina] = replace(MODULES[trina], bypass_diodes=145)
     shading = config["pv_strings"][0]["module_shading"]
     shading["modules"][0] = {"substrings": [{"beam_shaded_fraction": CLEAR}] * 145}
-    with pytest.raises(ValueError, match="bypass_diodes \\(145\\) are more than its 144 cells"):
+    with pytest.raises(ValueError, match="bypass_diodes \\(145\\) leave fewer than one of its 144 cells per string"):
         resolve_app_config(config)
 
 
@@ -696,11 +700,13 @@ def test_a_narrow_global_peak_is_not_filtered_out():
 
 def test_string_energy_binds_unbound_shading_to_the_module():
     raw = ModuleShading.from_mapping({"azimuth_deg": [0], "elevation_deg": [0], "modules": [LIT, LIT]})
-    bound = ShadedStringCurve(raw.for_module(3), _parts(), np.ones(STEPS), 2)
+    bound = ShadedStringCurve(raw.for_module(3, 2), _parts(), np.ones(STEPS), 2)
     unbound = ShadedStringCurve(raw, _parts(), np.ones(STEPS), 2)
     np.testing.assert_array_equal(unbound.mpp, bound.mpp)
-    with pytest.raises(ValueError, match="bound to 2 bypass diodes; the module has 3"):
-        ShadedStringCurve(raw.for_module(2), _parts(), np.ones(STEPS), 2)
+    with pytest.raises(ValueError, match="bound to 2 bypass diodes of 2 cell strings; the module has 3 of 2"):
+        ShadedStringCurve(raw.for_module(2, 2), _parts(), np.ones(STEPS), 2)
+    with pytest.raises(ValueError, match="bound to 3 bypass diodes of 1 cell strings; the module has 3 of 2"):
+        ShadedStringCurve(raw.for_module(3), _parts(), np.ones(STEPS), 2)
 
 
 def test_a_numpy_diode_count_is_stored_as_an_int():

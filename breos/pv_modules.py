@@ -81,9 +81,14 @@ class PVModuleParams:
     # models never use them.
     T_Vmp_pct: Optional[float] = None  # %/°C - Vmp temperature coefficient
     Max_System_Voltage: Optional[float] = None  # V - IEC maximum system voltage rating
-    # Bypass diodes, each across one substring of N_Cells / bypass_diodes
-    # series cells; read by module-level shading (breos.pv.mismatch).
+    # Bypass diodes, each across one section of the module; read by
+    # module-level shading (breos.pv.mismatch).
     bypass_diodes: int = 3
+    # Cell strings in parallel within each section: 1 for a full-cell module,
+    # 2 for a half-cut one, whose top and bottom halves share each diode. A
+    # section's strings hold N_Cells / (cell_strings_in_parallel *
+    # bypass_diodes) cells in series each.
+    cell_strings_in_parallel: int = 1
 
     _POSITIVE_FIELDS = frozenset({"Mpp", "Vmp", "Imp", "Voc", "Isc"})
     _STC_POINT_FIELDS = ("Mpp", "Vmp", "Imp")
@@ -104,7 +109,7 @@ class PVModuleParams:
                 self._validate_number(name, value)
             if name == "T_Pmax_pct" and float(value) >= 0:
                 raise ValueError("T_Pmax_pct must be negative")
-        elif name in ("N_Cells", "bypass_diodes"):
+        elif name in ("N_Cells", "bypass_diodes", "cell_strings_in_parallel"):
             if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
         elif name == "Module_Efficiency" and value is not None:
@@ -202,7 +207,17 @@ class PVModuleParams:
 
     def __post_init__(self) -> None:
         self._validate_stc_point(self.Mpp, self.Vmp, self.Imp)
+        if self.N_Cells % self.cell_strings_in_parallel:
+            raise ValueError(
+                f"N_Cells ({self.N_Cells}) must divide into cell_strings_in_parallel ({self.cell_strings_in_parallel}) "
+                "strings of whole cells"
+            )
         object.__setattr__(self, "_module_params_ready", True)
+
+    @property
+    def cells_in_series(self) -> int:
+        """Cell positions in series across the module: ``N_Cells / cell_strings_in_parallel``."""
+        return self.N_Cells // self.cell_strings_in_parallel
 
 
 # =============================================================================
@@ -223,7 +238,8 @@ MODULES: Dict[str, PVModuleParams] = {
         T_Pmax_pct=-0.34,  # %/°C - Power temperature coefficient
         T_Voc_pct=-0.26,  # %/°C - Voltage temperature coefficient
         T_Isc_pct=0.05,  # %/°C - Current temperature coefficient
-        N_Cells=6 * 24,  # 144 cells
+        N_Cells=6 * 24,  # 144 half-cells
+        cell_strings_in_parallel=2,  # half-cut: top and bottom halves on each diode
         Name="Suntech_STP550S-C72/Vmh",
     ),
     # -------------------------------------------------------------------------
@@ -243,7 +259,9 @@ MODULES: Dict[str, PVModuleParams] = {
         T_Pmax_pct=-0.30,  # %/°C - Power temperature coefficient
         T_Voc_pct=-0.24,  # %/°C - Voltage temperature coefficient
         T_Isc_pct=0.04,  # %/°C - Current temperature coefficient
+        # 144 cells at a 52.6 V open circuit are 72 in series: half-cut.
         N_Cells=144,
+        cell_strings_in_parallel=2,
     ),
     # -------------------------------------------------------------------------
     # Generic 400W Module (common 72-cell / 144-half-cell residential panel)
@@ -264,6 +282,7 @@ MODULES: Dict[str, PVModuleParams] = {
         T_Voc_pct=-0.265,  # %/°C - Voltage temperature coefficient
         T_Isc_pct=0.05,  # %/°C - Current temperature coefficient
         N_Cells=144,  # 72-cell module (144 half-cells)
+        cell_strings_in_parallel=2,
         Name="Generic 400W (LONGi LR4-72HPH-400M ref)",
     ),
     # -------------------------------------------------------------------------
@@ -290,6 +309,7 @@ MODULES: Dict[str, PVModuleParams] = {
         T_Voc_pct=-0.26,
         T_Isc_pct=0.046,
         N_Cells=144,
+        cell_strings_in_parallel=2,  # 144 half-cells
         bifaciality=0.70,
         Name="Generic 600W bifacial (Trina Vertex bifaciality ref)",
     ),

@@ -1,7 +1,6 @@
 # 0009 — Module electrical layout
 
-- **Status:** Accepted 2026-10-13. M1's `bypass_diodes` is implemented; the
-  rest of M1, M2 and M3 are next.
+- **Status:** Accepted 2026-10-13. M1 and M2 are implemented; M3 is next.
 - **Date:** 2026-10-13
 
 ## Context
@@ -67,9 +66,23 @@ in parallel that share the section's voltage. A substring's shading may give
 a `halves` list, one entry per parallel chain in the module record's order,
 each with its own `beam_shaded_fraction` and `limiting_shaded_fraction`; the
 order carries no top or bottom meaning, since portrait and landscape swap
-them. A substring without `halves` is shaded alike in both. The ADR 0008 S6
-convention is removed. The implementation is validated against an
-independent cell-level model.
+them. A substring without `halves` is shaded alike in both, so its
+limiting fraction is each chain's worst cell. The ADR 0008 S6 convention is
+removed.
+
+A substring whose chains are shaded alike keeps ADR 0008 S6's closed form
+with `N_Cells / cell_strings_in_parallel` cell positions, each the chains'
+cells side by side. One whose chains differ is solved as the chains' summed
+current at each voltage: each chain is its parts in series, its worst cell
+and its other cells, capped at its smallest part's short-circuit current,
+and the bypass diode clamps the substring
+(`breos.pv.mismatch._HalfSection`). Against a cell-level model of a 144
+half-cell module with explicit parallel chains (tests/test_half_cut_halves.py),
+portrait shade on one to twelve bottom rows came within 0.2 % of module
+power, and a ten-module string with three such modules within 0.1 %. A chain
+is described by its mean and its worst cell, so a shadow that darkens every
+other cell of a chain, as one landscape row along the long edge does, comes
+out 0.9 % high.
 
 ### M3. An optional breakdown voltage
 
@@ -101,4 +114,7 @@ string keeps `parallel = 1`.
   is refused as an unknown key. The result's shading summary reports the
   module's `bypass_diodes` and no longer `bypass_diodes_stated`.
 - Callers that send three substrings per module for three-diode modules are
-  unaffected by M1. M2 adds an optional key.
+  unaffected by M1. M2 adds an optional key, and the bundled modules, all
+  half-cut, state `cell_strings_in_parallel = 2`; on them a substring's
+  limiting fraction now means each chain's worst cell, no longer the mean of
+  the two chains' worst cells.

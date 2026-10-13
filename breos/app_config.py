@@ -3383,7 +3383,7 @@ def _check_module_shading(
         if string.module_shading is not None and string.array < len(arrays):
             module = arrays[string.array][0]
             try:
-                shading = string.module_shading.for_module(module.bypass_diodes)
+                shading = string.module_shading.for_module(module.bypass_diodes, module.cell_strings_in_parallel)
             except ValueError as error:
                 raise ValueError(f"'pv_strings[{i}].module_shading': {error}") from None
             problem = shading.inconsistency(module.N_Cells)

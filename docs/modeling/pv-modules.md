@@ -64,24 +64,26 @@ can have front-contact or back-contact cells.
 | Module | Wiring | Shading in BREOS |
 |---|---|---|
 | Full-cell (60 or 72 cells) | One chain, three substrings, three diodes | Represented |
-| Half-cut (120 or 144 half-cells) | Two half-chains in parallel on each diode, top and bottom | Approximated: see below |
+| Half-cut (120 or 144 half-cells) | Two half-chains in parallel on each diode, top and bottom | Represented, each half with its own shade: see below |
 | Back-contact with low breakdown voltage (some IBC and variants) | Either of the above | Represented as cells without breakdown; losses overstated |
 | Shingled | Cell strips overlapped into parallel strip-strings | Not represented |
 | Thin film (CdTe, CIGS) | Long narrow cells across the module, few or no diodes | Not represented |
 
-**Half-cut modules.** BREOS takes a half-cut module as a chain of half-cells
-in series, and the shading input gives the mean of the two halves' most-shaded
-cells. That reproduces the substring's current limit but behaves as if each
-top half-cell were wired in parallel with its bottom partner, which real
-modules are not. When the shadow covers the bottom half only, as row-to-row
-shade does on modules mounted in portrait, the real top half keeps carrying
-its current at the section's voltage while the shaded bottom half contributes
-little, and the module delivers less than BREOS computes. In a test against a
-cell-level model of a 144 half-cell module, with one to six bottom rows
-shaded, BREOS overstated module power by 12 to 15 % when every substring was
-shaded and by 6 to 7 % when one was. With half the module shaded the
-difference was under 1 %, and in landscape, where the shadow crosses both
-halves alike, there was none.
+**Half-cut modules.** A module record states its layout with
+`cell_strings_in_parallel`: 1 for a full-cell module, 2 for a half-cut one,
+whose `N_Cells` counts the half-cells. Each bypass diode then spans two
+chains of half-cells in parallel, which share the substring's voltage and add
+their currents. When the shadow covers the bottom half only, as row-to-row
+shade does on modules mounted in portrait, the top chain keeps carrying its
+current while the shaded bottom one contributes little. The shading input
+may give each chain its own shaded fractions; a substring given without them
+is shaded alike in both. Against a cell-level model of a 144 half-cell
+module, portrait shade on one to twelve bottom rows came within 0.2 % of
+module power, and within 0.1 % for a string of ten modules with three
+shaded. Each chain is described by its mean and its single most-shaded cell,
+with its other cells taken as evenly shaded. A shadow that darkens every
+other cell of a chain, as one row of landscape shade does along the long
+edge, therefore comes out about 1 % high.
 
 The temperature coefficients come from the module's datasheet, so the
 technology's temperature behaviour enters through them. `celltype` only seeds

@@ -3,7 +3,11 @@
 Each module splits into bypass-diode substrings. A substring is its cells in
 series: the most-shaded cell at the irradiance its limiting shaded fraction
 leaves, and the other cells at the irradiance that keeps the substring's
-area mean. Each part is a single-diode curve with its share of the module's
+area mean. In a module of several cell strings per substring, such as a
+half-cut one (design record 0009), each cell position is that many cells in
+parallel; strings shaded alike behave as one string of positions, and
+strings shaded differently share the substring's voltage and add their
+currents. Each part is a single-diode curve with its share of the module's
 series and shunt resistance and diode voltage, used in forward bias. A part
 carries no more than its own short-circuit current: the module's shunt is a
 fit to the forward curve, and split per cell it would pass amperes in
@@ -46,6 +50,11 @@ _GOLDEN_RATIO = (5.0**0.5 - 1.0) / 2.0
 # Relative distance of the grid points either side of a part's short-circuit
 # current, on its own curve below it and on the bypass diode above it.
 _EDGE = 1e-7
+# A substring whose parallel strings are shaded differently is tabled: each
+# string's voltage on a grid of its own currents, from reverse current up to
+# its cap, and the substring's current on a grid of voltages.
+_STRING_POINTS = 240
+_SECTION_POINTS = 320
 
 
 def _newton_mpp(*params):
@@ -78,14 +87,16 @@ class ShadedStringCurve:
         if len(shading.modules) != modules:
             raise ValueError(f"module_shading has {len(shading.modules)} modules for a string of {modules}")
         diodes = parts.pv_params.bypass_diodes
+        parallel = parts.pv_params.cell_strings_in_parallel
         if shading.bypass_diodes is None:
-            shading = shading.for_module(diodes)
+            shading = shading.for_module(diodes, parallel)
             problem = shading.inconsistency(parts.pv_params.N_Cells)
             if problem:
                 raise ValueError(f"module_shading: {problem}")
-        elif shading.bypass_diodes != diodes:
+        elif (shading.bypass_diodes, shading.cell_strings_in_parallel) != (diodes, parallel):
             raise ValueError(
-                f"module_shading is bound to {shading.bypass_diodes} bypass diodes; the module has {diodes}"
+                f"module_shading is bound to {shading.bypass_diodes} bypass diodes of "
+                f"{shading.cell_strings_in_parallel} cell strings; the module has {diodes} of {parallel}"
             )
         self.parts = parts
         self.scale = np.asarray(scale, dtype=float)
@@ -93,7 +104,10 @@ class ShadedStringCurve:
         self.cable_ohm = float(cable_ohm)
         self.bypass_v = float(bypass_diode_voltage_v)
         steps = len(self.scale)
-        cells = float(parts.pv_params.N_Cells)
+        # Cell positions in series across the module: each is the module's
+        # parallel cell strings' cells side by side.
+        self.strings = shading.cell_strings_in_parallel
+        cells = float(parts.pv_params.N_Cells) / self.strings
         diodes = shading.diodes
         self.cells = cells
         per_substring = cells / diodes
@@ -101,9 +115,28 @@ class ShadedStringCurve:
         weights = shading.axes.grid_weights(parts.sun_azimuth, parts.sun_elevation)
         mean, limiting = shading.substring_fractions(weights)
         view = shading.sky_view_factors[:, None, None]
+        self._sky_view = shading.sky_view_factors
 
         def irradiance(fraction: np.ndarray) -> np.ndarray:
             return parts.irradiance(fraction, view)
+
+        # Substrings whose parallel strings are shaded differently.
+        fractions = shading.half_fractions(weights)
+        halved = np.zeros(mean.shape, dtype=bool)
+        self._halves: tuple[np.ndarray, ...] | None = None
+        if fractions is not None:
+            half_mean, half_limiting = fractions
+            halved = (half_mean != half_mean[:, :, :1]).any(axis=2) | (half_limiting != half_limiting[:, :, :1]).any(
+                axis=2
+            )
+            self._halves = (
+                parts.irradiance(half_mean, view[..., None]),
+                parts.irradiance(half_limiting, view[..., None]),
+                half_mean,
+                half_limiting,
+            )
+            # Halves shaded alike are one substring of their shared fractions.
+            limiting = np.where(halved, limiting, half_limiting[:, :, 0])
 
         e_mean = irradiance(mean)
         limited = (limiting > mean) & (per_substring > 1.0)
@@ -112,7 +145,8 @@ class ShadedStringCurve:
         e_rest = irradiance(np.where(limited, rest, mean))
 
         lit = (e_mean.max(axis=(0, 1)) > 0) & (self.scale > 0)
-        same = np.all(e_mean == e_mean[:1, :1], axis=(0, 1)) & ~limited.any(axis=(0, 1))
+        same = np.all(e_mean == e_mean[:1, :1], axis=(0, 1)) & ~limited.any(axis=(0, 1)) & ~halved.any(axis=(0, 1))
+        self._halved = halved
         self.uniform = np.flatnonzero(lit & same)
         self.mismatched = np.flatnonzero(lit & ~same)
 
@@ -168,7 +202,13 @@ class ShadedStringCurve:
         groups: dict[tuple[Any, ...], list[tuple[int, int]]] = {}
         for m, module in enumerate(shading.modules):
             for k in range(shading.diodes):
-                key = (id(module.mean[k]), id(module.limiting[k]), module.sky_view_factor)
+                halves = module.substring_halves(k)
+                key = (
+                    id(module.mean[k]),
+                    id(module.limiting[k]),
+                    module.sky_view_factor,
+                    None if halves is None else tuple(id(t) for pair in halves for t in pair),
+                )
                 groups.setdefault(key, []).append((m, k))
 
         def element(irradiance: np.ndarray, share: float) -> tuple[np.ndarray, ...]:
@@ -183,9 +223,13 @@ class ShadedStringCurve:
         brightest = np.max(np.where(limited[:, :, rows], -np.inf, e_mean[:, :, rows]), axis=(0, 1))
         brightest = np.where(np.isfinite(brightest), brightest, e_mean[:, :, rows].max(axis=(0, 1)))
         self._reference = [element(brightest, per_substring / cells)]
-        substrings = []
+        substrings: list[tuple[int, Any, np.ndarray]] = []
         for members in groups.values():
             m, k = members[0]
+            if self._halved[m, k, rows].any():
+                section = self._half_section(m, k, rows, per_substring, cells)
+                substrings.append((len(members), section, np.ones(rows.size, dtype=bool)))
+                continue
             own = limited[m, k, rows] | (e_mean[m, k, rows] != brightest)
             if limited[m, k, rows].any():
                 lim = limited[m, k, rows]
@@ -197,13 +241,74 @@ class ShadedStringCurve:
                 parts = [element(e_mean[m, k, rows], per_substring / cells)]
             substrings.append((len(members), parts, own))
         # Each part's photocurrent: the curve's knees lie just below them.
-        self._photocurrents = np.asarray([p[0] for _, parts, _ in substrings for p in parts] + [self._reference[0][0]])
+        photocurrents = [self._reference[0][0]]
         # Each part's short-circuit current, where its substring drops to the bypass diode.
-        self._short_circuits = np.asarray([p[5] for _, parts, _ in substrings for p in parts] + [self._reference[0][5]])
+        short_circuits = [self._reference[0][5]]
+        for _, parts, _ in substrings:
+            if isinstance(parts, _HalfSection):
+                photocurrents.extend(parts.knees)
+                short_circuits.extend(parts.caps)
+            else:
+                photocurrents.extend(p[0] for p in parts)
+                short_circuits.extend(p[5] for p in parts)
+        self._photocurrents = np.asarray(photocurrents)
+        self._short_circuits = np.asarray(short_circuits)
         return substrings
 
-    def _substring_voltage(self, current: np.ndarray, parts: list[tuple[np.ndarray, ...]], rows: Any) -> np.ndarray:
+    def _half_section(self, m: int, k: int, rows: np.ndarray, per_substring: float, cells: float) -> _HalfSection:
+        """Substring ``k`` of module ``m``, whose parallel strings are shaded differently, on the steps ``rows``.
+
+        Each string is its most-shaded cell and its other cells, as a
+        substring is, with one cell per position: a position's share of the
+        module's current and diode saturation, and the string count times
+        its share of the resistances.
+        """
+        assert self._halves is not None
+        e_half_mean, e_half_limit, half_mean, half_limiting = self._halves
+        strings = self.strings
+
+        def element(irradiance: np.ndarray, count: float) -> tuple[np.ndarray, ...]:
+            photo, saturation, series, shunt, diode = self.parts.diode_parameters(irradiance, rows)
+            share = count / cells
+            params = (
+                photo / strings,
+                saturation / strings,
+                series * share * strings,
+                shunt * share * strings,
+                diode * share,
+            )
+            short_circuit = np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.i_from_v, 0.0, *params), dtype=float))
+            return params + (short_circuit,)
+
+        chains = []
+        for h in range(strings):
+            mean = half_mean[m, k, h, rows]
+            limit = half_limiting[m, k, h, rows]
+            lim = (limit > mean) & (per_substring > 1.0)
+            if lim.any():
+                rest = np.clip((per_substring * mean - limit) / max(per_substring - 1.0, 1.0), 0.0, 1.0)
+                e_rest = self._rest_irradiance(m, k, h, rows, rest, lim)
+                low = np.where(lim, e_half_limit[m, k, h, rows], e_half_mean[m, k, h, rows])
+                chains.append([element(low, 1.0), element(e_rest, per_substring - 1.0)])
+            else:
+                chains.append([element(e_half_mean[m, k, h, rows], per_substring)])
+        return _HalfSection(chains, self.bypass_v)
+
+    def _rest_irradiance(
+        self, m: int, k: int, h: int, rows: np.ndarray, rest: np.ndarray, limited: np.ndarray
+    ) -> np.ndarray:
+        """String ``h`` of substring ``k`` of module ``m``: its other cells' irradiance on the steps ``rows``."""
+        assert self._halves is not None
+        e_half_mean = self._halves[0]
+        fraction = np.zeros(len(self.scale))
+        fraction[rows] = rest
+        full = self.parts.irradiance(fraction, self._sky_view[m])
+        return np.where(limited, full[rows], e_half_mean[m, k, h, rows])
+
+    def _substring_voltage(self, current: np.ndarray, parts: Any, rows: Any) -> np.ndarray:
         """One substring's voltage at ``current`` on the mismatched steps ``rows``, held by its bypass diode."""
+        if isinstance(parts, _HalfSection):
+            return parts.voltage(current, rows)
         shape = (-1,) + (1,) * (current.ndim - 1)
         voltage = np.zeros(current.shape)
         for params in parts:
@@ -533,3 +638,89 @@ def _table_current(table_v: np.ndarray, table_i: np.ndarray, voltage: np.ndarray
             # The reverse-current part of the table lies above open circuit.
             current = np.clip(np.where(above == 0, 0.0, current), 0.0, None)
     return np.where(above >= points, table_i[:, -1], current)
+
+
+def _rowwise_interp(x: np.ndarray, y: np.ndarray, query: np.ndarray) -> np.ndarray:
+    """Row by row, ``y`` at ``query`` on the piecewise-linear curve through ``(x, y)``.
+
+    ``x`` rises along each row; ``query`` has one row per row of ``x`` and
+    any number of columns, and holds at the ends of its row's ``x``.
+    """
+    rows, points = x.shape
+    span = float(np.nanmax(x) - np.nanmin(x)) + 1.0
+    offset = (np.arange(rows, dtype=float) * 2.0 * span)[:, None]
+    clipped = np.clip(query, x[:, :1], x[:, -1:])
+    flat = (x + offset).ravel()
+    position = np.searchsorted(flat, (clipped + offset).ravel(), side="right").reshape(query.shape)
+    index = np.clip(position - 1 - (np.arange(rows) * points)[:, None], 0, points - 2)
+    x0, x1 = np.take_along_axis(x, index, 1), np.take_along_axis(x, index + 1, 1)
+    y0, y1 = np.take_along_axis(y, index, 1), np.take_along_axis(y, index + 1, 1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        weight = np.where(x1 > x0, (clipped - x0) / (x1 - x0), 0.0)
+    return y0 + weight * (y1 - y0)
+
+
+class _HalfSection:
+    """A substring of parallel cell strings shaded differently, on the mismatched steps it was built on.
+
+    Each string is its parts in series and carries at most its smallest
+    part's short-circuit current. The strings share the substring's voltage
+    and add their currents; the bypass diode holds the substring at minus its
+    forward voltage once their sum falls short of the string's current.
+    """
+
+    def __init__(self, chains: list[list[tuple[np.ndarray, ...]]], bypass_v: float) -> None:
+        self.bypass_v = bypass_v
+        rows = chains[0][0][0].shape[0]
+        unit = np.unique(
+            np.concatenate(
+                (
+                    -1.5 * np.geomspace(1e-4, 1.0, 24)[::-1],
+                    np.linspace(0.0, 1.0, _STRING_POINTS - 64),
+                    1.0 - np.geomspace(1e-7, 0.25, 40),
+                )
+            )
+        )
+        tables = []
+        knees = []
+        top = np.full(rows, -np.inf)
+        for parts in chains:
+            cap = np.min([p[5] for p in parts], axis=0)
+            current = cap[:, None] * unit[None, :]
+            voltage = np.zeros(current.shape)
+            for params in parts:
+                diode = [p[:, None] for p in params[:5]]
+                voltage += np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.v_from_i, current, *diode), dtype=float))
+            # The voltage falls as the current rises: tabled against falling voltage, it rises.
+            tables.append((-voltage, current))
+            knees.append(np.min([p[0] for p in parts], axis=0))
+            top = np.maximum(top, voltage[:, 0])
+        # The substring's current over a grid of voltages from its bypass clamp up past open circuit.
+        levels = np.concatenate(
+            [np.linspace(0.0, 1.0, _SECTION_POINTS - 8 * len(chains))[None, :].repeat(rows, 0)]
+            + [
+                ((-t[0][:, [-1, -8, -16, -24, -40, -60, -90, -120]] + bypass_v) / (top + bypass_v)[:, None])
+                for t in tables
+            ],
+            axis=1,
+        )
+        volts = np.sort(-bypass_v + np.clip(levels, 0.0, 1.0) * (top + bypass_v)[:, None], axis=1)
+        total = np.zeros(volts.shape)
+        for falling, current in tables:
+            total += _rowwise_interp(falling, current, -volts)
+        # Current rises as the voltage falls: the substring's curve against rising current.
+        self._current = total[:, ::-1]
+        self._voltage = volts[:, ::-1]
+        # Where the diode takes over: the most the strings carry together.
+        self.caps = [self._current[:, -1]]
+        self.knees = [sum(knees)]
+
+    def voltage(self, current: np.ndarray, rows: Any) -> np.ndarray:
+        """The substring's voltage at ``current`` on the steps ``rows`` of its table."""
+        shape = current.shape
+        table_i, table_v = self._current[rows], self._voltage[rows]
+        query = current.reshape(table_i.shape[0], -1)
+        voltage = _rowwise_interp(table_i, table_v, query)
+        # Beyond what the strings carry together, the bypass diode takes the current.
+        voltage = np.where(query > table_i[:, -1:], -self.bypass_v, voltage)
+        return np.maximum(voltage, -self.bypass_v).reshape(shape)
