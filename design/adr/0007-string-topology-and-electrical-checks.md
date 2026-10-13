@@ -87,7 +87,9 @@ needs only how many modules of which array are in series on which input.
 A string belongs to one array, and an array has one orientation, so a string
 that mixes orientations cannot be declared. The caller's layout decides which
 faces are grouped. Module-level power electronics (optimizers, micro-inverters)
-are out of scope.
+are out of scope, except one microinverter that tracks each module separately:
+it is one inverter with one input per module and a one-module string on each
+(amended 2026-10-13, ADR 0008 S7).
 
 Entries on the same input add up. A caller may send each string as its own
 entry with `parallel = 1`, or group identical strings; the check is the same.

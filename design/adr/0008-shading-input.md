@@ -199,7 +199,8 @@ resistance and diode voltage, at the array's cell temperature. The bypass
 diode holds the substring at minus its forward voltage
 (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated, the
 value pvlib's partial-shading example assumes, reported as assumed), so a
-shaded cell in reverse bias never sees more than the rest of its substring.
+shaded cell in reverse bias never sees more than the rest of its substring's
+voltage plus the diode's forward drop.
 Each part carries at most its own short-circuit current; above it, its
 voltage falls without limit and the bypass diode takes the substring
 (amended 2026-10-13). The shunt share is used in forward bias only: the
@@ -262,7 +263,11 @@ per-module shading in hand, an optimizer string's energy is the sum of each
 module's own maximum power point less the optimizer's efficiency, with no
 series mismatch; a microinverter's is each module's through its own AC
 conversion. S6's per-module inputs are therefore the inputs MLPE needs, and
-this record's contract does not change when MLPE arrives.
+this record's contract does not change when MLPE arrives. One microinverter
+that tracks each module separately needs no new record: it is ADR 0007's one
+inverter with one input per module and a one-module string on each, with
+module shading as for any string (amended 2026-10-13). Several
+microinverters, and optimizers, wait for the later record.
 
 ## What this record does not decide
 

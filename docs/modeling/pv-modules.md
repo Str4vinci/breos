@@ -19,8 +19,10 @@ source. Its current is close to proportional to irradiance; its voltage, about
 warms. A module is a chain of cells in series, and cells in series carry one
 current, so the chain carries no more than its most-shaded cell can pass.
 
-When one cell is shaded, the lit cells drive the string's current through it
-and push it into reverse bias, where it absorbs power instead of producing it.
+A shaded cell still generates while the string's current stays below its own
+short-circuit current. Above it, the lit cells drive the extra current through
+the cell and push it into reverse bias, where it absorbs power instead of
+producing it.
 Modules therefore split their chain into substrings, usually three, each with
 a bypass diode across it. Once a shaded substring's voltage falls below minus
 the diode's forward voltage, the diode conducts and the current flows around
@@ -39,16 +41,19 @@ over decides how much a small shadow costs. BREOS lets each part of a substring
 carry at most its own short-circuit current; beyond it, the bypass diode
 conducts. Reverse leakage and avalanche breakdown are not modelled.
 
-That holds for front-contact cells, whose breakdown voltage (about -10 to
--20 V for PERC, further out for TOPCon and heterojunction) lies at or beyond
-the voltage the bypass diode allows a shaded cell: in a 20-cell substring the
-diode holds a fully shaded cell near minus the rest of the substring's
-voltage, about -12 to -15 V. Many
-back-contact cells (IBC and its variants) break down at a few volts, so a
-shaded cell passes the current itself before its substring's diode is needed,
-and only that cell's share is lost
-([Calcabrini et al., 2022](https://doi.org/10.1016/j.xcrp.2022.101155)). For
-those modules BREOS overstates the shading loss.
+Whether that holds depends on the cell's reverse characteristic, which
+datasheets rarely state. In a 20-cell substring the diode holds a fully shaded
+cell near minus the voltage of the rest of the substring plus the diode's
+forward drop, about -12 to -15 V. A cell that breaks down beyond that, as
+TOPCon and heterojunction cells typically do, never reaches breakdown, and the
+model holds. PERC cells break down at about -10 to -20 V, so some leak before
+the diode takes over and lose a little less than BREOS computes. Some
+back-contact cells (IBC and its variants) are designed to break down at a few
+volts ([Calcabrini et al., 2022](https://doi.org/10.1016/j.xcrp.2022.101155)):
+a shaded cell then passes the current itself before its substring's diode is
+needed, and the module loses that cell's generation and the power it
+dissipates in breakdown rather than the whole substring. For modules with such
+cells BREOS overstates the shading loss.
 
 ## Module layouts and technologies
 
@@ -60,7 +65,7 @@ can have front-contact or back-contact cells.
 |---|---|---|
 | Full-cell (60 or 72 cells) | One chain, three substrings, three diodes | Represented |
 | Half-cut (120 or 144 half-cells) | Two half-chains in parallel on each diode, top and bottom | Approximated: see below |
-| Back-contact (IBC and variants) | Either of the above | Represented as front-contact cells; losses overstated |
+| Back-contact with low breakdown voltage (some IBC and variants) | Either of the above | Represented as cells without breakdown; losses overstated |
 | Shingled | Cell strips overlapped into parallel strip-strings | Not represented |
 | Thin film (CdTe, CIGS) | Long narrow cells across the module, few or no diodes | Not represented |
 
@@ -69,9 +74,9 @@ in series, and the shading input gives the mean of the two halves' most-shaded
 cells. That reproduces the substring's current limit but behaves as if each
 top half-cell were wired in parallel with its bottom partner, which real
 modules are not. When the shadow covers the bottom half only, as row-to-row
-shade does on modules mounted in portrait, the real top half keeps producing
-at its own maximum power point while the shaded bottom half carries what it
-can, and the module delivers less than BREOS computes. In a test against a
+shade does on modules mounted in portrait, the real top half keeps carrying
+its current at the section's voltage while the shaded bottom half contributes
+little, and the module delivers less than BREOS computes. In a test against a
 cell-level model of a 144 half-cell module, with one to six bottom rows
 shaded, BREOS overstated module power by 12 to 15 % when every substring was
 shaded and by 6 to 7 % when one was. With half the module shaded the
@@ -99,13 +104,17 @@ parallel that see different light, or different shade, each work away from
 their own maximum power point at the shared voltage; the
 `parallel_mismatch` stage of the
 [PV loss waterfall](../getting-started/interpreting-results.md#pv-loss-waterfall)
-reports that loss, which a separate input for each string would avoid.
+reports that loss before the input's limits and the inverter's clipping. A
+separate input for each string would avoid it, though where a limit or the
+clipping binds anyway the energy gained is smaller.
 
 Under shade, the curve has several peaks. Trackers that climb towards the
 nearest peak can stop on a lower one; inverters that sweep the whole curve
 every few minutes find the highest. BREOS assumes the highest peak inside the
 window on every step: hourly and 15-minute steps cannot resolve what a tracker
-does between sweeps.
+does between sweeps. Its search refines the best few peaks of each curve, so a
+curve with more peaks, or a very narrow one, can still have its highest peak
+missed.
 
 String-level energy models one inverter. The PVWatts `mismatch` loss still
 applies, for differences between modules of one model, which a model of

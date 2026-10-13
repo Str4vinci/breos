@@ -421,12 +421,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Documentation
 - A new page, How BREOS models PV modules, explains string-level detail:
   cells, bypass diodes and reverse bias; which module technologies it
-  represents (full-cell, half-cut approximated, back-contact with overstated
-  shading losses, shingled and thin film not represented); strings, inverter
-  inputs and the global-peak assumption; bifacial rear losses; and one
-  microinverter as a string-level inverter. It states that the half-cut
-  convention overstates module power by 12 to 15 % under portrait row shade.
-  ADR 0008 records the same limits, and the configuration page no longer
+  represents (full-cell; half-cut, approximated; back-contact cells with a low
+  breakdown voltage, with overstated shading losses; shingled and thin film
+  not represented); strings, inverter inputs and the global-peak assumption;
+  bifacial rear losses; and one microinverter as a string-level inverter. It
+  states that the half-cut convention overstates module power by 12 to 15 %
+  under portrait row shade. ADR 0008 records the same limits, ADR 0007 and
+  0008 the one-microinverter mapping, and the configuration page no longer
   says that partial shading of single modules is not modelled.
 
 ## [0.7.0] - 2026-10-02
