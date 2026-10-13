@@ -10,7 +10,7 @@ from breos.pv.mismatch import ShadedStringCurve
 from breos.pv.shading import ModuleShading
 from breos.pv_modules import get_module
 from breos.solar import IrradianceParts, _get_cec_params
-from tests.cell_reference import Reference, breos_entry, breos_power, landscape, portrait
+from tests.cell_reference import Reference, bottom_rows, breos_entry, breos_power, landscape, portrait
 
 BEAM, DIFFUSE, TEMP = 800.0, 200.0, 25.0
 MODULE = get_module("Generic_400W")
@@ -125,15 +125,24 @@ _FIT = _get_cec_params(MODULE)
 @pytest.mark.parametrize("rows", range(1, 13))
 @pytest.mark.parametrize("columns", [list(range(6)), [0, 1]], ids=["every-section", "one-section"])
 def test_portrait_row_shade_matches_the_cell_level_reference(rows, columns):
+    # A chain's shade is concentrated in as many cells as its mean allows, so
+    # a hard-edged shadow is described exactly, however many cells it darkens.
     shaded = portrait(rows, columns)
-    error = breos_power(MODULE, [breos_entry(shaded)]) / _REFERENCE.power(_REFERENCE.module_voltage(shaded)) - 1.0
-    if rows <= 7 or rows == 12:
-        assert abs(error) < 2.5e-3
-    else:
-        # A chain is its mean and its single most-shaded cell, so with most of
-        # its cells dark but a few lit, its other dark cells are spread over
-        # the lit ones: 1.1 % high at 11 of 12 rows.
-        assert 0.0 < error < 0.012
+    reference = _REFERENCE.power(_REFERENCE.module_voltage(shaded))
+    assert breos_power(MODULE, [breos_entry(shaded)]) == pytest.approx(reference, rel=1e-3)
+
+
+@pytest.mark.parametrize(
+    "fractions",
+    [[1.0, 0.5], [1.0, 0.66, 0.33], [1.0, 1.0, 0.5], [0.8, 0.6, 0.4, 0.2]],
+    ids=["penumbra", "wide-penumbra", "two-rows-and-penumbra", "gradient"],
+)
+def test_soft_shade_matches_the_cell_level_reference(fractions):
+    # Concentrating a chain's partly shaded cells into fewer darker ones
+    # slightly understates it: 0.1 % for a gradient over four rows.
+    shaded = bottom_rows(fractions)
+    reference = _REFERENCE.power(_REFERENCE.module_voltage(shaded))
+    assert breos_power(MODULE, [breos_entry(shaded)]) == pytest.approx(reference, rel=1.5e-3)
 
 
 def test_two_landscape_rows_match_the_cell_level_reference():
@@ -149,15 +158,12 @@ def test_a_string_matches_the_cell_level_reference():
     assert power == pytest.approx(_REFERENCE.power(voltage), rel=1e-3)
 
 
-def test_one_landscape_row_is_overstated_by_the_worst_cell_approximation():
+def test_one_landscape_row_matches_the_cell_level_reference():
     # One shaded column puts one fully shaded and one lit cell side by side in
-    # each of a string's rows. A half is described by its mean and its single
-    # worst cell, so its other shaded cells are spread evenly over the rest;
-    # here that overstates the module's power by under 1 %.
+    # each of a string's rows: twelve dark cells per chain.
     shaded = landscape(1)
     reference = _REFERENCE.power(_REFERENCE.module_voltage(shaded))
-    error = breos_power(MODULE, [breos_entry(shaded)]) / reference - 1.0
-    assert 0.0 < error < 0.01
+    assert breos_power(MODULE, [breos_entry(shaded)]) == pytest.approx(reference, rel=1e-3)
 
 
 # -- second review regressions --------------------------------------------------------------------
@@ -226,3 +232,20 @@ def test_every_section_holds_strings_of_whole_cells():
     # 64 * 3 wraps to -64 in int8, which divides 128.
     with pytest.raises(ValueError, match="must divide"):
         replace(MODULE, N_Cells=np.int16(128), cell_strings_in_parallel=np.int8(64))
+
+
+def test_a_chains_shade_is_concentrated_without_an_empty_part():
+    from breos.pv.mismatch import _concentrated
+
+    mean = np.array([3 / 24, 23.5 / 24, 0.2, 0.0])
+    limiting = np.array([1.0, 1.0, 0.2, 0.0])
+    counts, fractions = _concentrated(24.0, mean, limiting, limiting > mean)
+    np.testing.assert_allclose(sum(counts), 24.0)
+    np.testing.assert_allclose(sum(c * f for c, f in zip(counts, fractions, strict=True)), 24.0 * mean)
+    assert (np.asarray(counts) > 0).all()
+    # Three dark cells, none at the remainder and 20 clear.
+    assert [c[0] for c in counts] == [3.0, 1.0, 20.0] and [f[0] for f in fractions] == [1.0, 0.0, 0.0]
+    # 23 dark cells and the half-shaded one split between the last two parts.
+    assert [c[1] for c in counts] == [23.0, 0.5, 0.5] and [f[1] for f in fractions] == [1.0, 0.5, 0.5]
+    # Unlimited, every cell at the mean.
+    assert all(f[2] == 0.2 and f[3] == 0.0 for f in fractions)

@@ -30,9 +30,13 @@ the substring: the module loses about a third of its voltage and keeps its
 current. A shaded string's power-voltage curve therefore has several peaks, one
 for each set of substrings that are bypassed or not.
 
-BREOS builds each substring from its most-shaded cell and its other cells,
-each a single-diode curve with its share of the module's parameters, and lets
-the bypass diode take the current a shaded substring cannot carry.
+The shading input gives each substring two numbers: its area mean, and the
+shaded share of its most-shaded cell. BREOS concentrates the shade: as many
+cells as the mean allows at the most-shaded cell's share, one cell at what is
+left, and the rest clear. Each group of cells is a single-diode curve with
+its share of the module's parameters, and the bypass diode takes the current
+a shaded substring cannot carry. A hard-edged shadow, which leaves every cell
+lit, dark, or cut by its edge, is described exactly.
 
 ## Reverse bias
 
@@ -63,13 +67,13 @@ Datasheets do not publish the value; module makers and test reports
 sometimes do. Unstated, a cell does not break down, which for modules with
 low-breakdown cells overstates the shading loss. Against a cell-level model
 with a hard breakdown, one dark cell in a chain comes within 0.05 % of module
-power at -3 to -15 V. BREOS breaks down only a chain's most-shaded cell,
-though: its other shaded cells are spread over the rest, so where a shadow
-darkens several cells of a chain, the module keeps a substring working that
-their summed breakdown voltages would bypass. One row of shade across a
-half-cut module in portrait darkens two cells of each bottom chain, and at
--3 V that comes out 26 % high. Against PVMismatch's avalanche model, a hard
-breakdown comes within 0.3 % of string power from -2 to -5.5 V.
+power at -3 to -15 V, and so does a hard shadow that darkens several cells
+of a chain, since they break down together. Soft shade around a dark cell is
+where the two numbers fall short: three rows shaded by half and one dark cell
+are concentrated into three dark cells, which at -3 V bypass a chain the real
+module keeps working, and the module comes out 15 % low. Against PVMismatch's
+avalanche model, a hard breakdown comes within 0.3 % of string power from -2
+to -5.5 V.
 
 ## Module layouts and technologies
 
@@ -81,7 +85,7 @@ can have front-contact or back-contact cells.
 |---|---|---|
 | Full-cell (60 or 72 cells) | One chain, three substrings, three diodes | Represented |
 | Half-cut (120 or 144 half-cells) | Two half-chains in parallel on each diode, top and bottom | Represented, each half with its own shade: see below |
-| Back-contact with low breakdown voltage (some IBC and variants) | Either of the above | With `breakdown_voltage_v`: one dark cell per chain represented, several overstated. Without: losses overstated |
+| Back-contact with low breakdown voltage (some IBC and variants) | Either of the above | With `breakdown_voltage_v`: hard shadows represented, soft shade around a dark cell understated. Without: losses overstated |
 | Shingled | Cell strips overlapped into parallel strip-strings | Not represented |
 | Thin film (CdTe, CIGS) | Long narrow cells across the module, few or no diodes | Not represented |
 
@@ -93,14 +97,13 @@ their currents. When the shadow covers the bottom half only, as row-to-row
 shade does on modules mounted in portrait, the top chain keeps carrying its
 current while the shaded bottom one contributes little. The shading input
 may give each chain its own shaded fractions; a substring given without them
-is shaded alike in both. Each chain is described by its mean and its
-single most-shaded cell, with its other cells taken as evenly shaded.
-Against a cell-level model of a 144 half-cell module, portrait shade on one
-to seven bottom rows, or on all twelve, came within 0.25 % of module power,
-and a string of ten modules with three shaded within 0.1 %. Where most of a
-chain's cells are dark but a few are lit, as with eight to eleven bottom
-rows, or where every other cell is dark, as with one row of landscape shade
-along the long edge, the evenly shaded cells come out up to 1.1 % high.
+is shaded alike in both. Each chain's shade is concentrated as a
+substring's is. Against a cell-level model of a 144 half-cell module,
+portrait shade on any number of bottom rows, and landscape shade along the
+long edge, came within 0.05 % of module power, and a string of ten modules
+with three shaded within 0.1 %. Soft shade, a penumbra or a gradient over
+four rows, came within 0.15 %: concentrating partly shaded cells into fewer
+darker ones understates the module slightly.
 
 The temperature coefficients come from the module's datasheet, so the
 technology's temperature behaviour enters through them. `celltype` only seeds

@@ -325,15 +325,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   module) puts two chains of half-cells on each diode, a substring may give
   `halves`, each chain's own fractions, for shade that falls on one chain
   only (ADR 0009 M2). A module whose `N_Cells` does not divide into whole
-  chains on every diode is refused. Against a cell-level model of a 144 half-cell module,
-  portrait row shade came within 0.25 % of module power, and within 1.1 %
-  where a few lit cells remain among dark ones. A module may state its
-  cell's `breakdown_voltage_v`, for cells that break down at a few volts,
-  as some back-contact cells do: a shaded part then passes the current at
-  its cells' breakdown voltage where that keeps its substring above the
-  bypass diode's clamp (ADR 0009 M3). Only a chain's most-shaded cell breaks
-  down, so shade that darkens several cells of a chain is overstated.
-  BREOS builds each
+  chains on every diode is refused. A module may state its cell's
+  `breakdown_voltage_v`, for cells that break down at a few volts, as some
+  back-contact cells do: a shaded part then passes the current at its
+  cells' breakdown voltage where that keeps its substring above the bypass
+  diode's clamp (ADR 0009 M3). Each chain's shade is concentrated: as many
+  cells as its mean allows at its most-shaded cell's fraction, one at the
+  remainder and the rest clear (ADR 0009 M6). Against a cell-level model of
+  a 144 half-cell module, hard-edged portrait and landscape shade came
+  within 0.05 % of module power, with or without breakdown, and soft shade
+  within 0.15 % without it; with breakdown, soft shade around a dark cell
+  is understated, by 15 % in the worst case tested. BREOS builds each
   string's curve from its substrings and bypass diodes
   (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated) and
   runs each input at the curve's global maximum within its limits

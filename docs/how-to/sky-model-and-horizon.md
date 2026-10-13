@@ -196,7 +196,9 @@ mounting swap them; it only has to be the same in every substring that pairs
 them with cells. A substring with `halves` gives no fractions of its own,
 and a full-cell module takes none.
 
-BREOS builds each substring from its most-shaded cell and its other cells,
+BREOS builds each substring with its shade concentrated: as many cells as
+the mean allows at the limiting fraction, one at the remainder and the rest
+clear, which describes a hard-edged shadow exactly. It
 lets the bypass diode take the current a shaded substring cannot carry
 (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated), and
 runs each input at the global maximum of its strings' curve. The array's

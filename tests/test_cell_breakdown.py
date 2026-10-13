@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from breos.pv_modules import PVModuleParams, get_module
-from tests.cell_reference import Reference, breos_entry, breos_power, portrait
+from tests.cell_reference import Reference, bottom_rows, breos_entry, breos_power, portrait
 
 BASE = get_module("Generic_400W")
 CLEAR = np.zeros((24, 6), dtype=bool)
@@ -71,16 +71,32 @@ def test_a_low_breakdown_keeps_a_shaded_substring_working_in_a_string():
     assert power > 1.3 * bypassed
 
 
-def test_several_dark_cells_in_a_chain_break_down_as_one():
-    # A chain is described by its mean and its most-shaded cell, so only that
-    # cell breaks down; its other dark cells are spread over the lit ones. One
-    # portrait row darkens two cells of each bottom chain, which at -3 V hold
-    # it at -6 V and so bypass it; BREOS holds it at -3 V and keeps it working.
+@pytest.mark.parametrize("rows", [1, 2, 4])
+def test_several_dark_cells_in_a_chain_break_down_together(rows):
+    # One portrait row darkens two cells of each bottom chain, which at -3 V
+    # hold it at -6 V and so bypass it. A chain's shade is concentrated in as
+    # many dark cells as its mean allows, and they break down together.
     module = _with(-3.0)
     reference = Reference(module, -3.0)
-    shaded = portrait(1, list(range(6)))
+    shaded = portrait(rows, list(range(6)))
     expected = reference.power(reference.module_voltage(shaded))
-    assert breos_power(module, [breos_entry(shaded)]) > 1.2 * expected
+    assert breos_power(module, [breos_entry(shaded)]) == pytest.approx(expected, rel=1e-3)
+
+
+def test_soft_shade_around_a_dark_cell_breaks_down_too_soon():
+    # A chain gives only its mean and its most-shaded cell. Three half-shaded
+    # rows and one dark cell are concentrated into three dark cells and a
+    # half-shaded one, which at -3 V break down as three: the module is
+    # understated by 15 %. The same shade without breakdown is exact.
+    shaded = bottom_rows([0.5, 0.5, 0.5])
+    shaded[23, 0] = 1.0
+    module = _with(-3.0)
+    reference = Reference(module, -3.0)
+    error = breos_power(module, [breos_entry(shaded)]) / reference.power(reference.module_voltage(shaded)) - 1.0
+    assert -0.16 < error < -0.13
+    reference = Reference(BASE)
+    expected = reference.power(reference.module_voltage(shaded))
+    assert breos_power(BASE, [breos_entry(shaded)]) == pytest.approx(expected, rel=1e-3)
 
 
 # -- review regressions ---------------------------------------------------------------------------

@@ -74,6 +74,14 @@ def portrait(rows: int, columns: list[int]) -> np.ndarray:
     return shaded
 
 
+def bottom_rows(fractions: list[float]) -> np.ndarray:
+    """Portrait shade on every column, each bottom row at its own shaded fraction, the lowest first."""
+    shaded = np.zeros((24, 6))
+    for row, fraction in enumerate(fractions):
+        shaded[23 - row] = fraction
+    return shaded
+
+
 def landscape(rows: int) -> np.ndarray:
     # On its side, the module's long edge is its first columns.
     shaded = np.zeros((24, 6), dtype=bool)
@@ -82,7 +90,7 @@ def landscape(rows: int) -> np.ndarray:
 
 
 class Reference:
-    """The cell-level model of one module type; a shaded cell's beam is fully blocked."""
+    """The cell-level model of one module type, each cell shaded by its own fraction of the beam."""
 
     def __init__(self, module: PVModuleParams, breakdown_v: float | None = None) -> None:
         self.module = module
@@ -120,8 +128,12 @@ class Reference:
         return np.minimum(current, cap)
 
     def module_voltage(self, shaded: np.ndarray) -> np.ndarray:
-        """The module's voltage over :attr:`current`, -inf where it cannot carry it."""
-        irradiance = np.where(shaded, DIFFUSE, BEAM + DIFFUSE)
+        """The module's voltage over :attr:`current`, -inf where it cannot carry it.
+
+        ``shaded`` is each cell's shaded fraction of the beam, or True where
+        all of it is blocked.
+        """
+        irradiance = BEAM * (1.0 - np.asarray(shaded, dtype=float)) + DIFFUSE
         total = np.zeros(self.current.size)
         for s in range(3):
             columns = irradiance[:, 2 * s : 2 * s + 2]

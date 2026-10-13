@@ -1,6 +1,6 @@
 # 0009 — Module electrical layout
 
-- **Status:** Accepted 2026-10-13. M1, M2 and M3 are implemented.
+- **Status:** Accepted 2026-10-13. M1, M2, M3 and M6 are implemented.
 - **Date:** 2026-10-13
 
 ## Context
@@ -74,18 +74,15 @@ removed.
 A substring whose chains are shaded alike keeps ADR 0008 S6's closed form
 with `N_Cells / cell_strings_in_parallel` cell positions, each the chains'
 cells side by side. One whose chains differ is solved as the chains' summed
-current at each voltage: each chain is its parts in series, its worst cell
-and its other cells, capped at its smallest part's short-circuit current,
+current at each voltage: each chain is its parts in series, its shade
+concentrated as M6 states, capped at its smallest part's short-circuit current,
 and the bypass diode clamps the substring
 (`breos.pv.mismatch._HalfSection`). Above its open circuit a chain takes
 current back from the others, up to the brightest one's. Against a
 cell-level model of a 144 half-cell module with explicit parallel chains
-(tests/cell_reference.py), portrait shade on one to seven bottom rows, or
-on all twelve, came within 0.25 % of module power, and a ten-module string
-with three such modules within 0.1 %. A chain is described by its mean and
-its worst cell, so a shadow that leaves a few of its cells lit among dark
-ones, as eight to eleven bottom rows do, or darkens every other cell, as one
-landscape row along the long edge does, comes out up to 1.1 % high.
+(tests/cell_reference.py), portrait shade on any number of bottom rows came
+within 0.05 % of module power, and a ten-module string with three such
+modules within 0.1 % (M6).
 
 ### M3. An optional breakdown voltage
 
@@ -107,13 +104,9 @@ string power lower. Against the cell-level model of M2 with the same hard
 breakdown (tests/test_cell_breakdown.py), one dark cell per chain came
 within 0.05 %.
 
-A chain is described by its mean and its most-shaded cell, so only that cell
-breaks down; its other shaded cells are spread over the rest at the
-irradiance that keeps the mean. Where a shadow darkens several cells of a
-chain, BREOS keeps the substring working where their summed breakdown
-voltages would bypass it: one portrait row across a half-cut module darkens
-two cells of each bottom chain, and at -3 V came out 26 % high. Without a
-breakdown voltage the same description is within 0.25 % for that shade.
+A hard shadow that darkens several cells of a chain breaks them down
+together (M6): one to four portrait rows at -3 V come within 0.05 %. Soft
+shade around a dark cell does not; see M6.
 
 ### M4. Not represented
 
@@ -130,6 +123,35 @@ stated as an assumption. No runtime warning names a technology, since the
 fields cannot tell a back-contact module from another. A module-shaded
 string keeps `parallel = 1`.
 
+### M6. A chain's shade is concentrated
+
+The shading input gives each chain two numbers, its area mean and its
+most-shaded cell's fraction. ADR 0008 S6 first read them as the most-shaded
+cell in series with the other cells at the irradiance that keeps the mean,
+which is exact for one dark cell but spreads a shadow that darkens several
+over the lit ones. Without a breakdown voltage, eight to eleven portrait
+bottom rows came out up to 1.1 % high; with `breakdown_voltage_v = -3`, one
+portrait row darkens two cells per chain, which break down as one, and came
+out 26 % high.
+
+A chain of n cells is now `floor(n * mean / limiting)` cells at the limiting
+fraction, one cell at the remainder, `n * mean` less the dark cells' share,
+and the other cells clear (`breos.pv.mismatch._concentrated`). A hard-edged
+shadow, every cell lit, dark or cut by its edge, is described exactly: every
+portrait and landscape case of the cell-level model, with or without
+breakdown, comes within 0.05 %. The input format is unchanged.
+
+The trade-off is soft shade, where several cells are partly shaded:
+concentrating them into fewer darker cells understates the module. Without
+breakdown a penumbra or a gradient over four rows comes within 0.15 %. With
+breakdown, soft shade around a dark cell is concentrated into several dark
+cells that break down together: three rows shaded by half and one dark cell
+come out 15 % low at -3 V, where the first form was within 0.6 %; a dark cell
+with two half-shaded neighbours comes out 8.5 % low at -5.5 V, where the
+first form was 9.5 % high. Two numbers per chain cannot describe both; a
+third, such as the count of cells above half shade, would, and waits for a
+caller that needs it.
+
 ## Consequences
 
 - `module_shading.bypass_diodes` is removed; a configuration that gives it
@@ -140,3 +162,7 @@ string keeps `parallel = 1`.
   half-cut, state `cell_strings_in_parallel = 2`; on them a substring's
   limiting fraction now means each chain's worst cell, no longer the mean of
   the two chains' worst cells.
+- M6 changes every module-shaded result where a chain's mean exceeds its
+  limiting fraction over its cell count, without a new key.
+- A module whose `N_Cells` does not divide into whole chains on every diode
+  is refused.

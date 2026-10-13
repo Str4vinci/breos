@@ -185,10 +185,13 @@ replaces the convention this record first used, the mean of the two halves'
 worst cells in one chain of half-cells, which overstated module power by 12
 to 15 % under portrait row shade (amended 2026-10-13).
 
-BREOS models each substring as its most-shaded cell at the limiting
-irradiance in series with its other cells at the irradiance that keeps the
-area mean, with `N_Cells / (cell_strings_in_parallel * bypass_diodes)`
-cells per chain (ADR 0009). Each part is a
+BREOS models each substring with its shade concentrated, with
+`N_Cells / (cell_strings_in_parallel * bypass_diodes)` cells n per chain
+(ADR 0009): `floor(n * mean / limiting)` cells at the limiting irradiance,
+one cell at the remainder of the area mean, and the other cells clear. This
+replaces the first form, the most-shaded cell in series with the other cells
+at the irradiance that keeps the mean, which spread a shadow that darkens
+several cells over the lit ones (ADR 0009 M6, amended 2026-10-13). Each part is a
 single-diode curve with its share of the module's series resistance, shunt
 resistance and diode voltage, at the array's cell temperature. The bypass
 diode holds the substring at minus its forward voltage
