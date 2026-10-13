@@ -51,6 +51,9 @@ _GOLDEN_RATIO = (5.0**0.5 - 1.0) / 2.0
 # Relative distance of the grid points either side of a part's short-circuit
 # current, on its own curve below it and on the bypass diode above it.
 _EDGE = 1e-7
+# Just above a short-circuit current of 0, where a dark cell breaks down at
+# any current: a relative step alone would sample 0 again.
+_ABSOLUTE_EDGE = 1e-9
 # A substring whose parallel strings are shaded differently is tabled: each
 # string's voltage on a grid of its own currents, from reverse current up to
 # its cap, and the substring's current on a grid of voltages.
@@ -220,7 +223,11 @@ class ShadedStringCurve:
             photo, saturation, series, shunt, diode = self.parts.diode_parameters(irradiance, rows)
             params = (photo, saturation, series * share, shunt * share, diode * share)
             # The most current the part carries before it breaks down or needs its bypass diode.
-            short_circuit = np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.i_from_v, 0.0, *params), dtype=float))
+            # A dark part's can come out a roundoff below 0, which would break it
+            # down at open circuit.
+            short_circuit = np.maximum(
+                np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.i_from_v, 0.0, *params), dtype=float)), 0.0
+            )
             return params + (short_circuit, np.full(rows.size, share * cells * self.breakdown_v))
 
         # Most substrings are lit like the brightest on most steps: they share
@@ -282,7 +289,9 @@ class ShadedStringCurve:
                 shunt * share * strings,
                 diode * share,
             )
-            short_circuit = np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.i_from_v, 0.0, *params), dtype=float))
+            short_circuit = np.maximum(
+                np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.i_from_v, 0.0, *params), dtype=float)), 0.0
+            )
             return params + (short_circuit, np.full(rows.size, count * self.breakdown_v))
 
         chains = []
@@ -357,7 +366,8 @@ class ShadedStringCurve:
         # the voltage's jump there at that current.
         pieces.append((currents.T[:, :, None] * knee[None, None, :]).reshape(len(top), -1))
         pieces.append(self._short_circuits.T * (1.0 - _EDGE))
-        pieces.append(self._short_circuits.T * (1.0 + _EDGE))
+        above = self._short_circuits.T * (1.0 + _EDGE)
+        pieces.append(above + _ABSOLUTE_EDGE if np.isfinite(self.breakdown_v) else above)
         return np.sort(np.concatenate(pieces, axis=1), axis=1)
 
     def _mismatched_curve(self) -> None:
@@ -712,11 +722,10 @@ class _HalfSection:
                 # voltage, so the chain carries current up to its largest
                 # part's, each part's jump tabled on both sides.
                 pieces.append(part_caps.max(axis=0)[:, None] * unit[None, :])
-                edges = (
-                    part_caps[:, :, None]
-                    * np.concatenate((1.0 - np.geomspace(1e-7, 0.25, 40), 1.0 + np.array([_EDGE, 1e-4])))[None, None, :]
-                )
-                pieces.append(edges.transpose(1, 0, 2).reshape(rows, -1))
+                below = part_caps[:, :, None] * (1.0 - np.geomspace(1e-7, 0.25, 40))[None, None, :]
+                above = part_caps[:, :, None] * (1.0 + np.array([_EDGE, 1e-4]))[None, None, :] + _ABSOLUTE_EDGE
+                for edges in (below, above):
+                    pieces.append(edges.transpose(1, 0, 2).reshape(rows, -1))
                 current = np.sort(np.concatenate(pieces, axis=1), axis=1)
             else:
                 pieces.append(cap[:, None] * unit[None, :])
@@ -731,10 +740,8 @@ class _HalfSection:
                     voltage += _part_voltage(current, [p[:, None] for p in params])
                 # The voltages on both sides of each jump, for the substring's voltage grid.
                 for part_cap in part_caps:
-                    for side in (1.0 - _EDGE, 1.0 + _EDGE):
-                        at = sum(
-                            _part_voltage((part_cap * side)[:, None], [p[:, None] for p in q])[:, 0] for q in parts
-                        )
+                    for edge in (part_cap * (1.0 - _EDGE), part_cap * (1.0 + _EDGE) + _ABSOLUTE_EDGE):
+                        at = sum(_part_voltage(edge[:, None], [p[:, None] for p in q])[:, 0] for q in parts)
                         corners.append(at)
             # The voltage falls as the current rises: tabled against falling voltage, it rises.
             tables.append((-voltage, current))
@@ -762,8 +769,16 @@ class _HalfSection:
         # Current rises as the voltage falls: the substring's curve against rising current.
         self._current = total[:, ::-1]
         self._voltage = volts[:, ::-1]
-        # Where the diode takes over: the most the strings carry together.
+        # Where the diode takes over: the most the strings carry together;
+        # with breakdown, also the substring's currents at each jump of a
+        # string, so the string's own table samples both sides of them.
         self.caps = [self._current[:, -1]]
+        if corners:
+            at = np.clip(np.stack(corners, axis=1), -bypass_v, top[:, None])
+            jumps = np.zeros(at.shape)
+            for falling, current in tables:
+                jumps += _rowwise_interp(falling, current, -at)
+            self.caps.extend(jumps.T)
         self.knees = [sum(knees)] + ([sum(brightest)] if brightest else [])
 
     def voltage(self, current: np.ndarray, rows: Any) -> np.ndarray:

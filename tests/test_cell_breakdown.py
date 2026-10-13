@@ -81,3 +81,64 @@ def test_several_dark_cells_in_a_chain_break_down_as_one():
     shaded = portrait(1, list(range(6)))
     expected = reference.power(reference.module_voltage(shaded))
     assert breos_power(module, [breos_entry(shaded)]) > 1.2 * expected
+
+
+# -- review regressions ---------------------------------------------------------------------------
+
+
+def _split_curve(module: str, beam: float, sky: float, temp: float, breakdown: float | None = -3.0):
+    """One module whose three substrings each have one dark cell in one half and two in the other."""
+    from breos.pv.mismatch import ShadedStringCurve
+    from breos.pv.shading import ModuleShading
+    from breos.solar import IrradianceParts
+
+    one = np.ones(1)
+    pv = replace(get_module(module), breakdown_voltage_v=breakdown)
+    parts = IrradianceParts(
+        beam=beam * one, circumsolar=0.0 * one, sky=sky * one, other=0.0 * one, temp_cell=temp * one,
+        sun_azimuth=180.0 * one, sun_elevation=50.0 * one, pv_params=pv,
+    )  # fmt: skip
+    halves = [
+        {"beam_shaded_fraction": [[1 / 24]], "limiting_shaded_fraction": [[1.0]]},
+        {"beam_shaded_fraction": [[2 / 24]], "limiting_shaded_fraction": [[1.0]]},
+    ]
+    entry = {"substrings": [{"halves": halves}] * 3}
+    shading = ModuleShading.from_mapping({"azimuth_deg": [0], "elevation_deg": [0], "modules": [entry]})
+    return ShadedStringCurve(shading.for_module(3, 2), parts, one, 1)
+
+
+def test_the_tabled_current_follows_the_curve_across_a_chains_breakdown():
+    curve = _split_curve("Generic_400W", 800.0, 200.0, 25.0)
+    step = np.array([True])
+
+    def exact(voltage: float) -> float:
+        low, high = 0.0, float(curve._table_i.max())
+        for _ in range(80):
+            middle = 0.5 * (low + high)
+            if curve._terminal_voltage(np.array([middle]), np.array([0]), False)[0] > voltage:
+                low = middle
+            else:
+                high = middle
+        return 0.5 * (low + high)
+
+    for voltage in np.linspace(30.0, 46.0, 33):
+        tabled = curve.current(np.array([[voltage]]), step)[0, 0]
+        assert tabled == pytest.approx(exact(voltage), rel=2e-3, abs=1e-3), voltage
+
+
+def test_a_dark_cell_has_no_power_above_the_curves_reach():
+    # No diffuse light: a fully shaded cell's short-circuit current is 0, and
+    # past it, at any current, it breaks down.
+    curve = _split_curve("Suntech_STP550S_STC", 1000.0, 0.0, 25.0)
+    step = np.array([True])
+    # Any current breaks the dark cells down, so the module falls to 38.8 V,
+    # well below its 47.7 V open circuit, and nothing lies between.
+    assert curve._terminal_voltage(np.array([1e-6]), np.array([0]), False)[0] < 39.0
+    power, _ = curve.constrained_mpp(step, 43.0, 44.0, np.inf)
+    assert power[0] < 1e-6
+
+
+def test_a_dark_cell_does_not_break_down_at_open_circuit():
+    breaking = _split_curve("Generic_400W", 1000.0, 0.0, -20.0)
+    plain = _split_curve("Generic_400W", 1000.0, 0.0, -20.0, breakdown=None)
+    assert breaking.v_oc[0] == pytest.approx(plain.v_oc[0], rel=1e-6)
