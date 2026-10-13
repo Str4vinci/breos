@@ -36,13 +36,13 @@ from breos.battery import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity"))
 
-from harness import FREQ, INSTRUCTION_SCENARIOS, RESOLUTIONS, SCENARIOS, build, build_instructed  # noqa: E402
+from harness import AC_SCENARIOS, FREQ, INSTRUCTION_SCENARIOS, RESOLUTIONS, SCENARIOS, build, build_any  # noqa: E402
 
 numba = pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
 
 
 def _run(name: str, backend: str, freq: str = FREQ):
-    pv, load, temp, cfg, sim_kwargs = (build_instructed if name in INSTRUCTION_SCENARIOS else build)(name, freq)
+    pv, load, temp, cfg, sim_kwargs = build_any(name, freq)
     return simulate_energy_balance(
         pv_dc=pv,
         houseload=load,
@@ -126,6 +126,18 @@ def test_numba_matches_python_exactly_under_instructions(scenario, freq):
         assert (grid_ac == 0.0).all()
     else:
         assert grid_ac.sum() > 0.0, "the scenario must grid-charge"
+
+
+@pytest.mark.parametrize("freq", RESOLUTIONS)
+@pytest.mark.parametrize("scenario", AC_SCENARIOS)
+def test_numba_matches_python_exactly_ac_coupled(scenario, freq):
+    python_out = _run(scenario, "python", freq)
+    _assert_identical(f"{scenario}@{freq}", python_out, _run(scenario, "numba", freq))
+    frame = python_out[0]
+    assert frame["PV_AC_To_Battery"].sum() > 0.0, "the scenario must charge from PV AC"
+    assert (frame["PV_DC_To_Battery"] == 0.0).all()
+    if scenario in ("ac_fixed_target", "ac_night_limited"):
+        assert frame["Grid_AC_To_Battery"].sum() > 0.0, "the scenario must grid-charge"
 
 
 def test_compiled_backend_compiles_the_python_backends_own_day_loop():

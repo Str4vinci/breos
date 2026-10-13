@@ -107,6 +107,7 @@ def test_checker_counts_grid_charging_as_an_input():
     charged["Battery_Charge_Input"] += drawn
     charged["Battery_Charge_Loss"] += drawn - 100.0
     charged["Battery_Charge_Stored"] += 100.0
+    charged["Grid_Origin_Battery_Charge_Stored"] += 100.0
     charged["Battery_Energy_Delta"] += 100.0
     assert_energy_conservation(charged, config)
 

@@ -896,6 +896,219 @@ def _dispatch_dc_step(
     )
 
 
+def _battery_inverter_charge(
+    ac: float, rating_wh: float, efficiency: float, pow_two: float, flat_ac: np.ndarray, flat_eff: np.ndarray
+) -> float:
+    """DC an AC-coupled battery inverter delivers for AC input ``ac`` (ADR 0004 C4).
+
+    The PVWatts core run AC to DC: its input limit is the AC rating
+    ``rating_wh`` and its DC output at most ``rating_wh * efficiency``. An
+    infinite rating is the flat conversion ``ac * efficiency``.
+    """
+    return _dc_ac(ac, rating_wh * efficiency, efficiency, 1.0, pow_two, flat_ac, flat_eff, 0.0, 0.0)[0]
+
+
+def _battery_inverter_charge_input(
+    dc: float, rating_wh: float, efficiency: float, flat_ac: np.ndarray, flat_eff: np.ndarray
+) -> float:
+    """AC input :func:`_battery_inverter_charge` needs for DC output ``dc``, saturating at the rating."""
+    return _dc_for_ac(dc, rating_wh * efficiency, efficiency, 1.0, flat_ac, flat_eff, 0.0, 0.0)
+
+
+def _dispatch_ac_step(
+    pv_dc: float,
+    pv_ac: float,
+    pv_conversion_loss: float,
+    pv_clipping_dc: float,
+    night: float,
+    load: float,
+    battery_energy: float,
+    emax: float,
+    eff_charge: float,
+    eff_discharge: float,
+    battery_inverter_wh: float,
+    battery_inverter_eff: float,
+    cap_charge_in_wh: float,
+    cap_discharge_ac_wh: float,
+    cap_stored_wh: float,
+    pow_two: float,
+    discharge_allowed: bool,
+    discharge_floor: float,
+    grid_target_energy: float,
+    grid_import_cap_wh: float,
+    flat_ac: np.ndarray,
+    flat_eff: np.ndarray,
+) -> Tuple[
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+]:
+    """Dispatch one AC-coupled timestep (ADR 0004 C5, C7); inputs and outputs are Wh.
+
+    The PV inverter has already converted the step: ``pv_ac``,
+    ``pv_conversion_loss`` and ``pv_clipping_dc`` are the PV-only run's
+    conversion of ``pv_dc``, whatever the battery does. PV AC serves the load
+    first, then charges the battery through its own inverter, then is
+    exported. The battery serves the remaining deficit through the same
+    inverter, rated ``battery_inverter_wh`` (AC, per step; infinite for flat
+    conversion) at nominal efficiency ``battery_inverter_eff``. Grid charge
+    then runs as in the DC-coupled step, but through the battery inverter:
+    PV and grid AC entering it in one step convert at one operating point,
+    and the DC is split in proportion to each source's AC.
+
+    ``night`` is the PV inverter's draw this step, from the grid whatever
+    the battery does (ADR 0004 M3). It is part of ``grid_import`` before
+    grid charge takes what is left of the site limit.
+
+    ``flat_ac`` and ``flat_eff`` are empty curve arrays, which select the
+    PVWatts curve for the battery inverter.
+
+    Returns the sixteen values of :func:`_dispatch_dc_step`, with
+    ``pv_dc_to_battery`` always 0, followed by ``pv_ac_to_battery`` and
+    ``pv_dc_charge``, the DC that PV AC became in the battery inverter.
+    ``battery_charge_input`` is ``pv_dc_charge + grid_dc``.
+    """
+    battery_discharge_dc = 0.0
+    battery_ac_to_load = 0.0
+    battery_discharge_loss = 0.0
+    battery_inverter_loss = 0.0
+    pv_ac_to_battery = 0.0
+    pv_dc_charge = 0.0
+    grid_ac = 0.0
+    grid_dc = 0.0
+    hold_target = discharge_allowed and not math.isnan(grid_target_energy) and discharge_floor >= grid_target_energy
+
+    pv_ac_to_load = min(pv_ac, load)
+    surplus_ac = pv_ac - pv_ac_to_load
+    deficit = load - pv_ac_to_load
+    energy_before_charge = battery_energy
+
+    # 1. PV surplus charges through the battery inverter.
+    room = max(0.0, emax - battery_energy)
+    if surplus_ac > 0.0 and room > 0.0 and eff_charge > 0.0:
+        dc_wanted = min(room / eff_charge, cap_charge_in_wh, cap_stored_wh / eff_charge)
+        if dc_wanted > 0.0:
+            pv_ac_to_battery = min(
+                surplus_ac,
+                _battery_inverter_charge_input(dc_wanted, battery_inverter_wh, battery_inverter_eff, flat_ac, flat_eff),
+                battery_inverter_wh,
+            )
+            pv_dc_charge = min(
+                dc_wanted,
+                _battery_inverter_charge(
+                    pv_ac_to_battery, battery_inverter_wh, battery_inverter_eff, pow_two, flat_ac, flat_eff
+                ),
+            )
+            battery_energy = battery_energy + pv_dc_charge * eff_charge
+    pv_ac_export = surplus_ac - pv_ac_to_battery
+
+    # 2. The battery serves the deficit through the battery inverter. A step
+    # with a surplus has no deficit, so it never both charges and discharges.
+    available = max(0.0, battery_energy - discharge_floor)
+    if deficit > 0.0 and discharge_allowed and available > 0.0 and eff_discharge > 0.0:
+        ac_target = min(deficit, cap_discharge_ac_wh, battery_inverter_wh)
+        battery_dc = min(
+            available * eff_discharge,
+            _dc_for_ac(ac_target, battery_inverter_wh, battery_inverter_eff, 1.0, flat_ac, flat_eff, 0.0, 0.0),
+            cap_stored_wh * eff_discharge,
+        )
+        battery_ac_to_load = min(
+            ac_target,
+            _dc_ac(battery_dc, battery_inverter_wh, battery_inverter_eff, 1.0, pow_two, flat_ac, flat_eff, 0.0, 0.0)[0],
+        )
+        draw = battery_dc / eff_discharge
+        if hold_target:
+            # Land exactly on a binding floor, as the DC-coupled step does.
+            if battery_dc == available * eff_discharge:
+                draw = available
+            draw = min(draw, available)
+            battery_energy = discharge_floor if draw == available else max(discharge_floor, battery_energy - draw)
+        else:
+            battery_energy -= draw
+        battery_discharge_dc = draw
+        battery_discharge_loss = draw - battery_dc
+        battery_inverter_loss = battery_dc - battery_ac_to_load
+    grid_import = max(0.0, deficit - battery_ac_to_load)
+    if night > 0.0:
+        grid_import = grid_import + night
+
+    # 3. Grid charge toward the target, with what PV left of every shared
+    # limit, including the battery inverter's AC input (C7).
+    if not math.isnan(grid_target_energy) and pv_ac_export <= 0.0 and battery_discharge_dc <= 0.0 and eff_charge > 0.0:
+        goal = min(grid_target_energy, emax)
+        if goal - battery_energy > 0.0:
+            dc_needed = (goal - energy_before_charge) / eff_charge
+            dc_cap = min(cap_charge_in_wh, cap_stored_wh / eff_charge)
+            # The inverse saturates at the rating, so a need at or above the
+            # rating's DC output is not reachable this step.
+            if dc_needed < battery_inverter_wh * battery_inverter_eff:
+                required_ac = (
+                    _battery_inverter_charge_input(
+                        dc_needed, battery_inverter_wh, battery_inverter_eff, flat_ac, flat_eff
+                    )
+                    - pv_ac_to_battery
+                )
+            else:
+                required_ac = math.inf
+            grid_ac = min(
+                required_ac,
+                _battery_inverter_charge_input(dc_cap, battery_inverter_wh, battery_inverter_eff, flat_ac, flat_eff)
+                - pv_ac_to_battery,
+                battery_inverter_wh - pv_ac_to_battery,
+                grid_import_cap_wh - grid_import,
+            )
+            if grid_ac > 0.0:
+                total_ac = pv_ac_to_battery + grid_ac
+                dc_total = _battery_inverter_charge(
+                    total_ac, battery_inverter_wh, battery_inverter_eff, pow_two, flat_ac, flat_eff
+                )
+                grid_dc = dc_total * grid_ac / total_ac
+                pv_dc_charge = dc_total - grid_dc
+                battery_energy = energy_before_charge + dc_total * eff_charge
+                if hold_target and grid_ac == required_ac:
+                    battery_energy = goal
+                grid_import = grid_import + grid_ac
+            else:
+                grid_ac = 0.0
+
+    battery_charge_input = pv_dc_charge + grid_dc
+    return (
+        battery_energy,
+        0.0,
+        pv_dc - pv_clipping_dc,
+        pv_clipping_dc,
+        pv_ac_to_load,
+        pv_ac_export,
+        battery_charge_input,
+        battery_discharge_dc,
+        battery_ac_to_load,
+        battery_charge_input * (1.0 - eff_charge),
+        battery_discharge_loss,
+        pv_conversion_loss,
+        battery_inverter_loss,
+        grid_import,
+        grid_ac,
+        grid_dc,
+        pv_ac_to_battery,
+        pv_dc_charge,
+    )
+
+
 def _dispatch_day(
     matrix: np.ndarray,
     pv_dc_vals: np.ndarray,
@@ -933,6 +1146,13 @@ def _dispatch_day(
     ac_derate: np.ndarray,
     cable_k: float,
     night_wh: float,
+    ac_coupled: bool,
+    battery_inverter_wh: float,
+    battery_inverter_eff: float,
+    pv_chain_ac: np.ndarray,
+    pv_chain_loss: np.ndarray,
+    pv_chain_clip: np.ndarray,
+    pv_chain_night: np.ndarray,
 ) -> None:
     """Dispatch timesteps ``[lo, hi)`` at fixed health, writing rows of *matrix*.
 
@@ -953,10 +1173,21 @@ def _dispatch_day(
     ``night_wh`` is what the inverter draws from the grid in a step in which
     it converts nothing: no PV DC and no battery charge or discharge.
 
+    ``ac_coupled`` selects :func:`_dispatch_ac_step` for every step (ADR
+    0004). The PV inverter's conversion then comes from the ``pv_chain_*``
+    arrays, the PV-only run's AC output, conversion loss, clipped DC and
+    night draw in Wh per step, indexed like the inputs; the inverter
+    arguments above are not read. ``battery_inverter_wh`` is the battery
+    inverter's AC rating per step, infinite for none, at nominal efficiency
+    ``battery_inverter_eff``. A DC-coupled run passes empty chain arrays.
+
     Nothing is returned: the state the next window and the day-close
     replacement path need is the final step's row of *matrix*.
     """
     soh_percent = soh_fraction * 100.0
+    # Empty curve arrays of the right types: the battery inverter's PVWatts curve.
+    flat_ac = curve_ac[:0]
+    flat_eff = curve_eff[:0]
     for i in range(lo, hi):
         # Treat negative model/data artefacts as zero generation, matching the
         # public inverter helper and preventing negative PV from being
@@ -1015,57 +1246,111 @@ def _dispatch_day(
         grid_fraction = (
             min(1.0, max(0.0, grid_before_dispatch / energy_before_dispatch)) if energy_before_dispatch > 0.0 else 0.0
         )
-        (
-            battery_energy,
-            pv_dc_to_battery,
-            pv_dc_to_inverter,
-            pv_dc_curtailed,
-            pv_ac_to_load,
-            pv_ac_export,
-            battery_charge_input,
-            battery_discharge_dc,
-            battery_ac_to_load,
-            battery_charge_loss,
-            battery_discharge_loss,
-            pv_direct_inverter_loss,
-            battery_inverter_loss,
-            grid_import,
-            grid_ac,
-            grid_dc,
-        ) = _dispatch_dc_step(
-            pv_dc_power,
-            load,
-            battery_energy,
-            emin,
-            emax,
-            eff_charge,
-            eff_discharge,
-            inv_eff,
-            cap_charge_in_wh,
-            cap_discharge_ac_wh,
-            inv_cap_ac_wh * ac_derate[i],
-            ac_output_scale,
-            cap_stored_wh,
-            pow_two,
-            discharge_allowed[i],
-            discharge_floor,
-            grid_target_energy,
-            grid_eff,
-            grid_import_cap_wh,
-            curve_ac,
-            curve_eff,
-            curve_rows[i],
-            cable_k,
-        )
+        if ac_coupled:
+            (
+                battery_energy,
+                pv_dc_to_battery,
+                pv_dc_to_inverter,
+                pv_dc_curtailed,
+                pv_ac_to_load,
+                pv_ac_export,
+                battery_charge_input,
+                battery_discharge_dc,
+                battery_ac_to_load,
+                battery_charge_loss,
+                battery_discharge_loss,
+                pv_direct_inverter_loss,
+                battery_inverter_loss,
+                grid_import,
+                grid_ac,
+                grid_dc,
+                pv_ac_to_battery,
+                pv_dc_charge,
+            ) = _dispatch_ac_step(
+                pv_dc_power,
+                pv_chain_ac[i],
+                pv_chain_loss[i],
+                pv_chain_clip[i],
+                pv_chain_night[i],
+                load,
+                battery_energy,
+                emax,
+                eff_charge,
+                eff_discharge,
+                battery_inverter_wh,
+                battery_inverter_eff,
+                cap_charge_in_wh,
+                cap_discharge_ac_wh,
+                cap_stored_wh,
+                pow_two,
+                discharge_allowed[i],
+                discharge_floor,
+                grid_target_energy,
+                grid_import_cap_wh,
+                flat_ac,
+                flat_eff,
+            )
+            pv_charge_conversion_loss = pv_ac_to_battery - pv_dc_charge
+        else:
+            (
+                battery_energy,
+                pv_dc_to_battery,
+                pv_dc_to_inverter,
+                pv_dc_curtailed,
+                pv_ac_to_load,
+                pv_ac_export,
+                battery_charge_input,
+                battery_discharge_dc,
+                battery_ac_to_load,
+                battery_charge_loss,
+                battery_discharge_loss,
+                pv_direct_inverter_loss,
+                battery_inverter_loss,
+                grid_import,
+                grid_ac,
+                grid_dc,
+            ) = _dispatch_dc_step(
+                pv_dc_power,
+                load,
+                battery_energy,
+                emin,
+                emax,
+                eff_charge,
+                eff_discharge,
+                inv_eff,
+                cap_charge_in_wh,
+                cap_discharge_ac_wh,
+                inv_cap_ac_wh * ac_derate[i],
+                ac_output_scale,
+                cap_stored_wh,
+                pow_two,
+                discharge_allowed[i],
+                discharge_floor,
+                grid_target_energy,
+                grid_eff,
+                grid_import_cap_wh,
+                curve_ac,
+                curve_eff,
+                curve_rows[i],
+                cable_k,
+            )
+            pv_ac_to_battery = 0.0
+            pv_charge_conversion_loss = 0.0
+            # The DC PV put into the battery: PV DC itself when DC-coupled.
+            pv_dc_charge = pv_dc_to_battery
         if battery_charge_input > 0.0 and battery_discharge_dc > 0.0:
             raise ValueError("a dispatch step both charged and discharged the battery")
         night_consumption = 0.0
-        if night_wh > 0.0 and pv_dc_power <= 0.0 and battery_charge_input <= 0.0 and battery_discharge_dc <= 0.0:
+        if ac_coupled:
+            # The PV inverter draws on its PV-less steps whatever the battery
+            # does; the AC step already counted it in grid_import (ADR 0004 M3).
+            night_consumption = pv_chain_night[i]
+        elif night_wh > 0.0 and pv_dc_power <= 0.0 and battery_charge_input <= 0.0 and battery_discharge_dc <= 0.0:
             night_consumption = night_wh
             grid_import += night_consumption
         charge_stored = battery_charge_input * eff_charge
         # Each source's charge adds to its own origin: PV DC to PV, grid to grid.
-        pv_charge_stored = pv_dc_to_battery * eff_charge
+        pv_charge_stored = pv_dc_charge * eff_charge
         grid_charge_stored = grid_dc * eff_charge
         pv_origin_discharge_dc = battery_discharge_dc * origin_fraction
         pv_origin_battery_ac = battery_ac_to_load * origin_fraction
@@ -1130,8 +1415,8 @@ def _dispatch_day(
         matrix[L_GRID_AC_TO_BATTERY, i] = grid_ac / hours_per_step
         matrix[L_GRID_DC_TO_BATTERY, i] = grid_dc / hours_per_step
         matrix[L_GRID_CHARGE_CONVERSION_LOSS, i] = (grid_ac - grid_dc) / hours_per_step
-        matrix[L_PV_AC_TO_BATTERY, i] = 0.0
-        matrix[L_PV_CHARGE_CONVERSION_LOSS, i] = 0.0
+        matrix[L_PV_AC_TO_BATTERY, i] = pv_ac_to_battery / hours_per_step
+        matrix[L_PV_CHARGE_CONVERSION_LOSS, i] = pv_charge_conversion_loss / hours_per_step
         matrix[L_BATTERY_DISCHARGE_DC, i] = battery_discharge_dc / hours_per_step
         matrix[L_BATTERY_AC_TO_LOAD, i] = battery_ac_to_load / hours_per_step
         matrix[L_PV_DIRECT_INVERTER_LOSS, i] = pv_direct_inverter_loss / hours_per_step
@@ -1181,6 +1466,7 @@ def _day_arguments(
     instructions: Optional["DispatchInstructions"] = None,
     ac_derate: Optional[np.ndarray] = None,
     curve_rows: Optional[np.ndarray] = None,
+    pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None,
 ) -> Tuple[Any, ...]:
     """Pack one day's state into the positional arguments of :func:`_dispatch_day`.
 
@@ -1201,13 +1487,38 @@ def _day_arguments(
     ``battery_config.inverter_conversion`` supplies the efficiency curve, the
     AC cable and the night consumption.
 
-    An AC-coupled ``battery_config`` is refused here, before any step runs:
-    the day loop has only the DC-coupled step so far (ADR 0004).
+    An AC-coupled ``battery_config`` needs ``pv_chain``: the PV inverter's
+    AC output, conversion loss, clipped DC and night draw in Wh per step over
+    the whole run, as the PV-only path computes them (ADR 0004 C3, M2).
+    Its grid charge passes through the battery inverter, so its instructions
+    carry no ``grid_charge_efficiency``; the kernels receive NaN. A
+    DC-coupled one takes no chain and needs the efficiency.
     """
-    if battery_config.coupling != "dc":
-        raise NotImplementedError(
-            "AC-coupled battery dispatch is not implemented yet; use coupling = 'dc' or a run without a battery"
+    ac_coupled = battery_config.coupling == "ac"
+    if instructions is not None and instructions.grid_charge_efficiency is None and not ac_coupled:
+        raise ValueError(
+            "a DC-coupled battery needs a grid_charge_efficiency in its dispatch instructions; "
+            "only an AC-coupled battery converts grid charge in its own inverter"
         )
+    if ac_coupled:
+        if pv_chain is None:
+            raise ValueError("an AC-coupled battery needs the PV inverter's conversion, pv_chain")
+        if any(len(array) != len(pv_dc_vals) for array in pv_chain):
+            raise ValueError("pv_chain must cover the same steps as pv_dc_vals")
+        chain = pv_chain
+        battery_inverter_wh = (
+            math.inf
+            if battery_config.battery_inverter_ac_capacity_w is None
+            else battery_config.battery_inverter_ac_capacity_w * hours_per_step
+        )
+        assert battery_config.battery_inverter_efficiency is not None
+        battery_inverter_eff = battery_config.battery_inverter_efficiency
+    else:
+        if pv_chain is not None:
+            raise ValueError("pv_chain is for an AC-coupled battery; a hybrid inverter converts PV in the step")
+        chain = (np.empty(0), np.empty(0), np.empty(0), np.empty(0))
+        battery_inverter_wh = math.inf
+        battery_inverter_eff = 1.0
     if instructions is None:
         instructions = DispatchInstructions.noop(len(pv_dc_vals))
     if ac_derate is None:
@@ -1245,7 +1556,7 @@ def _day_arguments(
         instructions.discharge_allowed,
         instructions.reserve_fraction,
         instructions.grid_target_fraction,
-        float(instructions.grid_charge_efficiency),
+        math.nan if instructions.grid_charge_efficiency is None else float(instructions.grid_charge_efficiency),
         float(instructions.grid_import_limit_w * hours_per_step),
         curve_ac,
         curve_eff,
@@ -1253,6 +1564,10 @@ def _day_arguments(
         ac_derate,
         float(cable_k),
         float(conversion.night_consumption_w * hours_per_step),
+        ac_coupled,
+        float(battery_inverter_wh),
+        float(battery_inverter_eff),
+        *chain,
     )
 
 

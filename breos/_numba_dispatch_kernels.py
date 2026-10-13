@@ -47,6 +47,9 @@ for _helper in (
     _dispatch._grid_charge,
     _dispatch._combined_conversion,
     _dispatch._dispatch_dc_step,
+    _dispatch._battery_inverter_charge,
+    _dispatch._battery_inverter_charge_input,
+    _dispatch._dispatch_ac_step,
 ):
     register_jitable(fastmath=False)(_helper)
 

@@ -131,6 +131,35 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
             atol,
             "charge efficiency",
         )
+        # Each source's charge stores into its own origin (ADR 0002 A8,
+        # ADR 0004 C8): PV's DC, as DC or after the battery inverter.
+        pv_origin_stored = _column(results, "PV_Origin_Battery_Charge_Stored")
+        grid_origin_stored = _column(results, "Grid_Origin_Battery_Charge_Stored")
+        _assert_balanced(
+            pv_origin_stored,
+            (results["PV_DC_To_Battery"] + pv_ac_to_battery - pv_charge_conversion_loss) * config.charge_efficiency,
+            atol,
+            "PV-origin charge stored",
+        )
+        _assert_balanced(
+            grid_origin_stored, grid_dc_to_battery * config.charge_efficiency, atol, "grid-origin charge stored"
+        )
+    if getattr(config, "coupling", "dc") == "ac":
+        # No PV DC reaches the battery, and the battery inverter's AC rating
+        # bounds what enters it, PV and grid together, and what leaves it.
+        _assert_balanced(results["PV_DC_To_Battery"], 0.0, 0.0, "AC coupling stores no PV DC")
+        rating = config.battery_inverter_ac_capacity_w
+        if rating is not None:
+            entering = pv_ac_to_battery + grid_to_battery
+            for label, flow in (
+                ("battery inverter AC in", entering),
+                ("battery inverter AC out", results["Battery_AC_To_Load"]),
+            ):
+                if (flow > rating + atol).any():
+                    raise AssertionError(f"{label} exceeds its rating at {flow.idxmax()}: {flow.max()} > {rating}")
+    else:
+        _assert_balanced(pv_ac_to_battery, 0.0, 0.0, "a hybrid inverter takes no PV AC into the battery")
+        _assert_balanced(pv_charge_conversion_loss, 0.0, 0.0, "a hybrid inverter has no PV charging conversion")
     _assert_balanced(
         results["Battery_Energy_Delta"],
         results["Battery_Charge_Stored"]

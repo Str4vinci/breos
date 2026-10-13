@@ -110,8 +110,10 @@ class BatteryConfig:
     ``battery_inverter_ac_capacity_w`` and ``battery_inverter_efficiency``;
     the inverter fields above then describe the PV inverter only. ``"dc"``
     refuses the battery inverter fields, and ``"ac"`` requires the
-    efficiency. AC-coupled dispatch is not implemented yet: a run with an
-    AC-coupled battery stops before its first step.
+    efficiency. With ``"ac"`` PV converts as in a PV-only run, its surplus
+    AC charges the battery through the battery inverter, and grid charge
+    takes instructions without a ``grid_charge_efficiency``. Instruction
+    planners and daily controllers do not plan for it yet.
 
     Power limits are nameplate powers and therefore scale with the timestep:
     ``max_charge_power_w`` limits DC input to the battery path, while
@@ -1289,6 +1291,59 @@ def _apply_battery_retirement(
     return 0.0, 0.0, 0.0, 0.0
 
 
+def _pv_inverter_conversion(
+    pv_dc_wh: np.ndarray,
+    *,
+    battery_config: BatteryConfig,
+    hours_per_step: float,
+    cap_wh: float,
+    pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
+    ac_derate: Optional[np.ndarray] = None,
+    curve_rows: Optional[np.ndarray] = None,
+    units: Optional[InverterUnits] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """The PV inverters' conversion of ``pv_dc_wh`` on its own: ``(ac, conversion_loss, clipping, night)``.
+
+    Wh per step, as a PV-only run converts it. ``night`` is the inverters'
+    draw on the steps they convert nothing, None when there is none. A
+    PV-only run and an AC-coupled battery's PV inverter (ADR 0004 C3) both
+    take their conversion from here, so they agree bit for bit. ``ac_derate``
+    and ``curve_rows`` are aligned to ``pv_dc_wh``; ``units`` and a memoized
+    ``pv_chain`` cover a whole span.
+    """
+    if units is not None:
+        assert pv_chain is None
+        converted = convert_units(
+            pv_dc_wh,
+            units,
+            inverter_efficiency=battery_config.inverter_efficiency,
+            ac_output_scale=battery_config.ac_output_scale,
+            hours_per_step=hours_per_step,
+        )
+        # With several inverters, each one draws on the steps it receives no DC.
+        night = converted.night if converted.night.any() else None
+        return converted.ac, converted.conversion_loss, converted.clipping, night
+    if pv_chain is None:
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
+            pv_dc_wh,
+            cap_wh,
+            battery_config.inverter_efficiency,
+            battery_config.ac_output_scale,
+            conversion=battery_config.conversion,
+            ac_derate=ac_derate,
+            curve_rows=curve_rows,
+            hours_per_step=hours_per_step,
+        )
+    else:
+        # Memoized by the caller for these exact inputs. Same values, same
+        # expressions downstream; see AlignedSimulationInputs.with_pv_only_chain.
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = pv_chain
+    # The inverter's draw while it converts nothing, from the grid.
+    night_wh = battery_config.conversion.night_consumption_w * hours_per_step
+    night = np.where(pv_dc_wh <= 0.0, night_wh, 0.0) if night_wh > 0.0 else None
+    return ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night
+
+
 def _dispatch_no_battery_vectorized(
     out: Union["_ResultBuffers", "_PvOnlySummaryBuffers"],
     pv_dc_values: np.ndarray,
@@ -1319,44 +1374,22 @@ def _dispatch_no_battery_vectorized(
         assert isinstance(out, _ResultBuffers) and pv_chain is None
         out.matrix[:, steps] = 0.0
 
+    assert units is None or steps == slice(None)
     pv_dc_wh = np.maximum(0.0, pv_dc_values[steps] * hours_per_step)
     load_wh = load_values[steps] * hours_per_step
-    night_consumption_wh: Optional[np.ndarray]
-    if units is not None:
-        assert steps == slice(None) and pv_chain is None
-        converted = convert_units(
-            pv_dc_wh,
-            units,
-            inverter_efficiency=battery_config.inverter_efficiency,
-            ac_output_scale=battery_config.ac_output_scale,
-            hours_per_step=hours_per_step,
-        )
-        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = converted.ac, converted.conversion_loss, converted.clipping
-    elif pv_chain is None:
-        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
-            pv_dc_wh,
-            cap_wh,
-            battery_config.inverter_efficiency,
-            battery_config.ac_output_scale,
-            conversion=battery_config.conversion,
-            ac_derate=None if ac_derate is None else ac_derate[steps],
-            curve_rows=None if curve_rows is None else curve_rows[steps],
-            hours_per_step=hours_per_step,
-        )
-    else:
-        # Memoized by the caller for these exact inputs. Same values, same
-        # expressions downstream; see AlignedSimulationInputs.with_pv_only_chain.
-        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = pv_chain
+    ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night_consumption_wh = _pv_inverter_conversion(
+        pv_dc_wh,
+        battery_config=battery_config,
+        hours_per_step=hours_per_step,
+        cap_wh=cap_wh,
+        pv_chain=pv_chain,
+        ac_derate=None if ac_derate is None else ac_derate[steps],
+        curve_rows=None if curve_rows is None else curve_rows[steps],
+        units=units,
+    )
     pv_ac_to_load_wh = np.minimum(ac_wh, load_wh)
     grid_export_wh = ac_wh - pv_ac_to_load_wh
     grid_import_wh = np.maximum(0.0, load_wh - pv_ac_to_load_wh)
-    # The inverter's draw while it converts nothing, from the grid; with
-    # several inverters, each one's on the steps it receives no DC.
-    if units is not None:
-        night_consumption_wh = converted.night if converted.night.any() else None
-    else:
-        night_wh = battery_config.conversion.night_consumption_w * hours_per_step
-        night_consumption_wh = np.where(pv_dc_wh <= 0.0, night_wh, 0.0) if night_wh > 0.0 else None
     if night_consumption_wh is not None:
         grid_import_wh = grid_import_wh + night_consumption_wh
     # Keep the scalar reference's subtraction order. Returning ``ac_wh``
@@ -2190,6 +2223,12 @@ def _simulate_core(
     cap_stored_wh = _step_energy_cap(battery_config.stored_power_limit_w, hours_per_step)
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
+    ac_coupled = has_battery and battery_config.coupling == "ac"
+    if ac_coupled and (instruction_planner is not None or day_controller is not None):
+        raise NotImplementedError(
+            "an AC-coupled battery takes fixed dispatch_instructions for now; "
+            "instruction planners and daily controllers do not plan for it yet"
+        )
     if instruction_planner is not None:
         if dispatch_instructions is not None or day_controller is not None:
             raise ValueError("pass one of dispatch_instructions, an instruction planner or a daily controller")
@@ -2213,6 +2252,16 @@ def _simulate_core(
     if dispatch_instructions is not None and len(dispatch_instructions) != n_steps:
         raise ValueError(
             f"dispatch_instructions cover {len(dispatch_instructions)} steps; the simulation has {n_steps}"
+        )
+    if (
+        ac_coupled
+        and dispatch_instructions is not None
+        and dispatch_instructions.grid_charge_efficiency is not None
+        and not np.isnan(dispatch_instructions.grid_target_fraction).all()
+    ):
+        raise ValueError(
+            "an AC-coupled battery grid-charges through its own inverter; its dispatch instructions "
+            "take grid_charge_efficiency = None"
         )
     # No instructions is greedy dispatch; one no-op set serves every day.
     instructions = dispatch_instructions if dispatch_instructions is not None else DispatchInstructions.noop(n_steps)
@@ -2265,6 +2314,21 @@ def _simulate_core(
             degradation_tracking=degradation_tracking,
             hours_per_step=hours_per_step,
         )
+
+    # An AC-coupled battery's PV inverter converts as in a PV-only run,
+    # whatever the battery does, so its conversion is computed once for the
+    # span (ADR 0004 C3, M2).
+    ac_pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None
+    if ac_coupled:
+        chain_ac, chain_loss, chain_clip, chain_night = _pv_inverter_conversion(
+            np.maximum(0.0, _pv_dc_vals * hours_per_step),
+            battery_config=battery_config,
+            hours_per_step=hours_per_step,
+            cap_wh=cap_wh,
+            ac_derate=_derate_vals,
+            curve_rows=_curve_rows,
+        )
+        ac_pv_chain = (chain_ac, chain_loss, chain_clip, np.zeros(n_steps) if chain_night is None else chain_night)
 
     # Dispatch advances one degradation day at a time. Health state is fixed
     # for the whole window and advanced here, between windows, so every
@@ -2346,6 +2410,7 @@ def _simulate_core(
                     instructions=dispatch_arrays,
                     ac_derate=_full_rating if _derate_vals is None else _derate_vals,
                     curve_rows=_curve_rows,
+                    pv_chain=ac_pv_chain,
                 )
             if session is not None:
                 session.complete_segment(_pv_dc_vals, _load_vals, _temp_vals)

@@ -1,4 +1,7 @@
-"""AC-coupled batteries (ADR 0004): configuration, ledger columns and the run-time refusal."""
+"""AC-coupled batteries (ADR 0004): configuration and ledger columns.
+
+The AC dispatch step itself is tested in ``test_ac_dispatch.py``.
+"""
 
 import dataclasses
 import importlib.util
@@ -106,12 +109,6 @@ def test_ledger_adds_the_pv_ac_charge_columns_after_the_grid_charge_columns():
     position = _LEDGER_COLUMNS.index("Grid_Charge_Conversion_Loss")
     assert _LEDGER_COLUMNS[position + 1 : position + 3] == AC_COLUMNS
     assert LEDGER_SCHEMA_VERSION == "3.1"
-
-
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_ac_coupled_battery_is_refused_before_any_step(backend):
-    with pytest.raises(NotImplementedError, match="AC-coupled battery dispatch is not implemented yet"):
-        _simulate(_ac(battery_inverter_ac_capacity_w=3000.0), backend)
 
 
 @pytest.mark.parametrize("backend", _BACKENDS)

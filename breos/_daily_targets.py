@@ -369,6 +369,10 @@ class _DayEvaluator:
         wear_cost_per_kwh: float = 0.0,
     ) -> None:
         config = problem.battery_config
+        if config.coupling != "dc":
+            raise NotImplementedError(
+                "the daily-target planner does not plan for an AC-coupled battery yet; use fixed dispatch_instructions"
+            )
         hours = problem.hours_per_step
         self.problem = problem
         self.wear_cost_per_kwh = wear_cost_per_kwh
