@@ -6,7 +6,7 @@ import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, NamedTuple, TypeVar, cast
@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from pvlib.location import Location
 
-from breos.app_config import ResolvedAppConfig, SimulationPeriod, resolve_app_config
+from breos.app_config import ResolvedAppConfig, SimulationPeriod, default_module_key, resolve_app_config
 from breos.electrical import string_cable_loss, string_limited_dc
 from breos.inverter import AcCable, InverterConversion, InverterUnits, ac_derate
 from breos.pv.horizon import apply_terrain_horizon_profile
@@ -840,16 +840,33 @@ def reuse_prepared_inputs() -> Iterator[None]:
 
 
 def config_cache_key(cfg: dict[str, Any], independent_keys: frozenset[str]) -> str | None:
-    """A resolved config without ``independent_keys``, as canonical JSON.
+    """A resolved config without ``independent_keys``, as canonical JSON, with the parameters of its modules.
 
+    A module is named by its catalogue key, and a registered module's
+    parameters can change under the same name, so the key carries them.
     None when a value is not plain JSON data (an in-memory frame or series),
     which the key could not represent faithfully; that run is not cached.
     """
     relevant = {key: value for key, value in cfg.items() if key not in independent_keys}
     try:
-        return json.dumps(relevant, sort_keys=True)
+        return json.dumps([relevant, _module_parameters(cfg)], sort_keys=True)
     except (TypeError, ValueError):
         return None
+
+
+def _module_parameters(cfg: dict[str, Any]) -> list[Any]:
+    """The parameters of each module the config names, by name, as plain JSON values."""
+    default = cfg.get("pv_module") or default_module_key()
+    arrays = [arr for arr in cfg.get("pv_arrays") or [] if isinstance(arr, dict)]
+    names = {default} | {arr.get("module", default) for arr in arrays}
+    out = []
+    for name in sorted(n for n in names if isinstance(n, str)):
+        try:
+            module = get_module(name)
+        except (KeyError, ValueError):
+            continue
+        out.append([name, json.loads(json.dumps(asdict(module), default=str))])
+    return out
 
 
 def _input_cache_key(cfg: dict[str, Any]) -> str | None:

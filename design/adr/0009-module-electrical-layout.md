@@ -15,10 +15,13 @@ combine freely:
   half-cells: each bypass diode spans two half-chains in parallel, top and
   bottom. Shingled modules overlap cell strips into parallel strip-strings,
   and thin-film modules are one monolithic chain of narrow cells.
-- **Reverse behaviour**: the voltage at which a shaded cell breaks down.
-  Front-contact cells (PERC, TOPCon, heterojunction) break down at or beyond
-  the voltage the bypass diode allows a shaded cell, about -12 to -15 V in a
-  20-cell substring, so the no-leakage curve of ADR 0008 S6 holds. Some
+- **Reverse behaviour**: the voltage at which a shaded cell breaks down, and
+  what it leaks before. The bypass diode holds a fully shaded cell at about
+  -12 to -15 V in a 20-cell substring. Where a cell breaks down beyond that
+  and leaks little before, as TOPCon and heterojunction cells typically do,
+  the no-leakage curve of ADR 0008 S6 is a close approximation; PERC cells,
+  which break down from about -10 V, can leak before the diode takes over
+  and lose a little less than it computes. Some
   back-contact cells are designed to break down at a few volts
   (Calcabrini et al., 2022), so a shaded cell passes the current itself and
   the module loses that cell's generation and what it dissipates, not the

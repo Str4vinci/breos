@@ -308,7 +308,7 @@ class ModuleShading:
                     "bypass diodes, one table each"
                 )
             modules.append(module)
-        return replace(self, modules=tuple(modules), bypass_diodes=bypass_diodes)
+        return replace(self, modules=tuple(modules), bypass_diodes=int(bypass_diodes))
 
     @property
     def diodes(self) -> int:

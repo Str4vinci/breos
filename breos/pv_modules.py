@@ -127,6 +127,9 @@ class PVModuleParams:
             point[name] = value
             self._validate_stc_point(point["Mpp"], point["Vmp"], point["Imp"])
 
+        if name == "bypass_diodes":
+            # A built-in int, so the count serialises wherever it is reported.
+            value = int(value)
         object.__setattr__(self, name, value)
 
     @staticmethod

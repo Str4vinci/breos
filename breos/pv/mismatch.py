@@ -77,6 +77,16 @@ class ShadedStringCurve:
     ) -> None:
         if len(shading.modules) != modules:
             raise ValueError(f"module_shading has {len(shading.modules)} modules for a string of {modules}")
+        diodes = parts.pv_params.bypass_diodes
+        if shading.bypass_diodes is None:
+            shading = shading.for_module(diodes)
+            problem = shading.inconsistency(parts.pv_params.N_Cells)
+            if problem:
+                raise ValueError(f"module_shading: {problem}")
+        elif shading.bypass_diodes != diodes:
+            raise ValueError(
+                f"module_shading is bound to {shading.bypass_diodes} bypass diodes; the module has {diodes}"
+            )
         self.parts = parts
         self.scale = np.asarray(scale, dtype=float)
         self.modules = modules

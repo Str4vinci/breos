@@ -8,6 +8,7 @@ unless it truly leaves the inputs unchanged.
 
 import csv
 import pickle
+from dataclasses import replace
 from unittest import mock
 
 import pandas as pd
@@ -22,6 +23,7 @@ from breos.app_inputs import (
     reuse_prepared_inputs,
 )
 from breos.economics import default_amount_cost_keys
+from breos.pv_modules import MODULES
 from tools.generate_app_golden import _fake_fetch
 
 BASE = {
@@ -296,3 +298,10 @@ def test_a_sweep_writes_the_same_csv_bytes_with_and_without_the_cache(monkeypatc
     assert [row["param_n_modules"] for row in rows[:4]] == ["8", "10", "8", "10"]
     # The runs differ, so the equality is not between identical rows.
     assert len({row["grid_import_cost_year1_prices"] for row in rows}) > 8
+
+
+def test_a_registered_modules_parameters_are_part_of_the_cache_key(monkeypatch):
+    resolved = App(BASE)._resolved
+    key = _input_cache_key(resolved.cfg)
+    monkeypatch.setitem(MODULES, resolved.pv_module_key, replace(MODULES[resolved.pv_module_key], bypass_diodes=2))
+    assert _input_cache_key(App(BASE)._resolved.cfg) != key

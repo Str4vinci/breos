@@ -692,3 +692,20 @@ class _NarrowFirstPeak:
 def test_a_narrow_global_peak_is_not_filtered_out():
     _, limited, _ = _curves_power([_NarrowFirstPeak(), _NarrowFirstPeak()], 0.0, 800.0, 100.0, 100.0)
     assert limited[0] == pytest.approx(600.0, rel=1e-4)
+
+
+def test_string_energy_binds_unbound_shading_to_the_module():
+    raw = ModuleShading.from_mapping({"azimuth_deg": [0], "elevation_deg": [0], "modules": [LIT, LIT]})
+    bound = ShadedStringCurve(raw.for_module(3), _parts(), np.ones(STEPS), 2)
+    unbound = ShadedStringCurve(raw, _parts(), np.ones(STEPS), 2)
+    np.testing.assert_array_equal(unbound.mpp, bound.mpp)
+    with pytest.raises(ValueError, match="bound to 2 bypass diodes; the module has 3"):
+        ShadedStringCurve(raw.for_module(2), _parts(), np.ones(STEPS), 2)
+
+
+def test_a_numpy_diode_count_is_stored_as_an_int():
+    module = replace(get_module("Generic_400W"), bypass_diodes=np.int64(2))
+    assert type(module.bypass_diodes) is int
+    shading = ModuleShading.from_mapping({"azimuth_deg": [0], "elevation_deg": [0], "modules": [LIT]})
+    assert type(shading.for_module(np.int64(2)).bypass_diodes) is int
+    json.dumps(shading.for_module(np.int64(2)).as_dict())
