@@ -23,6 +23,14 @@ resolution = "h"
 electrical_fidelity = "string"
 pv_loss_overrides = { mismatch = 0.0 }
 
+# A plug-in kit is self-installed and needs no maintenance contract. The
+# module and inverter prices still come from residential_de, which prices
+# rooftop systems with a string inverter; replace them with your kit's.
+[costs]
+installation_cost_per_module = 0.0
+other_cost_per_module = 0.0
+maintenance_cost_per_panel = 0.0
+
 # Hung on a south-facing railing at 70 degrees.
 [[pv_arrays]]
 modules = 2

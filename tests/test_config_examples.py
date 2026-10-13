@@ -68,13 +68,23 @@ def test_the_balcony_example_runs_each_module_on_its_own_input():
     from tools.generate_app_golden import _fake_fetch
 
     config = tomllib.loads((EXAMPLES / "balcony-microinverter.toml").read_text(encoding="utf-8"))
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
-        app = App(config)
-        app.simulate()
+
+    def run(config):
+        with (
+            mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
+            mock.patch("breos.app.load_weather", lambda **_kwargs: None),
+        ):
+            app = App(config)
+            app.simulate()
+        return app
+
+    app = run(config)
     result = app.result()
+    # With one module per input there is no series mismatch: the PVWatts
+    # mismatch loss is off, 2 % of the DC by default.
+    with_mismatch = run({key: value for key, value in config.items() if key != "pv_loss_overrides"})
+    produced = app.timeseries()["PV_DC"].sum()
+    assert produced == pytest.approx(with_mismatch.timeseries()["PV_DC"].sum() / 0.98, rel=1e-3)
     # Every limit of the microinverter holds; only the module's unstated
     # system voltage leaves a check not run.
     assert [(f["code"], f["field"]) for f in result["electrical"]["findings"]] == [
@@ -82,4 +92,4 @@ def test_the_balcony_example_runs_each_module_on_its_own_input():
     ]
     stages = {stage["key"]: stage for stage in result["pv_loss_waterfall"]["stages"]}
     assert stages["mppt_limits"]["delta_kwh"] == 0.0
-    assert app.timeseries()["PV_Production"].sum() > 0
+    assert result["electrical"]["status"] == "incomplete"
