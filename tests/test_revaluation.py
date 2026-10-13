@@ -249,6 +249,7 @@ def test_keys_that_change_the_simulation_are_refused(flat_app, changes):
 
 def test_revaluation_keys_are_the_prices():
     assert REVALUATION_KEYS == {
+        "battery_replacement_cost",
         "cost_preset",
         "costs",
         "currency",

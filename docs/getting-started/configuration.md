@@ -1014,8 +1014,8 @@ maintenance_cost_per_panel = 12
   sets it; see [Optimization](optimization.md).
 - `App.revalue` can move a run to another currency, but only with every
   money input restated in it, because it changes a table only in the keys
-  you give. Restate each non-zero key the run set under `[costs]`, and each
-  non-zero `import_prices`, `export_prices`, `fixed_charge_per_day` and
+  you give. Restate each non-zero key the run set under `[costs]`, a
+  non-zero `battery_replacement_cost`, and each non-zero `import_prices`, `export_prices`, `fixed_charge_per_day` and
   `annual_network_credit` amount of a `[tariff]` or `[reference_tariff]` the
   run keeps, or set it to None to remove it; a new `currency` label alone is
   refused. The cost preset must be removed or one in the new currency. A

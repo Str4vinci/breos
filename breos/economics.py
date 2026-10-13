@@ -63,21 +63,25 @@ BATTERY_COST_KEYS: tuple[str, ...] = (
 PV_ONLY_COST_KEYS: tuple[str, ...] = ("inverter_cost_per_kw_simple",)
 
 
-def default_amount_cost_keys(*, tariff: bool, battery: bool | None) -> tuple[str, ...]:
+def default_amount_cost_keys(*, tariff: bool, battery: bool | None, coupling: str = "dc") -> tuple[str, ...]:
     """The cost keys a run prices with whose :class:`CostParams` default is an amount of money.
 
     Those defaults are amounts in the default currency, EUR; a zero default
     is zero in any currency and is left out. ``tariff`` drops the flat energy
     prices a tariff replaces. ``battery`` keeps the keys priced with a
     battery (True), without one (False), or both (None, for a search that
-    may install either).
+    may install either). With ``coupling = "ac"`` the PV inverter is priced
+    at the simple rate, battery or not, and the hybrid rate never (ADR 0004
+    C9).
     """
     defaults = CostParams()
     skipped = set(FLAT_PRICE_COST_KEYS if tariff else ())
-    if battery is True:
-        skipped.update(PV_ONLY_COST_KEYS)
-    elif battery is False:
+    if battery is False:
         skipped.update(BATTERY_COST_KEYS)
+    elif coupling == "ac":
+        skipped.add("inverter_cost_per_kw_hybrid")
+    elif battery is True:
+        skipped.update(PV_ONLY_COST_KEYS)
     # A key with no default (None) is never read from a default.
     return tuple(
         key

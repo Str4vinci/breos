@@ -330,7 +330,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "The price of one battery replacement at t = 0, such as a unit sold as pack and inverter. `None` prices "
             "the pack at `storage_cost_per_kwh`. The terminal credit stays the pack's"
         ),
-        summary="battery.replacement_cost",
+        # A price, so App.revalue may change it.
+        summary="economics.battery_replacement_cost",
     ),
     "cost_preset": AppConfigField(
         default=None,
@@ -1835,6 +1836,7 @@ def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
         preset=cfg.get("cost_preset"),
         tariff=tariff_spec is not None,
         battery=cfg["battery_kwh"] * 1000 > 1,
+        coupling=cfg["battery_coupling"],
     )
     _validate_battery_and_degradation(cfg)
     _validate_battery_coupling(cfg)
@@ -3200,6 +3202,7 @@ def check_cost_currency(
     preset: str | None = None,
     tariff: bool,
     battery: bool | None,
+    coupling: str = "dc",
     where: str = "[costs]",
 ) -> None:
     """Refuse cost inputs that are not in the run's ``currency``.
@@ -3209,8 +3212,8 @@ def check_cost_currency(
     cost the run prices with whose :class:`~breos.economics.CostParams`
     default is a EUR amount must be given, in ``given`` (the cost keys set
     explicitly) or by a preset in that currency. Defaults of zero are zero in
-    any currency and stay. ``tariff`` and ``battery`` select the keys the run
-    prices with (:func:`~breos.economics.default_amount_cost_keys`).
+    any currency and stay. ``tariff``, ``battery`` and ``coupling`` select the
+    keys the run prices with (:func:`~breos.economics.default_amount_cost_keys`).
 
     Raises:
         ValueError: If the preset's currency differs, or a EUR default would be read.
@@ -3227,7 +3230,11 @@ def check_cost_currency(
         supplied.update(load_config_json("costs.json")[preset])
     if currency == DEFAULT_CURRENCY:
         return
-    missing = [key for key in default_amount_cost_keys(tariff=tariff, battery=battery) if key not in supplied]
+    missing = [
+        key
+        for key in default_amount_cost_keys(tariff=tariff, battery=battery, coupling=coupling)
+        if key not in supplied
+    ]
     if missing:
         raise ValueError(
             f"The run is in {currency}, but {', '.join(missing)} would come from the built-in "

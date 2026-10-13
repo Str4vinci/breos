@@ -6,7 +6,7 @@ import pytest
 
 from breos import App
 from breos.app_config import build_costs_dict, resolve_app_config
-from breos.economics import replacement_event_cost
+from breos.economics import default_amount_cost_keys, replacement_event_cost
 from breos.projection import build_battery_config
 from tools.generate_app_golden import _fake_fetch
 
@@ -199,3 +199,67 @@ def test_an_ac_battery_reports_its_inverter_apart_from_the_pv_inverter():
     assert balance["pv_dc"]["to_battery_kwh"] == 0.0
     assert balance["ac_delivery"]["pv_to_battery_kwh"] > 0.0
     assert ac["provenance"]["resolved_config"]["battery_inverter_kw_per_kwh"] == 0.6
+
+
+# --- currency and revaluation ------------------------------------------------
+
+
+def test_an_ac_run_needs_the_simple_pv_inverter_price_never_the_hybrid_one():
+    dc = default_amount_cost_keys(tariff=False, battery=True)
+    ac = default_amount_cost_keys(tariff=False, battery=True, coupling="ac")
+    assert "inverter_cost_per_kw_hybrid" in dc and "inverter_cost_per_kw_simple" not in dc
+    assert "inverter_cost_per_kw_simple" in ac and "inverter_cost_per_kw_hybrid" not in ac
+    either = default_amount_cost_keys(tariff=False, battery=None, coupling="ac")
+    assert "inverter_cost_per_kw_hybrid" not in either
+    assert default_amount_cost_keys(tariff=False, battery=False, coupling="ac") == default_amount_cost_keys(
+        tariff=False, battery=False
+    )
+
+
+def _usd(keys):
+    return {key: 1.0 for key in keys}
+
+
+def test_a_non_eur_ac_run_refuses_a_eur_default_pv_inverter_price():
+    needed = default_amount_cost_keys(tariff=False, battery=True, coupling="ac")
+    base = {**BASE, "cost_preset": None, "currency": "USD", "battery_kwh": 5, **AC}
+    costs = {**_usd(needed), "battery_inverter_cost_per_kw": 120.0}
+    resolve_app_config({**base, "costs": costs})
+    missing = {key: value for key, value in costs.items() if key != "inverter_cost_per_kw_simple"}
+    with pytest.raises(ValueError, match="inverter_cost_per_kw_simple would come from the built-in EUR defaults"):
+        resolve_app_config({**base, "costs": missing})
+
+
+def test_revalue_changes_the_replacement_price_and_refuses_it_across_currencies():
+    with (
+        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
+        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
+    ):
+        app = App({**BASE, "battery_kwh": 5, "battery_eol_percentage": 0.97, "battery_replacement_cost": 4321.0})
+        app.simulate()
+        result = app.result()
+        assert result["battery_replacements"] > 0
+        revalued = app.revalue({"battery_replacement_cost": 1000.0})
+        assert revalued["battery_replacements"] == result["battery_replacements"]
+        assert revalued["battery_replacement_cost_npv"] == pytest.approx(
+            result["battery_replacement_cost_npv"] * 1000.0 / 4321.0, abs=0.02
+        )
+        usd = {
+            "currency": "USD",
+            "cost_preset": None,
+            "costs": _usd(default_amount_cost_keys(tariff=False, battery=True)),
+        }
+        with pytest.raises(ValueError, match="battery_replacement_cost is an amount in EUR"):
+            app.revalue(usd)
+        restated = app.revalue({**usd, "battery_replacement_cost": 5000.0})
+        assert restated["battery_replacements"] == result["battery_replacements"]
+
+
+def test_the_ac_cable_carries_the_pv_inverter_output_alone():
+    # Beside an AC-coupled battery the PV inverter and its cable convert as
+    # in a PV-only run (ADR 0004 C3), so the cable loss is the PV-only one.
+    cable = {"ac_cable": {"length_m": 30, "cross_section_mm2": 2.5, "phases": 1, "voltage_v": 230}}
+    pv_only = _result({"battery_kwh": 0, **cable})["pv_loss_waterfall"]["inverter"]["ac_cable"]
+    ac = _result({"battery_kwh": 5, **AC, **cable})["pv_loss_waterfall"]
+    assert ac["energy_balance"]["ac_delivery"]["pv_to_battery_kwh"] > 0.0
+    assert ac["inverter"]["ac_cable"]["loss_kwh"] == pv_only["loss_kwh"] > 0.0

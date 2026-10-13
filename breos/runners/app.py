@@ -263,10 +263,14 @@ def _inverter_model_fields(
     cable = resolved.ac_cable
     if cable is not None:
         k = cable.loss_coefficient_per_w
+        # The cable carries the PV inverter's output: with a hybrid inverter
+        # that includes the battery's discharge; beside an AC-coupled
+        # battery it is PV alone, including the AC it sends the battery.
+        third = "PV_AC_To_Battery" if resolved.cfg["battery_coupling"] == "ac" else "Battery_AC_To_Load"
         delivered = (
             first_year_results_df["PV_AC_To_Load"]
             + first_year_results_df["PV_AC_Export"]
-            + first_year_results_df["Battery_AC_To_Load"]
+            + first_year_results_df[third]
         ).to_numpy(dtype=float)
         root = np.sqrt(np.clip(1.0 - 4.0 * k * delivered, 0.0, None))
         gross = 2.0 * delivered / (1.0 + root)
