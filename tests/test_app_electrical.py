@@ -112,7 +112,10 @@ def test_several_inverters_add_up_and_weight_their_efficiency(trina):
     )
     assert resolved.inverter_ac_capacity_w == 10000
     assert resolved.cfg["inverter_efficiency"] == pytest.approx((6000 * 0.982 + 4000 * 0.984) / 10000)
-    assert resolved.electrical.check.status == "pass"
+    # 3150 W of modules on the 6 kW inverter is a DC/AC ratio of 0.53, below 0.8.
+    (finding,) = resolved.electrical.check.findings
+    assert (finding.code, finding.inverter, finding.severity) == ("dc_ac_ratio_outside_range", 0, "warning")
+    assert finding.value == pytest.approx(3150 / 6000)
 
 
 def test_without_pv_arrays_the_single_array_is_array_0(trina):

@@ -116,7 +116,10 @@ does between sweeps. Its search refines the best few peaks of each curve, so a
 curve with more peaks, or a very narrow one, can still have its highest peak
 missed.
 
-String-level energy models one inverter. The PVWatts `mismatch` loss still
+With several inverters, each clips and converts its own strings' DC, and
+their AC outputs add up; a battery then waits for AC coupling (see
+[Several inverters](../getting-started/configuration.md#several-inverters)).
+The PVWatts `mismatch` loss still
 applies, for differences between modules of one model, which a model of
 identical modules does not produce.
 

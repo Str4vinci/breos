@@ -7,7 +7,7 @@ using pvlib, with support for both hourly and 15-minute time resolutions.
 
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -275,13 +275,18 @@ class PVProductionBreakdown:
     # DC that strings on different curves lose by sharing an MPPT input's
     # voltage, already taken out of ``dc_after_losses``; None when no input
     # holds such strings. ``input_parallel_mismatch`` holds each input's, by
-    # its MPPT index.
+    # its ``(inverter, mppt)`` indices.
     parallel_mismatch_loss: Optional[pd.Series] = None
-    input_parallel_mismatch: Optional[Dict[int, pd.Series]] = None
+    input_parallel_mismatch: Optional[Dict[Tuple[int, int], pd.Series]] = None
     # The inverter inputs' operating DC voltage with string-level energy,
     # weighted by the power each input delivers, in V; 0 where none does.
     # None otherwise.
     dc_voltage: Optional[pd.Series] = None
+    # With string-level energy and several inverters, each inverter's share
+    # of ``dc_after_losses`` and its inputs' operating DC voltage, in the
+    # order of ``inverters``; None otherwise.
+    inverter_dc: Optional[Tuple[pd.Series, ...]] = None
+    inverter_dc_voltage: Optional[Tuple[pd.Series, ...]] = None
 
 
 @dataclass(frozen=True)

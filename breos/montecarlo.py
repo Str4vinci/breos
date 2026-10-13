@@ -476,6 +476,21 @@ def _reject_weather_file(cfg: dict[str, Any]) -> None:
         )
 
 
+def _reject_several_string_inverters(resolved: ResolvedAppConfig) -> None:
+    """Refuse string-level energy with several inverters, before any weather is loaded or any trajectory runs.
+
+    Each trajectory carries one DC series, converted by one inverter; several
+    inverters each convert their own share (ADR 0007 D10), in breos.App only.
+    """
+    electrical = resolved.electrical
+    if electrical is not None and electrical.fidelity == "string" and len(electrical.inverters) > 1:
+        raise ValueError(
+            f"electrical_fidelity = 'string' with {len(electrical.inverters)} inverters runs in breos.App only; "
+            "Monte Carlo converts each trajectory's DC through one inverter. Run the design with breos.App, or "
+            "use electrical_fidelity = 'aggregate'."
+        )
+
+
 def _reject_planned_smart_charging(resolved: ResolvedAppConfig) -> None:
     """Refuse daily-persistence smart charging, before any weather is loaded or any trajectory runs.
 
@@ -511,6 +526,7 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
     _reject_period(cfg)
     _reject_weather_file(cfg)
     _reject_planned_smart_charging(resolved)
+    _reject_several_string_inverters(resolved)
     weather_key = _weather_cache_key(cfg, resolved, settings)
     runtime_weather: dict[str, Any] = {}
     weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
@@ -957,6 +973,7 @@ def run_montecarlo(
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
     _reject_planned_smart_charging(resolved)
+    _reject_several_string_inverters(resolved)
     if settings.execution_backend is None:
         settings = replace(settings, execution_backend=cfg["execution_backend"])
     if settings.n_runs < 1:

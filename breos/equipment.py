@@ -9,6 +9,8 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from numbers import Integral, Real
+from types import MappingProxyType
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -173,8 +175,11 @@ class InverterSpec:
     ``temperature_derating`` lowers the AC rating in hot ambients; both accept
     mappings of their fields. ``night_consumption_w`` is what the inverter
     draws from the grid while it converts nothing, as datasheets state it;
-    unset, it is not modelled and not reported missing. No prices, product identities, certifications or
-    sizing presets live here.
+    unset, it is not modelled and not reported missing. ``ac_cable`` is
+    the inverter's own AC cable, as the fields of
+    :class:`~breos.inverter.AcCable`, for string-level energy with several
+    inverters. No prices, product identities, certifications or sizing
+    presets live here.
     """
 
     nominal_power_w: float
@@ -193,9 +198,14 @@ class InverterSpec:
     efficiency_curve: EfficiencyCurve | None = None
     temperature_derating: TemperatureDerating | None = None
     night_consumption_w: float | None = None
+    ac_cable: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         _positive("nominal_power_w", self.nominal_power_w)
+        if self.ac_cable is not None:
+            if not isinstance(self.ac_cable, Mapping):
+                raise ValueError("ac_cable must be a mapping of AcCable's fields")
+            object.__setattr__(self, "ac_cable", MappingProxyType(dict(self.ac_cable)))
         for name, kind in (("efficiency_curve", EfficiencyCurve), ("temperature_derating", TemperatureDerating)):
             value = getattr(self, name)
             if isinstance(value, Mapping):

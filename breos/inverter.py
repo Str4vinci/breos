@@ -11,10 +11,11 @@ This module handles:
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 import numpy as np
+import pandas as pd
 
 from breos._dispatch import (
     PVWATTS_CURVE_CONSTANT,
@@ -382,6 +383,145 @@ def _calculate_dc_ac_power_arrays(
     clipping_loss_dc = np.maximum(0.0, pv_dc_power - dc_used)
     conversion_loss = np.maximum(0.0, dc_used - ac_power)
     return ac_power, conversion_loss, clipping_loss_dc
+
+
+@dataclass(frozen=True, eq=False)
+class InverterUnits:
+    """Several inverters, each converting its own share of the system's DC.
+
+    String-level energy without a battery (ADR 0007 D10). Entry ``i`` of
+    ``ac_capacity_w``, ``efficiency`` and ``conversions`` is inverter ``i``'s
+    AC nameplate, single efficiency and conversion: its efficiency curve, its
+    own AC cable and its night draw. ``shares`` holds each step's share of
+    the system DC per inverter, one column per inverter; ``ac_derate`` each
+    inverter's AC rating as a fraction of its nameplate, 1 without
+    temperature derating; and ``curve_rows`` each inverter's efficiency-curve
+    row position. ``feeder_cable_k_per_w`` is the shared AC cable's loss over
+    the square of the inverters' summed AC output, in 1/W.
+    """
+
+    ac_capacity_w: tuple[float, ...]
+    efficiency: tuple[float, ...]
+    conversions: tuple[InverterConversion, ...]
+    shares: pd.DataFrame
+    ac_derate: pd.DataFrame
+    curve_rows: pd.DataFrame
+    feeder_cable_k_per_w: float = 0.0
+
+    def __post_init__(self) -> None:
+        n = len(self.ac_capacity_w)
+        if n < 2 or len(self.efficiency) != n or len(self.conversions) != n:
+            raise ValueError("InverterUnits needs at least two inverters and one entry of each field per inverter")
+        for frame in (self.shares, self.ac_derate, self.curve_rows):
+            if frame.shape[1] != n or not frame.index.equals(self.shares.index):
+                raise ValueError("InverterUnits per-step frames need one column per inverter on one index")
+        k = float(self.feeder_cable_k_per_w)
+        if not math.isfinite(k) or k < 0.0:
+            raise ValueError("feeder_cable_k_per_w must be a finite number of at least 0")
+
+    def aligned(self, index: pd.DatetimeIndex) -> "InverterUnits":
+        """These units on ``index``, which their per-step frames must cover with finite values."""
+        frames = []
+        for name in ("shares", "ac_derate", "curve_rows"):
+            frame = getattr(self, name).reindex(index)
+            if not np.isfinite(frame.to_numpy(dtype=float)).all():
+                raise ValueError(f"InverterUnits.{name} must hold a finite value at every simulated step")
+            frames.append(frame)
+        return replace(self, shares=frames[0], ac_derate=frames[1], curve_rows=frames[2])
+
+
+@dataclass(frozen=True)
+class UnitsConversion:
+    """What :func:`convert_units` returns, in the energy per step its DC came in.
+
+    ``ac``, ``conversion_loss``, ``clipping`` and ``night`` are the system's:
+    the AC delivered past the shared cable, the DC that entered the
+    inverters less that AC, the DC above the inverters' limits, and their
+    night draw. ``inverters`` holds one mapping per inverter of its ``dc``,
+    ``ac`` (past its own cable), ``conversion_loss``, ``clipping``, ``night``
+    and ``cable_loss``; ``feeder_cable_loss`` is the shared cable's.
+    """
+
+    ac: np.ndarray
+    conversion_loss: np.ndarray
+    clipping: np.ndarray
+    night: np.ndarray
+    inverters: tuple[dict[str, np.ndarray], ...]
+    feeder_cable_loss: np.ndarray
+
+
+def _cable_loss_from_net(net: np.ndarray, cable_k: float) -> np.ndarray:
+    """What a cable losing ``cable_k * ac**2`` took from the AC it delivered as ``net``."""
+    if cable_k <= 0.0:
+        return np.zeros_like(net)
+    root = np.sqrt(np.clip(1.0 - 4.0 * cable_k * net, 0.0, None))
+    return 2.0 * net / (1.0 + root) - net
+
+
+def convert_units(
+    pv_dc: np.ndarray, units: InverterUnits, *, ac_output_scale: float = 1.0, hours_per_step: float = 1.0
+) -> UnitsConversion:
+    """Convert the system DC ``pv_dc`` (energy per step) through each inverter of ``units`` on its own.
+
+    ``units`` must be aligned to ``pv_dc``'s steps. Each inverter takes its
+    share of the DC, clips at its own derated nameplate and converts along
+    its own curve, past its own AC cable; it draws its night consumption on
+    the steps it receives no DC. The shared cable then takes its loss from
+    the summed AC, and ``ac_output_scale`` applies last, as in the single
+    inverter's conversion.
+    """
+    pv_dc = np.maximum(0.0, np.asarray(pv_dc, dtype=np.float64))
+    shares = units.shares.to_numpy(dtype=np.float64)
+    derates = units.ac_derate.to_numpy(dtype=np.float64)
+    rows = units.curve_rows.to_numpy(dtype=np.float64)
+    gross = np.zeros_like(pv_dc)
+    clipping = np.zeros_like(pv_dc)
+    night = np.zeros_like(pv_dc)
+    inverters = []
+    for i, conversion in enumerate(units.conversions):
+        dc = pv_dc * shares[:, i]
+        derate = derates[:, i]
+        reads_rows = conversion.curve_ac.size > 0 and conversion.curve_eff.shape[0] > 1
+        ac, _, clip = _calculate_dc_ac_power_arrays(
+            dc,
+            _step_cap(units.ac_capacity_w[i], hours_per_step),
+            units.efficiency[i],
+            1.0,
+            conversion=conversion,
+            ac_derate=None if (derate == 1.0).all() else derate,
+            curve_rows=rows[:, i] if reads_rows else None,
+            hours_per_step=hours_per_step,
+        )
+        draw = np.where(dc <= 0.0, conversion.night_consumption_w * hours_per_step, 0.0)
+        cable_k = conversion.ac_cable_k_per_w / hours_per_step
+        inverters.append(
+            {
+                "dc": dc,
+                "ac": ac,
+                "conversion_loss": np.maximum(0.0, dc - clip - ac),
+                "clipping": clip,
+                "night": draw,
+                "cable_loss": _cable_loss_from_net(ac, cable_k),
+            }
+        )
+        gross += ac
+        clipping += clip
+        night += draw
+    feeder_k = units.feeder_cable_k_per_w / hours_per_step
+    delivered = np.maximum(0.0, gross - feeder_k * gross * gross) if feeder_k > 0.0 else gross
+    ac = delivered * _clamped_ac_output_scale(ac_output_scale)
+    return UnitsConversion(
+        ac=ac,
+        conversion_loss=np.maximum(0.0, pv_dc - clipping - ac),
+        clipping=clipping,
+        night=night,
+        inverters=tuple(inverters),
+        feeder_cable_loss=gross - delivered,
+    )
+
+
+def _step_cap(power_w: float, hours_per_step: float) -> float:
+    return power_w * hours_per_step
 
 
 def dc_power_for_ac_output(

@@ -247,12 +247,12 @@ def test_string_level_energy_reads_the_curve_at_the_strings_voltage(curved_inver
     assert resolved.inverter_conversion.curve_row == pytest.approx((7 * 44.6 - 250) / 150)
 
 
-def test_a_curve_needs_a_single_inverter(curved_inverter_config):
+def test_a_curve_with_several_inverters_needs_string_level_energy(curved_inverter_config):
     second = {k: v for k, v in curved_inverter_config["inverters"][0].items() if k != "efficiency_curve"}
     curved_inverter_config["inverters"].append(second)
     curved_inverter_config["pv_arrays"].append({"modules": 7, "module": "Trina_TSM_450NEG9R28"})
     curved_inverter_config["pv_strings"].append({"inverter": 1, "mppt": 0, "array": 1, "modules": 7})
-    with pytest.raises(ValueError, match="needs a single inverter"):
+    with pytest.raises(ValueError, match="several inverters needs electrical_fidelity = 'string'"):
         resolve_app_config(curved_inverter_config)
 
 

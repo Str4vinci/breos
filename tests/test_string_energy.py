@@ -235,7 +235,10 @@ def test_the_operating_point_is_the_best_one_the_limits_allow(v_min, v_max, curr
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        ({"inverters": [FRONIUS_GEN24_6, FRONIUS_GEN24_6]}, "one inverter; 2 are configured"),
+        (
+            {"inverters": [FRONIUS_GEN24_6, FRONIUS_GEN24_6], "battery_kwh": 5.0},
+            "2 inverters need a system without a battery",
+        ),
         ({"pv_strings": [{"inverter": 0, "mppt": 0, "array": 0, "modules": 7}]}, "unconnected_modules"),
         (
             {"inverters": [{**FRONIUS_GEN24_6, "mppts": [{"max_strings": 2}, {"max_strings": 1}]}]},
@@ -421,7 +424,7 @@ def test_parallel_arrays_run_at_the_best_point_of_their_summed_curve(v_min, v_ma
     dc, loss = energy.dc, energy.limit_loss
     assert energy.parallel_mismatch is not None
     parallel = energy.parallel_mismatch.total
-    pd.testing.assert_series_equal(energy.parallel_mismatch.inputs[0], parallel, check_names=False)
+    pd.testing.assert_series_equal(energy.parallel_mismatch.inputs[(0, 0)], parallel, check_names=False)
 
     grid = np.linspace(v_min, v_max, 400001)
     # Without the range or a limit the input could run anywhere up to its open-circuit voltage.

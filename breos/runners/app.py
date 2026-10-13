@@ -23,6 +23,7 @@ from breos.degradation.results import DegradationEngineName, build_degradation_s
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import TerminalHealthCredit, find_payback_year
 from breos.execution import aggregate_jit_cache_states, backend_provenance, config_has_battery
+from breos.inverter import InverterUnits, convert_units
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import (
     BASELINE_NETWORK_CREDIT_COLUMNS,
@@ -31,6 +32,7 @@ from breos.projection import (
     ProjectionValue,
     ProjectionYear,
     YearInstructions,
+    build_pv_only_battery_config,
     effective_reference_escalation,
     price_reference_year_rows,
     price_tariff_year_rows_by_step,
@@ -277,10 +279,9 @@ def _inverter_model_fields(
             "loss_pct_at_nameplate": _rounded(cable.loss_pct_at(resolved.inverter_ac_capacity_w or 0.0), digits=4),
         }
     if electrical is not None and any(i.night_consumption_w is not None for i in electrical.inverters):
-        assert conversion is not None
         night = first_year_results_df["Inverter_Night_Consumption"]
         fields["night_consumption"] = {
-            "power_w": conversion.night_consumption_w,
+            "power_w": sum(i.night_consumption_w or 0.0 for i in electrical.inverters),
             "energy_kwh": _rounded(_series_energy_kwh(night, freq)),
             "hours": _rounded(float((night > 0).sum()) * get_hours_per_step(freq)),
         }
@@ -292,6 +293,47 @@ def _inverter_model_fields(
             "derated_hours": _rounded(float((inverter_ac_derate < 1.0).sum()) * get_hours_per_step(freq)),
         }
     return fields
+
+
+def _inverter_units_summary(
+    resolved: ResolvedAppConfig, pv_dc: pd.Series, units: InverterUnits | None, freq: str
+) -> list[dict[str, Any]] | None:
+    """Each inverter's year-1 energy when string-level energy converts several, or None.
+
+    The dispatch's own conversion (:func:`breos.inverter.convert_units`),
+    repeated on year 1's DC, which no PV degradation has yet reduced.
+    """
+    if units is None or resolved.electrical is None:
+        return None
+    hours = get_hours_per_step(freq)
+    aligned = units.aligned(pd.DatetimeIndex(pv_dc.index))
+    converted = convert_units(
+        np.maximum(0.0, pv_dc.to_numpy(dtype=float)) * hours,
+        aligned,
+        ac_output_scale=build_pv_only_battery_config(resolved.cfg, resolved).ac_output_scale,
+        hours_per_step=hours,
+    )
+    rows = []
+    for number, (inverter, flows) in enumerate(zip(resolved.electrical.inverters, converted.inverters, strict=True)):
+        derate = aligned.ac_derate.iloc[:, number].to_numpy(dtype=float)
+        row: dict[str, Any] = {
+            "inverter": number,
+            "ac_capacity_kw": _rounded(units.ac_capacity_w[number] / 1000.0, digits=3),
+            "efficiency_pct": _rounded(units.efficiency[number] * 100.0),
+            "dc_input_kwh": _rounded(float(flows["dc"].sum()) / 1000.0),
+            "clipping_kwh": _rounded(float(flows["clipping"].sum()) / 1000.0),
+            "conversion_loss_kwh": _rounded(float(flows["conversion_loss"].sum()) / 1000.0),
+            "ac_cable_loss_kwh": _rounded(float(flows["cable_loss"].sum()) / 1000.0),
+            "ac_output_kwh": _rounded(float(flows["ac"].sum()) / 1000.0),
+            "night_consumption_kwh": _rounded(float(flows["night"].sum()) / 1000.0),
+        }
+        if inverter.temperature_derating is not None:
+            row["temperature_derating"] = {
+                "min_output_fraction": _rounded(float(derate.min()), digits=4),
+                "derated_hours": _rounded(float((derate < 1.0).sum()) * hours),
+            }
+        rows.append(row)
+    return rows
 
 
 def _near_shading_summary(resolved: ResolvedAppConfig, poa_dc: float, poa_shaded_dc: float) -> dict[str, Any] | None:
@@ -347,10 +389,19 @@ def _parallel_mismatch_summary(
     if pv_breakdown.parallel_mismatch_loss is None or resolved.electrical is None:
         return None
     inputs = []
-    for mppt, loss in sorted((pv_breakdown.input_parallel_mismatch or {}).items()):
-        strings = [i for i, string in enumerate(resolved.electrical.strings) if string.mppt == mppt]
+    for (inverter, mppt), loss in sorted((pv_breakdown.input_parallel_mismatch or {}).items()):
+        strings = [
+            i
+            for i, string in enumerate(resolved.electrical.strings)
+            if (string.inverter, string.mppt) == (inverter, mppt)
+        ]
         inputs.append(
-            {"inverter": 0, "mppt": mppt, "strings": strings, "loss_kwh": _rounded(_series_energy_kwh(loss, freq))}
+            {
+                "inverter": inverter,
+                "mppt": mppt,
+                "strings": strings,
+                "loss_kwh": _rounded(_series_energy_kwh(loss, freq)),
+            }
         )
     return {"loss_kwh": _rounded(_series_energy_kwh(pv_breakdown.parallel_mismatch_loss, freq)), "inputs": inputs}
 
@@ -360,6 +411,7 @@ def _build_pv_loss_waterfall(
     first_year_results_df: pd.DataFrame,
     resolved: ResolvedAppConfig,
     inverter_ac_derate: pd.Series | None = None,
+    inverter_units: InverterUnits | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable year-1 PV loss waterfall, or the window's for a [period] run."""
     cfg = resolved.cfg
@@ -490,6 +542,13 @@ def _build_pv_loss_waterfall(
             "direct_pv_conversion_loss_kwh": _rounded(direct_pv_conversion),
             "battery_discharge_conversion_loss_kwh": _rounded(battery_discharge_conversion),
             **_inverter_model_fields(resolved, pv_breakdown, first_year_results_df, freq, inverter_ac_derate),
+            **(
+                {}
+                if inverter_units is None
+                else {
+                    "inverters": _inverter_units_summary(resolved, pv_breakdown.dc_after_losses, inverter_units, freq)
+                }
+            ),
         },
         "dispatch": dispatch,
         "energy_balance": {
@@ -582,6 +641,7 @@ def run_app_simulation(
             extra=extra,
             inverter_ac_derate=inputs.inverter_ac_derate,
             inverter_curve_row=inputs.inverter_curve_row,
+            inverter_units=inputs.inverter_units,
         )
 
     # Every project year replays the start-year calendar (ADR 0002 A2), so the
@@ -690,7 +750,7 @@ def run_app_simulation(
         total_replacements=total_replacements,
         end_of_life_events=projection.end_of_life_events,
         pv_loss_waterfall=_build_pv_loss_waterfall(
-            inputs.pv_breakdown, first_year_results_df, resolved, inputs.inverter_ac_derate
+            inputs.pv_breakdown, first_year_results_df, resolved, inputs.inverter_ac_derate, inputs.inverter_units
         ),
         weather_metadata=dict(inputs.weather.attrs.get(WEATHER_METADATA_KEY, unknown_source_metadata("weather"))),
         load_profile_metadata=dict(

@@ -655,10 +655,12 @@ as the `mppt_limits` stage of the
 limit binds and no input holds strings on different curves the result equals
 the aggregate run.
 
-String-level energy needs one inverter, the MPPT voltage range, the start-up
-voltage (0 for none), each used input's `max_input_current_a`, and a wiring
-without structural errors (every reference resolves, every module is strung
-once, and parallel strings match).
+String-level energy needs, for each inverter that strings feed, the MPPT
+voltage range, the start-up voltage (0 for none) and each used input's
+`max_input_current_a`, and a wiring without structural errors (every
+reference resolves, every module is strung once, and parallel strings match).
+Several inverters need a system without a battery; see
+[Several inverters](#several-inverters).
 It refuses to run otherwise rather than fall back to the aggregate model. Hard
 limits such as an overvoltage do not stop it; they remain errors in the check.
 
@@ -673,6 +675,57 @@ modules and bypass diodes are modelled when strings carry `module_shading`
 (see [Model shading module by module](../how-to/sky-model-and-horizon.md#model-shading-module-by-module)).
 [How BREOS models PV modules](../modeling/pv-modules.md) explains the physics
 and its limits.
+
+### Several inverters
+
+An inverter clips at its own nameplate and converts at its own part-load
+point, so two inverters are not one inverter of their combined rating: an
+east inverter that clips at noon cannot lend its surplus to a west one with
+room to spare. With string-level energy, each inverter runs its own inputs,
+its own `max_usable_dc_power_w` cap and its own start-up, and converts its
+DC with its own nameplate, `inverter_efficiency` (the App's
+`inverter_efficiency` when unset), `efficiency_curve` read at its own inputs'
+voltage, and `temperature_derating`. Each draws its `night_consumption_w` on
+the steps it receives no DC. Their AC outputs then add up into one energy
+balance with the household's load, the grid and the tariff.
+
+```toml
+[[inverters]]
+nominal_power_w = 3000
+# ... the first inverter's limits and inputs
+
+[inverters.ac_cable]
+length_m = 15
+cross_section_mm2 = 4
+phases = 1
+voltage_v = 230
+
+[[inverters]]
+nominal_power_w = 5000
+# ... the second inverter's
+
+[ac_cable]
+length_m = 10
+cross_section_mm2 = 10
+phases = 3
+voltage_v = 400
+```
+
+Each inverter may carry its own `ac_cable`, its run to the point where the
+outputs join; `[ac_cable]` is then the run they share to the meter, and loses
+on their summed output. With one inverter, its cable goes in either place,
+not both. The `inverter` block of the PV loss waterfall lists each inverter's
+year-1 DC input, clipping, conversion loss, cable loss, AC output and night
+draw, and `parallel_mismatch` names each input by its inverter and MPPT. The
+electrical check warns when an inverter's DC/AC ratio, its modules' STC power
+over its nameplate, lies outside 0.8 to 1.5.
+
+A battery behind one of several inverters needs the other inverters' AC to
+reach it, which AC coupling will model; until then, string-level energy with
+several inverters refuses a battery, and Monte Carlo refuses several
+inverters. Aggregate energy keeps treating several inverters as one of their
+combined nameplate, with their nameplate-weighted efficiency, and refuses
+their curves, derating and own cables.
 
 ### DC cables
 
@@ -764,14 +817,16 @@ output as a fraction of the nameplate at each ambient, linear between the
 points and held beyond them. The ambient is the weather's air temperature,
 for an inverter outdoors, or `electrical_environment.inverter_ambient_temp_c`
 when you state it, for one indoors. DC above the derated rating is clipped,
-and a battery may still store it. Both keys need a single inverter.
+and a battery may still store it. With several inverters, both keys need
+string-level energy, which applies each to its own inverter.
 
 `night_consumption_w` is what the inverter draws from the grid while it
 converts nothing: a step with no PV DC and no battery charge or discharge.
 Take it from the datasheet; unset, it is not modelled. It adds to `Import_From_Grid`, and so to the
 import cost, and the results frame reports it as `Inverter_Night_Consumption`.
 It does not change dispatch: the planned charging targets are chosen without
-it. With several inverters their stated values add up.
+it. With several inverters, aggregate energy adds their stated values up, and
+string-level energy has each draw its own on the steps it receives no DC.
 
 ### AC cable
 
@@ -793,7 +848,8 @@ current; with 3, it is line to line and three do. `conductor` is copper by
 default, `power_factor` 1, and `conductor_temp_c` 50 °C when unstated, which
 the result reports as assumed. Grid charging through the same cable is not
 charged. Without `[ac_cable]` the AC side has no cable loss beyond any
-`wiring` loss you keep (see [DC cables](#dc-cables)).
+`wiring` loss you keep (see [DC cables](#dc-cables)). With several inverters
+it is the run they share; see [Several inverters](#several-inverters).
 
 ## Sky-diffusion (transposition) model
 

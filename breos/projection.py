@@ -47,6 +47,7 @@ from breos.economics import (
     terminal_health_credit,
 )
 from breos.execution import config_has_battery, observed_jit_cache_state, reset_jit_cache_observation
+from breos.inverter import InverterUnits
 from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 
@@ -748,6 +749,9 @@ class ProjectionYear:
     # The efficiency curve's row position per step, from the operating DC
     # voltage, with the per-step series; None reads the conversion's own row.
     inverter_curve_row: pd.Series | None = None
+    # Several inverters, each converting its own share of ``pv_dc``, for a
+    # run without a battery; None converts through the battery config.
+    inverter_units: InverterUnits | None = None
 
 
 @dataclass(frozen=True)
@@ -1045,6 +1049,7 @@ def project_years(
                     temperature_series=year.temperature_series if has_battery else None,
                     inverter_ac_derate=year.inverter_ac_derate,
                     inverter_curve_row=year.inverter_curve_row,
+                    inverter_units=year.inverter_units,
                     instruction_planner=plan_year,
                     **core_kwargs,
                 )
@@ -1066,6 +1071,7 @@ def project_years(
                         temperature_series=year.temperature_series if has_battery else None,
                         inverter_ac_derate=year.inverter_ac_derate,
                         inverter_curve_row=year.inverter_curve_row,
+                        inverter_units=year.inverter_units,
                         **common,
                     ),
                 )
@@ -1079,6 +1085,7 @@ def project_years(
                     temperature_series=year.temperature_series,
                     inverter_ac_derate=year.inverter_ac_derate,
                     inverter_curve_row=year.inverter_curve_row,
+                    inverter_units=year.inverter_units,
                     day_controller=day_controller,
                     controller_tariff=tariff,
                     controller_carry=carry.controller_carry,

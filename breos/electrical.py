@@ -854,29 +854,30 @@ _STRUCTURAL_CODES = frozenset(
 def string_model_problems(setup: ElectricalSetup) -> list[str]:
     """Why the string energy model cannot run for this setup; empty when it can.
 
-    The model needs one inverter, a wiring with no structural error, the MPPT
-    voltage range, the start-up voltage and each used input's operating-current
-    limit. Other errors, such as an overvoltage, do not stop it: their energy is
-    a diagnostic, as in aggregate mode.
+    The model needs a wiring with no structural error and, for each inverter
+    that strings feed, the MPPT voltage range, the start-up voltage and each
+    used input's operating-current limit. Other errors, such as an
+    overvoltage, do not stop it: their energy is a diagnostic, as in
+    aggregate mode. Several inverters need a system without a battery, which
+    the App checks (ADR 0007 D10).
     """
     problems = []
-    if len(setup.inverters) != 1:
-        problems.append(f"it models one inverter; {len(setup.inverters)} are configured")
     structural = sorted({f.code for f in setup.check.findings if f.code in _STRUCTURAL_CODES})
     if structural:
         problems.append("the wiring has " + ", ".join(structural))
-    if setup.inverters:
-        inverter = setup.inverters[0]
+    fed = sorted({s.inverter for s in setup.strings if s.inverter < len(setup.inverters)})
+    for number in fed:
+        inverter = setup.inverters[number]
         for name in ("min_mppt_voltage_v", "max_mppt_voltage_v", "startup_voltage_v"):
             if getattr(inverter, name) is None:
-                problems.append(f"inverter 0 has no {name}")
+                problems.append(f"inverter {number} has no {name}")
         if inverter.mppts is None:
-            problems.append("inverter 0 has no mppts")
+            problems.append(f"inverter {number} has no mppts")
         else:
-            used = sorted({s.mppt for s in setup.strings if s.inverter == 0 and s.mppt < len(inverter.mppts)})
+            used = sorted({s.mppt for s in setup.strings if s.inverter == number and s.mppt < len(inverter.mppts)})
             for index in used:
                 if inverter.mppts[index].max_input_current_a is None:
-                    problems.append(f"MPPT {index} of inverter 0 has no max_input_current_a")
+                    problems.append(f"MPPT {index} of inverter {number} has no max_input_current_a")
     return problems
 
 
@@ -899,12 +900,13 @@ class ShadingMismatch:
 class ParallelMismatch:
     """DC that strings in parallel lose by sharing their input's voltage, in W, after availability.
 
-    ``total`` is the system's; ``inputs`` holds each input's, by MPPT index,
-    for the inputs whose strings run on different curves.
+    ``total`` is the system's; ``inputs`` holds each input's, by its
+    ``(inverter, mppt)`` indices, for the inputs whose strings run on
+    different curves.
     """
 
     total: pd.Series
-    inputs: dict[int, pd.Series]
+    inputs: dict[tuple[int, int], pd.Series]
 
 
 @dataclass(frozen=True)
@@ -920,6 +922,9 @@ class StringEnergy:
     holds strings on different curves. ``shading`` is the shading mismatch,
     or None without module shading. ``voltage`` is the inputs' operating DC
     voltage, in V, weighted by the power each delivers; 0 where none does.
+    ``inverter_dc`` and ``inverter_voltage`` hold the same two per inverter,
+    in the order of ``inverters``: each inverter's share of ``dc`` and its
+    own inputs' operating voltage.
     """
 
     dc: pd.Series
@@ -928,6 +933,8 @@ class StringEnergy:
     parallel_mismatch: ParallelMismatch | None
     shading: ShadingMismatch | None
     voltage: pd.Series
+    inverter_dc: tuple[pd.Series, ...] = ()
+    inverter_voltage: tuple[pd.Series, ...] = ()
 
 
 def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEnergy:
@@ -970,9 +977,6 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
     problems = string_model_problems(setup)
     if problems:
         raise ValueError("String-level energy cannot run: " + "; ".join(problems))
-    inverter = setup.inverters[0]
-    assert inverter.mppts is not None and inverter.min_mppt_voltage_v is not None
-    assert inverter.max_mppt_voltage_v is not None and inverter.startup_voltage_v is not None
     for breakdown in arrays:
         if breakdown.module_operating is None:
             raise ValueError("String-level energy needs each array's module operating point")
@@ -982,100 +986,124 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
     availability = in_service.pop()
 
     index = arrays[0].dc_after_losses.index
-    # Powers before availability: delivered after the limits, and their cost.
-    delivered = np.zeros(len(index))
+    # Powers before availability: what the limits cost, and the losses ahead of them.
     cost = np.zeros(len(index))
     wiring = np.zeros(len(index))
     mismatch = np.zeros(len(index))
     string_mismatch: dict[int, np.ndarray] = {}
-    input_parallel: dict[int, np.ndarray] = {}
-    open_circuit = np.zeros(len(index))
-    # The inputs' operating voltages, weighted by the power each delivers.
-    voltage_power = np.zeros(len(index))
+    input_parallel: dict[tuple[int, int], np.ndarray] = {}
     conductor_c = setup.environment.conductor_c
     position = {id(s): i for i, s in enumerate(setup.strings)}
-    by_input: dict[int, list[PVString]] = defaultdict(list)
-    for string in setup.strings:
-        by_input[string.mppt].append(string)
-    for mppt_index, members in sorted(by_input.items()):
-        spec = inverter.mppts[mppt_index]
-        assert spec.max_input_current_a is not None
-        string_limit = math.inf if spec.max_string_input_current_a is None else spec.max_string_input_current_a
-        resistance = {id(s): s.cable_resistance_ohm(conductor_c) for s in members}
-        plain = [s for s in members if s.module_shading is None]
-        shaded = [s for s in members if s.module_shading is not None]
-        # Strings of one array with one cable resistance are identical.
-        groups = [
-            _StringGroup(
-                arrays[array],
-                sum(s.parallel for s in plain if (s.array, resistance[id(s)]) == (array, ohm)),
-                ohm,
-                members[0].modules,
-            )
-            for array, ohm in sorted({(s.array, resistance[id(s)]) for s in plain})
-        ]
-        for group in groups:
-            if group.cable_ohm > 0:
-                wiring += np.clip(group.power_at_mpp(group.bare) - group.power_at_mpp(group.operating), 0.0, None)
-        if shaded:
-            curves = []
-            for string in shaded:
-                assert string.module_shading is not None
-                breakdown = arrays[string.array]
-                if breakdown.irradiance_parts is None:
-                    raise ValueError("A string with module_shading needs its array's irradiance parts")
-                curve = ShadedStringCurve(
-                    string.module_shading,
-                    breakdown.irradiance_parts,
-                    _StringGroup(breakdown, 1).string_scale,
-                    string.modules,
-                    resistance[id(string)],
-                    setup.environment.bypass_diode_v,
+    # Each inverter's delivered power and operating voltage, after its own limits.
+    inverter_delivered: list[np.ndarray] = []
+    inverter_voltages: list[np.ndarray] = []
+    for number, inverter in enumerate(setup.inverters):
+        fed = [s for s in setup.strings if s.inverter == number]
+        if not fed:
+            inverter_delivered.append(np.zeros(len(index)))
+            inverter_voltages.append(np.zeros(len(index)))
+            continue
+        assert inverter.mppts is not None and inverter.min_mppt_voltage_v is not None
+        assert inverter.max_mppt_voltage_v is not None and inverter.startup_voltage_v is not None
+        delivered = np.zeros(len(index))
+        open_circuit = np.zeros(len(index))
+        # The inputs' operating voltages, weighted by the power each delivers.
+        voltage_power = np.zeros(len(index))
+        by_input: dict[int, list[PVString]] = defaultdict(list)
+        for string in fed:
+            by_input[string.mppt].append(string)
+        for mppt_index, members in sorted(by_input.items()):
+            spec = inverter.mppts[mppt_index]
+            assert spec.max_input_current_a is not None
+            string_limit = math.inf if spec.max_string_input_current_a is None else spec.max_string_input_current_a
+            resistance = {id(s): s.cable_resistance_ohm(conductor_c) for s in members}
+            plain = [s for s in members if s.module_shading is None]
+            shaded = [s for s in members if s.module_shading is not None]
+            # Strings of one array with one cable resistance are identical.
+            groups = [
+                _StringGroup(
+                    arrays[array],
+                    sum(s.parallel for s in plain if (s.array, resistance[id(s)]) == (array, ohm)),
+                    ohm,
+                    members[0].modules,
                 )
-                reference = _StringGroup(breakdown, 1, 0.0, string.modules).power_at_mpp(breakdown.module_operating)
-                mismatch += reference - curve.mpp_bare
-                wiring += np.clip(curve.mpp_bare - curve.mpp, 0.0, None)
-                string_mismatch[position[id(string)]] = curve.own_mean_power() - curve.mpp_bare
-                curves.append(curve)
-            sources: list[Any] = [_GroupSource(group) for group in groups] + [_CurveSource(c) for c in curves]
-            solve: Callable[..., tuple[np.ndarray, np.ndarray, np.ndarray]] = partial(_curves_power, sources)
-            input_open_circuit = _sources_open_circuit(sources)
-        else:
-            solve = partial(_input_power, groups, members[0].modules)
-            input_open_circuit = None
-        unconstrained, limited, input_voltage = solve(
-            inverter.min_mppt_voltage_v, inverter.max_mppt_voltage_v, spec.max_input_current_a, string_limit
-        )
-        lost = np.clip(unconstrained - limited, 0.0, None)
-        if len(groups) + len(shaded) > 1:
-            # Strings on different curves share the input's voltage. What that
-            # costs before any limit is the parallel mismatch; the limits cost
-            # the rest, so the two add up to the input's whole loss.
-            _, shared, _ = solve(0.0, math.inf, math.inf, math.inf)
-            input_parallel[mppt_index] = np.minimum(np.clip(unconstrained - shared, 0.0, None), lost)
-            lost = lost - input_parallel[mppt_index]
-        cost += lost
-        if spec.max_usable_dc_power_w is not None:
-            cost += _excess(limited, spec.max_usable_dc_power_w)
-            limited = np.minimum(limited, spec.max_usable_dc_power_w)
-        delivered += limited
-        voltage_power += limited * input_voltage
+                for array, ohm in sorted({(s.array, resistance[id(s)]) for s in plain})
+            ]
+            for group in groups:
+                if group.cable_ohm > 0:
+                    wiring += np.clip(group.power_at_mpp(group.bare) - group.power_at_mpp(group.operating), 0.0, None)
+            if shaded:
+                curves = []
+                for string in shaded:
+                    assert string.module_shading is not None
+                    breakdown = arrays[string.array]
+                    if breakdown.irradiance_parts is None:
+                        raise ValueError("A string with module_shading needs its array's irradiance parts")
+                    curve = ShadedStringCurve(
+                        string.module_shading,
+                        breakdown.irradiance_parts,
+                        _StringGroup(breakdown, 1).string_scale,
+                        string.modules,
+                        resistance[id(string)],
+                        setup.environment.bypass_diode_v,
+                    )
+                    reference = _StringGroup(breakdown, 1, 0.0, string.modules).power_at_mpp(breakdown.module_operating)
+                    mismatch += reference - curve.mpp_bare
+                    wiring += np.clip(curve.mpp_bare - curve.mpp, 0.0, None)
+                    string_mismatch[position[id(string)]] = curve.own_mean_power() - curve.mpp_bare
+                    curves.append(curve)
+                sources: list[Any] = [_GroupSource(group) for group in groups] + [_CurveSource(c) for c in curves]
+                solve: Callable[..., tuple[np.ndarray, np.ndarray, np.ndarray]] = partial(_curves_power, sources)
+                input_open_circuit = _sources_open_circuit(sources)
+            else:
+                solve = partial(_input_power, groups, members[0].modules)
+                input_open_circuit = None
+            unconstrained, limited, input_voltage = solve(
+                inverter.min_mppt_voltage_v, inverter.max_mppt_voltage_v, spec.max_input_current_a, string_limit
+            )
+            lost = np.clip(unconstrained - limited, 0.0, None)
+            if len(groups) + len(shaded) > 1:
+                # Strings on different curves share the input's voltage. What that
+                # costs before any limit is the parallel mismatch; the limits cost
+                # the rest, so the two add up to the input's whole loss.
+                _, shared, _ = solve(0.0, math.inf, math.inf, math.inf)
+                key = (number, mppt_index)
+                input_parallel[key] = np.minimum(np.clip(unconstrained - shared, 0.0, None), lost)
+                lost = lost - input_parallel[key]
+            cost += lost
+            if spec.max_usable_dc_power_w is not None:
+                cost += _excess(limited, spec.max_usable_dc_power_w)
+                limited = np.minimum(limited, spec.max_usable_dc_power_w)
+            delivered += limited
+            voltage_power += limited * input_voltage
+            if inverter.startup_voltage_v > 0:
+                if input_open_circuit is None:
+                    input_open_circuit = members[0].modules * _open_circuit_voltage(groups)
+                open_circuit = np.maximum(open_circuit, input_open_circuit)
+        # The inputs' operating voltage, weighted by what each delivers before the
+        # inverter's own cap, which sheds power from all of them alike.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            voltage = np.where(delivered > 0, voltage_power / delivered, 0.0)
+        if inverter.max_usable_dc_power_w is not None:
+            cost += _excess(delivered, inverter.max_usable_dc_power_w)
+            delivered = np.minimum(delivered, inverter.max_usable_dc_power_w)
         if inverter.startup_voltage_v > 0:
-            if input_open_circuit is None:
-                input_open_circuit = members[0].modules * _open_circuit_voltage(groups)
-            open_circuit = np.maximum(open_circuit, input_open_circuit)
-    # The inputs' operating voltage, weighted by what each delivers before the
-    # inverter's own cap, which sheds power from all of them alike.
-    with np.errstate(divide="ignore", invalid="ignore"):
-        voltage = np.where(delivered > 0, voltage_power / delivered, 0.0)
-    if inverter.max_usable_dc_power_w is not None:
-        cost += _excess(delivered, inverter.max_usable_dc_power_w)
-        delivered = np.minimum(delivered, inverter.max_usable_dc_power_w)
-    if inverter.startup_voltage_v > 0:
-        idle = ~_running(delivered > 0, open_circuit >= inverter.startup_voltage_v - _TOLERANCE)
-        cost += np.where(idle, delivered, 0.0)
-        delivered = np.where(idle, 0.0, delivered)
-        voltage = np.where(idle, 0.0, voltage)
+            idle = ~_running(delivered > 0, open_circuit >= inverter.startup_voltage_v - _TOLERANCE)
+            cost += np.where(idle, delivered, 0.0)
+            delivered = np.where(idle, 0.0, delivered)
+            voltage = np.where(idle, 0.0, voltage)
+        inverter_delivered.append(delivered)
+        inverter_voltages.append(voltage)
+
+    if len(inverter_delivered) == 1:
+        delivered, voltage = inverter_delivered[0], inverter_voltages[0]
+    else:
+        delivered = sum(inverter_delivered[1:], inverter_delivered[0])
+        weighted = sum(
+            (d * v for d, v in zip(inverter_delivered, inverter_voltages, strict=True)), np.zeros(len(index))
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            voltage = np.where(delivered > 0, weighted / delivered, 0.0)
 
     total = sum((b.dc_after_losses for b in arrays[1:]), arrays[0].dc_after_losses)
     loss_series = pd.Series(cost * availability, index=index, name="mppt_limit_loss_W")
@@ -1087,8 +1115,10 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
         parallel = ParallelMismatch(
             total=pd.Series(sum(input_parallel.values()) * availability, index=index, name="parallel_mismatch_loss_W"),
             inputs={
-                i: pd.Series(values * availability, index=index, name=f"mppt_{i}_parallel_mismatch_W")
-                for i, values in sorted(input_parallel.items())
+                (number, mppt): pd.Series(
+                    values * availability, index=index, name=f"inverter_{number}_mppt_{mppt}_parallel_mismatch_W"
+                )
+                for (number, mppt), values in sorted(input_parallel.items())
             },
         )
         removed = removed + parallel.total
@@ -1103,14 +1133,25 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
         removed = removed + shading.total
     # Where nothing reaches the inverter its DC is exactly 0, not the rounding
     # left by taking every loss from the arrays' DC.
-    dc = (total - removed).where(delivered > 0, 0.0)
+    dc = (total - removed).where(delivered > 0, 0.0).rename("dc_power_W")
+    if len(inverter_delivered) == 1:
+        inverter_dc: tuple[pd.Series, ...] = (dc.rename("inverter_0_dc_power_W"),)
+    else:
+        # Each inverter's share of the system DC is its share of what the inputs delivered.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            inverter_dc = tuple(
+                (dc * np.where(delivered > 0, d / delivered, 0.0)).rename(f"inverter_{i}_dc_power_W")
+                for i, d in enumerate(inverter_delivered)
+            )
     return StringEnergy(
-        dc.rename("dc_power_W"),
+        dc,
         loss_series,
         wiring_series,
         parallel,
         shading,
         pd.Series(voltage, index=index, name="dc_voltage_V"),
+        inverter_dc,
+        tuple(pd.Series(v, index=index, name=f"inverter_{i}_dc_voltage_V") for i, v in enumerate(inverter_voltages)),
     )
 
 

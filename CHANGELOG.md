@@ -6,6 +6,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- String-level energy runs several inverters in a system without a battery
+  (ADR 0007 D10). Each inverter applies its own input limits, usable DC power
+  cap and start-up to its own inputs, and converts its share of the DC with
+  its own nameplate, efficiency, efficiency curve, temperature derating and
+  night draw; their AC outputs add up into one energy balance, so an inverter
+  that clips cannot lend its surplus to another. Each inverter may carry its
+  own `ac_cable`, and `[ac_cable]` is then the run they share, losing on the
+  summed output; one inverter takes its cable in either place, not both. The
+  waterfall's `inverter` block lists each inverter's year-1 DC input,
+  clipping, conversion loss, cable loss, AC output and night draw, and
+  `parallel_mismatch` names each input by its inverter and MPPT. Several
+  inverters with a battery, and in Monte Carlo, are refused until AC coupling
+  is modelled. The electrical check now warns when an inverter's DC/AC ratio
+  lies outside 0.8 to 1.5. Runs with one inverter are unchanged, apart from
+  that warning.
 - `weather_file` names the App's weather file directly
   ([#394](https://github.com/Str4vinci/breos/issues/394)). The App reads that
   CSV (or `.csv.gz`), whatever its name and for any location, instead of

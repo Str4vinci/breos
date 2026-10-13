@@ -17,10 +17,11 @@ from pvlib.location import Location
 
 from breos.app_config import ResolvedAppConfig, SimulationPeriod, resolve_app_config
 from breos.electrical import string_cable_loss, string_limited_dc
-from breos.inverter import ac_derate
+from breos.inverter import AcCable, InverterConversion, InverterUnits, ac_derate
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs
 from breos.pv.shading import ModuleMeanShading
+from breos.pv_modules import get_module
 from breos.solar import (
     PVProductionBreakdown,
     _sum_pv_breakdowns,
@@ -69,6 +70,9 @@ class PreparedSimulationInputs:
     # The efficiency curve's row position per step, from the operating DC
     # voltage; None where the curve is read at one row.
     inverter_curve_row: pd.Series | None = None
+    # With string-level energy and several inverters, each inverter's share
+    # of the DC and its own conversion; None otherwise.
+    inverter_units: InverterUnits | None = None
 
 
 def unknown_source_metadata(provider: str) -> dict[str, Any]:
@@ -498,6 +502,8 @@ def build_pv_production_breakdown(
                 parallel_mismatch_loss=None if parallel is None else parallel.total,
                 input_parallel_mismatch=None if parallel is None else parallel.inputs,
                 dc_voltage=energy.voltage,
+                inverter_dc=energy.inverter_dc if len(energy.inverter_dc) > 1 else None,
+                inverter_dc_voltage=energy.inverter_voltage if len(energy.inverter_voltage) > 1 else None,
             )
         wiring_loss = string_cable_loss(electrical, arrays)
         return replace(
@@ -622,6 +628,7 @@ def prepare_simulation_inputs(
         temperature_series=temperature_series,
         inverter_ac_derate=build_inverter_ac_derate(resolved, weather, pd.DatetimeIndex(dc_system_base.index)),
         inverter_curve_row=build_inverter_curve_row(resolved, pv_breakdown),
+        inverter_units=build_inverter_units(cfg, resolved, weather, pv_breakdown),
     )
 
 
@@ -678,6 +685,74 @@ def build_inverter_ac_derate(
         indoor_model={"enabled": False},
     )
     return pd.Series(ac_derate(derating, ambient.to_numpy(dtype=float)), index=index, name="inverter_ac_derate")
+
+
+def build_inverter_units(
+    cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame, pv_breakdown: PVProductionBreakdown
+) -> InverterUnits | None:
+    """Each inverter's share of the DC and its own conversion, with string-level energy and several inverters.
+
+    None otherwise. Each inverter converts with its own nameplate, its
+    ``inverter_efficiency`` (the App's ``inverter_efficiency`` when unset),
+    its efficiency curve read at its own inputs' operating voltage, its
+    temperature derating, its own AC cable and its night draw. ``[ac_cable]``
+    is the run the inverters share (ADR 0007 D10).
+    """
+    electrical = resolved.electrical
+    if electrical is None or len(electrical.inverters) < 2 or pv_breakdown.inverter_dc is None:
+        return None
+    assert pv_breakdown.inverter_dc_voltage is not None
+    index = pd.DatetimeIndex(pv_breakdown.dc_after_losses.index)
+    total = pv_breakdown.dc_after_losses.to_numpy(dtype=float)
+    modules = [get_module(arr["module"]) for arr in resolved.pv_arrays] or [resolved.pv_params]
+    ambient = None
+    conversions, shares, derates, rows = [], {}, {}, {}
+    for number, inverter in enumerate(electrical.inverters):
+        own = None if inverter.ac_cable is None else AcCable(**inverter.ac_cable)
+        curve = inverter.efficiency_curve
+        voltage = None
+        if curve is not None:
+            weighted = [
+                (s.modules * s.parallel * modules[s.array].Mpp, s.modules * modules[s.array].Vmp)
+                for s in electrical.strings
+                if s.inverter == number and s.array < len(modules)
+            ]
+            power = sum(p for p, _ in weighted)
+            voltage = sum(p * v for p, v in weighted) / power if power > 0 else None
+        conversion = InverterConversion.build(
+            curve, voltage_v=voltage, ac_cable=own, night_consumption_w=inverter.night_consumption_w
+        )
+        conversions.append(conversion)
+        dc = pv_breakdown.inverter_dc[number].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            shares[number] = np.where(total > 0, dc / total, 0.0)
+        derates[number] = np.ones(len(index))
+        if inverter.temperature_derating is not None:
+            if ambient is None:
+                ambient = build_battery_temperature_series(
+                    electrical.environment.inverter_ambient_temp_c,
+                    index=index,
+                    weather_df=weather,
+                    indoor_model={"enabled": False},
+                ).to_numpy(dtype=float)
+            derates[number] = ac_derate(inverter.temperature_derating, ambient)
+        rows[number] = np.full(len(index), conversion.curve_row)
+        if curve is not None and curve.voltages_v is not None and len(curve.voltages_v) > 1:
+            values = pv_breakdown.inverter_dc_voltage[number].to_numpy(dtype=float)
+            position = np.interp(values, curve.voltages_v, np.arange(len(curve.voltages_v), dtype=float))
+            rows[number] = np.where(values > 0, position, conversion.curve_row)
+    return InverterUnits(
+        ac_capacity_w=tuple(float(i.nominal_power_w) for i in electrical.inverters),
+        efficiency=tuple(
+            float(cfg["inverter_efficiency"] if i.inverter_efficiency is None else i.inverter_efficiency)
+            for i in electrical.inverters
+        ),
+        conversions=tuple(conversions),
+        shares=pd.DataFrame(shares, index=index),
+        ac_derate=pd.DataFrame(derates, index=index),
+        curve_rows=pd.DataFrame(rows, index=index),
+        feeder_cable_k_per_w=0.0 if resolved.ac_cable is None else resolved.ac_cable.loss_coefficient_per_w,
+    )
 
 
 # Config keys that do not reach prepare_simulation_inputs, directly or through

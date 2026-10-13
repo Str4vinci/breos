@@ -50,7 +50,12 @@ from breos.electrical import (
 )
 from breos.emissions import EmissionsParams
 from breos.equipment import InverterSpec, MpptSpec
-from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
+from breos.execution import (
+    DEFAULT_EXECUTION_BACKEND,
+    EXECUTION_BACKENDS,
+    config_has_battery,
+    validate_execution_backend,
+)
 from breos.inverter import AcCable, InverterConversion, inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
 from breos.pv.horizon import normalise_horizon_profile
@@ -722,7 +727,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             'How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT '
             "input's voltage, current and power limits, the inverter's power limit and its start-up voltage. "
             '`"string"` needs `inverters`, `pv_strings` and '
-            "`electrical_environment`, one inverter, and a wiring without structural errors"
+            "`electrical_environment`, a wiring without structural errors, and one inverter, or several in a system "
+            "without a battery"
         ),
         summary="inverter.electrical_fidelity",
     ),
@@ -1459,6 +1465,11 @@ INVERTER_TABLE = TableSpec(
             "What the inverter draws from the grid while it converts nothing (W), as its datasheet states; "
             "unset, it is not modelled. See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
         ),
+        "ac_cable": (
+            "The inverter's own AC cable, with the keys of [`[ac_cable]`](#ac_cable); with several inverters it "
+            "needs string-level energy, and `[ac_cable]` is then the run they share. See "
+            "[Several inverters](configuration.md#several-inverters)"
+        ),
     },
 )
 
@@ -1613,6 +1624,10 @@ def _electrical_inputs(
                 _built(MpptSpec, MPPT_TABLE.validate(mppt, f"inverters[{i}].mppts[{j}]"), f"inverters[{i}].mppts[{j}]")
                 for j, mppt in enumerate(table["mppts"])
             )
+        if table.get("ac_cable") is not None:
+            cable = AC_CABLE_TABLE.validate(table["ac_cable"], f"inverters[{i}].ac_cable")
+            _built(AcCable, cable, f"inverters[{i}].ac_cable")
+            table["ac_cable"] = cable
         inverters.append(_built(InverterSpec, table, f"inverters[{i}]"))
     strings = tuple(
         _built(PVString, PV_STRING_TABLE.validate(entry, f"pv_strings[{i}]"), f"pv_strings[{i}]")
@@ -3257,6 +3272,19 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     ac_cable = (
         None if cfg["ac_cable"] is None else _built(AcCable, AC_CABLE_TABLE.validate(cfg["ac_cable"]), "ac_cable")
     )
+    if electrical is not None and any(inverter.ac_cable is not None for inverter in electrical.inverters):
+        if len(electrical.inverters) == 1:
+            # One inverter has one cable to the meter, given in either place.
+            if ac_cable is not None:
+                raise ValueError("Give the inverter's AC cable as '[ac_cable]' or 'inverters[0].ac_cable', not both")
+            own = electrical.inverters[0].ac_cable
+            assert own is not None
+            ac_cable = _built(AcCable, dict(own), "inverters[0].ac_cable")
+        elif electrical.fidelity != "string":
+            raise ValueError(
+                "An inverter's own 'ac_cable' with several inverters needs electrical_fidelity = 'string', which "
+                "converts each inverter on its own"
+            )
     return ResolvedAppConfig(
         cfg=cfg,
         lat=lat,
@@ -3300,12 +3328,18 @@ def _inverter_conversion(
     the steps without PV, and each step with PV reads its own operating
     voltage (:func:`breos.app_inputs.build_inverter_curve_row`). The night
     consumption is every inverter's that states one.
+
+    String-level energy with several inverters converts each on its own
+    (:func:`breos.app_inputs.build_inverter_units`), so there is no single
+    conversion: None.
     """
     inverters = electrical.inverters if electrical is not None else ()
+    if len(inverters) > 1 and electrical is not None and electrical.fidelity == "string":
+        return None
     if len(inverters) > 1 and any(i.efficiency_curve or i.temperature_derating for i in inverters):
         raise ValueError(
-            "An inverter efficiency_curve or temperature_derating needs a single inverter in 'inverters'; "
-            f"{len(inverters)} are configured"
+            "An inverter efficiency_curve or temperature_derating with several inverters needs "
+            f"electrical_fidelity = 'string'; {len(inverters)} are configured"
         )
     curve = inverters[0].efficiency_curve if inverters else None
     stated = [i.night_consumption_w for i in inverters if i.night_consumption_w is not None]
@@ -3353,6 +3387,10 @@ def _check_module_shading(
             )
 
 
+# The DC/AC ratio range outside which the electrical check warns, per inverter.
+DC_AC_RATIO_RANGE = (0.8, 1.5)
+
+
 def _resolve_electrical(
     cfg: Mapping[str, Any], pv_arrays: list[dict[str, Any]], pv_params: PVModuleParams, n_modules: int
 ) -> ElectricalSetup | None:
@@ -3377,12 +3415,19 @@ def _resolve_electrical(
         inverters,
         strings,
         environment,
-        check_topology(arrays, inverters, strings, environment, mountings=mountings),
+        check_topology(
+            arrays, inverters, strings, environment, dc_ac_ratio_range=DC_AC_RATIO_RANGE, mountings=mountings
+        ),
         fidelity=cfg["electrical_fidelity"],
         dc_wiring=cable_summary(arrays, strings, environment),
     )
     if setup.fidelity == "string":
         problems = string_model_problems(setup)
+        if len(inverters) > 1 and config_has_battery(cfg):
+            problems.append(
+                f"{len(inverters)} inverters need a system without a battery, since a battery behind one of them "
+                "needs AC coupling, which is not modelled yet"
+            )
         if problems:
             raise ValueError("electrical_fidelity = 'string' cannot run: " + "; ".join(problems))
     return setup

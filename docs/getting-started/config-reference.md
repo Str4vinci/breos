@@ -49,7 +49,7 @@ is a `breos run` option that overrides the config file.
 | `discount_rate` | `0.03` | `--discount-rate` | Nominal discount rate for NPV |
 | `dual_axis_max_tilt` | `90.0` | — | Maximum panel tilt for dual-axis tracking (degrees) |
 | `electrical_environment` | `None` | — | Design temperatures and mounting for the string check; see [`[electrical_environment]`](#electrical_environment). Set with `inverters` and `pv_strings` |
-| `electrical_fidelity` | `"aggregate"` | — | How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT input's voltage, current and power limits, the inverter's power limit and its start-up voltage. `"string"` needs `inverters`, `pv_strings` and `electrical_environment`, one inverter, and a wiring without structural errors |
+| `electrical_fidelity` | `"aggregate"` | — | How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT input's voltage, current and power limits, the inverter's power limit and its start-up voltage. `"string"` needs `inverters`, `pv_strings` and `electrical_environment`, a wiring without structural errors, and one inverter, or several in a system without a battery |
 | `emissions_country` | `None` | `--emissions-country` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...); see [Packaged options](options.md#emissions-factors) |
 | `enable_resistance_fade` | `False` | — | Grow the battery's internal resistance as it ages (Naumann), which lowers its charge and discharge efficiencies. Native engine only: it cannot be combined with `degradation_engine = "blast"` |
 | `execution_backend` | `"python"` | `--execution-backend` | Within-day dispatch implementation. `"python"` is the numerical reference; `"numba"` is an optional compiled path that reproduces it bit for bit and needs `pip install "breos[fast]"`. One of `"python"`, `"numba"` |
@@ -174,6 +174,7 @@ One entry per specified inverter, as `[[inverters]]` in TOML. `None` or an omitt
 | Key | Required | Description |
 |---|---|---|
 | `nominal_power_w` | yes | AC nameplate (W) |
+| `ac_cable` |  | The inverter's own AC cable, with the keys of [`[ac_cable]`](#ac_cable); with several inverters it needs string-level energy, and `[ac_cable]` is then the run they share. See [Several inverters](configuration.md#several-inverters) |
 | `efficiency_curve` |  | Measured efficiency against AC output, replacing the single efficiency: `output_fraction` (AC output over the nameplate, increasing), `efficiency` (one row per DC voltage) and `voltages_v` (one per row, increasing; optional with one row). See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve) |
 | `inverter_efficiency` |  | Efficiency fraction. When every inverter sets it, their nameplate-weighted mean replaces `inverter_efficiency` |
 | `is_hybrid` |  | Whether the inverter also connects a battery; metadata |

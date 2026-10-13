@@ -1,7 +1,7 @@
 # 0007 — String topology and electrical checks
 
-- **Status:** Proposed. D1–D9 are implemented, D7 for one inverter; several
-  inverters are the next step.
+- **Status:** Proposed. D1–D10 are implemented; several inverters with a
+  battery wait for ADR 0004 (D10).
 - **Date:** 2026-10-11
 
 ## Context
@@ -267,9 +267,9 @@ in a string, which a model of identical modules does not produce, so the string
 model adds to it rather than replacing it.
 
 The model runs for one inverter, whose rating, part-load curve and battery
-coupling are the existing aggregate ones. For several inverters, each would need
-its own AC clipping and, with a battery, the converter topology of ADR 0004
-(#419). Until then, string mode refuses them. It also refuses a wiring with
+coupling are the existing aggregate ones, or for several in a system without a
+battery (D10). With a battery, several inverters need the converter topology of
+ADR 0004 (#419); until then, string mode refuses them. It also refuses a wiring with
 structural errors and an input without the limits it needs, rather than fall
 back to the aggregate model. A design that breaks a hard limit but is wired
 definitely, such as one with an overvoltage, still gets string energy as a
@@ -339,11 +339,47 @@ with no PV DC and no battery charge or discharge. It is taken from the grid,
 as `Inverter_Night_Consumption` within `Import_From_Grid`, and leaves dispatch
 unchanged. Unset, it is not modelled and not reported missing.
 
+### D10. Several inverters without a battery (added 2026-10-13)
+
+An inverter clips at its own nameplate and converts at its own part-load
+point and DC voltage, so several inverters are not one of their combined
+rating. String mode with several inverters therefore runs each on its own:
+
+1. Inputs are keyed by `(inverter, mppt)`. Each inverter applies its own
+   window, current limits, usable DC power cap and start-up gate to its own
+   inputs, and has its own operating voltage.
+2. Each inverter's DC is its share of the system DC: the share of the
+   inputs' delivered power its own inputs deliver. The system DC and the
+   waterfall stages ahead of the inverters are unchanged, and degradation
+   scales every inverter's DC alike.
+3. Each inverter converts its DC with its own nameplate, efficiency, curve
+   (read at its own inputs' voltage, D9), temperature derating and optional
+   own AC cable, and draws its night consumption on the steps it receives no
+   DC. The AC outputs add up; the top-level `[ac_cable]` is the run they
+   share, and loses `k * (sum ac)**2`. With one inverter, its own cable and
+   `[ac_cable]` are the same cable, so giving both is refused.
+4. The conversion runs on the PV-only path, before the energy balance, as
+   ADR 0004 C3 computes a PV inverter's. The ledger keeps its system-wide
+   columns and schema; the waterfall's `inverter` block lists each
+   inverter's year-1 DC input, clipping, conversion loss, cable loss, AC
+   output and night draw.
+5. A battery behind one inverter needs the others' AC to reach it, which is
+   AC coupling (ADR 0004, #419). Until then, string mode refuses several
+   inverters with a battery, and Monte Carlo, which carries one DC series
+   through one inverter, refuses several inverters in string mode. Aggregate
+   mode keeps one inverter of the combined nameplate (D5) and refuses
+   per-inverter curves, derating and cables.
+6. The check warns when an inverter's DC/AC ratio lies outside 0.8 to 1.5.
+
+With several inverters, string mode differs from aggregate mode even where
+no limit binds: per-inverter clipping and part-load efficiency are not
+linear. D5's and D7's equality with aggregate mode holds for one inverter.
+
 ### Open items
 
 These are additive and do not change a field above:
 
-- Several inverters in string mode, after ADR 0004 (#419).
+- Several inverters with a battery, after ADR 0004 (#419), and in Monte Carlo.
 - The DC link's voltage while only the battery discharges, for the curve row
   of those steps.
 - The daily-target planner reads the curve at the fixed row, at the full AC
