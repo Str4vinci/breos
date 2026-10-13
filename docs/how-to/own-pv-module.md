@@ -47,7 +47,10 @@ almost every module.
 Everything after `N_Cells` is optional. `Module_Efficiency` feeds the PVsyst and
 SAM cell-temperature models, and `noct-sam` refuses to run without both it and a
 `NOCT` value. Set `bifaciality` if you also plan to turn on
-`bifacial_model`, because the metadata alone changes nothing.
+`bifacial_model`, because the metadata alone changes nothing. `bypass_diodes`,
+3 by default, is the number of bypass diodes, each across one substring of
+cells; module-level shading reads it (see
+[How BREOS models PV modules](../modeling/pv-modules.md)).
 
 To confirm the registration took effect, resolve the same config in the current
 Python process before running a full simulation. Ten 540 W modules give 5.4

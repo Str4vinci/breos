@@ -158,7 +158,8 @@ so that an unshaded array is stated as such (an all-zero table), not assumed.
 At level 2, the shading is given per module rather than per array.
 `pv_strings[i].module_shading` holds one grid of sun positions for the
 string (`azimuth_deg`, `elevation_deg`, with S2's rules), an optional
-`bypass_diodes` count (3 when omitted, reported as assumed), and `modules`:
+`bypass_diodes` count (3 when omitted, reported as assumed; moved to the
+module record by ADR 0009 M1, amended 2026-10-13), and `modules`:
 one entry per module of the string, in series order. An entry gives either
 one `beam_shaded_fraction` table for the whole module, shaded evenly, or
 `substrings`, one table per bypass-diode substring in the module's own

@@ -84,7 +84,7 @@ class ShadedStringCurve:
         self.bypass_v = float(bypass_diode_voltage_v)
         steps = len(self.scale)
         cells = float(parts.pv_params.N_Cells)
-        diodes = shading.bypass_diodes
+        diodes = shading.diodes
         self.cells = cells
         per_substring = cells / diodes
 
@@ -157,7 +157,7 @@ class ShadedStringCurve:
         rows = self.mismatched
         groups: dict[tuple[Any, ...], list[tuple[int, int]]] = {}
         for m, module in enumerate(shading.modules):
-            for k in range(shading.bypass_diodes):
+            for k in range(shading.diodes):
                 key = (id(module.mean[k]), id(module.limiting[k]), module.sky_view_factor)
                 groups.setdefault(key, []).append((m, k))
 

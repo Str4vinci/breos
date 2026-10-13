@@ -80,6 +80,9 @@ class PVModuleParams:
     # models never use them.
     T_Vmp_pct: Optional[float] = None  # %/°C - Vmp temperature coefficient
     Max_System_Voltage: Optional[float] = None  # V - IEC maximum system voltage rating
+    # Bypass diodes, each across one substring of N_Cells / bypass_diodes
+    # series cells; read by module-level shading (breos.pv.mismatch).
+    bypass_diodes: int = 3
 
     _POSITIVE_FIELDS = frozenset({"Mpp", "Vmp", "Imp", "Voc", "Isc"})
     _STC_POINT_FIELDS = ("Mpp", "Vmp", "Imp")
@@ -100,9 +103,9 @@ class PVModuleParams:
                 self._validate_number(name, value)
             if name == "T_Pmax_pct" and float(value) >= 0:
                 raise ValueError("T_Pmax_pct must be negative")
-        elif name == "N_Cells":
+        elif name in ("N_Cells", "bypass_diodes"):
             if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
-                raise ValueError("N_Cells must be a positive integer")
+                raise ValueError(f"{name} must be a positive integer")
         elif name == "Module_Efficiency" and value is not None:
             self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
         elif name == "Max_System_Voltage" and value is not None:

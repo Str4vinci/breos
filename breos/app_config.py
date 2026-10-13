@@ -1508,9 +1508,10 @@ PV_STRING_TABLE = TableSpec(
         "cable_cross_section_mm2": "Conductor cross-section (mm²) of each string's cable",
         "conductor": 'Cable conductor, `"copper"` or `"aluminium"`; `"copper"` by default',
         "module_shading": (
-            "Each module's own shading, for string-level energy: `azimuth_deg`, `elevation_deg`, optional "
-            "`bypass_diodes` (3) and `modules`, one entry per module in series order with a whole-module "
-            "`beam_shaded_fraction` or one `substrings` table per bypass diode; every string of an array or none"
+            "Each module's own shading, for string-level energy: `azimuth_deg`, `elevation_deg` and `modules`, "
+            "one entry per module in series order with a whole-module `beam_shaded_fraction` or one `substrings` "
+            "table per bypass diode of the module (its `bypass_diodes`, 3 by default); every string of an array "
+            "or none"
         ),
     },
 )
@@ -3361,17 +3362,29 @@ def _inverter_conversion(
 
 def _check_module_shading(
     cfg: Mapping[str, Any], strings: Sequence[PVString], arrays: Sequence[tuple[PVModuleParams, int]]
-) -> None:
-    """Refuse module shading that string-level energy cannot run."""
+) -> tuple[PVString, ...]:
+    """The strings with their module shading bound to their array's module; refuse shading string energy cannot run.
+
+    Each string's tables take its module's bypass diodes
+    (:meth:`~breos.pv.shading.ModuleShading.for_module`).
+    """
     shaded = [string.module_shading is not None for string in strings]
     if not any(shaded):
-        return
+        return tuple(strings)
     n_arrays = len(cfg["pv_arrays"] or [])
+    bound = []
     for i, string in enumerate(strings):
         if string.module_shading is not None and string.array < len(arrays):
-            problem = string.module_shading.inconsistency(arrays[string.array][0].N_Cells)
+            module = arrays[string.array][0]
+            try:
+                shading = string.module_shading.for_module(module.bypass_diodes)
+            except ValueError as error:
+                raise ValueError(f"'pv_strings[{i}].module_shading': {error}") from None
+            problem = shading.inconsistency(module.N_Cells)
             if problem:
                 raise ValueError(f"'pv_strings[{i}].module_shading': {problem}")
+            string = replace(string, module_shading=shading)
+        bound.append(string)
     first = shaded.index(True)
     if cfg["electrical_fidelity"] != "string":
         raise ValueError(f"'pv_strings[{first}].module_shading' needs electrical_fidelity = 'string'")
@@ -3385,6 +3398,7 @@ def _check_module_shading(
                 f"'pv_strings[{members[flags.index(False)]}]' has no module_shading, but another string of "
                 f"array {array} does. Give every string of an array module_shading, or none"
             )
+    return tuple(bound)
 
 
 # The DC/AC ratio range outside which the electrical check warns, per inverter.
@@ -3410,7 +3424,7 @@ def _resolve_electrical(
             "Give every 'pv_strings' entry cable_length_m and cable_cross_section_mm2, or none: the cables "
             "replace the flat 'wiring' loss for the whole system"
         )
-    _check_module_shading(cfg, strings, arrays)
+    strings = _check_module_shading(cfg, strings, arrays)
     setup = ElectricalSetup(
         inverters,
         strings,

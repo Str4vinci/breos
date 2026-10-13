@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from numbers import Real
 from typing import Any
 
@@ -201,12 +201,9 @@ def _weights(axis: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.ndarray, n
     return lower, upper, weight
 
 
-#: Bypass diodes per module when ``module_shading`` does not state them.
-DEFAULT_BYPASS_DIODES = 3
-
 #: The keys of a ``pv_strings[i].module_shading`` table, of each of its
 #: ``modules`` and of each module's ``substrings``.
-MODULE_SHADING_KEYS = ("azimuth_deg", "elevation_deg", "bypass_diodes", "modules")
+MODULE_SHADING_KEYS = ("azimuth_deg", "elevation_deg", "modules")
 MODULE_ENTRY_KEYS = ("beam_shaded_fraction", "substrings", "sky_view_factor")
 SUBSTRING_KEYS = ("beam_shaded_fraction", "limiting_shaded_fraction")
 
@@ -227,7 +224,8 @@ class ModuleShade:
     ``mean`` holds each substring's area-mean beam shaded fraction table and
     ``limiting`` the shaded fraction of its most-shaded series cell, or None
     where the shade is even over the substring. ``whole`` records that the
-    caller gave one table for the whole module.
+    caller gave one table for the whole module, which every substring then
+    shares.
     """
 
     mean: tuple[ShadingTable, ...]
@@ -242,13 +240,12 @@ class ModuleShading:
     """The shading of each module of one string, in series order, on one grid of sun positions.
 
     Each module's tables follow :class:`ShadingTable`'s rules on the shared
-    axes. ``bypass_diodes`` is the number of bypass-diode substrings per
-    module; ``bypass_diodes_stated`` whether the caller gave it.
+    axes. ``bypass_diodes`` is the module's number of bypass-diode
+    substrings, which :meth:`for_module` binds; None until then.
     """
 
     modules: tuple[ModuleShade, ...]
-    bypass_diodes: int = DEFAULT_BYPASS_DIODES
-    bypass_diodes_stated: bool = False
+    bypass_diodes: int | None = None
 
     @classmethod
     def from_mapping(cls, value: Any) -> ModuleShading:
@@ -257,10 +254,6 @@ class ModuleShading:
         missing = [key for key in ("azimuth_deg", "elevation_deg", "modules") if key not in table]
         if missing:
             raise ValueError(f"module_shading needs {', '.join(missing)}")
-        stated = "bypass_diodes" in table
-        diodes = table.get("bypass_diodes", DEFAULT_BYPASS_DIODES)
-        if isinstance(diodes, bool) or not isinstance(diodes, int) or diodes < 1:
-            raise ValueError("'module_shading.bypass_diodes' must be an integer of at least 1")
         entries = table["modules"]
         if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)) or not entries:
             raise ValueError("'module_shading.modules' must be a non-empty list, one entry per module")
@@ -282,17 +275,11 @@ class ModuleShading:
                 raise ValueError(f"'{where}.sky_view_factor' must be a number from 0 to 1")
             if "beam_shaded_fraction" in entry:
                 whole = grid(entry["beam_shaded_fraction"], f"{where}.beam_shaded_fraction")
-                modules.append(
-                    ModuleShade((whole,) * diodes, (None,) * diodes, float(view), True, "sky_view_factor" in entry)
-                )
+                modules.append(ModuleShade((whole,), (None,), float(view), True, "sky_view_factor" in entry))
                 continue
             substrings = entry["substrings"]
-            if (
-                not isinstance(substrings, Sequence)
-                or isinstance(substrings, (str, bytes))
-                or len(substrings) != diodes
-            ):
-                raise ValueError(f"'{where}.substrings' must hold one table per bypass diode ({diodes})")
+            if not isinstance(substrings, Sequence) or isinstance(substrings, (str, bytes)) or not substrings:
+                raise ValueError(f"'{where}.substrings' must hold one table per bypass diode of the module")
             means, limits = [], []
             for k, raw_sub in enumerate(substrings):
                 sub_where = f"{where}.substrings[{k}]"
@@ -303,7 +290,32 @@ class ModuleShading:
                 limit = sub.get("limiting_shaded_fraction")
                 limits.append(None if limit is None else grid(limit, f"{sub_where}.limiting_shaded_fraction"))
             modules.append(ModuleShade(tuple(means), tuple(limits), float(view), False, "sky_view_factor" in entry))
-        return cls(tuple(modules), int(diodes), stated)
+        return cls(tuple(modules))
+
+    def for_module(self, bypass_diodes: int) -> ModuleShading:
+        """These tables for a module of ``bypass_diodes`` substrings: one table per substring.
+
+        A module given as one table shares it among its substrings; one given
+        by substrings must hold one table per bypass diode.
+        """
+        modules = []
+        for m, module in enumerate(self.modules):
+            if module.whole:
+                module = replace(module, mean=module.mean[:1] * bypass_diodes, limiting=(None,) * bypass_diodes)
+            elif len(module.mean) != bypass_diodes:
+                raise ValueError(
+                    f"modules[{m}].substrings holds {len(module.mean)} tables; the module has {bypass_diodes} "
+                    "bypass diodes, one table each"
+                )
+            modules.append(module)
+        return replace(self, modules=tuple(modules), bypass_diodes=bypass_diodes)
+
+    @property
+    def diodes(self) -> int:
+        """The bound number of bypass diodes; :meth:`for_module` must have run."""
+        if self.bypass_diodes is None:
+            raise ValueError("module_shading is not bound to a module yet; call for_module")
+        return self.bypass_diodes
 
     def inconsistency(self, cells: int) -> str | None:
         """Why these tables cannot describe a module of ``cells`` series cells, or None when they can.
@@ -313,9 +325,9 @@ class ModuleShading:
         that share of its area: its mean shaded fraction is at least its
         limiting fraction over its cell count, at every node.
         """
-        per_substring = cells / self.bypass_diodes
+        per_substring = cells / self.diodes
         if per_substring < 1:
-            return f"bypass_diodes ({self.bypass_diodes}) is more than the module's {cells} cells"
+            return f"the module's bypass_diodes ({self.diodes}) are more than its {cells} cells"
         for m, module in enumerate(self.modules):
             for k, (mean, limit) in enumerate(zip(module.mean, module.limiting, strict=True)):
                 if limit is None:
@@ -324,7 +336,7 @@ class ModuleShading:
                 if per_substring < 2:
                     return (
                         f"{where} gives a limiting_shaded_fraction, but {cells} cells over "
-                        f"{self.bypass_diodes} bypass diodes leave fewer than 2 cells per substring"
+                        f"{self.diodes} bypass diodes leave fewer than 2 cells per substring"
                     )
                 low = np.asarray(limit.beam_shaded_fraction) / per_substring - np.asarray(mean.beam_shaded_fraction)
                 if (low > 1e-9).any():
@@ -366,8 +378,6 @@ class ModuleShading:
         """The shading as a plain ``module_shading`` mapping of floats, as the result echoes it."""
         axes = self.axes
         config: dict[str, Any] = {"azimuth_deg": list(axes.azimuth_deg), "elevation_deg": list(axes.elevation_deg)}
-        if self.bypass_diodes_stated:
-            config["bypass_diodes"] = self.bypass_diodes
         modules = []
         for module in self.modules:
             if module.whole:
@@ -395,8 +405,7 @@ class ModuleShading:
             "azimuth_points": len(axes.azimuth_deg),
             "elevation_points": len(axes.elevation_deg),
             "azimuth_periodic": axes.periodic,
-            "bypass_diodes": self.bypass_diodes,
-            "bypass_diodes_stated": self.bypass_diodes_stated,
+            "bypass_diodes": self.diodes,
             "modules_by_substring": sum(not module.whole for module in self.modules),
             "modules_with_limiting_cells": sum(
                 any(table is not None for table in module.limiting) for module in self.modules
@@ -429,7 +438,7 @@ class ModuleMeanShading:
         count = 0
         for shading in self.strings:
             mean, _ = shading.substring_fractions(shading.axes.grid_weights(sun_azimuth, sun_elevation))
-            part = mean.sum(axis=(0, 1)) / shading.bypass_diodes
+            part = mean.sum(axis=(0, 1)) / shading.diodes
             total = part if total is None else total + part
             count += len(shading.modules)
         assert total is not None

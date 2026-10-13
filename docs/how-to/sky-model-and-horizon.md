@@ -158,7 +158,8 @@ beam_shaded_fraction = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
 One grid of sun positions serves the string, with the rules of the array
 table above. Each module entry is either one `beam_shaded_fraction` table,
 for shade spread evenly over the module, or `substrings`, one entry per
-bypass diode (`bypass_diodes`, 3 when omitted). A substring's
+bypass diode of the module (its `bypass_diodes`, 3 unless the module states
+otherwise). A substring's
 `beam_shaded_fraction` is the shaded share of its area, and its optional
 `limiting_shaded_fraction` the shaded share of its most-shaded cell; in a
 half-cell module, give the mean of the two halves' most-shaded cells; for

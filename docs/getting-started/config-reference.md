@@ -218,7 +218,7 @@ One entry per group of identical strings on one input, as `[[pv_strings]]` in TO
 | `cable_cross_section_mm2` |  | Conductor cross-section (mm²) of each string's cable |
 | `cable_length_m` |  | One-way length (m) of each string's cable to the inverter input; with `cable_cross_section_mm2`, the cable's resistance replaces the flat `wiring` loss. Give it on every string or none |
 | `conductor` |  | Cable conductor, `"copper"` or `"aluminium"`; `"copper"` by default |
-| `module_shading` |  | Each module's own shading, for string-level energy: `azimuth_deg`, `elevation_deg`, optional `bypass_diodes` (3) and `modules`, one entry per module in series order with a whole-module `beam_shaded_fraction` or one `substrings` table per bypass diode; every string of an array or none |
+| `module_shading` |  | Each module's own shading, for string-level energy: `azimuth_deg`, `elevation_deg` and `modules`, one entry per module in series order with a whole-module `beam_shaded_fraction` or one `substrings` table per bypass diode of the module (its `bypass_diodes`, 3 by default); every string of an array or none |
 | `parallel` |  | Identical strings in parallel on the input; 1 by default |
 
 ## electrical_environment

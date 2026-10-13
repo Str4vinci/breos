@@ -1,6 +1,7 @@
 """Module-level shading: each module's substrings, their bypass diodes and the string's global maximum."""
 
 import json
+from dataclasses import replace
 
 import numpy as np
 import pvlib
@@ -20,8 +21,10 @@ def _table(value: float) -> list[list[float]]:
     return [[value]]
 
 
-def _shading(modules: list[dict], **extra) -> ModuleShading:
-    return ModuleShading.from_mapping({"azimuth_deg": [0], "elevation_deg": [0], "modules": modules, **extra})
+def _shading(modules: list[dict], diodes: int = 3, **extra) -> ModuleShading:
+    return ModuleShading.from_mapping(
+        {"azimuth_deg": [0], "elevation_deg": [0], "modules": modules, **extra}
+    ).for_module(diodes)
 
 
 def _parts(
@@ -50,20 +53,22 @@ LIT = {"beam_shaded_fraction": _table(0.0)}
 def test_the_shape_is_validated():
     with pytest.raises(ValueError, match="either beam_shaded_fraction or substrings"):
         _shading([{"beam_shaded_fraction": _table(0), "substrings": []}])
-    with pytest.raises(ValueError, match=r"one table per bypass diode \(3\)"):
+    with pytest.raises(ValueError, match="holds 2 tables; the module has 3 bypass diodes"):
         _shading([{"substrings": [{"beam_shaded_fraction": _table(0)}] * 2}])
     with pytest.raises(ValueError, match="unknown key"):
         _shading([{**LIT, "limiting_shaded_fraction": _table(1)}])
     with pytest.raises(ValueError, match="from 0 to 1"):
         _shading([{"beam_shaded_fraction": _table(1.5)}])
-    with pytest.raises(ValueError, match="bypass_diodes"):
-        _shading([LIT], bypass_diodes=0)
+    with pytest.raises(ValueError, match="unknown key"):
+        _shading([LIT], bypass_diodes=2)
     with pytest.raises(ValueError, match="single string"):
         PVString(0, 0, 0, 1, parallel=2, module_shading=_shading([LIT]))
     with pytest.raises(ValueError, match="2 module entries for 3 modules"):
         PVString(0, 0, 0, 3, module_shading=_shading([LIT, LIT]))
-    two = _shading([LIT], bypass_diodes=2)
-    assert two.bypass_diodes_stated and len(two.modules[0].mean) == 2
+    two = _shading([LIT], diodes=2)
+    assert two.bypass_diodes == 2 and len(two.modules[0].mean) == 2
+    with pytest.raises(ValueError, match="not bound to a module"):
+        _ = ModuleShading.from_mapping({"azimuth_deg": [0], "elevation_deg": [0], "modules": [LIT]}).diodes
 
 
 def test_even_shade_on_every_module_is_the_modules_own_curve():
@@ -304,7 +309,7 @@ def test_app_reports_the_mismatch_stage_and_each_string(trina, _patch_weather):
     by_string = {row["string"]: row for row in mismatch["strings"]}
     # The chimney's string loses to mismatch; the clear one does not.
     assert by_string[0]["loss_kwh"] > 0.1 and abs(by_string[1]["loss_kwh"]) < 0.01
-    assert by_string[0]["bypass_diodes"] == 3 and by_string[0]["bypass_diodes_stated"] is False
+    assert by_string[0]["bypass_diodes"] == 3
     assert waterfall["near_shading"]["arrays"][0]["form"] == "modules"
     echoed = result["provenance"]["resolved_config"]["pv_strings"][0]["module_shading"]
     assert echoed["modules"][0]["beam_shaded_fraction"] == CHIMNEY
@@ -493,8 +498,10 @@ def test_inconsistent_mean_and_limiting_fractions_are_refused(trina):
         resolve_app_config(config)
     module[0]["substrings"][0]["beam_shaded_fraction"] = [[v / 48 for v in row] for row in CHIMNEY]
     resolve_app_config(config)
-    config["pv_strings"][0]["module_shading"]["bypass_diodes"] = 100
+    MODULES[trina] = replace(MODULES[trina], bypass_diodes=100)
     module[0]["substrings"] += [{"beam_shaded_fraction": CLEAR}] * 97
+    for other in config["pv_strings"][0]["module_shading"]["modules"][1:]:
+        other["beam_shaded_fraction"] = CLEAR
     with pytest.raises(ValueError, match="fewer than 2 cells per substring"):
         resolve_app_config(config)
 
@@ -520,7 +527,7 @@ def test_reusing_the_brightest_substring_matches_solving_each():
                 {"beam_shaded_fraction": [[0.0, 0.0]]},
             ],
         }
-    )  # fmt: skip
+    ).for_module(3)  # fmt: skip
     curve = ShadedStringCurve(shading, parts, np.ones(STEPS), 3)
     assert curve.mismatched.size == STEPS
     reused = curve._voltage(curve._table_i)
@@ -604,11 +611,24 @@ def test_repeated_grid_currents_do_not_hide_the_peak():
 
 def test_more_bypass_diodes_than_cells_is_refused(trina):
     config = _module_shaded_config(trina, CLEAR)
+    MODULES[trina] = replace(MODULES[trina], bypass_diodes=145)
     shading = config["pv_strings"][0]["module_shading"]
-    shading["bypass_diodes"] = 145
     shading["modules"][0] = {"substrings": [{"beam_shaded_fraction": CLEAR}] * 145}
-    with pytest.raises(ValueError, match="more than the module's 144 cells"):
+    with pytest.raises(ValueError, match="bypass_diodes \\(145\\) are more than its 144 cells"):
         resolve_app_config(config)
+
+
+def test_the_substrings_follow_the_modules_bypass_diodes(trina):
+    MODULES[trina] = replace(MODULES[trina], bypass_diodes=2)
+    config = _module_shaded_config(trina, CLEAR)
+    module = config["pv_strings"][0]["module_shading"]["modules"]
+    module[0] = {"substrings": [{"beam_shaded_fraction": CLEAR}] * 3}
+    with pytest.raises(ValueError, match="holds 3 tables; the module has 2 bypass diodes"):
+        resolve_app_config(config)
+    module[0] = {"substrings": [{"beam_shaded_fraction": CLEAR}] * 2}
+    resolved = resolve_app_config(config)
+    assert resolved.electrical.strings[0].module_shading.bypass_diodes == 2
+    assert len(resolved.electrical.strings[1].module_shading.modules[0].mean) == 2
 
 
 class _FourPlateaus:

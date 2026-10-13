@@ -318,7 +318,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Module-level shading (ADR 0008, level 2). With string-level energy, a
   `pv_strings` entry may carry `module_shading`: each module's shaded
   fraction table, whole or per bypass-diode substring, where a substring may
-  also give the shaded fraction of its most-shaded cell. BREOS builds each
+  also give the shaded fraction of its most-shaded cell. The substrings
+  follow the module's `bypass_diodes`, a new `PVModuleParams` field, 3 by
+  default (ADR 0009 M1). BREOS builds each
   string's curve from its substrings and bypass diodes
   (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated) and
   runs each input at the curve's global maximum within its limits
