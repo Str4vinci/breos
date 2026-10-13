@@ -306,8 +306,9 @@ def test_optimizer_workers_start_with_one_native_thread(tariff_case, monkeypatch
     ids=["greedy", "fixed-target", "discharge-only"],
 )
 @pytest.mark.parametrize(("freq", "backend"), [("h", "python"), ("15min", "numba")])
+@pytest.mark.parametrize("coupling", ["dc", "ac"])
 def test_three_year_tariff_design_reproduces_through_app(
-    monkeypatch, open_meteo_weather, freq, backend, smart_charging
+    monkeypatch, open_meteo_weather, freq, backend, smart_charging, coupling
 ):
     import breos.app as app_module
     from breos import App
@@ -325,6 +326,10 @@ def test_three_year_tariff_design_reproduces_through_app(
         tariff.update(
             schedule="pt_mainland_2026_weekly_tri", import_prices={"off_peak": 0.10, "mid_peak": 0.25, "peak": 0.50}
         )
+    ac = coupling == "ac"
+    if ac and smart_charging and "grid_charge_efficiency" in smart_charging:
+        # The battery inverter converts grid charge (ADR 0004 C7).
+        smart_charging = {key: value for key, value in smart_charging.items() if key != "grid_charge_efficiency"}
     app_config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "Europe/Lisbon"},
         "n_modules": 8,
@@ -341,6 +346,16 @@ def test_three_year_tariff_design_reproduces_through_app(
         "execution_backend": backend,
         "tariff": tariff,
         **({"smart_charging": smart_charging} if smart_charging else {}),
+        **(
+            {
+                "battery_coupling": "ac",
+                "battery_inverter_kw_per_kwh": 0.5,
+                "battery_inverter_efficiency": 0.95,
+                "costs": {"battery_inverter_cost_per_kw": 120.0},
+            }
+            if ac
+            else {}
+        ),
     }
     dependencies = AppRuntimeDependencies(
         load_profile=lambda **kwargs: load.copy(),
@@ -372,7 +387,12 @@ def test_three_year_tariff_design_reproduces_through_app(
         "location": cfg["location"],
         "simulation": {"resolution": freq, "years_projection": 3},
         "pv": {"module": cfg["pv_module"], "degradation_rate": cfg["pv_degradation_rate"]},
-        "battery": {"temperature": 20.0, "eol_percentage": 0.99, "enable_resistance_fade": True},
+        "battery": {
+            "temperature": 20.0,
+            "eol_percentage": 0.99,
+            "enable_resistance_fade": True,
+            **({"coupling": "ac", "inverter_kw_per_kwh": 0.5, "inverter_efficiency": 0.95} if ac else {}),
+        },
         "costs": costs,
         "financials": {
             "discount_rate": cfg["discount_rate"],
@@ -393,6 +413,13 @@ def test_three_year_tariff_design_reproduces_through_app(
     )
     assert fixed.metrics["Projected_Total_Replacements"] > 0
     assert result["npv_savings"] == pytest.approx(fixed.metrics["Projected_NPV"], abs=0.0051, rel=0)
+    assert result["total_investment"] == pytest.approx(fixed.metrics["Projected_Initial_Cost"], abs=0.0051, rel=0)
+    if ac:
+        assert fixed.metrics["Battery_Inverter_AC_Rating_kW"] == 2.5
+        assert fixed.metrics["Projected_Battery_Inverter_Cost"] == pytest.approx(300.0, rel=1e-15)
+        assert fixed.yearly["PV_AC_To_Battery_kWh"].min() > 0.0
+    else:
+        assert "Battery_Inverter_AC_Rating_kW" not in fixed.metrics
     assert result["provenance"]["tariff"] == fixed.provenance["tariff"]
     if smart_charging:
         assert result["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]

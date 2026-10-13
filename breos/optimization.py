@@ -248,6 +248,19 @@ _BATTERY_SPEC_KEYS = (
 )
 
 
+def _battery_inverter_ac_capacity_w(batt_spec: Mapping[str, Any], battery_kwh: float) -> Optional[float]:
+    """A candidate's AC-coupled battery inverter rating in W, or None without one (ADR 0004 C13).
+
+    ``inverter_kw_per_kwh`` follows the candidate's nominal capacity;
+    ``inverter_ac_rating_kw`` is fixed for the study.
+    """
+    if batt_spec.get("coupling", "dc") != "ac" or not battery_kwh > 0.0:
+        return None
+    if batt_spec.get("inverter_ac_rating_kw") is not None:
+        return float(batt_spec["inverter_ac_rating_kw"]) * 1000.0
+    return float(batt_spec["inverter_kw_per_kwh"]) * float(battery_kwh) * 1000.0
+
+
 def _build_battery_config_from_spec(
     batt_spec: Dict[str, Any],
     nominal_energy_wh: float,
@@ -262,9 +275,17 @@ def _build_battery_config_from_spec(
     Only the settings the spec names are forwarded. Everything it leaves out
     takes the :class:`BatteryConfig` default, which is the same default the
     App resolves, so the two entry points evaluate the same battery when a
-    caller omits a setting.
+    caller omits a setting. An AC-coupled candidate with a battery gets its
+    battery inverter; without one it runs the PV-only path either way.
     """
     configured = {key: batt_spec[key] for key in _BATTERY_SPEC_KEYS if key in batt_spec}
+    battery_kwh = nominal_energy_wh / 1000.0
+    if batt_spec.get("coupling", "dc") == "ac" and nominal_energy_wh > 0.0:
+        configured.update(
+            coupling="ac",
+            battery_inverter_ac_capacity_w=_battery_inverter_ac_capacity_w(batt_spec, battery_kwh),
+            battery_inverter_efficiency=batt_spec["inverter_efficiency"],
+        )
     return BatteryConfig(
         nominal_energy_wh=nominal_energy_wh,
         initial_soh=initial_soh,
@@ -302,6 +323,7 @@ def _battery_replacement_treatment(battery: Mapping[str, Any]) -> Dict[str, Any]
         "allow_terminal_replacement": bool(battery.get("allow_terminal_replacement", True)),
         "replacement_min_remaining_years": float(battery.get("replacement_min_remaining_years", 0.0)),
         "skipped_replacement_action": str(battery.get("skipped_replacement_action", "keep")),
+        "coupling": str(battery.get("coupling", "dc")),
         "terminal_period": (
             "The final degradation period of the last project year: the elapsed one-day window of simulation "
             "steps that ends on the horizon's last step, whole or partial. It is always aged and recorded; "
@@ -440,6 +462,7 @@ def _evaluate_projected_design_metrics(
         raise ValueError("projected PV degradation rate must be between 0 and 1")
 
     cost_params = cost_params_from_config(costs_cfg, fin_cfg)
+    battery_inverter_w = _battery_inverter_ac_capacity_w(batt_spec, battery_kwh)
     costs = calculate_costs(
         n_modules=n_modules,
         module_power_w=pv_params.Mpp,
@@ -449,6 +472,8 @@ def _evaluate_projected_design_metrics(
         replacement_cost_each=replacement_event_cost(
             battery_kwh, cost_params.battery_cost_per_kwh, batt_spec.get("replacement_cost")
         ),
+        battery_coupling=batt_spec.get("coupling", "dc"),
+        battery_inverter_ac_capacity_w=battery_inverter_w,
     )
     has_battery = battery_kwh > 0.0
     degradation_engine, blast_model = _resolve_degradation_engine_spec(batt_spec)
@@ -511,6 +536,15 @@ def _evaluate_projected_design_metrics(
         "Projected_Payback_Year": float(payback_year) if payback_year is not None else np.nan,
         "Projected_Payback_Year_Interpolated": payback_interpolated if payback_interpolated is not None else np.nan,
         "Projected_Initial_Cost": float(costs["total_initial_cost"]),
+        # An AC-coupled study's battery inverter, per candidate (ADR 0004 C14).
+        **(
+            {
+                "Battery_Inverter_AC_Rating_kW": float(battery_inverter_w or 0.0) / 1000.0,
+                "Projected_Battery_Inverter_Cost": float(costs["battery_inverter_cost"]),
+            }
+            if batt_spec.get("coupling", "dc") == "ac"
+            else {}
+        ),
         "Projected_Replacement_Cost_T0_Prices": float(cost_projection.attrs["total_replacement_cost"]),
         "Projected_Total_Replacements": int(total_replacements),
         "Projected_Final_SOH_%": float(current_soh),
@@ -599,7 +633,13 @@ def _resolve_optimization_tariff(
         {"reference_tariff": config.get("reference_tariff"), "resolution": resolution}, timezone, config["currency"]
     )
     smart_charging = resolve_smart_charging_spec(
-        {"smart_charging": config["smart_charging"], "battery_kwh": battery_kwh}, spec, battery_key
+        {
+            "smart_charging": config["smart_charging"],
+            "battery_kwh": battery_kwh,
+            "battery_coupling": (config.get("battery") or {}).get("coupling", "dc"),
+        },
+        spec,
+        battery_key,
     )
     tariff = spec.resolve(index, timezone) if spec is not None else None
     reference: Dict[str, Any] = {}
