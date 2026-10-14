@@ -23,9 +23,11 @@ from breos._planner_forecast import (
     RESAMPLING_REACH_HOURS,
     PlannerForecast,
     calendar_epoch_seconds,
-    source_offsets,
+    epoch_seconds,
+    source_times,
 )
 from breos.app_config import resolve_app_config
+from breos.app_inputs import remap_tmy_year
 from breos.smart_charging import DEFAULT_PUBLICATION_DELAY_HOURS, SmartChargingSpec
 from breos.weather import IRRADIANCE_RESAMPLING_POLICIES, WEATHER_METADATA_KEY, save_weather_csv
 from tests.conftest import _build_synthetic_weather
@@ -170,7 +172,7 @@ def test_a_spec_built_directly_checks_its_forecast():
 # -- the lead rule -------------------------------------------------------------
 
 
-def _forecast(freq="15min", days=10, leads=7, delay_h=6.0, offsets=None) -> PlannerForecast:
+def _forecast(freq="15min", days=10, leads=7, delay_h=6.0, support=None, decision=None) -> PlannerForecast:
     index = pd.date_range("2026-01-01", periods=days * (96 if freq == "15min" else 24), freq=freq, tz="UTC")
     n = len(index)
     step_s = 900 if freq == "15min" else 3600
@@ -179,7 +181,8 @@ def _forecast(freq="15min", days=10, leads=7, delay_h=6.0, offsets=None) -> Plan
         calendar_epoch_seconds(index),
         step_s,
         pv_degradation_rate=0.0,
-        source_offset_s=offsets,
+        support_source_s=support,
+        decision_source_s=decision,
         pv_dc_by_lead_w=np.vstack([np.arange(n, dtype=float) + 1000 * k for k in range(1, leads + 1)]),
         publication_delay_s=int(delay_h * 3600),
         resampling_reach_s=int(RESAMPLING_REACH_HOURS[freq] * 3600),
@@ -201,28 +204,75 @@ def test_a_step_takes_the_youngest_lead_published_before_the_decision():
     assert (_forecast(delay_h=0).leads(88, 80)[:80] == 1).all()
 
 
-def test_ages_count_a_source_day_the_calendar_drops():
-    index = pd.date_range("2026-01-01", periods=365 * 96, freq="15min", tz="UTC")
-    offsets = source_offsets(index, 2024)
-    feb28 = index.get_loc(pd.Timestamp("2026-02-28", tz="UTC"))
-    mar1 = index.get_loc(pd.Timestamp("2026-03-01", tz="UTC"))
-    assert offsets[mar1] - offsets[feb28] == 86400  # 29 February 2024 is not on the 2026 calendar
-    assert set(source_offsets(index, 2025)) == {-365 * 86400}
-    # A leap calendar fills 29 February from a common year's 28 February.
-    leap = pd.date_range("2028-02-28", periods=3 * 96, freq="15min", tz="UTC")
-    filled = source_offsets(leap, 2025)
-    # The calendar day the source lacks is a step back in source time, which ages ignore.
-    assert filled[96] == filled[0] - 86400 and filled[2 * 96] == filled[96]
+def _restamped(raw: pd.DatetimeIndex, year: int) -> tuple[np.ndarray, np.ndarray]:
+    """Raw right-labelled hours restamped onto ``year`` by the App: their calendar and source seconds."""
+    frame = remap_tmy_year(pd.DataFrame({"source_s": epoch_seconds(raw)}, index=raw), year)
+    return epoch_seconds(pd.DatetimeIndex(frame.index)), frame["source_s"].to_numpy(dtype=np.int64)
 
-    days = 10
-    shifted = np.zeros(days * 96, dtype=np.int64)
-    shifted[96 * 2 :] = 86400
-    plain = _forecast(days=days).leads(88, 96 * 3)
-    after = np.arange(96 * 3) + 88 + RESAMPLING_REACH_HOURS["15min"] * 4 + 1 >= 96 * 2
-    leap_leads = _forecast(days=days, offsets=shifted).leads(88, 96 * 3)
-    assert (leap_leads[after] == plain[after] + 1).all() and (leap_leads[~after] == plain[~after]).all()
-    # A backward jump (spliced weather) counts calendar time.
-    np.testing.assert_array_equal(_forecast(days=days, offsets=-shifted).leads(88, 96 * 3), plain)
+
+def _leads_on(raw, year, steps, start, freq="15min", delay_h=6.0):
+    step_s = 900 if freq == "15min" else 3600
+    reach = int(RESAMPLING_REACH_HOURS[freq] * 3600)
+    calendar, source = _restamped(raw, year)
+    support, decision = source_times(calendar, source, epoch_seconds(steps), step_s, reach)
+    n = len(steps)
+    forecast = PlannerForecast(
+        "weather",
+        epoch_seconds(steps),
+        step_s,
+        pv_degradation_rate=0.0,
+        support_source_s=support,
+        decision_source_s=decision,
+        pv_dc_by_lead_w=np.zeros((7, n)),
+        publication_delay_s=int(delay_h * 3600),
+        resampling_reach_s=reach,
+    )
+    return forecast.leads(start, n - start)
+
+
+def test_ages_count_a_day_the_calendar_drops_even_at_a_period_edge():
+    """2024 weather on the 2026 calendar: 29 February is gone, so 1 March is a day further away in source time."""
+    raw = pd.date_range("2024-01-01 01:00", "2025-01-01 00:00", freq="h", tz="UTC")
+    steps = pd.date_range("2026-02-27", "2026-03-01 23:45", freq="15min", tz="UTC")
+    decided = steps.get_loc(pd.Timestamp("2026-02-28", tz="UTC"))
+    leads = _leads_on(raw, 2026, steps, decided)
+    times = steps[decided:]
+    # Evening steps of 28 February are shaped by 1 March hours, issued a source day later.
+    evening = (times >= pd.Timestamp("2026-02-28 20:00", tz="UTC")) & (times < pd.Timestamp("2026-03-01", tz="UTC"))
+    assert (leads[evening] >= 3).all()
+    plain = _forecast(days=3).leads(0, 96)
+    morning = times < pd.Timestamp("2026-02-28 12:00", tz="UTC")
+    np.testing.assert_array_equal(leads[morning], plain[: int(morning.sum())])
+
+
+def test_a_filled_day_puts_the_decision_back_in_source_time():
+    """2025 weather on the leap 2028 calendar: 29 February repeats 28 February, so a decision there is earlier."""
+    raw = pd.date_range("2025-01-01 01:00", "2026-01-01 00:00", freq="h", tz="UTC")
+    steps = pd.date_range("2028-02-28", "2028-03-01 23:45", freq="15min", tz="UTC")
+    decided = steps.get_loc(pd.Timestamp("2028-02-29", tz="UTC"))
+    leads = _leads_on(raw, 2028, steps, decided)
+    # The first steps after the decision are shaped by the evening of 28 February, the source day after it.
+    assert (leads[:8] >= 2).all()
+
+
+def test_ages_follow_the_weathers_own_clock():
+    """Weather stamped at +10:00 drops its local 29 February, whose end is 14:00 UTC on 28 February 2026."""
+    raw = pd.date_range("2024-01-01 01:00", "2025-01-01 00:00", freq="h", tz="+10:00")
+    steps = pd.date_range("2026-02-27", "2026-03-02 23:00", freq="h", tz="UTC")
+    decided = steps.get_loc(pd.Timestamp("2026-02-28", tz="UTC"))
+    leads = _leads_on(raw, 2026, steps, decided, freq="h")
+    times = steps[decided:]
+    # The hourly step from 13:00 reads the raw hour labelled 14:00 UTC, local 1 March 00:00: a source day on.
+    jump = times >= pd.Timestamp("2026-02-28 13:00", tz="UTC")
+    # Before it, a day's lead; from it, one more for the same calendar distance.
+    assert leads[(times >= pd.Timestamp("2026-02-28 10:00", tz="UTC")) & ~jump].max() == 1
+    assert leads[jump & (times < pd.Timestamp("2026-02-28 18:00", tz="UTC"))].min() == 2
+
+
+def test_the_contiguous_case_is_the_calendar_rule():
+    steps = pd.date_range("2026-01-01", periods=96 * 4, freq="15min", tz="UTC")
+    raw = pd.date_range("2026-01-01 01:00", "2027-01-01 00:00", freq="h", tz="UTC")
+    np.testing.assert_array_equal(_leads_on(raw, 2026, steps, 88), _forecast(days=4).leads(88, 96 * 4 - 88))
 
 
 def test_the_forecast_replaces_only_pv_and_degrades_it_by_project_year():
@@ -240,6 +290,10 @@ def test_the_forecast_replaces_only_pv_and_degrades_it_by_project_year():
     record = forecast.record()
     assert record["decisions"] == 1 and sum(record["planned_steps_by_lead"].values()) == 300
 
+    # A planned step past the calendar's end is in the next project year, and degraded as such.
+    seam = forecast.series(SimpleNamespace(project_step_ordinal=958, projection_year=0), 4, pv[:4], load, temperature)
+    np.testing.assert_allclose(seam[0] / (np.array([958, 959, 0, 1]) + 1000), [1, 1, 0.9, 0.9])
+
     index = pd.date_range("2026-01-01", periods=96, freq="15min", tz="UTC")
     truth = np.arange(96, dtype=float)
     perfect = PlannerForecast(
@@ -253,7 +307,7 @@ def test_the_forecast_replaces_only_pv_and_degrades_it_by_project_year():
     )
     out = perfect.series(SimpleNamespace(project_step_ordinal=96 + 90, projection_year=1), 10, pv, load, temperature)
     steps = (90 + np.arange(10)) % 96
-    np.testing.assert_allclose(out[0], steps * 0.5)
+    np.testing.assert_allclose(out[0], steps * 0.5 ** (1 + (90 + np.arange(10)) // 96))
     np.testing.assert_allclose(out[1], steps + 1.0)
     np.testing.assert_allclose(out[2], steps + 2.0)
 
@@ -388,3 +442,17 @@ def test_a_year_the_archive_does_not_cover_is_refused(monkeypatch):
     monkeypatch.setattr("breos.weather._openmeteo_year", gappy)
     with pytest.raises(ValueError, match="20 hour"):
         fetch_forecast_archive(41.15, -8.63, 2024, leads=1, save_to_file=False)
+
+
+def test_a_truncated_year_is_refused(monkeypatch):
+    captured: dict = {}
+    _install_fake_openmeteo(monkeypatch, captured)
+    real = __import__("breos.weather", fromlist=["openmeteo_requests"]).openmeteo_requests.Client
+
+    class Short(real):  # type: ignore[misc, valid-type]
+        def weather_api(self, url, *, params):
+            return super().weather_api(url, params={**params, "start_date": "2025-01-02"})
+
+    monkeypatch.setattr("breos.weather.openmeteo_requests.Client", Short)
+    with pytest.raises(ValueError, match="returned 8737 hours for 2025, not the 8760"):
+        fetch_forecast_archive(41.15, -8.63, 2025, leads=1, save_to_file=False)

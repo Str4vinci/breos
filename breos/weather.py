@@ -832,7 +832,14 @@ def _openmeteo_year(url: str, params: dict[str, Any], fields: Sequence[str], yea
     )
     frame = pd.DataFrame({name: hourly.Variables(i).ValuesAsNumpy() for i, name in enumerate(fields)}, index=index)
     frame.index.name = "date"
-    return frame[(frame.index > pd.Timestamp(f"{year}-01-01")) & (frame.index <= pd.Timestamp(f"{year + 1}-01-01"))]
+    frame = frame[(frame.index > pd.Timestamp(f"{year}-01-01")) & (frame.index <= pd.Timestamp(f"{year + 1}-01-01"))]
+    expected = pd.date_range(f"{year}-01-01 01:00", f"{year + 1}-01-01 00:00", freq="h")
+    if not frame.index.equals(expected):
+        raise ValueError(
+            f"{url} returned {len(frame)} hours for {year}, not the {len(expected)} hourly labels from "
+            f"{expected[0]} to {expected[-1]}"
+        )
+    return frame
 
 
 def _openmeteo_file_metadata(source: str, fields: Sequence[str], extra: dict[str, Any]) -> dict[str, Any]:
@@ -851,9 +858,9 @@ def _openmeteo_file_metadata(source: str, fields: Sequence[str], extra: dict[str
 
 
 def _require_complete(frame: pd.DataFrame, what: str) -> None:
-    missing = frame.isna().any(axis=1)
+    missing = ~np.isfinite(frame.to_numpy(dtype=np.float64)).all(axis=1)
     if missing.any():
-        first = frame.index[missing.argmax()]
+        first = frame.index[int(missing.argmax())]
         raise ValueError(
             f"{what} has {int(missing.sum())} hour(s) without data, the first labelled {first}; the archive may "
             "not cover the whole year yet. Choose another year."

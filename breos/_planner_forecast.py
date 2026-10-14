@@ -9,17 +9,19 @@ Open-Meteo Previous Runs archive, :func:`breos.weather.fetch_forecast_archive`).
 Each file runs through the run's own PV model, so the forecast PV differs
 from the true PV by the weather forecast's error alone.
 
-A decision plans each step on the shortest lead whose forecasts were
-published before the decision. A step's PV is shaped by the raw hours up to
-``resampling_reach`` after the step's end (the hourly-to-15-minute
-resampling interpolates across neighbouring hours), and a forecast of hour
-``h`` at lead ``k`` is issued at ``h - k days`` and published
-``forecast_publication_delay_hours`` later. So a step takes lead
-``ceil((end + reach + delay - decision) / 1 day)``, counted in the weather's
-own time: a day the simulated calendar drops from the source year, such as
-29 February of a leap-year file restamped onto a common year, still counts.
-A step that would need a lead beyond the last file keeps the persistence
-value. Load and temperature stay persistence.
+A decision plans each step on the shortest lead whose forecasts of every raw
+hour that shapes the step were published before the decision. A forecast of
+the hour labelled ``h`` at lead ``k`` is issued at ``h - k days`` and
+published ``forecast_publication_delay_hours`` later. The raw hours that
+shape a step are those labelled within ``resampling_reach`` of it, on either
+side (the hourly-to-15-minute resampling interpolates across neighbouring
+hours). Times are the weather's own: :func:`source_times` maps every raw
+hour through the App's own restamping onto the simulated year, so a day the
+calendar drops (29 February of a leap year on a common calendar) or repeats
+(a filled 29 February) is counted where it really falls. A step takes lead
+``ceil(max(source age, calendar age) / 1 day)``; one that would need a lead
+beyond the last file keeps the persistence value. Load and temperature stay
+persistence.
 
 ``forecast = "perfect"`` plans on the run's own future PV, load and
 temperature: a perfect-information reference, not a controller.
@@ -39,41 +41,69 @@ import pandas as pd
 
 from breos._controller import ControllerDayInput
 
-# How far after a step's end the latest raw hour that shapes its PV can lie,
-# by simulation resolution. At 15 minutes the resampler reads neighbouring
-# hours (a raw hour moves the steps from 4 h before its label; pinned by a
-# test that perturbs single hours); an hourly run reads its own hour.
+# How far from a step the raw hours that shape its PV can be labelled, by
+# simulation resolution. At 15 minutes the resampler reads neighbouring hours
+# (a raw hour moves the steps from 4 h before its label to 3 h after it;
+# pinned by a test that perturbs single hours); an hourly run reads its own
+# hour.
 RESAMPLING_REACH_HOURS = {"15min": 4.0, "h": 0.0}
 # A step needing a lead beyond the last file keeps persistence: lead 0.
 PERSISTENCE_LEAD = 0
 _DAY_S = 86400
+_HOUR_S = 3600
 
 
 def resampling_reach_seconds(freq: str) -> int:
     if freq not in RESAMPLING_REACH_HOURS:
         raise ValueError(f"smart_charging.forecast = 'weather' supports resolutions {sorted(RESAMPLING_REACH_HOURS)}")
-    return int(RESAMPLING_REACH_HOURS[freq] * 3600)
+    return int(RESAMPLING_REACH_HOURS[freq] * _HOUR_S)
 
 
-def source_offsets(index: pd.DatetimeIndex, source_year: int) -> np.ndarray:
-    """Per step of the simulated calendar, the source weather's time less the step's, in seconds.
-
-    The App restamps one year of weather onto the simulated year by whole
-    years, dropping 29 February of a leap source year on a common calendar
-    (and filling it from 28 February on a leap calendar). A step's source
-    time is its date in ``source_year``; a filled 29 February is 28 February.
-    """
+def epoch_seconds(index: pd.DatetimeIndex) -> np.ndarray:
+    """Each timestamp in seconds since the epoch, UTC (a naive index is read as UTC)."""
     utc = index.tz_convert("UTC") if index.tz is not None else index.tz_localize("UTC")
-    dates = pd.DatetimeIndex(utc.normalize())
-    out = np.empty(len(index), dtype=np.int64)
-    for day in dates.unique():
-        month, dom = day.month, day.day
-        if month == 2 and dom == 29 and not pd.Timestamp(year=source_year, month=1, day=1).is_leap_year:
-            dom = 28
-        # A filled 29 February repeats the source's 28 February: one day further back.
-        source = pd.Timestamp(year=source_year, month=month, day=dom, tz="UTC")
-        out[dates == day] = int((source - day).total_seconds())
-    return out
+    return np.asarray((utc - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1), dtype=np.int64)
+
+
+# Kept under its earlier name for the controller's calendar.
+calendar_epoch_seconds = epoch_seconds
+
+
+def source_times(
+    raw_calendar_s: np.ndarray, raw_source_s: np.ndarray, steps_s: np.ndarray, step_s: int, reach_s: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per step, the latest source time of the raw hours shaping it, and the source time of a decision there.
+
+    ``raw_calendar_s`` and ``raw_source_s`` give every raw weather row's
+    label on the simulated calendar (after restamping) and in the weather's
+    own time; ``steps_s`` each step's start on the calendar. A step is
+    shaped by the rows labelled from ``reach_s`` before its start to
+    ``reach_s`` after its end. A decision at a step's start is at the
+    earliest source time that the rows labelled within the hour either side
+    of it map it to. A step with no such row gets the calendar time.
+    """
+    order = np.argsort(raw_calendar_s, kind="stable")
+    calendar = raw_calendar_s[order]
+    source = raw_source_s[order]
+    offset = source - calendar
+
+    def window(lo_s: np.ndarray, hi_s: np.ndarray, values: np.ndarray, pick: Any, empty: np.ndarray) -> np.ndarray:
+        lo = np.searchsorted(calendar, lo_s, side="left")
+        hi = np.searchsorted(calendar, hi_s, side="right")
+        width = int(np.max(hi - lo, initial=0))
+        out = empty.astype(np.float64).copy()
+        for k in range(width):
+            position = lo + k
+            inside = position < hi
+            value = values[np.minimum(position, len(values) - 1)]
+            out = np.where(inside, pick(out, value), out)
+        return out
+
+    latest = window(steps_s - reach_s, steps_s + step_s + reach_s, source, np.fmax, np.full(len(steps_s), np.nan))
+    latest = np.where(np.isnan(latest), steps_s + step_s + reach_s, latest).astype(np.int64)
+    shift = window(steps_s - _HOUR_S, steps_s + _HOUR_S, offset, np.fmin, np.full(len(steps_s), np.nan))
+    decision = (steps_s + np.where(np.isnan(shift), 0, shift)).astype(np.int64)
+    return latest, decision
 
 
 @dataclass
@@ -83,16 +113,18 @@ class PlannerForecast:
     ``kind`` is ``weather`` (PV from ``pv_dc_by_lead_w``, one row per lead
     day, undegraded) or ``perfect`` (the run's PV, load and temperature).
     ``calendar_epoch_s`` holds each step's start in seconds since the epoch,
-    UTC; ``source_offset_s`` its source-time offset (:func:`source_offsets`).
-    PV of project year ``y`` (from 0) is degraded by ``(1 - rate) ** y``, as
-    the runner degrades the true PV.
+    UTC. Under ``weather``, ``support_source_s`` and ``decision_source_s``
+    come from :func:`source_times`. PV of project year ``y`` (from 0) is
+    degraded by ``(1 - rate) ** y``, as the runner degrades the true PV; a
+    planned step past the calendar's end is in the next project year.
     """
 
     kind: str
     calendar_epoch_s: np.ndarray
     step_s: int
     pv_degradation_rate: float
-    source_offset_s: np.ndarray | None = None
+    support_source_s: np.ndarray | None = None
+    decision_source_s: np.ndarray | None = None
     pv_dc_by_lead_w: np.ndarray | None = None
     true_pv_dc_w: np.ndarray | None = None
     true_load_w: np.ndarray | None = None
@@ -108,10 +140,13 @@ class PlannerForecast:
         if self.kind == "weather":
             if self.pv_dc_by_lead_w is None or self.pv_dc_by_lead_w.ndim != 2 or self.pv_dc_by_lead_w.shape[1] != n:
                 raise ValueError("a weather forecast needs PV of shape (leads, steps)")
-            if self.source_offset_s is None:
-                self.source_offset_s = np.zeros(n, dtype=np.int64)
-            if len(self.source_offset_s) != n:
-                raise ValueError("source_offset_s needs one value per step")
+            if self.support_source_s is None or self.decision_source_s is None:
+                # The weather's own time is the calendar's.
+                self.support_source_s, self.decision_source_s = source_times(
+                    self.calendar_epoch_s, self.calendar_epoch_s, self.calendar_epoch_s, self.step_s, 0
+                )
+            if len(self.support_source_s) != n or len(self.decision_source_s) != n:
+                raise ValueError("support_source_s and decision_source_s need one value per step")
         elif self.kind == "perfect":
             for name in ("true_pv_dc_w", "true_load_w", "true_temperature_c"):
                 value = getattr(self, name)
@@ -119,32 +154,26 @@ class PlannerForecast:
                     raise ValueError(f"a perfect forecast needs {name} with one value per step")
         else:
             raise ValueError(f"unknown planner forecast {self.kind!r}")
-        self._year_s = int(self.calendar_epoch_s[-1] - self.calendar_epoch_s[0]) + self.step_s
 
     @property
     def steps(self) -> int:
         return len(self.calendar_epoch_s)
 
-    def _offset(self, steps: np.ndarray) -> np.ndarray:
-        """Source offsets of calendar ``steps``; a step past the calendar's end is its replay, a year on."""
-        assert self.source_offset_s is not None
-        n = self.steps
-        return self.source_offset_s[steps % n] - (steps // n) * self._year_s
-
     def leads(self, start: int, count: int) -> np.ndarray:
         """The lead day of each of ``count`` steps planned at calendar step ``start``; 0 is persistence.
 
-        ``start`` is the decision's step on the calendar. A backward jump in
-        source time (spliced weather) counts calendar time.
+        A step past the calendar's end replays the calendar's start (A2): its
+        weather is older in source time, so its calendar age decides.
         """
         assert self.pv_dc_by_lead_w is not None
+        assert self.support_source_s is not None and self.decision_source_s is not None
+        n = self.steps
         j = np.arange(count, dtype=np.int64)
         steps = start + j
-        reach = self.resampling_reach_s // self.step_s + 1
-        offset = np.maximum(self._offset(steps), self._offset(steps + reach))
-        offset_t = self._offset(np.array([start]))[0]
-        age = (j + 1) * self.step_s + self.resampling_reach_s + self.publication_delay_s
-        age = age + np.maximum(offset - offset_t, 0)
+        delay = self.publication_delay_s
+        calendar_age = (j + 1) * self.step_s + self.resampling_reach_s + delay
+        source_age = self.support_source_s[steps % n] + delay - self.decision_source_s[start]
+        age = np.where(steps < n, np.maximum(calendar_age, source_age), calendar_age)
         lead = np.maximum(-((-age) // _DAY_S), 1)
         return np.where(lead > len(self.pv_dc_by_lead_w), PERSISTENCE_LEAD, lead).astype(np.int64)
 
@@ -158,8 +187,10 @@ class PlannerForecast:
         """
         n = self.steps
         start = day.project_step_ordinal % n
-        steps = (start + np.arange(count, dtype=np.int64)) % n
-        factor = (1.0 - self.pv_degradation_rate) ** day.projection_year
+        absolute = start + np.arange(count, dtype=np.int64)
+        steps = absolute % n
+        # A step past the calendar's end is in the next project year.
+        factor = (1.0 - self.pv_degradation_rate) ** (day.projection_year + absolute // n)
         self.decisions += 1
         if self.kind == "perfect":
             assert self.true_pv_dc_w is not None and self.true_load_w is not None
@@ -179,17 +210,11 @@ class PlannerForecast:
             record.update(
                 leads=len(self.pv_dc_by_lead_w),
                 files=[dict(f) for f in self.files],
-                publication_delay_hours=self.publication_delay_s / 3600,
-                resampling_reach_hours=self.resampling_reach_s / 3600,
+                publication_delay_hours=self.publication_delay_s / _HOUR_S,
+                resampling_reach_hours=self.resampling_reach_s / _HOUR_S,
                 # Planned steps by lead day; 0 kept persistence.
                 planned_steps_by_lead={str(k): int(v) for k, v in sorted(self.lead_steps.items())},
             )
         else:
             record["perfect_information"] = True
         return record
-
-
-def calendar_epoch_seconds(index: pd.DatetimeIndex) -> np.ndarray:
-    """Each step's start in seconds since the epoch, UTC (a naive index is read as UTC)."""
-    utc = index.tz_convert("UTC") if index.tz is not None else index.tz_localize("UTC")
-    return np.asarray((utc - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1), dtype=np.int64)

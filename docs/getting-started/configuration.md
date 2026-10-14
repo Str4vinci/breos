@@ -1213,10 +1213,11 @@ same year, named with `weather_file`.
 Each planned step takes the youngest forecast that was published before
 the decision. A forecast is published `forecast_publication_delay_hours`
 after it is issued, and at 15-minute resolution a step's PV also depends on
-the raw hours up to 4 hours after it, through the hourly-to-15-minute
+the raw hours up to 4 hours either side of it, through the hourly-to-15-minute
 resampling, so those hours must be published too. A step beyond the last
-lead file keeps persistence. Ages are counted in the weather's own time, so
-29 February of a leap-year file restamped onto a common year still counts.
+lead file keeps persistence. Ages are counted in the weather's own time,
+through the App's own restamping, so 29 February of a leap-year file
+restamped onto a common year still counts.
 
 `breos.fetch_forecast_archive` writes the lead files of one year from the
 Open-Meteo Previous Runs archive (from early 2024), and

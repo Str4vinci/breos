@@ -956,25 +956,28 @@ oracle.
   model, and is aligned onto the simulation calendar as the true PV is. The
   forecast PV therefore differs from the true PV by the weather forecast's
   error alone, and project year `y` degrades it by `(1 - rate)^y` as the
-  runner degrades the true PV. Load and battery temperature stay
+  runner degrades the true PV; a planned step past the year's end takes the
+  next year's factor. Load and battery temperature stay
   persistence: load forecasts are not archived, and a household controller
   forecasts load from its own history.
-- **Causality: the lead of each planned step.** A forecast of hour `h` at
-  lead `k` is issued at `h - k` days and published
+- **Causality: the lead of each planned step.** A forecast of the hour
+  labelled `h` at lead `k` is issued at `h - k` days and published
   `forecast_publication_delay_hours` later; the archives keep no
   availability times, and 6 h covers the main global models. A planned
-  step's PV is shaped by the raw hours up to the resampling reach after its
-  end: 4 h at 15 minutes (the hourly-to-15-minute resampling interpolates
-  across neighbouring hours; a test perturbs single raw hours under every
-  `irradiance_resampling` policy and pins it), 0 at hourly resolution. So a
-  step decided at `t` takes lead `ceil((end + reach + delay - t) / 1 day)`,
-  at least 1. Ages are counted in the weather's own time: a day the
-  simulated calendar drops from the source year (29 February of a leap
-  year restamped onto a common year) adds a day; a day the calendar adds,
-  or a backward jump in spliced weather, counts calendar time. A step that
-  would need a lead beyond the last file keeps the persistence value. A
-  step of the replayed calendar past the year's end (A2) is the next year's
-  in source time.
+  step's PV is shaped by the raw hours labelled within the resampling reach
+  of it on either side: 4 h at 15 minutes (the hourly-to-15-minute
+  resampling interpolates across neighbouring hours; a test perturbs single
+  raw hours under every `irradiance_resampling` policy and pins it), 0 at
+  hourly resolution. Times are the weather's own: every raw hour is carried
+  through the App's own restamping onto the simulated year (on the
+  weather's own clock, dropped and filled days included), so a step's age
+  is the latest source label shaping it, less the decision's source time
+  (the earliest that the hours around the decision map it to). A step takes
+  lead `ceil(max(source age, calendar age) / 1 day)`, at least 1, where the
+  calendar age is the step's end plus the reach and the delay, less the
+  decision. A step of the replayed calendar past the year's end (A2) has
+  older weather and takes its calendar age. A step that would need a lead
+  beyond the last file keeps the persistence value.
 - **Both decision boundaries.** A civil-day decision is made at its day's
   first step, a window decision (A19) at the window's start; the forecast
   covers the steps the decision plans, from that step.

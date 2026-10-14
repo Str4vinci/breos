@@ -565,9 +565,9 @@ def prepare_planner_forecast(
     """
     from breos._planner_forecast import (
         PlannerForecast,
-        calendar_epoch_seconds,
+        epoch_seconds,
         resampling_reach_seconds,
-        source_offsets,
+        source_times,
     )
     from breos.battery import align_simulation_inputs
     from breos.weather import read_weather_csv
@@ -584,7 +584,7 @@ def prepare_planner_forecast(
             raise ValueError("The planner forecast's calendar differs from the simulation calendar")
         return out
 
-    epoch = calendar_epoch_seconds(index)
+    epoch = epoch_seconds(index)
     rate = float(cfg["pv_degradation_rate"])
     if spec.forecast == "perfect":
         truth = aligned(inputs.dc_system_base)
@@ -627,15 +627,32 @@ def prepare_planner_forecast(
         metadata = weather.attrs.get(WEATHER_METADATA_KEY, {})
         files.append({"lead_day": len(files) + 1, "path": metadata.get("path"), "sha256": metadata.get("sha256")})
     assert source_year is not None and spec.forecast_publication_delay_hours is not None
+    # Every raw row's label in the weather's own time, carried through the
+    # App's own restamping onto the simulated year (dropped or filled days
+    # included), so forecast ages count real time.
+    raw_index = pd.DatetimeIndex(read_weather_csv(spec.forecast_weather_files[0]).index)
+    if raw_index.tz is None:
+        raw_index = raw_index.tz_localize("UTC")
+    labels = pd.DataFrame({"source_s": epoch_seconds(raw_index)}, index=raw_index)
+    restamped = remap_tmy_year(labels, start_year)
+    reach_s = resampling_reach_seconds(freq)
+    support, decision = source_times(
+        epoch_seconds(pd.DatetimeIndex(restamped.index)),
+        restamped["source_s"].to_numpy(dtype=np.int64),
+        epoch,
+        step_s,
+        reach_s,
+    )
     return PlannerForecast(
         "weather",
         epoch,
         step_s,
         pv_degradation_rate=rate,
-        source_offset_s=source_offsets(index, source_year),
+        support_source_s=support,
+        decision_source_s=decision,
         pv_dc_by_lead_w=np.vstack(leads),
         publication_delay_s=int(round(spec.forecast_publication_delay_hours * 3600)),
-        resampling_reach_s=resampling_reach_seconds(freq),
+        resampling_reach_s=reach_s,
         files=tuple(files),
     )
 
