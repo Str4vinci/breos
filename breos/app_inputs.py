@@ -11,6 +11,7 @@ from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar, cast
 
+import numpy as np
 import pandas as pd
 from pvlib.location import Location
 
@@ -544,6 +545,115 @@ def prepare_simulation_inputs(
         pv_breakdown=pv_breakdown,
         load_data=load_data,
         temperature_series=temperature_series,
+    )
+
+
+def prepare_planner_forecast(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    deps: AppRuntimeDependencies,
+    inputs: PreparedSimulationInputs,
+    index: pd.DatetimeIndex,
+) -> Any:
+    """The ``daily_persistence`` planner's forecast (ADR 0002 A20), or None under persistence.
+
+    ``index`` is the simulation calendar the tariff was resolved on. Under
+    ``forecast = "weather"`` each forecast weather file runs through the
+    run's own weather preparation and PV model and is aligned onto that
+    calendar as the true PV is; under ``"perfect"`` the run's own aligned
+    PV, load and temperature are the forecast.
+    """
+    from breos._planner_forecast import (
+        PlannerForecast,
+        epoch_seconds,
+        resampling_reach_seconds,
+        source_times,
+    )
+    from breos.battery import align_simulation_inputs
+    from breos.weather import read_weather_csv
+
+    spec = resolved.smart_charging
+    if spec is None or spec.forecast in (None, "persistence"):
+        return None
+    freq = cfg["resolution"]
+    step_s = int(pd.Timedelta(get_hours_per_step(freq), unit="h").total_seconds())
+
+    def aligned(pv_dc: pd.Series) -> Any:
+        out = align_simulation_inputs(pv_dc, inputs.load_data, inputs.temperature_series, freq=freq)
+        if not out.index.equals(index):
+            raise ValueError("The planner forecast's calendar differs from the simulation calendar")
+        return out
+
+    epoch = epoch_seconds(index)
+    rate = float(cfg["pv_degradation_rate"])
+    if spec.forecast == "perfect":
+        truth = aligned(inputs.dc_system_base)
+        return PlannerForecast(
+            "perfect",
+            epoch,
+            step_s,
+            pv_degradation_rate=rate,
+            true_pv_dc_w=np.asarray(truth.pv_dc_w, dtype=np.float64),
+            true_load_w=np.asarray(truth.load_w, dtype=np.float64),
+            true_temperature_c=np.asarray(truth.temperature_c, dtype=np.float64),
+        )
+    start_year = int(cfg["start_date"][:4])
+    leads: list[np.ndarray] = []
+    files: list[dict[str, Any]] = []
+    source_year: int | None = None
+    for path in spec.forecast_weather_files:
+        raw = read_weather_csv(path)
+        years = pd.Series(pd.DatetimeIndex(raw.index).year)
+        year = int(years.mode().iloc[0])
+        if source_year is None:
+            source_year = year
+        elif year != source_year:
+            raise ValueError(
+                f"smart_charging.forecast_weather_files hold different years ({source_year} and {year} in {path}): "
+                "every lead file must cover the same weather year"
+            )
+        weather = load_weather_for_simulation(
+            resolved,
+            freq,
+            start_year,
+            deps,
+            horizon_profile=cfg["horizon_profile"],
+            solar_position=cfg["solar_position"],
+            irradiance_resampling=cfg["irradiance_resampling"],
+            period=resolved.period,
+            weather_file=path,
+        )
+        leads.append(np.asarray(aligned(build_pv_production_breakdown(cfg, resolved, weather).dc_after_losses).pv_dc_w))
+        metadata = weather.attrs.get(WEATHER_METADATA_KEY, {})
+        files.append({"lead_day": len(files) + 1, "path": metadata.get("path"), "sha256": metadata.get("sha256")})
+    assert source_year is not None and spec.forecast_publication_delay_hours is not None
+    # Every raw row's label in the weather's own time, carried through the
+    # App's own restamping onto the simulated year (dropped or filled days
+    # included), so forecast ages count real time.
+    raw_index = pd.DatetimeIndex(read_weather_csv(spec.forecast_weather_files[0]).index)
+    if raw_index.tz is None:
+        raw_index = raw_index.tz_localize("UTC")
+    labels = pd.DataFrame({"source_s": epoch_seconds(raw_index)}, index=raw_index)
+    restamped = remap_tmy_year(labels, start_year)
+    reach_s = resampling_reach_seconds(freq)
+    support, decision = source_times(
+        epoch_seconds(pd.DatetimeIndex(restamped.index)),
+        restamped["source_s"].to_numpy(dtype=np.int64),
+        epoch,
+        step_s,
+        reach_s,
+    )
+    return PlannerForecast(
+        "weather",
+        epoch,
+        step_s,
+        pv_degradation_rate=rate,
+        support_source_s=support,
+        decision_source_s=decision,
+        pv_dc_by_lead_w=np.vstack(leads),
+        publication_delay_s=int(round(spec.forecast_publication_delay_hours * 3600)),
+        resampling_reach_s=reach_s,
+        files=tuple(files),
     )
 
 

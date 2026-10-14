@@ -49,11 +49,16 @@ from breos.resources import load_config_json
 from breos.smart_charging import (
     DECISION_BOUNDARIES,
     DECISION_BOUNDARY_KEY,
+    DEFAULT_PUBLICATION_DELAY_HOURS,
     DISCHARGE_ONLY_MODES,
+    FORECAST_FILES_KEY,
+    FORECAST_KEY,
+    FORECASTS,
     OVERLAP_POLICIES,
     PLANNER_KEYS,
     PLANNER_MODES,
     PLANNER_SETTINGS,
+    PUBLICATION_DELAY_KEY,
     SMART_CHARGING_MODES,
     WEAR_COST_KEY,
     SmartChargingSpec,
@@ -1972,6 +1977,18 @@ def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
     missing = [key for key in _MODE_REQUIRED[mode] if key not in table]
     if missing:
         raise ValueError(f"'{where}' needs {', '.join(f'{where}.{k}' for k in missing)} for mode = '{mode}'")
+    if mode in PLANNER_MODES:
+        forecast = table.get(FORECAST_KEY, "persistence")
+        if forecast == "weather" and FORECAST_FILES_KEY not in table:
+            raise ValueError(
+                f"'{where}.{FORECAST_KEY}' = 'weather' needs {where}.{FORECAST_FILES_KEY}: the forecast weather "
+                "files, the first for lead day 1"
+            )
+        given = [key for key in (FORECAST_FILES_KEY, PUBLICATION_DELAY_KEY) if key in table]
+        if forecast != "weather" and given:
+            raise ValueError(
+                f"{', '.join(f'{where}.{k}' for k in given)} needs {where}.{FORECAST_KEY} = 'weather', not '{forecast}'"
+            )
     overlap = sorted(set(table.get("charge_periods", ())) & set(table["discharge_periods"]))
     if overlap and table.get("overlap_policy", "reject") == "reject":
         raise ValueError(
@@ -1995,6 +2012,9 @@ SMART_CHARGING_TABLE = TableSpec(
         **{name: integer(minimum=minimum) for name, (_default, minimum) in PLANNER_SETTINGS.items()},
         WEAR_COST_KEY: number(minimum=0),
         DECISION_BOUNDARY_KEY: choice(DECISION_BOUNDARIES),
+        FORECAST_KEY: choice(FORECASTS),
+        FORECAST_FILES_KEY: list_of(text, min_length=1),
+        PUBLICATION_DELAY_KEY: number(minimum=0),
     },
     required=frozenset({"mode"}),
     check=_check_smart_charging_keys,
@@ -2039,6 +2059,25 @@ SMART_CHARGING_TABLE = TableSpec(
             "civil day at local midnight; `charge_window_start` decides one per charge window at its start, held "
             "until the next window starts. A window is a run of consecutive steps in `charge_periods`; it may "
             "cross midnight or span a weekend. Needs a tariff period outside `charge_periods`"
+        ),
+        FORECAST_KEY: (
+            "`daily_persistence` only (experimental): what the planner forecasts PV with. `persistence` (default) "
+            "repeats the day before the decision; `weather` reads day-ahead forecast weather from "
+            f"`{FORECAST_FILES_KEY}` and takes, for each planned step, the youngest forecast published before "
+            "the decision, keeping persistence beyond the last lead; `perfect` plans on the run's own PV, load "
+            "and temperature, a perfect-information reference no controller can have. Load and temperature are "
+            "persistence under `persistence` and `weather`"
+        ),
+        FORECAST_FILES_KEY: (
+            f'`{FORECAST_KEY} = "weather"` only: forecast weather files, the first for lead day 1 (the values '
+            "forecast at least one day before their valid hour), the next for lead day 2, and so on, each in "
+            "the layout of `weather_file` and on the same year. A relative path is taken from the working "
+            "directory"
+        ),
+        PUBLICATION_DELAY_KEY: (
+            f'`{FORECAST_KEY} = "weather"` only: hours between a forecast\'s nominal issue (its valid hour less '
+            "one day per lead day) and the first decision that may use it. At least 0; default "
+            f"{DEFAULT_PUBLICATION_DELAY_HOURS:g}"
         ),
         "charge_periods": "Tariff periods in which the grid may charge the battery. Not with `discharge_only`",
         "discharge_periods": (
@@ -2106,6 +2145,9 @@ def _checked_smart_charging(
                 f"does not have. Its periods: {', '.join(sorted(periods))}."
             )
     check_charge_windows(table.get(DECISION_BOUNDARY_KEY), table.get("charge_periods", ()), periods)
+    for index, path in enumerate(table.get(FORECAST_FILES_KEY, ())):
+        if not Path(path).is_file():
+            raise FileNotFoundError(f"smart_charging.{FORECAST_FILES_KEY}[{index}] not found: {path}")
     return table
 
 

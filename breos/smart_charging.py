@@ -70,8 +70,26 @@ WEAR_COST_KEY = "wear_cost_per_kwh"
 # midnight, the default, or at the start of each charge window.
 DECISION_BOUNDARY_KEY = "decision_boundary"
 DECISION_BOUNDARIES = ("civil_day", "charge_window_start")
-# Every planner setting: the integers, the wear cost and the decision boundary.
-PLANNER_KEYS = (*PLANNER_SETTINGS, WEAR_COST_KEY, DECISION_BOUNDARY_KEY)
+# What the planner forecasts PV with (ADR 0002 A20): the day before the
+# decision repeated (the default), day-ahead weather forecasts, one file per
+# lead day, or the run's own future (perfect information, a reference).
+FORECAST_KEY = "forecast"
+FORECASTS = ("persistence", "weather", "perfect")
+FORECAST_FILES_KEY = "forecast_weather_files"
+# Hours between a forecast's nominal issue (its valid time less one day per
+# lead day) and its first use, for ``forecast = "weather"``.
+PUBLICATION_DELAY_KEY = "forecast_publication_delay_hours"
+DEFAULT_PUBLICATION_DELAY_HOURS = 6.0
+# Every planner setting: the integers, the wear cost, the decision boundary
+# and the forecast.
+PLANNER_KEYS = (
+    *PLANNER_SETTINGS,
+    WEAR_COST_KEY,
+    DECISION_BOUNDARY_KEY,
+    FORECAST_KEY,
+    FORECAST_FILES_KEY,
+    PUBLICATION_DELAY_KEY,
+)
 # Normal App runs carry stored energy, origin shares and degradation from one
 # project year into the next (ADR 0002, boundary and terminal conventions).
 TERMINAL_CONVENTION = "physical_carry"
@@ -112,6 +130,9 @@ class SmartChargingSpec:
     overlap_policy: str = "reject"
     wear_cost_per_kwh: float | None = None
     decision_boundary: str | None = None
+    forecast: str | None = None
+    forecast_weather_files: tuple[str, ...] = ()
+    forecast_publication_delay_hours: float | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in SMART_CHARGING_MODES:
@@ -119,6 +140,7 @@ class SmartChargingSpec:
         check_overlap_policy(self.mode, self.overlap_policy)
         object.__setattr__(self, "charge_periods", tuple(self.charge_periods))
         object.__setattr__(self, "discharge_periods", tuple(self.discharge_periods))
+        object.__setattr__(self, FORECAST_FILES_KEY, tuple(self.forecast_weather_files))
         planner = {name: getattr(self, name) for name in PLANNER_KEYS}
         if self.mode == "disabled":
             settings = (
@@ -180,8 +202,9 @@ class SmartChargingSpec:
                     f"'smart_charging.{DECISION_BOUNDARY_KEY}' must be one of: {', '.join(DECISION_BOUNDARIES)}"
                 )
             object.__setattr__(self, DECISION_BOUNDARY_KEY, boundary)
+            self._check_forecast()
         else:
-            given = [name for name, value in planner.items() if value is not None]
+            given = [name for name, value in planner.items() if value not in (None, ())]
             if given:
                 raise ValueError(
                     f"'smart_charging' with mode = '{self.mode}' takes no planner settings; "
@@ -194,6 +217,31 @@ class SmartChargingSpec:
                 "every step either charges or discharges; "
                 "set overlap_policy = 'hold_target' with mode = 'fixed_target' or 'daily_persistence' "
                 "to allow overlap"
+            )
+
+    def _check_forecast(self) -> None:
+        """Fill and check the forecast settings of a planner spec (A20)."""
+        forecast = "persistence" if self.forecast is None else self.forecast
+        if forecast not in FORECASTS:
+            raise ValueError(f"'smart_charging.{FORECAST_KEY}' must be one of: {', '.join(FORECASTS)}")
+        object.__setattr__(self, FORECAST_KEY, forecast)
+        if forecast == "weather":
+            if not self.forecast_weather_files:
+                raise ValueError(
+                    f"'smart_charging.{FORECAST_KEY}' = 'weather' needs smart_charging.{FORECAST_FILES_KEY}: "
+                    "the forecast weather files, the first for lead day 1"
+                )
+            delay = self.forecast_publication_delay_hours
+            delay = DEFAULT_PUBLICATION_DELAY_HOURS if delay is None else delay
+            if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < 0:
+                raise ValueError(f"'smart_charging.{PUBLICATION_DELAY_KEY}' must be a number of at least 0")
+            object.__setattr__(self, PUBLICATION_DELAY_KEY, float(delay))
+            return
+        given = [name for name in (FORECAST_FILES_KEY, PUBLICATION_DELAY_KEY) if getattr(self, name) not in (None, ())]
+        if given:
+            raise ValueError(
+                f"{', '.join(f'smart_charging.{name}' for name in given)} needs "
+                f"smart_charging.{FORECAST_KEY} = 'weather'"
             )
 
 
