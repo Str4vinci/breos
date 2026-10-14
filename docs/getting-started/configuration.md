@@ -167,10 +167,11 @@ battery_inverter_cost_per_kw = 150  # no default; 0 if the battery price include
   rating, efficiency and conversion losses; `energy_balance.ac_delivery`
   gains `pv_to_battery_kwh`. Year rows have `PV_AC_To_Battery_kWh` and
   `PV_Charge_Conversion_Loss_kWh`.
-- Not modelled, for the PV, hybrid and battery inverters alike: inverter
-  replacement on its own schedule, and standby consumption while the battery
-  idles. They matter most for low loads, long idle periods and studies of
-  inverter lifetime cost.
+- Not modelled: inverter replacement on its own schedule, for the PV, hybrid
+  and battery inverters alike, and the battery inverter's standby
+  consumption while the battery idles. A PV or hybrid inverter's stated
+  `night_consumption_w` is modelled. The omissions matter most for low
+  loads, long idle periods and studies of inverter lifetime cost.
 
 The optimizer takes the same settings in its `[battery]` table: `coupling`,
 `inverter_ac_rating_kw` or `inverter_kw_per_kwh`, and `inverter_efficiency`,
@@ -1335,7 +1336,7 @@ mode = "fixed_target"               # or "disabled", "discharge_only", or the ex
 target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
 charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
-grid_charge_efficiency = 0.95       # required: AC-to-DC conversion of the grid-charging path
+grid_charge_efficiency = 0.95       # required with a DC-coupled battery; refused with battery_coupling = "ac"
 grid_import_limit_w = 5000          # optional: grid charging keeps total import below this
 overlap_policy = "reject"           # default; "hold_target" permits overlap
 ```
@@ -1358,14 +1359,18 @@ overlap_policy = "reject"           # default; "hold_target" permits overlap
   The floor holds the energy up to the target, not all the stored energy:
   to keep the battery from discharging in a period at all, leave that period
   out of `discharge_periods`.
-- `grid_charge_efficiency` has no default, because the inverter model has no
-  AC-to-DC path to derive one from. Stored energy then also passes through
-  the battery's own charge efficiency.
+- `grid_charge_efficiency` is required with a DC-coupled battery and has no
+  default, because the hybrid inverter model has no AC-to-DC path to derive
+  one from. With `battery_coupling = "ac"` it is refused: the battery
+  inverter converts grid charge at `battery_inverter_efficiency` on its
+  part-load curve. Stored energy then also passes through the battery's own
+  charge efficiency.
 - `grid_import_limit_w` limits grid charging only: in each step it may import
   up to the limit minus what the load already imports. Load import is never
   cut, so a load above the limit still imports in full. Omit it for no site
   limit. Grid charging is also bounded by the battery's charge power and by
-  the inverter's AC rating, which PV output uses first.
+  an inverter's AC rating, which PV uses first: the hybrid inverter's with
+  `"dc"`, the battery inverter's with `"ac"`.
 - `mode = "disabled"` accepts no other key. Unknown keys are errors.
 - Grid charging runs after PV in each step and never while PV is exported,
   so it never takes PV self-consumption. The grid-charge import is part of
@@ -1429,7 +1434,7 @@ the configuration. It is experimental and runs in `App` only:
 mode = "daily_persistence"
 charge_periods = ["off_peak"]
 discharge_periods = ["peak"]
-grid_charge_efficiency = 0.95       # required, as for fixed_target
+grid_charge_efficiency = 0.95       # as for fixed_target: required with "dc", refused with "ac"
 grid_import_limit_w = 5000          # optional
 # Optional planner settings, shown at their defaults:
 forecast_horizon_days = 2           # days the planner looks ahead, today included

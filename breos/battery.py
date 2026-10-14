@@ -129,7 +129,9 @@ class BatteryConfig:
     ``ac_output_scale`` derates AC delivery for shortfall the chain does not
     model and is bounded to ``(0, 1]``. It applies inside dispatch, not to a
     finished result, so battery discharge decisions and the reachable AC
-    ceiling respond to it. It is one constant approximating the combined
+    ceiling respond to it. With ``"ac"`` it scales the PV inverter's
+    conversion alone; the battery inverter's output and ceiling are
+    unchanged. It is one constant approximating the combined
     annual effect of things like availability, curtailment and downstream
     wiring, not a model of any of them individually. While it is active,
     the reported inverter loss is the whole DC-to-AC shortfall rather than

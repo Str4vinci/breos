@@ -151,8 +151,8 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         SMART_CHARGING_TABLE,
         "Battery dispatch by tariff period, as `[smart_charging]` in TOML; see "
         '[Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs '
-        "`target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses "
-        'the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but '
+        "`target_usable_fraction`, `charge_periods`, `discharge_periods` and, with a DC-coupled battery, "
+        '`grid_charge_efficiency`, which `battery_coupling = "ac"` refuses; it refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but '
         "`target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, "
         "`target_levels`, `soc_states`, `wear_cost_per_kwh` and `decision_boundary`. `grid_import_limit_w` is "
         "optional in both. "
