@@ -196,18 +196,44 @@ def test_an_app_run_keeps_each_inverters_pv_and_charges_the_battery(trina, _patc
     assert waterfall["battery_inverter"]["ac_capacity_kw"] == 2.5
 
 
-def test_two_project_years_carry_the_battery_and_discharge_only_runs(trina, _patch_weather):  # noqa: F811
+def test_two_project_years_carry_the_battery_and_discharge_only_runs(
+    trina,  # noqa: F811
+    _patch_weather,
+    monkeypatch,
+):
+    import breos.projection as projection_module
+
+    runs = []
+    detailed = projection_module._simulate_detailed_run
+
+    def record(*args, **kwargs):
+        run = detailed(*args, **kwargs)
+        runs.append((kwargs, run))
+        return run
+
+    monkeypatch.setattr(projection_module, "_simulate_detailed_run", record)
     discharge_only = {"mode": "discharge_only", "discharge_periods": ["peak"]}
     app = App({**TWO_INVERTERS, **APP_AC, "projection_years": 2, "tariff": TOU, "smart_charging": discharge_only})
     app.simulate()
     result = app.result()
     assert app._artifacts is not None
     years = app._artifacts.yearly_df
-    assert len(years) == 2
+    assert len(years) == 2 and len(runs) == 2
     assert (years["PV_AC_To_Battery_kWh"] > 0.0).all()
     assert (years["Grid_AC_To_Battery_kWh"] == 0.0).all()
-    # The second year starts from the stored energy the first one left.
-    assert result["yearly"][1]["soh_pct"] < result["yearly"][0]["soh_pct"]
+    # The second year opens on the stored energy and origins the first one closed on.
+    first = runs[0][1].results_df.iloc[-1]
+    second = runs[1][0]
+    assert second["initial_energy_wh"] == first["Battery_Energy_End"]
+    assert second["initial_pv_origin_energy_wh"] == first["Battery_PV_Origin_Energy_End"]
+    assert second["initial_grid_origin_energy_wh"] == first["Battery_Grid_Origin_Energy_End"]
+    # The battery discharges in peak steps and nowhere else.
+    for _kwargs, run in runs:
+        allowed = run.controller_instructions.discharge_allowed
+        assert 0.3 < allowed.mean() < 0.8, "peak is part of each day"
+        discharge = run.results_df["Battery_AC_To_Load"].to_numpy()
+        assert (discharge[~allowed] == 0.0).all()
+        assert discharge[allowed].sum() > 0.0
     rows = result["pv_loss_waterfall"]["inverter"]["inverters"]
     pv_dc = result["pv_loss_waterfall"]["energy_balance"]["pv_dc"]
     assert sum(row["dc_input_kwh"] for row in rows) == pytest.approx(pv_dc["generation_kwh"], abs=0.02)
