@@ -143,6 +143,16 @@ PLANNING_MODES = ("first_year", "yearly")
 DEFAULT_REPLAY_TOLERANCE = Tolerance(atol_wh=1.0)
 
 
+def _refuse_several_inverters(case: ReplayCase) -> None:
+    """Refuse a system whose PV several inverters convert: the planner plans through one (ADR 0004 M7)."""
+    electrical = case.resolved.electrical
+    if electrical is not None and electrical.fidelity == "string" and len(electrical.inverters) > 1:
+        raise ValueError(
+            f"The daily-target oracle plans with one PV inverter, not {len(electrical.inverters)}; "
+            "its planner would convert their PV as one"
+        )
+
+
 @dataclass(frozen=True)
 class YearPlan:
     """One project year's plan under yearly replanning, and the inputs it was planned on.
@@ -189,6 +199,7 @@ class YearlyDailyTargetPlanner:
         decision_boundary: str = "civil_day",
         wear_cost_per_kwh: float = 0.0,
     ) -> None:
+        _refuse_several_inverters(case)
         self.case = case
         self.decision_boundary = decision_boundary
         self.layout = case.configured_instructions()
@@ -294,6 +305,7 @@ def daily_target_problem(case: ReplayCase, decision_boundary: str = "civil_day")
     spec = case.resolved.smart_charging
     if spec is None or spec.mode != "fixed_target":
         raise ValueError("The daily-target oracle needs a [smart_charging] table with mode = 'fixed_target'")
+    _refuse_several_inverters(case)
     aligned = case.aligned_inputs()
     return DailyTargetProblem.from_tariff(
         case.tariff,

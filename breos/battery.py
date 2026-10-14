@@ -1968,7 +1968,8 @@ def _simulate_core(
             must cover every step. None reads the conversion's own row.
         inverter_units: Several inverters, each converting its own share of
             the DC (:class:`~breos.inverter.InverterUnits`), for a run without
-            a battery. They replace ``battery_config``'s single conversion and
+            a battery or with an AC-coupled one; a DC-coupled battery is
+            refused. They replace ``battery_config``'s single conversion and
             night draw, and must cover every step. None converts through
             ``battery_config`` alone.
         degradation_engine: Degradation backend. ``"native"`` preserves the

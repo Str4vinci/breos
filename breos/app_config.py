@@ -788,8 +788,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             'How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT '
             "input's voltage, current and power limits, the inverter's power limit and its start-up voltage. "
             '`"string"` needs `inverters`, `pv_strings` and '
-            "`electrical_environment`, a wiring without structural errors, and one inverter, or several in a system "
-            "without a battery"
+            "`electrical_environment`, a wiring without structural errors, and one inverter, or several with no "
+            'battery or an AC-coupled one (`battery_coupling = "ac"`)'
         ),
         summary="inverter.electrical_fidelity",
     ),

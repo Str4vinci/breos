@@ -765,7 +765,8 @@ class ProjectionYear:
     # voltage, with the per-step series; None reads the conversion's own row.
     inverter_curve_row: pd.Series | None = None
     # Several inverters, each converting its own share of ``pv_dc``, for a
-    # run without a battery; None converts through the battery config.
+    # run without a battery or with an AC-coupled one; None converts through
+    # the battery config.
     inverter_units: InverterUnits | None = None
 
 
