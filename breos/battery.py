@@ -113,7 +113,8 @@ class BatteryConfig:
     efficiency. With ``"ac"`` PV converts as in a PV-only run, its surplus
     AC charges the battery through the battery inverter, and grid charge
     takes instructions without a ``grid_charge_efficiency``. Instruction
-    planners and daily controllers do not plan for it yet.
+    planners and daily controllers run with it; with several PV inverters the
+    App refuses the daily-target planner, which plans through one.
 
     Power limits are nameplate powers and therefore scale with the timestep:
     ``max_charge_power_w`` limits DC input to the battery path, while

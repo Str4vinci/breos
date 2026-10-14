@@ -107,8 +107,9 @@ The PV inverter's night draw is grid import on every step without PV,
 whatever the battery does. An AC-coupled battery is costed with its own
 inverter price, `battery_inverter_cost_per_kw`; see
 [Cost and emissions presets](../getting-started/configuration.md#cost-and-emissions-presets). Inverter replacement on
-its own schedule and inverter standby consumption are not modelled, for the
-PV, hybrid and battery inverters alike.
+its own schedule is not modelled, for the PV, hybrid and battery inverters
+alike. The battery inverter's standby consumption is not modelled either; a
+PV or hybrid inverter's stated `night_consumption_w` is.
 
 ## Dispatch instructions and grid charging
 
@@ -149,9 +150,11 @@ temperature capacity factor every step and with SOH every day. The same
 target therefore names less energy on a cold night and falls as the pack
 fades.
 
-Grid charging runs after PV allocation in the same step. Grid AC `a` becomes
-DC charge input `a × grid_charge_efficiency`, which then passes through the
-cell charge efficiency like PV charge input. It is booked as
+Grid charging runs after PV allocation in the same step. With `"dc"`, grid
+AC `a` becomes DC charge input `a × grid_charge_efficiency`; with `"ac"`, the
+battery inverter converts PV and grid AC together on its part-load curve and
+splits the DC in proportion to each source's AC. The DC then passes through
+the cell charge efficiency like PV charge input. It is booked as
 `Battery_Charge_Input`, so cell losses, self-heating and both aging engines
 see it. PV keeps priority on every limit the two share:
 

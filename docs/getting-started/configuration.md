@@ -138,8 +138,8 @@ battery_inverter_cost_per_kw = 150  # no default; 0 if the battery price include
 ```
 
 - The PV inverter converts exactly as in a system without a battery, and
-  `inverter_ac_rating_kw`, `inverter_loading_ratio`, `inverter_efficiency` and
-  `ac_output_scale` describe it alone. PV AC that the load does not use
+  `inverter_ac_rating_kw`, `inverter_loading_ratio`, `inverter_efficiency`,
+  `inverters` and `[ac_cable]` describe it alone. PV AC that the load does not use
   charges the battery through the battery inverter before it is exported.
 - The battery inverter is sized by one of `battery_inverter_ac_rating_kw` and
   `battery_inverter_kw_per_kwh`. The per-kWh form resolves against the nominal
@@ -871,22 +871,26 @@ reads it, between the rows, at each step's operating DC voltage: the voltage
 each MPPT input runs at, after its window and current limits, weighted by
 the power it delivers. A step without PV, when only the battery discharges,
 reads the row of the strings' STC maximum power voltage, weighted by their
-STC power. The curve applies to PV and battery discharge alike, as they share
-the inverter. `inverter_efficiency` is then not used for the conversion.
+STC power. With a DC-coupled battery the curve applies to PV and battery
+discharge alike, as they share the inverter; beside an AC-coupled battery it
+is the PV inverter's alone, and the battery inverter keeps its PVWatts curve.
+`inverter_efficiency` is then not used for the conversion.
 
 `temperature_derating` lowers the AC rating in hot ambients: the allowed
 output as a fraction of the nameplate at each ambient, linear between the
 points and held beyond them. The ambient is the weather's air temperature,
 for an inverter outdoors, or `electrical_environment.inverter_ambient_temp_c`
-when you state it, for one indoors. DC above the derated rating is clipped,
-and a battery may still store it. With several inverters, both keys need
+when you state it, for one indoors. DC above the derated rating is clipped;
+a DC-coupled battery may still store it, an AC-coupled one cannot. With several inverters, both keys need
 string-level energy, which applies each to its own inverter. The planned
 charging targets of `daily_persistence` are chosen on one row, the row of
 the strings' STC maximum power voltage with string-level energy, and the
 full rating; dispatch then applies the per-step row and the derating.
 
 `night_consumption_w` is what the inverter draws from the grid while it
-converts nothing: a step with no PV DC and no battery charge or discharge.
+converts nothing: a step with no PV DC and, with a DC-coupled battery, no
+battery charge or discharge. Beside an AC-coupled battery the PV inverter
+draws on every step without PV DC, whatever the battery does.
 Take it from the datasheet; unset, it is not modelled. It adds to `Import_From_Grid`, and so to the
 import cost, and the results frame reports it as `Inverter_Night_Consumption`.
 It does not change dispatch: the planned charging targets are chosen without
@@ -896,8 +900,10 @@ string-level energy has each draw its own on the steps it receives no DC.
 ### AC cable
 
 `[ac_cable]` models the cable from the inverter to the meter. Its loss is I²R
-on the inverter's AC output, so it grows with the square of the output and
-applies to PV and battery discharge alike.
+on the inverter's AC output, so it grows with the square of the output. With
+a DC-coupled battery it applies to PV and battery discharge alike; beside an
+AC-coupled battery it carries the PV inverter's output, including the AC it
+sends the battery.
 
 ```toml
 [ac_cable]

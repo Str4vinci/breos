@@ -366,6 +366,16 @@ routing; `energy_balance.ac_delivery` reconciles delivered/exported AC; and
 `energy_balance.battery_stored_energy` reconciles beginning/end energy,
 charge, discharge, standby, capacity-window, and replacement boundary flows.
 
+With an AC-coupled battery (`battery_coupling = "ac"`) the `inverter` block
+is the PV inverter's alone: its `conversion_loss_kwh` is the direct-PV loss
+and `battery_discharge_conversion_loss_kwh` is 0. A `battery_inverter` block
+reports the battery inverter: `ac_capacity_kw`, `efficiency_pct`,
+`charge_conversion_loss_kwh` (PV and grid charge), `discharge_conversion_loss_kwh`
+and their sum, `conversion_loss_kwh`. `energy_balance.ac_delivery` adds
+`pv_to_battery_kwh`, the PV inverter's AC sent to the battery, which is not
+part of `usable_system_production_kwh`; that energy reaches the load as
+`pv_origin_battery_to_load_kwh`.
+
 Use {py:func}`breos.plotting.plot_pv_loss_waterfall` to render the same
 block as a PV loss diagram.
 
