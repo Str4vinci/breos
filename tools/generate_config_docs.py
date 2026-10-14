@@ -183,7 +183,7 @@ _CONDITIONALLY_REQUIRED = {
     "smart_charging": {
         "charge_periods": "`fixed_target`, `daily_persistence`",
         "discharge_periods": "unless `disabled`",
-        "grid_charge_efficiency": "`fixed_target`, `daily_persistence`",
+        "grid_charge_efficiency": '`fixed_target`, `daily_persistence`, with `battery_coupling = "dc"`',
         "target_usable_fraction": "`fixed_target`",
     },
 }
