@@ -151,7 +151,7 @@ def test_own_cables_and_curves_belong_to_each_inverter(trina, _patch_weather):
 
 
 def test_a_battery_with_several_inverters_is_refused(trina):
-    with pytest.raises(ValueError, match="2 inverters need a system without a battery"):
+    with pytest.raises(ValueError, match="a battery beside 2 inverters must be AC-coupled"):
         resolve_app_config({**TWO_INVERTERS, "battery_kwh": 5.0})
 
 

@@ -3634,10 +3634,17 @@ def _resolve_electrical(
     )
     if setup.fidelity == "string":
         problems = string_model_problems(setup)
-        if len(inverters) > 1 and config_has_battery(cfg):
+        if len(inverters) > 1 and config_has_battery(cfg) and cfg["battery_coupling"] != "ac":
             problems.append(
-                f"{len(inverters)} inverters need a system without a battery, since a battery behind one of them "
-                "needs AC coupling, which is not modelled yet"
+                f"a battery beside {len(inverters)} inverters must be AC-coupled (battery_coupling = 'ac'); a "
+                "DC-coupled battery sits behind one hybrid inverter"
+            )
+        smart_charging = cfg.get("smart_charging") or {}
+        if len(inverters) > 1 and config_has_battery(cfg) and smart_charging.get("mode") in PLANNER_MODES:
+            # The planner converts one forecast through one PV inverter (ADR 0004 M7).
+            problems.append(
+                f"smart_charging.mode = '{smart_charging['mode']}' plans with one PV inverter, not "
+                f"{len(inverters)}; use mode = 'fixed_target' or 'discharge_only'"
             )
         if problems:
             raise ValueError("electrical_fidelity = 'string' cannot run: " + "; ".join(problems))

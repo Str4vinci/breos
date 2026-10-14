@@ -1358,6 +1358,7 @@ def _dispatch_no_battery_vectorized(
     ac_derate: Optional[np.ndarray] = None,
     curve_rows: Optional[np.ndarray] = None,
     units: Optional[InverterUnits] = None,
+    span_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None,
 ) -> None:
     """Fill a PV-only result buffer without entering the timestep loop.
 
@@ -1367,6 +1368,9 @@ def _dispatch_no_battery_vectorized(
     the whole span only. ``units``, aligned to the span, converts each
     inverter's share of the DC on its own instead of ``battery_config``'s
     single conversion (:func:`~breos.inverter.convert_units`).
+    ``span_chain`` is an AC-coupled battery's PV inverter conversion over the
+    whole span, ``(ac, conversion_loss, clipping, night)`` in Wh, which its
+    retired steps read instead of converting again (ADR 0004 C12).
     """
     if steps == slice(None):
         out.zero_fill()
@@ -1377,16 +1381,23 @@ def _dispatch_no_battery_vectorized(
     assert units is None or steps == slice(None)
     pv_dc_wh = np.maximum(0.0, pv_dc_values[steps] * hours_per_step)
     load_wh = load_values[steps] * hours_per_step
-    ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night_consumption_wh = _pv_inverter_conversion(
-        pv_dc_wh,
-        battery_config=battery_config,
-        hours_per_step=hours_per_step,
-        cap_wh=cap_wh,
-        pv_chain=pv_chain,
-        ac_derate=None if ac_derate is None else ac_derate[steps],
-        curve_rows=None if curve_rows is None else curve_rows[steps],
-        units=units,
-    )
+    night_consumption_wh: Optional[np.ndarray]
+    if span_chain is not None:
+        assert pv_chain is None and units is None
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night_consumption_wh = (part[steps] for part in span_chain)
+        if not night_consumption_wh.any():
+            night_consumption_wh = None
+    else:
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night_consumption_wh = _pv_inverter_conversion(
+            pv_dc_wh,
+            battery_config=battery_config,
+            hours_per_step=hours_per_step,
+            cap_wh=cap_wh,
+            pv_chain=pv_chain,
+            ac_derate=None if ac_derate is None else ac_derate[steps],
+            curve_rows=None if curve_rows is None else curve_rows[steps],
+            units=units,
+        )
     pv_ac_to_load_wh = np.minimum(ac_wh, load_wh)
     grid_export_wh = ac_wh - pv_ac_to_load_wh
     grid_import_wh = np.maximum(0.0, load_wh - pv_ac_to_load_wh)
@@ -2119,9 +2130,10 @@ def _simulate_core(
         battery_config.max_soc,
         battery_config.min_soc,
     )
-    if has_battery and _units is not None:
+    if has_battery and _units is not None and battery_config.coupling != "ac":
         raise ValueError(
-            "several inverters need a run without a battery: a battery behind one of them needs AC coupling"
+            "a battery beside several inverters must be AC-coupled (coupling = 'ac'); a DC-coupled battery "
+            "sits behind one hybrid inverter"
         )
     if not has_battery and aligned is not None and aligned.pv_chain is not None:
         expected_chain_key = aligned._pv_chain_cache_key(battery_config, hours_per_step)
@@ -2339,6 +2351,7 @@ def _simulate_core(
             cap_wh=cap_wh,
             ac_derate=_derate_vals,
             curve_rows=_curve_rows,
+            units=_units,
         )
         ac_pv_chain = (chain_ac, chain_loss, chain_clip, np.zeros(n_steps) if chain_night is None else chain_night)
 
@@ -2396,6 +2409,7 @@ def _simulate_core(
                     steps=slice(segment_start, segment_end),
                     ac_derate=_derate_vals,
                     curve_rows=_curve_rows,
+                    span_chain=ac_pv_chain,
                 )
                 out.columns["Battery_SOH"][segment_start:segment_end] = aging.soh_percent
             else:

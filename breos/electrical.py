@@ -858,7 +858,7 @@ def string_model_problems(setup: ElectricalSetup) -> list[str]:
     that strings feed, the MPPT voltage range, the start-up voltage and each
     used input's operating-current limit. Other errors, such as an
     overvoltage, do not stop it: their energy is a diagnostic, as in
-    aggregate mode. Several inverters need a system without a battery, which
+    aggregate mode. A battery beside several inverters must be AC-coupled, which
     the App checks (ADR 0007 D10).
     """
     problems = []

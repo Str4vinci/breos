@@ -237,7 +237,7 @@ def test_the_operating_point_is_the_best_one_the_limits_allow(v_min, v_max, curr
     [
         (
             {"inverters": [FRONIUS_GEN24_6, FRONIUS_GEN24_6], "battery_kwh": 5.0},
-            "2 inverters need a system without a battery",
+            "a battery beside 2 inverters must be AC-coupled",
         ),
         ({"pv_strings": [{"inverter": 0, "mppt": 0, "array": 0, "modules": 7}]}, "unconnected_modules"),
         (

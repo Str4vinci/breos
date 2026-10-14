@@ -389,7 +389,8 @@ def _calculate_dc_ac_power_arrays(
 class InverterUnits:
     """Several inverters, each converting its own share of the system's DC.
 
-    String-level energy without a battery (ADR 0007 D10). Entry ``i`` of
+    String-level energy without a battery (ADR 0007 D10) or beside an
+    AC-coupled one (ADR 0004). Entry ``i`` of
     ``ac_capacity_w``, ``efficiency`` and ``conversions`` is inverter ``i``'s
     AC nameplate, single efficiency (None for the run's own, which the
     conversion is given) and conversion: its efficiency curve, its own AC

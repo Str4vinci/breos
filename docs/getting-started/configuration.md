@@ -659,7 +659,7 @@ String-level energy needs, for each inverter that strings feed, the MPPT
 voltage range, the start-up voltage (0 for none) and each used input's
 `max_input_current_a`, and a wiring without structural errors (every
 reference resolves, every module is strung once, and parallel strings match).
-Several inverters need a system without a battery; see
+A battery beside several inverters must be AC-coupled; see
 [Several inverters](#several-inverters).
 It refuses to run otherwise rather than fall back to the aggregate model. Hard
 limits such as an overvoltage do not stop it; they remain errors in the check.
@@ -720,12 +720,17 @@ draw, and `parallel_mismatch` names each input by its inverter and MPPT. The
 electrical check warns when an inverter's DC/AC ratio, its modules' STC power
 over its nameplate, lies outside 0.8 to 1.6.
 
-A battery behind one of several inverters needs the other inverters' AC to
-reach it, which AC coupling will model; until then, string-level energy with
-several inverters refuses a battery, and Monte Carlo refuses several
-inverters. Aggregate energy keeps treating several inverters as one of their
-combined nameplate, with their nameplate-weighted efficiency, and refuses
-their curves, derating and own cables.
+A battery beside several inverters must be AC-coupled
+(`battery_coupling = "ac"`): it has its own inverter on the AC bus, which
+every PV inverter's output can reach, and each PV inverter converts as in a
+system without a battery. A DC-coupled battery sits behind one hybrid
+inverter, so string-level energy with several inverters refuses it. The
+daily-target planner (`smart_charging.mode = "daily_persistence"`) plans
+through one PV inverter, so it is refused with several; `fixed_target` and
+`discharge_only` work. Monte Carlo refuses several inverters. Aggregate energy
+keeps treating several inverters as one of their combined nameplate, with
+their nameplate-weighted efficiency, and refuses their curves, derating and
+own cables.
 
 ### DC cables
 
