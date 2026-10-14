@@ -1087,7 +1087,9 @@ window, below, avoids this split.
 
 Keep these modelling assumptions in mind when reading the results:
 
-- The forecast is naive persistence, not a weather or load forecast.
+- The forecast is naive persistence, not a weather or load forecast, unless
+  `forecast = "weather"` gives it day-ahead weather (see "Planning on a
+  weather forecast" below). Load and temperature stay persistence.
 - The end-of-window price is a simple continuation value, not a learned one.
   It assumes missing energy can be bought back at the cheapest chargeable
   price within the window, and is biased when recharge prices beyond the
@@ -1184,6 +1186,55 @@ daily-target oracle takes the same choice as `--decision-boundary`, so a
 perfect-information replay stays comparable with the controller. The oracle
 plans one project year at a time, so it still splits the night that crosses
 the year seam between two targets; the controller does not.
+
+#### Planning on a weather forecast
+
+Persistence assumes tomorrow's sun is today's. A real controller plans on a
+weather forecast instead, and archived day-ahead forecasts exist for recent
+years. With
+
+```toml
+forecast = "weather"
+forecast_weather_files = [
+  "weather/porto_forecast_lead1_2025_openmeteo-best_match.csv",
+  "weather/porto_forecast_lead2_2025_openmeteo-best_match.csv",
+  "weather/porto_forecast_lead3_2025_openmeteo-best_match.csv",
+]
+forecast_publication_delay_hours = 6   # the default
+```
+
+the planner forecasts PV from forecast weather, one file per lead day: the
+first holds each hour's value forecast at least one day before it, the next
+at least two days, and so on. Each file runs through the run's own PV model,
+so the forecast PV differs from the true PV only by the forecast's error.
+Load and temperature stay persistence. Run it on the actual weather of the
+same year, named with `weather_file`.
+
+Each planned step takes the youngest forecast that was published before
+the decision. A forecast is published `forecast_publication_delay_hours`
+after it is issued, and at 15-minute resolution a step's PV also depends on
+the raw hours up to 4 hours after it, through the hourly-to-15-minute
+resampling, so those hours must be published too. A step beyond the last
+lead file keeps persistence. Ages are counted in the weather's own time, so
+29 February of a leap-year file restamped onto a common year still counts.
+
+`breos.fetch_forecast_archive` writes the lead files of one year from the
+Open-Meteo Previous Runs archive (from early 2024), and
+`breos.fetch_satellite_weather` the actual weather of the same year,
+satellite irradiance with reanalysis temperature and wind:
+
+```python
+import breos
+
+breos.fetch_forecast_archive(41.1579, -8.6291, 2025, leads=3, location_name="porto")
+breos.fetch_satellite_weather(41.1579, -8.6291, 2025, location_name="porto")
+```
+
+`forecast = "perfect"` instead plans on the run's own future PV, load and
+temperature. No controller can do that; use it as a reference beside the
+daily-target oracle. `provenance.smart_charging.planner_forecast` records
+the forecast, its files and digests, the delay, and how many planned steps
+took each lead (lead 0 kept persistence).
 
 ## Load profiles
 

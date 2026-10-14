@@ -1,14 +1,14 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted; amendments A1–A17 Accepted, A18 and A19 Proposed.
-  Implemented in 0.7.0, A15–A19 in 0.7.1,
+- **Status:** Accepted; amendments A1–A17 Accepted, A18–A20 Proposed.
+  Implemented in 0.7.0, A15–A20 in 0.7.1,
   with two additions that no amendment accepted: discharge-only mode and
   calendar-month seasons (see
   [Additions without an amendment](#additions-without-an-amendment)).
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
   A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
   A13 and A14 accepted 2026-10-01; A15–A17 accepted 2026-10-02; A18 and
-  A19 proposed 2026-10-03
+  A19 proposed 2026-10-03; A20 proposed 2026-10-14
 
 ## Context
 
@@ -505,6 +505,9 @@ steps it marks inside a civil day.)*
 
 ### A12. Daily persistence: warm start and forecast-terminal value — Accepted 2026-09-30
 
+*(Extended by A20, proposed 2026-10-14: the planner may forecast PV from
+day-ahead forecast weather instead of repeating the day before.)*
+
 The experimental App mode `daily_persistence` is a daily controller under
 A11. It keeps the fixed-target instruction layout and chooses one grid-charge
 target per configured-zone civil day. A decision reads the known tariff, the
@@ -923,3 +926,72 @@ when charging starts.
 - **Unchanged.** The dispatch kernel. Every configuration accepted before
   decides, dispatches and reports as before, apart from the new
   `decision_boundary` provenance key; App goldens are bit-identical.
+
+### A20. Daily targets can be planned on a day-ahead weather forecast (#430) — Proposed 2026-10-14
+
+Extends A12 and A19 and replaces neither. A12's forecast repeats the day
+before the decision: the standard naive baseline, and the only causal
+forecast a TMY run can have. A household controller would plan on a weather
+forecast, and archived day-ahead forecasts exist for recent years (the
+Open-Meteo Previous Runs archive keeps, for each hour since early 2024, the
+value forecast one to seven days before it). Without them BREOS can bracket
+adaptive grid charging only between persistence and the perfect-information
+oracle.
+
+- **Configuration.** `smart_charging.forecast`, a `daily_persistence`
+  planner setting: `"persistence"`, the default, keeps A12 and A19 bit for
+  bit; `"weather"` plans PV on forecast weather; `"perfect"` plans on the
+  run's own future PV, load and temperature, a perfect-information
+  reference no controller can have, kept experimental beside the oracle.
+  `"weather"` needs `forecast_weather_files`, one weather file per lead day
+  (the first holding each hour's value forecast at least one day before it,
+  the next at least two days, and so on), each in the layout of
+  `weather_file` and of one weather year; and takes
+  `forecast_publication_delay_hours` (default 6). The other modes refuse all
+  three keys, as they refuse the other planner settings, and `"persistence"`
+  and `"perfect"` refuse the files and the delay. Monte Carlo and the
+  optimizer refuse the planner as before.
+- **Forecast PV.** Each lead file runs through the run's own weather
+  preparation (restamping, resampling, horizon, `[period]` cut) and PV
+  model, and is aligned onto the simulation calendar as the true PV is. The
+  forecast PV therefore differs from the true PV by the weather forecast's
+  error alone, and project year `y` degrades it by `(1 - rate)^y` as the
+  runner degrades the true PV. Load and battery temperature stay
+  persistence: load forecasts are not archived, and a household controller
+  forecasts load from its own history.
+- **Causality: the lead of each planned step.** A forecast of hour `h` at
+  lead `k` is issued at `h - k` days and published
+  `forecast_publication_delay_hours` later; the archives keep no
+  availability times, and 6 h covers the main global models. A planned
+  step's PV is shaped by the raw hours up to the resampling reach after its
+  end: 4 h at 15 minutes (the hourly-to-15-minute resampling interpolates
+  across neighbouring hours; a test perturbs single raw hours under every
+  `irradiance_resampling` policy and pins it), 0 at hourly resolution. So a
+  step decided at `t` takes lead `ceil((end + reach + delay - t) / 1 day)`,
+  at least 1. Ages are counted in the weather's own time: a day the
+  simulated calendar drops from the source year (29 February of a leap
+  year restamped onto a common year) adds a day; a day the calendar adds,
+  or a backward jump in spliced weather, counts calendar time. A step that
+  would need a lead beyond the last file keeps the persistence value. A
+  step of the replayed calendar past the year's end (A2) is the next year's
+  in source time.
+- **Both decision boundaries.** A civil-day decision is made at its day's
+  first step, a window decision (A19) at the window's start; the forecast
+  covers the steps the decision plans, from that step.
+- **Warm start and terminal value.** Unchanged (A12, A19): the warm start
+  waits for the observed day that load and temperature persistence need.
+- **Provenance.** Runs with a forecast other than persistence record
+  `forecast_policy` (`weather_forecast_pv_by_published_lead_load_temperature_persistence`
+  or `perfect_information_reference`) and `planner_forecast`: the forecast,
+  its decisions, and under `"weather"` the files with their digests, the
+  number of leads, the delay, the reach and the planned steps by lead (lead
+  0 is persistence). Persistence runs record nothing new. The result format
+  stays `"1"`.
+- **Fetching.** `breos.fetch_forecast_archive` writes one lead file per
+  lead day of one year from the Previous Runs archive (`best_match` by
+  default), and `breos.fetch_satellite_weather` the actual weather of the
+  same year: EUMETSAT SARAH3 irradiance with ERA5 temperature and wind. Both
+  write right-labelled hourly means in GMT with metadata sidecars, the
+  layout of `fetch_weather_data`, and refuse a year with missing hours.
+- **Unchanged.** The dispatch kernel, the planner's solve, and every
+  configuration accepted before; App goldens are bit-identical.

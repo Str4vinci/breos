@@ -74,6 +74,7 @@ from breos._daily_targets import (
     solve_daily_targets,
 )
 from breos._dispatch import lfp_capacity_factor
+from breos._planner_forecast import PlannerForecast
 from breos.battery import BatteryConfig
 from breos.dispatch_instructions import DispatchInstructions
 from breos.smart_charging import TERMINAL_CONVENTION, SmartChargingSpec, check_tariff_periods, period_layout
@@ -94,6 +95,11 @@ WINDOW_POLICY = {
     "planner_version": "2",
     "forecast_policy": "repeat_local_day_before_decision",
     "warm_start_policy": "no_grid_until_a_window_after_one_complete_local_day",
+}
+# The forecast policy of a planner forecast other than persistence (A20).
+FORECAST_POLICIES = {
+    "weather": "weather_forecast_pv_by_published_lead_load_temperature_persistence",
+    "perfect": "perfect_information_reference",
 }
 # The candidate targets' placeholder on the layout: any finite value marks a
 # charge step; the planner replaces it with each day's target, and with it
@@ -179,18 +185,42 @@ class DailyPersistenceController:
     spec: SmartChargingSpec
     hours_per_step: float
     execution_backend: str
+    # The planner's forecast in place of persistence (A20); None is persistence.
+    forecast: PlannerForecast | None = None
 
     def __post_init__(self) -> None:
         if self.spec.mode != "daily_persistence":
             raise ValueError("a daily-persistence controller needs a spec with mode = 'daily_persistence'")
+        wanted = self.spec.forecast not in (None, "persistence")
+        if wanted != (self.forecast is not None):
+            raise ValueError("the controller's forecast must match smart_charging.forecast")
 
     @classmethod
     def for_run(
-        cls, spec: SmartChargingSpec, tariff: ResolvedTariff, *, freq: str, execution_backend: str
+        cls,
+        spec: SmartChargingSpec,
+        tariff: ResolvedTariff,
+        *,
+        freq: str,
+        execution_backend: str,
+        forecast: PlannerForecast | None = None,
     ) -> DailyPersistenceController:
         """The controller for a run on ``tariff``'s calendar at resolution ``freq``."""
         check_tariff_periods(spec, tariff)
-        return cls(spec, get_hours_per_step(freq), execution_backend)
+        return cls(spec, get_hours_per_step(freq), execution_backend, forecast)
+
+    def _forecast(
+        self, day: ControllerDayInput, observed: ObservedCivilDay, slot_keys: Sequence[SlotKey]
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The planner's PV, load and temperature for ``slot_keys`` from ``day``'s decision.
+
+        Persistence, with the PV (or, under ``perfect``, every series) of the
+        configured forecast in its place (A20).
+        """
+        pv, load, temperature = persistence_forecast(observed, slot_keys)
+        if self.forecast is None:
+            return pv, load, temperature
+        return self.forecast.series(day, len(slot_keys), pv, load, temperature)
 
     @property
     def windowed(self) -> bool:
@@ -228,7 +258,7 @@ class DailyPersistenceController:
             today = daily_target_instructions(_slice(layout, count), (0, count), [np.nan])
             return ControllerDayDecision(today, policy_state)
 
-        pv, load, temperature = persistence_forecast(observed, horizon.slot_keys)
+        pv, load, temperature = self._forecast(day, observed, horizon.slot_keys)
         battery = BatteryConfig(**cast("dict[str, Any]", dict(day.battery_config)))
         state = day.battery_state
         problem = DailyTargetProblem(
@@ -278,7 +308,7 @@ class DailyPersistenceController:
             target = math.nan
         else:
             end, day_starts = window_plan_span(horizon, layout, self.tariff_horizon_days - 2)
-            pv, load, temperature = persistence_forecast(observed, horizon.slot_keys[:end])
+            pv, load, temperature = self._forecast(day, observed, horizon.slot_keys[:end])
             battery = BatteryConfig(**cast("dict[str, Any]", dict(day.battery_config)))
             state = day.battery_state
             problem = DailyTargetProblem(
@@ -404,12 +434,14 @@ def daily_persistence_provenance(
     executed: DispatchInstructions,
     initial_stored_energy: dict[str, float],
     final_stored_energy: dict[str, float],
+    forecast: PlannerForecast | None = None,
 ) -> dict[str, Any]:
     """A JSON-safe record of a daily-persistence run for provenance.
 
     ``executed`` is every instruction the run dispatched, in project order
     across all its years; its hash identifies what the policy did without
-    exposing its forecasts or per-day targets.
+    exposing its forecasts or per-day targets. A run with a planner forecast
+    other than persistence (A20) also records it under ``planner_forecast``.
     """
     policy = {
         "controller_version": CONTROLLER_VERSION,
@@ -419,7 +451,7 @@ def daily_persistence_provenance(
     }
     if spec.decision_boundary == "charge_window_start":
         policy.update(WINDOW_POLICY)
-    return {
+    record = {
         "mode": spec.mode,
         "overlap_policy": spec.overlap_policy,
         "decision_boundary": spec.decision_boundary,
@@ -444,3 +476,7 @@ def daily_persistence_provenance(
         "initial_stored_energy": dict(initial_stored_energy),
         "final_stored_energy": dict(final_stored_energy),
     }
+    if forecast is not None:
+        record["forecast_policy"] = FORECAST_POLICIES[forecast.kind]
+        record["planner_forecast"] = forecast.record()
+    return record
