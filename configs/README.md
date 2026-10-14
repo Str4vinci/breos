@@ -81,6 +81,7 @@ breos list load-profiles
 | [`quickstart.toml`](examples/quickstart.toml) | Minimal PV + battery run for Porto, as in the quickstart guide |
 | [`pv-plus-battery.toml`](examples/pv-plus-battery.toml) | **Annotated reference** — the common keys with their defaults |
 | [`pv-only.toml`](examples/pv-only.toml) | Baseline with no battery, to compare storage scenarios against |
+| [`ac-coupled-battery.toml`](examples/ac-coupled-battery.toml) | A battery added to an existing PV system, with its own inverter (`battery_coupling = "ac"`) |
 | [`germany-berlin.toml`](examples/germany-berlin.toml) | Swapping location + cost preset + emissions factor together, on flat prices |
 | [`east-west-roof.toml`](examples/east-west-roof.toml) | Multiple `[[pv_arrays]]` (split east/west roof) |
 | [`bifacial-ground-mount.toml`](examples/bifacial-ground-mount.toml) | Opt-in infinite-sheds rear gain with explicit row geometry |

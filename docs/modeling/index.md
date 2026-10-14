@@ -28,8 +28,8 @@ string-level detail, and where the model errs.
 :link: ../api/energy-balance
 :link-type: doc
 
-DC-coupled dispatch, inverter boundaries, battery routing, conservation, and
-reported KPIs.
+DC- and AC-coupled dispatch, inverter boundaries, battery routing,
+conservation, and reported KPIs.
 :::
 
 :::{grid-item-card} Battery models

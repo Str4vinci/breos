@@ -43,9 +43,21 @@ attrs as JSON in `to_parquet`).
 
 ## Physical boundary and coupling
 
-BREOS currently implements **DC-coupled/hybrid dispatch only**. PV and the
-battery share one inverter AC nameplate. This is the only supported App
-dispatch model; there is no configuration option to select AC coupling.
+`BatteryConfig(coupling=...)`, the App's `battery_coupling`, selects one of
+two topologies (ADR 0004):
+
+- `"dc"`, the default: a hybrid inverter that PV and the battery share. PV
+  DC charges the battery before it crosses the inverter, and PV and battery
+  discharge share one AC nameplate.
+- `"ac"`: a battery with its own bidirectional inverter on the AC bus, beside
+  the PV inverter. The PV inverter converts exactly as in a system without a
+  battery; its AC serves the load, charges the battery through the battery
+  inverter, or is exported. The battery inverter converts in both directions
+  through the PVWatts part-load curve at its nominal efficiency
+  (`battery_inverter_efficiency`, which has no default) and its AC rating
+  (`battery_inverter_ac_capacity_w`; `None` is a flat, unclipped
+  conversion). The charging direction is an assumption: the curve is a
+  discharging curve. Several PV inverters with a battery need `"ac"`.
 
 Inputs and flow columns are average power in W over each interval. Dispatch
 converts them once to Wh (`W × interval hours`), applies all limits and
@@ -53,13 +65,16 @@ conservation equations in energy units, then converts flows back to W.
 Stored-energy state columns remain Wh.
 
 Direct PV and battery discharge use the same PVWatts part-load inverter
-curve as `breos.solar.dc_to_ac`. The configured AC nameplate remains shared:
-PV output consumes headroom before battery discharge, and combined delivery
-cannot exceed the rating. A lower-level `BatteryConfig` with no inverter
+curve as `breos.solar.dc_to_ac`. With `"dc"` the configured AC nameplate is
+shared: PV output consumes headroom before battery discharge, and combined
+delivery cannot exceed the rating. With `"ac"` each inverter has its own
+rating, and the PV inverter's rating never limits the battery. A lower-level `BatteryConfig` with no inverter
 nameplate keeps the legacy unbounded flat-efficiency fallback because an
 inverter loading fraction cannot be defined without rated power.
 
 ## DC routing and limits
+
+This section describes the `"dc"` topology; `"ac"` routing follows it.
 
 Direct PV serves AC load first. Surplus PV DC charges the battery before
 export; remaining DC exports within unused inverter headroom. Only DC that
@@ -77,6 +92,24 @@ most 5 kW in either direction. Its DC input while charging is higher by the
 charge loss, and its AC output while discharging is lower by the discharge and
 inverter losses.
 
+### AC coupling
+
+With `"ac"`, PV AC serves the load first. Surplus AC enters the battery
+inverter, up to its rating and the battery's charge-input and stored-energy
+limits, and what is left is exported. Clipping and curtailment are the PV
+inverter's alone. The battery discharges through its inverter to the
+remaining load, up to its rating and `max_discharge_power_w`, which is the
+battery inverter's AC output. The two limits keep their meaning:
+`max_charge_power_w` is the DC side of the battery inverter while charging.
+A step either charges or discharges, never both.
+
+The PV inverter's night draw is grid import on every step without PV,
+whatever the battery does. An AC-coupled battery is costed with its own
+inverter price, `battery_inverter_cost_per_kw`; see
+[Cost and emissions presets](../getting-started/configuration.md#cost-and-emissions-presets). Inverter replacement on
+its own schedule and inverter standby consumption are not modelled, for the
+PV, hybrid and battery inverters alike.
+
 ## Dispatch instructions and grid charging
 
 `simulate_energy_balance(..., dispatch_instructions=...)` takes a
@@ -90,7 +123,9 @@ one entry per simulation step; the last two are scalars.
 - `grid_target_fraction`: a grid-charge target as a usable fraction, or NaN
   for no grid charge in that step.
 - `grid_charge_efficiency`: the hybrid inverter's AC-to-DC conversion on the
-  charging path.
+  charging path. An AC-coupled battery converts grid charge in its own
+  inverter, so its grid-charging instructions take `None`, which a DC-coupled
+  run refuses.
 - `grid_import_limit_w`: the site import limit that grid charging respects,
   counting the load's own import against it (`math.inf` for none). Load
   import itself is never cut.
@@ -124,12 +159,16 @@ see it. PV keeps priority on every limit the two share:
   (`power_limit_c_rate`) bound PV and grid charge together;
 - grid-charge AC input is at most the inverter AC rating minus the step's PV
   AC output. This summed-throughput rule is conservative: a real hybrid
-  inverter may net the two flows internally;
+  inverter may net the two flows internally. With `"ac"` it applies to the
+  battery inverter: PV and grid AC into it are at most its rating, and the
+  PV inverter's rating does not limit grid charge;
 - grid-charge import is at most `grid_import_limit_w` minus the step's load
   import.
 
 There is no grid charging in a step that exports PV or discharges the
-battery. Grid-charge AC is part of `Import_From_Grid`.
+battery. Grid-charge AC is part of `Import_From_Grid`. With `"ac"`, PV
+surplus and grid AC entering the battery inverter in one step convert at one
+operating point, and the DC is split in proportion to each source's AC.
 
 | Column | Unit/basis | Definition |
 |---|---|---|
@@ -144,20 +183,26 @@ battery. Grid-charge AC is part of `Import_From_Grid`.
 |---|---|---|
 | `PV_DC` | W, DC | PV generated before dispatch |
 | `PV_DC_To_Inverter` | W, DC | Direct PV entering the inverter |
-| `PV_DC_To_Battery` | W, DC | Charge-path input, before charge loss |
+| `PV_DC_To_Battery` | W, DC | Charge-path input, before charge loss; 0 with `"ac"` |
 | `PV_DC_Curtailed` | W, DC | PV that cannot be routed |
 | `PV_AC_To_Load` | W, AC | Direct PV delivered to load |
 | `PV_AC_Export` | W, AC | Direct PV exported |
 | `Battery_Charge_Stored` | W-equivalent | Increase due to charging after charge loss |
 | `Battery_Discharge_DC` | W-equivalent, stored DC | Energy removed from storage |
 | `Battery_AC_To_Load` | W, AC | All battery energy delivered to load |
+| `PV_AC_To_Battery` | W, AC | PV inverter AC entering the battery inverter; 0 with `"dc"` |
+| `PV_Charge_Conversion_Loss` | W | The battery inverter's charging loss on that AC; 0 with `"dc"` |
 | `PV_Direct_Inverter_Loss` | W | Direct-PV inverter conversion loss |
-| `Battery_Inverter_Loss` | W | Battery-discharge inverter loss |
+| `Battery_Inverter_Loss` | W | Battery-discharge inverter loss, the battery inverter's with `"ac"` |
 | `Battery_Charge_Loss` / `Battery_Discharge_Loss` | W | Cell conversion losses |
 | `Standby_Loss` | W | Storage standby loss |
 | `Capacity_Window_Loss` | W | Energy explicitly removed when temperature/SOH lowers `Emax` |
 | `Battery_Energy_Beginning` / `Battery_Energy_End` | Wh | Stored energy at interval boundaries |
 | `Battery_Energy_Delta` | W-equivalent | End minus beginning, including explicit boundary adjustments |
+
+Ledger schema 3.1 adds `PV_AC_To_Battery` and `PV_Charge_Conversion_Loss`.
+With `"ac"`, `Battery_Charge_Input` is `PV_AC_To_Battery −
+PV_Charge_Conversion_Loss + Grid_DC_To_Battery`.
 
 Ledger schema 2.0 removed four columns that repeated another under a second
 name. Read the second name of each pair instead: `Sell_To_Grid` →

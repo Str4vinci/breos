@@ -121,6 +121,63 @@ readings can drive a 15-minute run. A file that is missing or unreadable, that
 comes from another calendar year, or that has gaps raises an error instead of
 falling back to a default temperature.
 
+## AC-coupled batteries
+
+By default a battery is DC-coupled: PV and the battery share one hybrid
+inverter. `battery_coupling = "ac"` gives the battery its own inverter on the
+AC bus, beside the PV inverter, as in a retrofit:
+
+```toml
+battery_kwh = 10
+battery_coupling = "ac"
+battery_inverter_kw_per_kwh = 0.5   # or battery_inverter_ac_rating_kw = 5
+battery_inverter_efficiency = 0.96  # from the product's datasheet; no default
+
+[costs]
+battery_inverter_cost_per_kw = 150  # no default; 0 if the battery price includes it
+```
+
+- The PV inverter converts exactly as in a system without a battery, and
+  `inverter_ac_rating_kw`, `inverter_loading_ratio`, `inverter_efficiency` and
+  `ac_output_scale` describe it alone. PV AC that the load does not use
+  charges the battery through the battery inverter before it is exported.
+- The battery inverter is sized by one of `battery_inverter_ac_rating_kw` and
+  `battery_inverter_kw_per_kwh`. The per-kWh form resolves against the nominal
+  capacity, so a capacity sweep keeps one ratio. No rating is derived from
+  `battery_power_limit_c_rate`.
+- `battery_inverter_efficiency` is the battery inverter's nominal efficiency.
+  Both directions run the PVWatts part-load curve; the charging direction is
+  an assumption.
+- With `"dc"` every battery inverter key, and its price, is refused. A system
+  without a battery accepts `"ac"` and needs none of them, so a capacity
+  sweep from 0 keeps one config.
+- `[smart_charging]` refuses `grid_charge_efficiency` with `"ac"`: the
+  battery inverter converts grid charge. `fixed_target`, `discharge_only` and
+  `daily_persistence` all run (the planner with one PV inverter); the planner
+  converts its PV forecast through the PV inverter at full rating, without
+  the night draw.
+- A battery beside several inverters must be AC-coupled; see
+  [Several inverters](#several-inverters).
+- The prices follow the topology; see
+  [Cost and emissions presets](#cost-and-emissions-presets).
+  `battery_replacement_cost` prices a replacement as one unit, such as a pack
+  sold with its inverter, in either topology.
+- The results report the PV inverter in the loss waterfall's `inverter`
+  block, and the battery inverter in a `battery_inverter` block with its
+  rating, efficiency and conversion losses; `energy_balance.ac_delivery`
+  gains `pv_to_battery_kwh`. Year rows have `PV_AC_To_Battery_kWh` and
+  `PV_Charge_Conversion_Loss_kWh`.
+- Not modelled, for the PV, hybrid and battery inverters alike: inverter
+  replacement on its own schedule, and standby consumption while the battery
+  idles. They matter most for low loads, long idle periods and studies of
+  inverter lifetime cost.
+
+The optimizer takes the same settings in its `[battery]` table: `coupling`,
+`inverter_ac_rating_kw` or `inverter_kw_per_kwh`, and `inverter_efficiency`,
+with `[costs] battery_inverter_cost_per_kw`. The coupling is fixed for a
+study; with `inverter_kw_per_kwh` each candidate's rating follows its
+capacity, and its CAPEX includes the battery inverter.
+
 ## Battery degradation calibration
 
 `calendar_model = "naumann_lam_field_calibrated"` is the stable default and

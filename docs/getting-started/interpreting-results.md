@@ -678,7 +678,7 @@ Other keys keep the spelling you configured.
 
 | 0.6.2 key or flag | 0.7.0 replacement or action |
 |---|---|
-| App `dc_coupled`, `breos run --dc-coupled`, optimizer `battery.dc_coupled` | Remove. BREOS always uses its DC-coupled/hybrid dispatch. |
+| App `dc_coupled`, `breos run --dc-coupled`, optimizer `battery.dc_coupled` | Remove. 0.7.0 always uses its DC-coupled/hybrid dispatch; from 0.8.0 `battery_coupling` selects the topology. |
 | `load_profile = "1"` or `"default"` | `"demandlib_h0"` |
 | `load_profile = "4"`, `"5"`, `"6"` | `"eredes_btn_a"`, `"eredes_btn_b"`, `"eredes_btn_c"` |
 | `load_profile = "7"`, `"8"` | `"bdew_h0"`, `"ree_2.0td"` |

@@ -4,8 +4,10 @@
   [Decisions on the open questions](#decisions-on-the-open-questions)) and
   amended for the electrical work (see
   [Amendments of 2026-10-13](#amendments-of-2026-10-13)). Specified in
-  #379; the implementation, planned for 0.8.0, is #419 and is in progress.
-- **Date:** 2026-10-03; accepted 2026-10-04; amended 2026-10-13
+  #379; implemented for 0.8.0 in #419 (see
+  [Implementation notes](#implementation-notes)).
+- **Date:** 2026-10-03; accepted 2026-10-04; amended 2026-10-13;
+  implemented 2026-10-14
 
 ## Context
 
@@ -1044,3 +1046,37 @@ C7 states the rule and AC7 checks it.
   topologies, as the optimizer can; the terminal credit stays pack-only.
 - Inverter replacement and inverter standby consumption stay unmodelled for
   every inverter, and the docs say so.
+
+## Implementation notes
+
+Implemented for 0.8.0 in #419, in the order of the PR plan with M8's
+additions. Where the implementation settled a point the text left open:
+
+- **Several PV inverters (M8).** A battery beside several inverters must be
+  AC-coupled; the PV chain is converted per inverter, and a retired pack's
+  steps read that chain, so they equal the PV-only run. The daily-target
+  planner plans through one PV inverter (M7), so it is refused with several
+  inverters; `fixed_target` and `discharge_only` run. A per-inverter forecast
+  split is left for later.
+- **Smart-charging validation.** `[smart_charging]` is validated against the
+  battery's coupling: a DC-coupled battery keeps the table check that
+  requires `grid_charge_efficiency`, so its errors and their order are
+  unchanged, and an AC-coupled one uses a variant that refuses it. The
+  optimizer validates the table with the coupling its `[battery]` table
+  gives.
+- **Reports.** The loss waterfall's `battery_inverter` block reports the
+  rating, nominal efficiency, and charging, discharging and total
+  conversion loss; with `"ac"` the `inverter` block's conversion loss is
+  the PV inverter's alone. The PV inverter's AC cable diagnostic counts PV
+  AC to the battery, not battery discharge.
+- **Currencies and revaluation.** A non-EUR AC-coupled run needs
+  `inverter_cost_per_kw_simple`, never the hybrid price.
+  `battery_replacement_cost` is an economics key that `App.revalue` may
+  change, and a currency change must restate it.
+- **Optimizer provenance (C14).** An AC study's
+  `battery_replacement_treatment` records the sizing key and its basis, the
+  efficiency and the price; `Battery_Inverter_AC_Rating_kW` is each
+  candidate's resolved rating. A candidate at or below 1 Wh, which dispatch
+  and CAPEX treat as PV-only, has no battery inverter.
+- **Oracles.** The LP bound refuses an AC-coupled battery; the daily-target
+  oracle mirrors the planner's PV chain.

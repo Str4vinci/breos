@@ -10,8 +10,9 @@ with Lam `Ea`/`n` fixed and `k0`/`b` fitted to field data.
 
 ## Configuration
 
-BREOS supports stationary DC-coupled/hybrid batteries only; there is no
-AC-coupled option (see [Energy balance](energy-balance.md#physical-boundary-and-coupling)).
+BREOS models stationary batteries, DC-coupled behind a hybrid inverter or
+AC-coupled with their own inverter (see
+[Energy balance](energy-balance.md#physical-boundary-and-coupling)).
 Optional charge and discharge nameplate limits default to unlimited;
 configure them for realistic sizing studies. Charge power is measured at the
 DC charge-path input. Discharge power is measured as AC delivered to load.

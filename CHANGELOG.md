@@ -6,6 +6,39 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- AC-coupled batteries ([#419](https://github.com/Str4vinci/breos/issues/419),
+  ADR 0004). `battery_coupling = "ac"` gives the battery its own
+  bidirectional inverter on the AC bus beside the PV inverter, sized by
+  `battery_inverter_ac_rating_kw` or `battery_inverter_kw_per_kwh` and with a
+  nominal `battery_inverter_efficiency` that has no default; both directions
+  run the PVWatts part-load curve. The PV inverter converts exactly as in a
+  system without a battery, and PV AC charges the battery through the battery
+  inverter before it is exported. Grid charging passes the battery inverter,
+  so `[smart_charging]` refuses `grid_charge_efficiency`; PV and grid AC
+  entering it in one step convert at one operating point. The daily-target
+  planner converts its forecast through the PV inverter at full rating. A
+  battery beside several inverters must be AC-coupled; the planner is then
+  refused. `"dc"` stays the default and refuses every battery inverter key,
+  so DC-coupled results are unchanged bit for bit; `resolved_config` gains
+  the five new keys.
+- Costs follow the topology (ADR 0004 C9). With `"ac"` the PV inverter is
+  priced at `inverter_cost_per_kw_simple`, battery or not, and the battery
+  inverter at the new `[costs] battery_inverter_cost_per_kw` times its
+  rating, which has no default: a missing price is refused before
+  simulation, never priced as zero. `battery_replacement_cost` gives the
+  price of one replacement in App and Monte Carlo, as the optimizer's
+  `[battery] replacement_cost` does, for a pack sold with its inverter; it is
+  revaluable. The estimated battery residual value stays the pack's, which
+  amends ADR 0003 E10. `CostParams.battery_inverter_cost_per_kw` is its last
+  field, and `calculate_costs` takes `battery_coupling` and
+  `battery_inverter_ac_capacity_w` and reports `battery_inverter_cost`.
+- The optimizer's `[battery]` table takes `coupling`, fixed for a study,
+  `inverter_ac_rating_kw` or `inverter_kw_per_kwh`, and
+  `inverter_efficiency`. Each candidate's battery inverter follows its
+  capacity under `inverter_kw_per_kwh`, its CAPEX includes the battery
+  inverter, and an AC study reports `Battery_Inverter_AC_Rating_kW` and
+  `Projected_Battery_Inverter_Cost` and records the settings in its
+  `battery_replacement_treatment`.
 - String-level energy runs several inverters in a system without a battery
   (ADR 0007 D10). Each inverter applies its own input limits, usable DC power
   cap and start-up to its own inputs, and converts its share of the DC with
@@ -16,9 +49,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   summed output; one inverter takes its cable in either place, not both. The
   waterfall's `inverter` block lists each inverter's year-1 DC input,
   clipping, conversion loss, cable loss, AC output and night draw, and
-  `parallel_mismatch` names each input by its inverter and MPPT. Several
-  inverters with a battery, and in Monte Carlo, are refused until AC coupling
-  is modelled. The electrical check now warns when an inverter's DC/AC ratio
+  `parallel_mismatch` names each input by its inverter and MPPT. A battery
+  beside several inverters must be AC-coupled, and Monte Carlo refuses
+  several inverters. The electrical check now warns when an inverter's DC/AC ratio
   lies outside 0.8 to 1.6. Runs with one inverter are unchanged, apart from
   that warning.
 - `weather_file` names the App's weather file directly
@@ -388,8 +421,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `shading_mismatch`, `dc_wiring`, `parallel_mismatch` and `mppt_limits`
   waterfall stages, present only when their inputs are; the waterfall's
   `near_shading`, `shading_mismatch`, `parallel_mismatch` and `dc_wiring`
-  blocks; and the inverter block's AC cable, efficiency curve, temperature
-  derating and night consumption entries.
+  blocks; the inverter block's AC cable, efficiency curve, temperature
+  derating and night consumption entries; and, for AC coupling, the
+  `PV_AC_To_Battery` and `PV_Charge_Conversion_Loss` columns (zero in a
+  DC-coupled run), the waterfall's `battery_inverter` block and
+  `energy_balance.ac_delivery.pv_to_battery_kwh`.
 - CI runs less on PRs that cannot need it. Draft PRs run nothing until they
   are marked ready for review. A PR that changes only documentation runs the
   test suite, checks and docs build on Python 3.12 alone, and skips the other

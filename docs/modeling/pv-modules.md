@@ -144,7 +144,7 @@ curve with more peaks, or a very narrow one, can still have its highest peak
 missed.
 
 With several inverters, each clips and converts its own strings' DC, and
-their AC outputs add up; a battery then waits for AC coupling (see
+their AC outputs add up; a battery beside them must be AC-coupled (see
 [Several inverters](../getting-started/configuration.md#several-inverters)).
 The PVWatts `mismatch` loss still
 applies, for differences between modules of one model, which a model of
