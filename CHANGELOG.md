@@ -6,6 +6,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- The experimental `daily_persistence` planner can plan on a day-ahead
+  weather forecast ([#430](https://github.com/Str4vinci/breos/issues/430),
+  ADR 0002 A20). `smart_charging.forecast = "weather"` reads
+  `forecast_weather_files`, one forecast weather file per lead day, runs each
+  through the run's PV model, and plans each step on the youngest forecast
+  published before the decision (`forecast_publication_delay_hours`, default
+  6, plus the 4 h the 15-minute resampling reaches); a step beyond the last
+  lead keeps persistence, and load and temperature stay persistence.
+  `forecast = "perfect"` plans on the run's own future as a
+  perfect-information reference. `breos.fetch_forecast_archive` writes the
+  lead files of one year from the Open-Meteo Previous Runs archive and
+  `breos.fetch_satellite_weather` the actual weather (SARAH3 irradiance, ERA5
+  temperature and wind). `provenance.smart_charging.planner_forecast` records
+  the forecast. The default, `forecast = "persistence"`, gives the same
+  results as before.
 - `weather_file` names the App's weather file directly
   ([#394](https://github.com/Str4vinci/breos/issues/394)). The App reads that
   CSV (or `.csv.gz`), whatever its name and for any location, instead of

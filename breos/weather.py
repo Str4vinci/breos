@@ -16,7 +16,7 @@ from collections.abc import Hashable, Iterable
 from copy import deepcopy
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -785,6 +785,195 @@ def fetch_weather_data(
         logger.info("Saved weather data and provenance sidecar to %s", filename)
 
     return hourly_dataframe
+
+
+# Open-Meteo hourly fields of a weather file, as BREOS names them.
+_OPENMETEO_METEO_FIELDS = ("temperature_2m", "wind_speed_10m")
+_OPENMETEO_RADIATION_FIELDS = (
+    "shortwave_radiation",
+    "direct_radiation",
+    "diffuse_radiation",
+    "direct_normal_irradiance",
+)
+FORECAST_ARCHIVE_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
+SATELLITE_ARCHIVE_URL = "https://satellite-api.open-meteo.com/v1/archive"
+HISTORICAL_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+
+
+def _openmeteo_year(url: str, params: dict[str, Any], fields: Sequence[str], year: int) -> pd.DataFrame:
+    """Hourly ``fields`` of one calendar year, right-labelled preceding-hour means in GMT.
+
+    The year's hours carry the labels from 1 January 01:00 to the next
+    1 January 00:00, so the request runs one day past the year's end.
+    """
+    if not HAS_OPENMETEO:
+        raise ImportError(
+            "openmeteo_requests is required to fetch Open-Meteo weather. Install with: pip install 'breos[weather]'"
+        )
+    cache_session = requests_cache.CachedSession(".cache", expire_after=timedelta(days=30))
+    retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
+    cache_session.mount("https://", HTTPAdapter(max_retries=retries))
+    cache_session.mount("http://", HTTPAdapter(max_retries=retries))
+    client = openmeteo_requests.Client(session=cache_session)
+    request = {
+        **params,
+        "start_date": f"{year}-01-01",
+        "end_date": f"{year + 1}-01-01",
+        "hourly": list(fields),
+        "timezone": "GMT",
+        "wind_speed_unit": "ms",
+    }
+    hourly = client.weather_api(url, params=request)[0].Hourly()
+    index = pd.date_range(
+        start=pd.to_datetime(hourly.Time(), unit="s"),
+        end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
+        freq=pd.Timedelta(seconds=hourly.Interval()),
+        inclusive="left",
+    )
+    frame = pd.DataFrame({name: hourly.Variables(i).ValuesAsNumpy() for i, name in enumerate(fields)}, index=index)
+    frame.index.name = "date"
+    frame = frame[(frame.index > pd.Timestamp(f"{year}-01-01")) & (frame.index <= pd.Timestamp(f"{year + 1}-01-01"))]
+    expected = pd.date_range(f"{year}-01-01 01:00", f"{year + 1}-01-01 00:00", freq="h")
+    if not frame.index.equals(expected):
+        raise ValueError(
+            f"{url} returned {len(frame)} hours for {year}, not the {len(expected)} hourly labels from "
+            f"{expected[0]} to {expected[-1]}"
+        )
+    return frame
+
+
+def _openmeteo_file_metadata(source: str, fields: Sequence[str], extra: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source": source,
+        "provider_hourly_fields": list(fields),
+        "raw_radiation_variables": list(_OPENMETEO_RADIATION_FIELDS),
+        "stored_radiation_variables": list(_OPENMETEO_RADIATION_FIELDS),
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "right",
+        "timestamp_timezone": "GMT",
+        "irradiance_time_offset_hours": None,
+        "horizon": _unknown_horizon_metadata("openmeteo"),
+        **extra,
+    }
+
+
+def _require_complete(frame: pd.DataFrame, what: str) -> None:
+    missing = ~np.isfinite(frame.to_numpy(dtype=np.float64)).all(axis=1)
+    if missing.any():
+        first = frame.index[int(missing.argmax())]
+        raise ValueError(
+            f"{what} has {int(missing.sum())} hour(s) without data, the first labelled {first}; the archive may "
+            "not cover the whole year yet. Choose another year."
+        )
+
+
+def _location_slug(latitude: float, longitude: float, location_name: Optional[str]) -> str:
+    return safe_path_slug(location_name) if location_name else f"lat{latitude:.0f}_lon{longitude:.0f}"
+
+
+def fetch_forecast_archive(
+    latitude: float,
+    longitude: float,
+    year: int,
+    *,
+    leads: int = 7,
+    model: str = "best_match",
+    location_name: Optional[str] = None,
+    output_dir: str = "weather",
+    save_to_file: bool = True,
+) -> dict[int, pd.DataFrame]:
+    """Fetch one year of archived day-ahead forecast weather, one file per lead day.
+
+    Reads the Open-Meteo Previous Runs archive, in which a field's
+    ``_previous_dayK`` value is the value forecast K days before its valid
+    hour. Lead file K holds those values for 2 m temperature, 10 m wind and
+    the irradiance components, in the layout of :func:`fetch_weather_data`,
+    so ``smart_charging.forecast_weather_files`` (ADR 0002 A20) reads it
+    like a ``weather_file``. The archive starts in January 2024 for most
+    models; a year it does not fully cover is refused.
+
+    Returns:
+        The weather of each lead day, keyed by lead day from 1.
+    """
+    if not 1 <= leads <= 7:
+        raise ValueError("leads must be from 1 to 7: the archive keeps forecasts up to seven days old")
+    fields = [*_OPENMETEO_METEO_FIELDS, *_OPENMETEO_RADIATION_FIELDS]
+    requested = [f"{name}_previous_day{lead}" for lead in range(1, leads + 1) for name in fields]
+    raw = _openmeteo_year(
+        FORECAST_ARCHIVE_URL, {"latitude": latitude, "longitude": longitude, "models": model}, requested, year
+    )
+    slug = _location_slug(latitude, longitude, location_name)
+    out = {}
+    for lead in range(1, leads + 1):
+        frame = raw[[f"{name}_previous_day{lead}" for name in fields]].copy()
+        frame.columns = fields
+        _require_complete(frame, f"The {model} forecast at lead day {lead}")
+        frame.attrs[WEATHER_METADATA_KEY] = _openmeteo_file_metadata(
+            "OpenMeteo_previous_runs",
+            [f"{name}_previous_day{lead}" for name in fields],
+            {
+                "provider_api_request": {"endpoint": FORECAST_ARCHIVE_URL, "model": model, "year": year},
+                "forecast_lead_days": lead,
+                "latitude": latitude,
+                "longitude": longitude,
+            },
+        )
+        if save_to_file:
+            os.makedirs(output_dir, exist_ok=True)
+            path = os.path.join(output_dir, f"{slug}_forecast_lead{lead}_{year}_openmeteo-{safe_path_slug(model)}.csv")
+            save_weather_csv(frame, path)
+            logger.info("Saved lead-%d forecast weather and provenance sidecar to %s", lead, path)
+        out[lead] = frame
+    return out
+
+
+def fetch_satellite_weather(
+    latitude: float,
+    longitude: float,
+    year: int,
+    *,
+    satellite_model: str = "eumetsat_sarah3",
+    location_name: Optional[str] = None,
+    output_dir: str = "weather",
+    save_to_file: bool = True,
+) -> pd.DataFrame:
+    """Fetch one year of satellite irradiance with reanalysis temperature and wind.
+
+    Irradiance comes from the Open-Meteo satellite archive (EUMETSAT SARAH3
+    by default), 2 m temperature and 10 m wind from its ERA5 archive, in the
+    layout of :func:`fetch_weather_data`. It is actual weather to run with
+    ``weather_file`` beside forecast weather from
+    :func:`fetch_forecast_archive`. A year with missing hours is refused.
+    """
+    where = {"latitude": latitude, "longitude": longitude}
+    radiation = _openmeteo_year(
+        SATELLITE_ARCHIVE_URL, {**where, "models": satellite_model}, _OPENMETEO_RADIATION_FIELDS, year
+    )
+    meteo = _openmeteo_year(HISTORICAL_ARCHIVE_URL, {**where, "models": "era5"}, _OPENMETEO_METEO_FIELDS, year)
+    frame = pd.concat([meteo, radiation], axis=1)
+    _require_complete(frame, f"The {satellite_model} satellite and ERA5 weather")
+    fields = [*_OPENMETEO_METEO_FIELDS, *_OPENMETEO_RADIATION_FIELDS]
+    frame = frame[fields]
+    frame.attrs[WEATHER_METADATA_KEY] = _openmeteo_file_metadata(
+        "OpenMeteo_satellite",
+        fields,
+        {
+            "provider_api_request": {
+                "irradiance": {"endpoint": SATELLITE_ARCHIVE_URL, "model": satellite_model},
+                "temperature_wind": {"endpoint": HISTORICAL_ARCHIVE_URL, "model": "era5"},
+                "year": year,
+            },
+            "latitude": latitude,
+            "longitude": longitude,
+        },
+    )
+    if save_to_file:
+        os.makedirs(output_dir, exist_ok=True)
+        slug = _location_slug(latitude, longitude, location_name)
+        path = os.path.join(output_dir, f"{slug}_satellite_{year}_openmeteo-{safe_path_slug(satellite_model)}.csv")
+        save_weather_csv(frame, path)
+        logger.info("Saved satellite weather and provenance sidecar to %s", path)
+    return frame
 
 
 def resample_to_15min(

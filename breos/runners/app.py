@@ -12,6 +12,7 @@ from breos._daily_persistence import DailyPersistenceController, daily_persisten
 from breos.app_config import ResolvedAppConfig, SimulationPeriod
 from breos.app_inputs import (
     AppRuntimeDependencies,
+    prepare_planner_forecast,
     prepare_simulation_inputs,
     prepare_simulation_inputs_cached,
     unknown_source_metadata,
@@ -429,8 +430,11 @@ def run_app_simulation(
         # daily_persistence decides each civil day while the run goes (ADR
         # 0002 A12); it has no static instructions to resolve.
         assert spec is not None and tariff is not None
+        planner_forecast = prepare_planner_forecast(
+            cfg, resolved, deps, inputs, pd.DatetimeIndex(inputs.dc_system_base.index)
+        )
         day_controller = DailyPersistenceController.for_run(
-            spec, tariff, freq=cfg["resolution"], execution_backend=execution_backend
+            spec, tariff, freq=cfg["resolution"], execution_backend=execution_backend, forecast=planner_forecast
         )
     elif from_spec:
         instructions = resolve_instructions(spec, tariff) if spec is not None and has_battery else None
@@ -503,7 +507,10 @@ def run_app_simulation(
         if planned:
             executed = projection.controller_instructions
             assert executed is not None
-            smart_charging = daily_persistence_provenance(spec, tariff, executed, **stored)
+            assert isinstance(day_controller, DailyPersistenceController)
+            smart_charging = daily_persistence_provenance(
+                spec, tariff, executed, **stored, forecast=day_controller.forecast
+            )
         else:
             assert isinstance(instructions, DispatchInstructions)
             smart_charging = {**smart_charging_provenance(spec, instructions, tariff), **stored}
