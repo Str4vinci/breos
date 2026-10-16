@@ -15,7 +15,52 @@ BREOS fits its parameters locally from catalogue or datasheet values with
 does not automatically import SAM/CEC component tables; those remain useful
 model documentation and comparison data.
 
-## Production
+## Specified inverter data
+
+`breos.equipment.InverterSpec` stores an inverter's AC nameplate and optional
+datasheet limits with validation. Unpublished limits remain `None`. Product
+identities, certification evidence and prices belong to the caller's catalog.
+
+The DC voltage limits apply to every input. `mppts` lists the inputs in
+datasheet order as `MpptSpec` entries, each with its own operating current,
+short-circuit current and string limits, so inverters with asymmetric inputs
+keep their published values. `isc_comparison_factor` records the multiplier the
+manufacturer applies to array Isc before comparing it with an input's
+short-circuit rating, such as 1.25. `None` means a value is unknown. An upper
+limit of `math.inf` or a lower limit of 0 states that the inverter has none, so
+unbounded and unpublished limits stay distinct. `mppts` also accepts mappings of
+`MpptSpec` fields, so catalog JSON loads without conversion.
+
+```python
+from breos import App
+from breos.equipment import InverterSpec, MpptSpec
+
+inverter = InverterSpec(
+    nominal_power_w=4000,
+    inverter_efficiency=0.975,
+    mppts=(
+        MpptSpec(max_input_current_a=16, max_short_circuit_current_a=24, max_strings=2),
+        MpptSpec(max_input_current_a=13, max_short_circuit_current_a=20, max_strings=1),
+    ),
+)
+app = App({"location": "porto", "n_modules": 12,
+           "annual_consumption_kwh": 4000, **inverter.as_app_config()})
+```
+
+The adapter supplies the AC rating in kW, clears the sizing ratio, and supplies
+efficiency only when known. The aggregate simulation consumes those values;
+the stored DC/MPPT limits do not enable topology validation or per-MPPT
+simulation. Unknown efficiency leaves the engine's existing assumption in place.
+
+```{eval-rst}
+.. autoclass:: breos.equipment.InverterSpec
+   :members:
+
+.. autoclass:: breos.equipment.MpptSpec
+   :members:
+```
+
+## Production functions
 
 ```{eval-rst}
 .. autosummary::
