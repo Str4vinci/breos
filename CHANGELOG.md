@@ -248,6 +248,29 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- `breos.cec_fit.fit_cec_params` reproduces `pvlib.ivtools.sdm.fit_cec_sam`
+  (#433). The open-circuit-voltage constraint is evaluated 5 °C above the
+  reference, as in SAM's `6par_solve.h`, instead of 2 °C; temperatures are
+  translated with SAM's `1/k = 11600 K/eV`, in the modeled `gamma_pmp` too,
+  which now does its own translation instead of going through
+  `calcparams_cec`. Together these removed the constant ~0.03 % offset in
+  maximum power. The inner solve works in `ln I_o` and the shunt conductance,
+  so the parameter scales are comparable and the branch followed in `Adjust`
+  can pass the infinite shunt resistance near `Adjust = 0`; it accepts a
+  solve only if the five reference residuals are within 1e-8 of Isc, and
+  exponents are capped against overflow. The `Adjust` search reaches ±100
+  instead of ±60, halves its step near a failed solve, down to 0.25, and
+  moves in the direction given by the gamma mismatch at `Adjust = 0`. A fit
+  must pass SAM's parameter ranges and I–V checks (power at Vmp within
+  1.5 %, current at Voc below 1.5 % of Imp, no positive slope); the comment
+  that attributed the old ranges to Dobos Table 5 is corrected. The initial
+  guesses count at most one cell per 0.6 V of Voc, because the CEC cell count
+  of shingled modules includes parallel strips, and the empirical guess uses
+  SAM's coefficients and clamps. On 1000 random CEC modules: no failures
+  (previously 4), maximum power within 1e-5 % of `fit_cec_sam` wherever SAM
+  keeps the datasheet Isc (previously 0.03 % typical and 2.4 % worst), and
+  5.7 times faster. **Fitted parameters change for every module**, by about
+  0.03 % in power for most of them.
 - Monte Carlo and optimizer workers no longer oversubscribe the CPU at
   15-minute resolution (#382). Each worker process limits its BLAS and
   OpenMP pools to one thread; the parent process keeps its own. On a
