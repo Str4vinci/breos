@@ -263,7 +263,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   moves in the direction given by the gamma mismatch at `Adjust = 0`. A fit
   must pass SAM's parameter ranges and I–V checks (power at Vmp within
   1.5 %, current at Voc below 1.5 % of Imp, no positive slope); the comment
-  that attributed the old ranges to Dobos Table 5 is corrected. The initial
+  that attributed the old ranges to Dobos Table 5 is corrected. The ranges
+  are stricter than before (`a_ref` 0.01–15 instead of 0.05–50, `I_o_ref`
+  1e-16–1e-7 instead of 1e-20–1e-5, `R_s` 0.001–75 instead of 1e-4–100,
+  `R_sh_ref` ≤ 100001 instead of 1e7), so a candidate accepted before can be
+  rejected and trigger another fitting attempt. The search continues through
+  samples outside the ranges and, if no sample matches the datasheet gamma,
+  returns the closest one that passes the checks, with a warning, as
+  before. The initial
   guesses count at most one cell per 0.6 V of Voc, because the CEC cell count
   of shingled modules includes parallel strips, and the empirical guess uses
   SAM's coefficients and clamps. On 1000 random CEC modules: no failures

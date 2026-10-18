@@ -304,15 +304,30 @@ def _solve_adjust(v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0):
     :data:`_ADJUST_MIN_STEP`, before the search gives up; it also ends at
     :data:`_ADJUST_LIMIT`. A bracketed match is refined with ``brentq``.
 
-    Returns ``(adjust, x)`` for the matched solution, the closest sample if the
-    branch never reaches the target gamma, or ``None`` if ``Adjust = 0`` itself
-    cannot be solved.
+    The search continues through samples outside SAM's parameter ranges or
+    I–V checks; at the end the samples are checked from the closest to the
+    target gamma outwards, so only samples that pass are returned.
+
+    Returns ``(adjust, x, residual)`` for the matched solution if it passes the
+    checks, otherwise for the passing sample closest to the target gamma, with
+    ``residual`` the absolute gamma mismatch in %/°C; ``None`` if no sample
+    passes.
     """
     args = (v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc)
+    samples = []
+
+    def closest_passing():
+        for adjust, x, residual in sorted(samples, key=lambda sample: sample[2]):
+            five = _from_unknowns(x)
+            if _is_physical(five, adjust) and _passes_iv_checks(five, v_mp, i_mp, v_oc):
+                return adjust, x, residual
+        return None
+
     x, ok = _solve_five_params(0.0, *args, np.asarray(x0, dtype=float))
     residual = _modeled_gamma(x, 0.0, alpha_sc) - gamma_pmp if ok else float("nan")
     if not np.isfinite(residual):
         return None
+    samples.append((0.0, x, abs(residual)))
     direction = 1.0 if residual > 0.0 else -1.0
     adjust, step = 0.0, _ADJUST_STEP
     while abs(residual) > _GAMMA_TOL * 1e-3:
@@ -326,6 +341,7 @@ def _solve_adjust(v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0):
             if step < _ADJUST_MIN_STEP:
                 break
             continue
+        samples.append((trial, x_trial, abs(trial_residual)))
         if residual * trial_residual <= 0.0:
             # Refine within the bracket, warm-starting each solve from the last.
             branch = x.copy()
@@ -338,14 +354,16 @@ def _solve_adjust(v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0):
                 return _modeled_gamma(solved, value, alpha_sc) - gamma_pmp
 
             try:
-                adjust = brentq(bracket_residual, adjust, trial, xtol=1e-10, rtol=1e-12)
+                matched = brentq(bracket_residual, adjust, trial, xtol=1e-10, rtol=1e-12)
             except (ValueError, RuntimeError):
-                return adjust, x
-            x, _ok = _solve_five_params(adjust, *args, branch)
-            return adjust, x
+                return closest_passing()
+            x_matched, ok = _solve_five_params(matched, *args, branch)
+            if ok:
+                samples.append((matched, x_matched, abs(_modeled_gamma(x_matched, matched, alpha_sc) - gamma_pmp)))
+            return closest_passing()
         adjust, x, residual = trial, x_trial, trial_residual
         step = _ADJUST_STEP
-    return adjust, x
+    return closest_passing()
 
 
 def fit_cec_params(
@@ -405,11 +423,8 @@ def fit_cec_params(
             result = _solve_adjust(Vmp, Imp, Voc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0)
             if result is None:
                 continue
-            adjust, x = result
+            adjust, x, residual = result
             five = _from_unknowns(x)
-            if not _is_physical(five, adjust) or not _passes_iv_checks(five, Vmp, Imp, Voc):
-                continue
-            residual = abs(_modeled_gamma(x, adjust, alpha_sc) - gamma_pmp)
             if residual <= _GAMMA_TOL:
                 i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref = five
                 return (i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref, adjust)

@@ -87,6 +87,16 @@ class TestGammaMatch:
         gammas = [_modeled_gamma(five0, adjust, _KNOWN["alpha_sc"]) for adjust in (-10.0, 0.0, 10.0, 20.0)]
         assert all(np.diff(gammas) < 0)
 
+    def test_unreachable_gamma_returns_closest_physical_solution(self):
+        # The search runs to Adjust = 100, where I_o leaves SAM's range; the
+        # closest sample that passes the checks is returned with a warning.
+        inputs = dict(_KNOWN, gamma_pmp=-0.8)
+        with pytest.warns(RuntimeWarning, match="closest physical solution"):
+            i_l, i_o, r_s, r_sh, a, adjust = fit_cec_params(**inputs)
+        assert i_o <= 1e-7
+        assert 0.0 < adjust < 100.0
+        assert _passes_iv_checks((i_l, i_o, r_s, r_sh, a), _KNOWN["Vmp"], _KNOWN["Imp"], _KNOWN["Voc"])
+
 
 class TestCatalogModules:
     @pytest.mark.parametrize("name", list(MODULES))
