@@ -311,6 +311,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Runs whose pack never reaches zero health, every default run among them,
   are bit-identical.
 
+### Acknowledgments
+- Thanks to @tomdacu for reporting and fixing the CEC fit's departures from
+  `fit_cec_sam` (#433, #434).
+
 ## [0.7.0] - 2026-10-02
 
 0.7.0 adds time-of-use tariffs and grid charging, makes the results

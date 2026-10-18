@@ -1,9 +1,9 @@
 {
  "case": "battery_worth",
- "title": "Is a battery worth it?",
+ "title": "Battery size and storage price",
  "breos_version": "0.7.0",
- "git_describe": "v0.6.2-610-gd29419b",
- "generated_utc": "2026-10-01T20:54:29+00:00",
+ "git_describe": "v0.7.0-106-g489c4e5",
+ "generated_utc": "2026-10-18T15:12:48+00:00",
  "runtime_s": 4.1,
  "cheap": true,
  "configs": {
@@ -60,7 +60,7 @@
  ],
  "preset_storage_cost_per_kwh": 500.0,
  "files": {
-  "designs.json": "64ab1ec7110a041da4d2157463268022fe71d8e908989e3ad9b26ce765ca8d86",
-  "storage_prices.csv": "784e836409cffd0361d46cc65b09d241534e031aa5ce2370e39033e3ba4aad40"
+  "designs.json": "e94253c85588e6841c4b3a804358c6ecb31fc201dff6a3d27ff459b09f07a6bf",
+  "storage_prices.csv": "b145e37701670ac6661bf3abbea8c101abf8e4f35aed0e62d4be706b277004a4"
  }
 }
