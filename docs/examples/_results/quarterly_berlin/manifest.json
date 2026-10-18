@@ -1,13 +1,13 @@
 {
  "case": "quarterly_berlin",
- "title": "A quarterly tariff in Berlin",
+ "title": "Discharge-only dispatch on a quarterly tariff in Berlin",
  "breos_version": "0.7.0",
- "git_describe": "v0.6.2-610-gd29419b",
- "generated_utc": "2026-10-01T20:55:41+00:00",
- "runtime_s": 6.5,
+ "git_describe": "v0.7.0-106-g489c4e5",
+ "generated_utc": "2026-10-18T15:13:06+00:00",
+ "runtime_s": 6.4,
  "cheap": true,
  "configs": {
-  "configs/examples/quarterly-tariff-berlin.toml": "63e894a58eacc784a1546efdebba74004615238857f5d5b65625b9c4b59c3b41"
+  "configs/examples/quarterly-tariff-berlin.toml": "b042aab2be03be12ee4b89ba21de6e4cdef95d68ce893fd6180f8340bf8bc977"
  },
  "weather": {
   "validation/data/weather/berlin_tmy_2005_2023_pvgis-sarah3.csv.gz": {
@@ -47,6 +47,6 @@
   }
  },
  "files": {
-  "strategies.json": "137181c4741452e38f3f234f57c67c5afd2b222e99238ad3f4efce43ebdd291f"
+  "strategies.json": "f38b2b9e9d0cda896afa5f8439e3c88bbe44ae7d4f8d04336f640cdd16a02f72"
  }
 }
