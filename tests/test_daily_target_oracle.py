@@ -325,9 +325,10 @@ def test_the_command_line_plans_charge_windows(tmp_path):
     config.write_text(json.dumps(_config(2)), encoding="utf-8")
     output, days = tmp_path / "dp.json", tmp_path / "days.csv"
     argv = ["--config", str(config), "--output", str(output), "--csv", str(days), "--target-levels", "3"]
-    assert main([*argv, "--decision-boundary", "charge_window_start"]) == 0
+    assert main([*argv, "--decision-boundary", "charge_window_start", "--wear-cost-per-kwh", "0.05"]) == 0
     summary = json.loads(output.read_text(encoding="utf-8"))
     assert summary["planner"]["decision_boundary"] == "charge_window_start"
+    assert summary["planner"]["wear_cost_per_kwh"] == 0.05
     # The run opens in the 00:00-08:00 window; every later window starts at 22:00.
     frame = pd.read_csv(days, comment="#")
     assert frame["day_start"].str.slice(11, 16).tolist() == ["00:00", "22:00", "22:00"]
@@ -391,15 +392,6 @@ def test_a_wear_cost_does_not_raise_the_discharge_throughput():
     assert free.plan.wear_cost == 0.0 and worn.plan.wear_cost > 0.0
     assert worn.plan.targets.sum() < free.plan.targets.sum()
     assert _discharge_kwh(worn.replay) < _discharge_kwh(free.replay)
-
-
-def test_the_command_line_records_the_wear_cost(tmp_path):
-    config = tmp_path / "config.json"
-    config.write_text(json.dumps(_config(2)), encoding="utf-8")
-    output = tmp_path / "dp.json"
-    argv = ["--config", str(config), "--output", str(output), "--target-levels", "3", "--soc-states", "3"]
-    assert main([*argv, "--wear-cost-per-kwh", "0.05"]) == 0
-    assert json.loads(output.read_text(encoding="utf-8"))["planner"]["wear_cost_per_kwh"] == 0.05
 
 
 @pytest.mark.parametrize("value", ["-0.01", "nan", "inf"])
