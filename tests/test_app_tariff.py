@@ -397,6 +397,19 @@ def test_custom_schedule_requires_its_fields_and_valid_metadata(mutate, message)
         App({**BASE, "tariff": {**CUSTOM_TARIFF, "custom_schedule": custom}})
 
 
+def test_custom_schedule_takes_none_for_its_optional_tables():
+    custom = {**deepcopy(CUSTOM_SCHEDULE), "holidays": None, "seasons": None}
+    App({**BASE, "tariff": {**CUSTOM_TARIFF, "custom_schedule": custom}})
+
+
+@pytest.mark.parametrize("season", ["", None, 1])
+def test_custom_schedule_refuses_an_unknown_season_with_value_error(season):
+    custom = deepcopy(CUSTOM_SCHEDULE)
+    custom["rules"][0]["season"] = season
+    with pytest.raises(ValueError, match=r"rules\[0\]\.season' must be one of"):
+        App({**BASE, "tariff": {**CUSTOM_TARIFF, "custom_schedule": custom}})
+
+
 def test_custom_schedule_must_be_a_table():
     # A parsed definition would be recorded as its repr and could not be fed back.
     definition = resolve_app_config({**BASE, "tariff": CUSTOM_TARIFF}).tariff.schedule

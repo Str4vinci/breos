@@ -2070,7 +2070,7 @@ def _holiday_dates(value: Any, where: str) -> Any:
 # checked against the schedule's own seasons in _custom_schedule.
 _CUSTOM_RULE_TABLE = TableSpec(
     "custom_schedule.rules[i]",
-    keys={"days": choice(("all", "saturday", "sunday", "weekday")), "season": text, "intervals": anything},
+    keys={"days": choice(("all", "saturday", "sunday", "weekday")), "season": anything, "intervals": anything},
     required=frozenset({"days", "season", "intervals"}),
 )
 
@@ -2100,8 +2100,8 @@ _CUSTOM_SCHEDULE_TABLE = TableSpec(
         "note": text,
         "effective_from": anything,
         "effective_to": anything,
-        "holidays": table(_CUSTOM_HOLIDAYS_TABLE),
-        "seasons": mapping_of(text, list_of(_month, min_length=1)),
+        "holidays": optional(table(_CUSTOM_HOLIDAYS_TABLE)),
+        "seasons": optional(mapping_of(text, list_of(_month, min_length=1))),
     },
     required=frozenset({"identifier", "version", "timezone", "cycle", "periods", "rules"}),
 )
