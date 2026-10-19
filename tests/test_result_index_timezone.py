@@ -105,7 +105,7 @@ def test_montecarlo_historical_weather_is_indexed_in_utc(synthetic_weather, tz):
     weather = synthetic_weather.copy()
     weather.index = weather.index.tz_localize(None) if tz is None else weather.index.tz_convert(tz)
 
-    indexed = _index_weather(weather.reset_index(names="date"))
+    indexed = _index_weather(weather)
 
     assert str(indexed.index.tz) == "UTC"
     assert indexed.index[0] == pd.Timestamp("2023-01-01 00:00", tz="UTC")

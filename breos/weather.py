@@ -239,16 +239,6 @@ def relabel_right_labeled_interval_means(weather: pd.DataFrame) -> pd.DataFrame:
     return relabeled
 
 
-def _relabel_weather_date_column(
-    weather: pd.DataFrame, metadata: dict[str, Any]
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Apply interval-label metadata to a frame whose timestamps are in ``date``."""
-    indexed = weather.set_index("date")
-    indexed.attrs[WEATHER_METADATA_KEY] = deepcopy(metadata)
-    relabeled = relabel_right_labeled_interval_means(indexed)
-    return relabeled.reset_index(), weather_metadata(relabeled)
-
-
 # Optional imports for API calls
 try:
     import openmeteo_requests
@@ -1401,7 +1391,7 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
     with a warning.
 
     Returns:
-        Tuple of (source year -> frame with a ``date`` column, file metadata)
+        Tuple of (source year -> frame indexed by ``date``, file metadata)
     """
     df = pd.read_csv(csv_file_path)
     if "date" not in df.columns:
@@ -1411,23 +1401,26 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
             "single-year TMY cannot be sampled by year."
         )
     df["date"] = _parse_weather_timestamps(df["date"])
+    df = df.set_index("date")
 
     metadata = weather_file_metadata(csv_file_path)
-    warn_if_naive_weather_timestamps(df["date"].dt, metadata, f"Weather file {csv_file_path}")
-    df, metadata = _relabel_weather_date_column(df, metadata)
-    df = df[~((df["date"].dt.month == 2) & (df["date"].dt.day == 29))]
+    warn_if_naive_weather_timestamps(df.index, metadata, f"Weather file {csv_file_path}")
+    df.attrs[WEATHER_METADATA_KEY] = metadata
+    df = relabel_right_labeled_interval_means(df)
+    metadata = weather_metadata(df)
+    df = df[~((df.index.month == 2) & (df.index.day == 29))]
 
-    step = df["date"].diff().median()
+    step = df.index.to_series().diff().median()
     if len(df) < 2 or pd.isna(step) or step <= pd.Timedelta(0):
         logger.warning("Weather file %s has no usable timestep, so it has no complete year", csv_file_path)
         return {}, metadata
     expected_rows = int(round(pd.Timedelta(days=365) / step))
 
-    years = df["date"].dt.year
+    years = df.index.year
     complete: Dict[int, pd.DataFrame] = {}
     incomplete: List[str] = []
     for year in years.unique():
-        year_data = df[years == year].reset_index(drop=True)
+        year_data = df[years == year]
         if len(year_data) == expected_rows:
             complete[int(year)] = year_data
         else:
@@ -1443,10 +1436,16 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
     return complete, metadata
 
 
-def _remap_weather_year(year_data: pd.DataFrame, source_year: int, target_year: int) -> pd.DataFrame:
-    remapped = year_data.copy()
-    remapped["date"] = remapped["date"] + pd.DateOffset(years=target_year - source_year)
-    return remapped
+def _weather_years(csv_file_path: str, target_year: int) -> Dict[int, pd.DataFrame]:
+    """The complete years of a multi-year weather CSV, indexed by their timestamps moved to ``target_year``."""
+    by_year, metadata = _complete_weather_years(csv_file_path)
+    result: Dict[int, pd.DataFrame] = {}
+    for year, year_data in by_year.items():
+        remapped = year_data.copy()
+        remapped.index = remapped.index + pd.DateOffset(years=target_year - year)
+        remapped.attrs[WEATHER_METADATA_KEY] = deepcopy(metadata)
+        result[year] = remapped
+    return result
 
 
 def preload_weather_by_year(
@@ -1465,15 +1464,10 @@ def preload_weather_by_year(
         target_year: Calendar year to remap all dates to
 
     Returns:
-        Dict mapping original year → DataFrame with target-year dates, indexed by 'date'
+        Dict mapping original year → DataFrame with target-year timestamps in
+        its first column, ``date``, and a row-number index
     """
-    by_year, metadata = _complete_weather_years(csv_file_path)
-    result: Dict[int, pd.DataFrame] = {}
-    for year, year_data in by_year.items():
-        remapped = _remap_weather_year(year_data, year, target_year)
-        remapped.attrs[WEATHER_METADATA_KEY] = deepcopy(metadata)
-        result[year] = remapped
-    return result
+    return {year: frame.reset_index() for year, frame in _weather_years(csv_file_path, target_year).items()}
 
 
 def read_epw_file(

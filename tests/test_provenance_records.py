@@ -79,7 +79,7 @@ def test_montecarlo_records_the_offset_the_pv_model_applies(monkeypatch, spellin
     # the PV model applied half a step.
     frame = pd.DataFrame({"date": pd.date_range("2025-01-01", periods=2, freq="h"), "temperature_2m": [10.0, 11.0]})
     index = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
-    monkeypatch.setattr(montecarlo_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
+    monkeypatch.setattr(montecarlo_module, "_weather_years", lambda *args, **kwargs: {2021: frame.set_index("date")})
     monkeypatch.setattr(
         montecarlo_module,
         "build_pv_production_breakdown",

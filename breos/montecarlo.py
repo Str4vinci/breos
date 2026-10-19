@@ -80,9 +80,9 @@ from breos.utils import package_version
 from breos.weather import (
     _weather_file_sha256,
     _weather_metadata_sidecar_path,
+    _weather_years,
     build_battery_temperature_series,
     fill_leap_day,
-    preload_weather_by_year,
     resample_to_15min,
     weather_metadata,
 )
@@ -184,17 +184,14 @@ def _sample_load_scale(
 
 
 def _index_weather(df: pd.DataFrame) -> pd.DataFrame:
-    """Turn a ``preload_weather_by_year`` frame (with a ``date`` column) into a
-    UTC-indexed weather DataFrame matching the deterministic pipeline.
+    """A weather year, indexed on the file's clock, in UTC as the deterministic pipeline has it.
 
     The years are read without 29 February, so a leap target year gets a copy
     of 28 February, as an App run of that year does. The day is filled on the
     file's own clock, where it was dropped: in UTC, a file written at +01:00
     would still have an hour dated 29 February, and the fill would be skipped.
     """
-    w = df.copy()
-    w["date"] = pd.to_datetime(w["date"])
-    w = fill_leap_day(w.set_index("date"))
+    w = fill_leap_day(df.copy())
     if w.index.tz is None:
         w.index = w.index.tz_localize("UTC")
     else:
@@ -211,7 +208,7 @@ def _load_weather_years(
 ) -> dict[int, pd.DataFrame]:
     """Read the weather file into per-year frames at the study resolution."""
     freq = cfg["resolution"]
-    weather_by_year = preload_weather_by_year(settings.weather_file, target_year=settings.target_year)
+    weather_by_year = _weather_years(settings.weather_file, target_year=settings.target_year)
     if settings.weather_start_year is not None:
         weather_by_year = {
             year: frame for year, frame in weather_by_year.items() if year >= settings.weather_start_year

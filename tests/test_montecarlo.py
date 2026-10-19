@@ -74,7 +74,7 @@ def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch)
     )
     index = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
     captured = {}
-    monkeypatch.setattr(mc_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
+    monkeypatch.setattr(mc_module, "_weather_years", lambda *args, **kwargs: {2021: frame.set_index("date")})
     monkeypatch.setattr(
         mc_module,
         "build_pv_production_breakdown",
