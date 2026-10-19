@@ -61,6 +61,9 @@ def test_dc_is_the_default_and_resolves_no_battery_inverter():
         {"battery_inverter_kw_per_kwh": 0.5},
         {"battery_inverter_efficiency": 0.96},
         {"costs": {"battery_inverter_cost_per_kw": 120.0}},
+        # Refused for being there, before the value is checked.
+        {"battery_inverter_efficiency": "bad"},
+        {"battery_inverter_ac_rating_kw": "3"},
     ],
 )
 def test_dc_refuses_every_battery_inverter_setting(extra):

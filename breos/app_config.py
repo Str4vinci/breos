@@ -1991,6 +1991,7 @@ class ValidatedSpecs:
 def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
     """Validate user-facing App config before resolving derived values."""
     has_arrays = _validate_structure_and_location(cfg)
+    _refuse_dc_battery_inverter_keys(cfg)
     _check_fields(cfg)
     _validate_pv_and_inverter(cfg, has_arrays)
     _validate_time_and_weather(cfg)
@@ -2938,25 +2939,32 @@ BATTERY_INVERTER_KEYS: tuple[str, ...] = (
 )
 
 
+def _refuse_dc_battery_inverter_keys(cfg: Mapping[str, Any]) -> None:
+    """A DC-coupled battery has no inverter of its own, so its keys are refused before their values are checked."""
+    if cfg["battery_coupling"] != "dc":
+        return
+    given = [key for key in BATTERY_INVERTER_KEYS if cfg[key] is not None]
+    costs = cfg.get("costs")
+    if isinstance(costs, Mapping) and "battery_inverter_cost_per_kw" in costs:
+        given.append("costs.battery_inverter_cost_per_kw")
+    if given:
+        raise ValueError(
+            f"{', '.join(repr(key) for key in given)} describe an AC-coupled battery's own inverter; "
+            "set battery_coupling = 'ac' or remove them"
+        )
+
+
 def _validate_battery_coupling(cfg: dict[str, Any]) -> None:
     """Validate the battery topology and an AC-coupled battery's inverter (ADR 0004 C2, C9).
 
     ``"dc"`` refuses the battery inverter keys and its price, so no setting
-    is silently ignored. ``"ac"`` with a battery needs one rating key and
+    is silently ignored; :func:`_refuse_dc_battery_inverter_keys` does that
+    first, in :func:`validate_config`. ``"ac"`` with a battery needs one rating key and
     the efficiency; without a battery it takes them and needs neither, so a
     capacity sweep from 0 keeps one config. Its price is checked when the
     costs resolve, since a preset could carry it.
     """
     coupling = cfg["battery_coupling"]
-    if coupling == "dc":
-        given = [key for key in BATTERY_INVERTER_KEYS if cfg[key] is not None]
-        if "battery_inverter_cost_per_kw" in (cfg.get("costs") or {}):
-            given.append("costs.battery_inverter_cost_per_kw")
-        if given:
-            raise ValueError(
-                f"{', '.join(repr(key) for key in given)} describe an AC-coupled battery's own inverter; "
-                "set battery_coupling = 'ac' or remove them"
-            )
     if cfg["battery_inverter_ac_rating_kw"] is not None and cfg["battery_inverter_kw_per_kwh"] is not None:
         raise ValueError(
             "'battery_inverter_ac_rating_kw' and 'battery_inverter_kw_per_kwh' both size the battery inverter; "
