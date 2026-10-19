@@ -444,22 +444,40 @@ def read_weather_csv(filepath: str | os.PathLike[str]) -> pd.DataFrame:
     return df
 
 
-def _read_weather_frame(filepath: str | os.PathLike[str]) -> pd.DataFrame:
-    """Read a weather CSV into a frame indexed by its timestamps."""
-    df = pd.read_csv(filepath, index_col=0, parse_dates=True)
+def _parse_weather_timestamps(values: Any) -> pd.DatetimeIndex:
+    """Parse the timestamp text of a weather file.
 
-    # Parse datetime index if it didn't work from index_col=0
-    if not isinstance(df.index, pd.DatetimeIndex):
-        # Try converting the existing index (handles timezone-aware strings)
+    ISO 8601 first, as BREOS writes it. Offsets that change within the file,
+    such as local times across a DST change, are read as UTC instants. Then
+    day-first ``dd/mm/YYYY HH:MM``, then pandas' inference for each element.
+    Values that are not text, such as a leading row-number column, raise
+    ``TypeError``.
+    """
+    if not pd.api.types.is_string_dtype(values) and not pd.api.types.is_object_dtype(values):
+        raise TypeError("weather timestamps must be text")
+    for kwargs in ({"format": "ISO8601"}, {"format": "ISO8601", "utc": True}, {"format": "%d/%m/%Y %H:%M"}):
         try:
-            df.index = pd.to_datetime(df.index, utc=True)
-        except (ValueError, TypeError):
-            # Fall back to looking for named datetime columns
-            df = pd.read_csv(filepath)
-            date_col = _find_date_column(df.columns)
-            if date_col is not None:
-                df[date_col] = pd.to_datetime(df[date_col])
-                df.set_index(date_col, inplace=True)
+            return pd.DatetimeIndex(pd.to_datetime(values, **kwargs))
+        except ValueError:
+            pass
+    return pd.DatetimeIndex(pd.to_datetime(values, format="mixed"))
+
+
+def _read_weather_frame(filepath: str | os.PathLike[str]) -> pd.DataFrame:
+    """Read a weather CSV into a frame indexed by its timestamps.
+
+    The timestamps are the first column, or else the first column named like
+    one (``date``, ``datetime``, ``time``).
+    """
+    df = pd.read_csv(filepath, index_col=0)
+    try:
+        df.index = _parse_weather_timestamps(df.index)
+    except (ValueError, TypeError):
+        df = pd.read_csv(filepath)
+        date_col = _find_date_column(df.columns)
+        if date_col is not None:
+            df[date_col] = _parse_weather_timestamps(df[date_col])
+            df = df.set_index(date_col)
     return df
 
 
@@ -1392,13 +1410,7 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
             "timestamp column named 'date', as `tools/fetch_weather.py historical` writes; a "
             "single-year TMY cannot be sampled by year."
         )
-    try:
-        df["date"] = pd.to_datetime(df["date"], format="ISO8601")
-    except ValueError:
-        try:
-            df["date"] = pd.to_datetime(df["date"], format="%d/%m/%Y %H:%M")
-        except ValueError:
-            df["date"] = pd.to_datetime(df["date"], format="mixed")
+    df["date"] = _parse_weather_timestamps(df["date"])
 
     metadata = weather_file_metadata(csv_file_path)
     warn_if_naive_weather_timestamps(df["date"].dt, metadata, f"Weather file {csv_file_path}")

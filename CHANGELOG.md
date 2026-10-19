@@ -557,6 +557,12 @@ removed in 0.9.0.
 
 ### Fixed
 
+- Weather files are read with one timestamp parser for App and Monte Carlo.
+  App (`load_weather`, `read_weather_csv`, `weather_file`) now reads
+  day-first `dd/mm/YYYY HH:MM` timestamps, which raised before, and finds a
+  `date` column that follows a row-number column instead of reading the row
+  numbers as 1970 timestamps. Monte Carlo now reads local timestamps whose
+  UTC offset changes at DST, as UTC instants, which raised before.
 - The optimizer's `[financials]` rates are held to the App's bounds when the
   configuration is read. `sell_price_inflation` must lie between -1 and 1
   (exclusive), as App requires; the optimizer accepted 1.5 before. The

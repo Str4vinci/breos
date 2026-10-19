@@ -19,6 +19,7 @@ from breos.weather import (
     parse_weather_filename,
     preload_weather_by_year,
     read_epw_file,
+    read_weather_csv,
     relabel_right_labeled_interval_means,
     resample_to_15min,
     save_weather_csv,
@@ -860,3 +861,35 @@ def test_preload_weather_by_year_names_a_missing_date_column(tmp_path):
 
     with pytest.raises(ValueError, match="has no 'date' column"):
         preload_weather_by_year(str(path), target_year=2025)
+
+
+def _hourly_year_csv(path, stamps, *, leading_row_numbers=False):
+    frame = pd.DataFrame({"date": stamps, "ghi": np.arange(len(stamps)) % 900.0, "temperature_2m": 10.0})
+    frame.to_csv(path, index=leading_row_numbers)
+    return path
+
+
+def test_read_weather_csv_reads_day_first_timestamps(tmp_path):
+    index = pd.date_range("2023-01-01", "2023-12-31 23:00", freq="h")
+    path = _hourly_year_csv(tmp_path / "dayfirst.csv", index.strftime("%d/%m/%Y %H:%M"))
+
+    pd.testing.assert_index_equal(read_weather_csv(path).index, index.as_unit("us"), check_names=False)
+
+
+def test_read_weather_csv_finds_the_date_column_after_row_numbers(tmp_path):
+    index = pd.date_range("2023-01-01", "2023-12-31 23:00", freq="h")
+    path = _hourly_year_csv(tmp_path / "numbered.csv", index.strftime("%Y-%m-%d %H:%M"), leading_row_numbers=True)
+
+    weather = read_weather_csv(path)
+
+    pd.testing.assert_index_equal(weather.index, index.as_unit("us"), check_names=False)
+    assert weather.index.name == "date"
+
+
+def test_preload_weather_by_year_reads_local_times_across_dst_as_instants(tmp_path):
+    local = pd.date_range("2023-01-01", "2023-12-31 23:00", freq="h", tz="Europe/Lisbon")
+    path = _hourly_year_csv(tmp_path / "lisbon.csv", [str(stamp) for stamp in local])
+
+    year = preload_weather_by_year(str(path), target_year=2023)[2023]
+
+    assert pd.DatetimeIndex(year["date"]).equals(local.tz_convert("UTC"))
