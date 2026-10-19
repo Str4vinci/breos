@@ -203,7 +203,8 @@ def test_montecarlo_cli_rejects_an_infinite_max_load_scale(tmp_path, capsys):
     assert cli.main(["montecarlo", "--config", str(config), "--output", str(tmp_path / "out.csv"), "--json"]) == 1
 
     err = capsys.readouterr().err
-    assert "max_load_scale must be a finite number, or None to leave the load scale unbounded, got inf" in err
+    # The [montecarlo] table refuses it before the run, as run_montecarlo does for a Python caller.
+    assert "'montecarlo.max_load_scale' must be a finite number" in err
     assert not (tmp_path / "out.provenance.json").exists()
 
 

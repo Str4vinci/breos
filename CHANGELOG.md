@@ -537,6 +537,11 @@ removed in 0.9.0.
   (exclusive), as App requires; the optimizer accepted 1.5 before. The
   other rates were already refused before the search, and are now refused
   by `resolve_optimization_config` too.
+- `breos montecarlo` checks each `[montecarlo]` setting's type and range
+  instead of converting it: `n_runs = 2.7` ran 2 trajectories and
+  `collect_yearly = "no"` turned yearly output on. App configs that carry a
+  `[montecarlo]` table get the same checks, and an unknown key is reported as
+  `Unknown key 'montecarlo.<key>'`.
 - `breos.cec_fit.fit_cec_params` reproduces `pvlib.ivtools.sdm.fit_cec_sam`
   (#433). The open-circuit-voltage constraint is evaluated 5 °C above the
   reference, as in SAM's `6par_solve.h`, instead of 2 °C; temperatures are

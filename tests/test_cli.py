@@ -149,7 +149,49 @@ def test_montecarlo_reports_unknown_setting_before_weather_lookup(tmp_path, caps
     config_path.write_text('location = "porto"\n\n[montecarlo]\nweather_fille = "missing.csv"\n', encoding="utf-8")
 
     assert cli.main(["montecarlo", "--config", str(config_path)]) == 1
-    assert "Unknown Monte Carlo config key(s): montecarlo.weather_fille" in capsys.readouterr().err
+    assert "Unknown key 'montecarlo.weather_fille'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("setting", "message"),
+    [
+        ("n_runs = 2.7", "'montecarlo.n_runs' must be an integer"),
+        ('collect_yearly = "no"', "'montecarlo.collect_yearly' must be true or false"),
+        ('max_load_scale = "2"', "'montecarlo.max_load_scale' must be a finite number"),
+        ("n_procs = 0", "'montecarlo.n_procs' must be >= 1"),
+        ('load_distribution = "lognormal"', "'montecarlo.load_distribution' must be one of: normal, uniform"),
+    ],
+)
+def test_montecarlo_refuses_a_bad_setting_instead_of_coercing_it(tmp_path, capsys, setting, message):
+    # The CLI once read n_runs = 2.7 as 2 runs and collect_yearly = "no" as on.
+    config_path = _montecarlo_config(tmp_path)
+    config_path.write_text(config_path.read_text(encoding="utf-8") + setting + "\n", encoding="utf-8")
+
+    assert cli.main(["montecarlo", "--config", str(config_path)]) == 1
+    assert message in capsys.readouterr().err
+
+
+def test_montecarlo_flags_beat_the_checked_table(tmp_path, monkeypatch):
+    from breos import montecarlo
+
+    config_path = _montecarlo_config(tmp_path)
+    table = "n_runs = 3\nmin_load_scale = 1\nmax_load_scale = 2\ncollect_yearly = true\nseed = 5\n"
+    config_path.write_text(config_path.read_text(encoding="utf-8") + table, encoding="utf-8")
+    seen = {}
+
+    def stop(config, settings):
+        seen["settings"] = settings
+        raise _BackendChosen
+
+    monkeypatch.setattr(montecarlo, "run_montecarlo", stop)
+    argv = ["montecarlo", "--config", str(config_path), "--runs", "7", "--output", str(tmp_path / "runs.csv")]
+    with pytest.raises(_BackendChosen):
+        cli._montecarlo(cli.build_parser().parse_args(argv))
+
+    settings = seen["settings"]
+    assert (settings.n_runs, settings.seed, settings.collect_yearly) == (7, 5, True)
+    assert settings.min_load_scale == 1.0 and isinstance(settings.min_load_scale, float)
+    assert settings.max_load_scale == 2.0 and isinstance(settings.max_load_scale, float)
 
 
 @pytest.mark.parametrize("flag", ["--ac-coupled", "--dc-coupled"])

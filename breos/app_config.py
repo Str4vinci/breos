@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from dataclasses import dataclass, fields, replace
 from datetime import date, datetime
@@ -14,7 +15,18 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 
-from breos.config_schema import TableSpec, anything, boolean, choice, integer, list_of, mapping_of, number, text
+from breos.config_schema import (
+    TableSpec,
+    anything,
+    boolean,
+    choice,
+    integer,
+    list_of,
+    mapping_of,
+    number,
+    optional,
+    text,
+)
 from breos.constants import (
     BATTERY_COUPLINGS,
     DEFAULT_CHARGE_EFFICIENCY,
@@ -1274,41 +1286,44 @@ def _validate_period(cfg: dict[str, Any]) -> None:
     cfg["period"] = {"start": start.isoformat(), "end": end.isoformat()}
 
 
-# Keep runner-table keys explicit until the shared configuration schema from
-# #181 can describe these sections alongside App fields.
-MONTECARLO_CONFIG_KEYS: frozenset[str] = frozenset(
-    {
-        "weather_file",
-        "n_runs",
-        "years_per_run",
-        "load_uncertainty",
-        "load_distribution",
-        "target_year",
-        "weather_start_year",
-        "weather_end_year",
-        "seed",
-        "min_load_scale",
-        "max_load_scale",
-        "collect_yearly",
-        "n_procs",
-        "execution_backend",
-        "model_uncertainty_pct",
-    }
+def _path(value: Any, where: str) -> str:
+    """A file path, as a string or a path object; returned as a string."""
+    return os.fspath(value) if isinstance(value, os.PathLike) else text(value, where)
+
+
+# The [montecarlo] table: the MonteCarloSettings fields. The checks that span
+# settings or need the App config (max_load_scale >= min_load_scale, the
+# weather years) stay in run_montecarlo, which Python callers reach directly.
+MONTECARLO_TABLE = TableSpec(
+    "montecarlo",
+    keys={
+        "weather_file": _path,
+        "n_runs": integer(minimum=1),
+        "years_per_run": optional(integer(minimum=1)),
+        "load_uncertainty": number(minimum=0),
+        "load_distribution": choice(("normal", "uniform")),
+        "target_year": integer(),
+        "weather_start_year": optional(integer()),
+        "weather_end_year": optional(integer()),
+        "seed": optional(integer(minimum=0)),
+        "min_load_scale": number(minimum=0),
+        "max_load_scale": number(allow_none=True),
+        "collect_yearly": boolean,
+        "n_procs": integer(minimum=1),
+        "execution_backend": optional(choice(EXECUTION_BACKENDS)),
+        "model_uncertainty_pct": number(minimum=0, allow_none=True),
+    },
 )
 
 
-def validate_montecarlo_config(cfg: dict[str, Any]) -> None:
-    """Reject unknown Monte Carlo settings before runner setup or weather access."""
+def validate_montecarlo_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """The checked ``[montecarlo]`` table, empty when the config has none.
+
+    Run before runner setup or weather access, so a typo is reported first.
+    """
     if "montecarlo" not in cfg:
-        return
-    montecarlo = cfg["montecarlo"]
-    if not isinstance(montecarlo, dict):
-        raise TypeError("'montecarlo' must be a table/dict of Monte Carlo settings")
-    unknown_mc = set(montecarlo) - MONTECARLO_CONFIG_KEYS
-    if unknown_mc:
-        available = ", ".join(sorted(f"montecarlo.{key}" for key in MONTECARLO_CONFIG_KEYS))
-        unknown_text = ", ".join(sorted(f"montecarlo.{key}" for key in unknown_mc))
-        raise ValueError(f"Unknown Monte Carlo config key(s): {unknown_text}. Available: {available}")
+        return {}
+    return MONTECARLO_TABLE.validate(cfg["montecarlo"])
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,7 @@ import sys
 import tomllib
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from breos.app import App
 from breos.app_config import (
@@ -617,43 +617,32 @@ def _montecarlo(args: argparse.Namespace) -> int:
 
     # Report a typo such as [montecarlo].weather_fille before a missing-file
     # error. The runner validates the full App config before weather access.
-    validate_montecarlo_config(config)
-    mc_cfg = config.get("montecarlo", {})
+    mc_cfg = validate_montecarlo_config(config)
 
     weather_file = args.weather_file or mc_cfg.get("weather_file")
     if not weather_file:
         raise ValueError("Monte Carlo needs a weather file: set [montecarlo].weather_file or pass --weather-file.")
 
-    # Each setting's flag and conversion; None for a setting with no flag or
-    # no conversion. A flag beats [montecarlo], and a setting neither gives
+    # A flag beats the checked [montecarlo] table, and a setting neither gives
     # keeps its MonteCarloSettings default. An unset execution_backend lets
     # run_montecarlo fall back to the top-level key, the same order a Python
     # caller gets.
-    options: dict[str, tuple[Any, Callable[[Any], Any] | None]] = {
-        "n_runs": (args.runs, int),
-        "years_per_run": (args.years, None),
-        "load_uncertainty": (args.load_uncertainty, float),
-        "load_distribution": (args.load_distribution, str),
-        "target_year": (args.target_year, int),
-        "weather_start_year": (args.weather_start_year, None),
-        "weather_end_year": (args.weather_end_year, None),
-        "seed": (args.seed, None),
-        "min_load_scale": (None, float),
-        "max_load_scale": (None, None),
-        "collect_yearly": (args.collect_yearly, bool),
-        "n_procs": (args.n_procs, int),
-        "execution_backend": (args.execution_backend, None),
-        "model_uncertainty_pct": (args.model_uncertainty, float),
+    flags = {
+        "n_runs": args.runs,
+        "years_per_run": args.years,
+        "load_uncertainty": args.load_uncertainty,
+        "load_distribution": args.load_distribution,
+        "target_year": args.target_year,
+        "weather_start_year": args.weather_start_year,
+        "weather_end_year": args.weather_end_year,
+        "seed": args.seed,
+        "collect_yearly": args.collect_yearly,
+        "n_procs": args.n_procs,
+        "execution_backend": args.execution_backend,
+        "model_uncertainty_pct": args.model_uncertainty,
     }
-    chosen: dict[str, Any] = {}
-    for name, (cli_value, convert) in options.items():
-        if cli_value is not None:
-            value = cli_value
-        elif name in mc_cfg:
-            value = mc_cfg[name]
-        else:
-            continue
-        chosen[name] = convert(value) if convert is not None else value
+    chosen = {name: value for name, value in mc_cfg.items() if name != "weather_file"}
+    chosen.update({name: value for name, value in flags.items() if value is not None})
     settings = MonteCarloSettings(weather_file=str(weather_file), **chosen)
 
     result = run_montecarlo(config, settings)

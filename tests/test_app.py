@@ -233,7 +233,7 @@ class TestAppValidation:
             pytest.param(
                 {"montecarlo": {"nruns": 10, "weather_file": "weather.csv"}},
                 ValueError,
-                r"Unknown Monte Carlo config key.*montecarlo\.nruns",
+                r"Unknown key 'montecarlo\.nruns'",
                 id="montecarlo-key",
             ),
         ],

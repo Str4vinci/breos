@@ -165,6 +165,15 @@ def choice(options: Iterable[str], *, case_insensitive: bool = True) -> Checker:
     return check
 
 
+def optional(checker: Checker) -> Checker:
+    """``checker``, or None for a value that is None."""
+
+    def check(value: Any, where: str) -> Any:
+        return None if value is None else checker(value, where)
+
+    return check
+
+
 def text(value: Any, where: str) -> str:
     """A non-empty string."""
     if not isinstance(value, str) or not value.strip():
