@@ -264,10 +264,10 @@ class TestAppValidation:
             (
                 {"inverter_efficiency": 0},
                 ValueError,
-                "'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)",
+                "'inverter_efficiency' must be between 0 and 1 (exclusive of the lower bound)",
             ),
-            ({"resolution": "30min"}, ValueError, "'resolution' must be 'h' or '15min'"),
-            ({"discount_rate": -1}, ValueError, "'discount_rate' must be greater than -1"),
+            ({"resolution": "30min"}, ValueError, "'resolution' must be one of: h, 15min; got '30min'"),
+            ({"discount_rate": -1}, ValueError, "'discount_rate' must be > -1"),
             (
                 {"battery_min_soc": 0.9, "battery_max_soc": 0.2},
                 ValueError,

@@ -151,18 +151,28 @@ def boolean(value: Any, where: str) -> bool:
     return value
 
 
-def choice(options: Iterable[str], *, case_insensitive: bool = True) -> Checker:
-    """One of ``options``; returned lowercased when ``case_insensitive``."""
-    allowed = tuple(options)
-    lookup = {option.lower(): option for option in allowed} if case_insensitive else {o: o for o in allowed}
+@dataclass(frozen=True)
+class Choice:
+    """The checker :func:`choice` returns; ``options`` lists the allowed values, as the CLI offers them."""
 
-    def check(value: Any, where: str) -> str:
-        key = value.strip().lower() if case_insensitive and isinstance(value, str) else value
-        if not isinstance(value, str) or key not in lookup:
-            raise ValueError(f"'{where}' must be one of: {', '.join(allowed)}; got {value!r}")
-        return lookup[key]
+    options: tuple[str, ...]
+    case_insensitive: bool = True
 
-    return check
+    def __call__(self, value: Any, where: str) -> str:
+        if isinstance(value, str):
+            key = value.strip().lower() if self.case_insensitive else value
+            for option in self.options:
+                if key == (option.lower() if self.case_insensitive else option):
+                    return option
+        raise ValueError(f"'{where}' must be one of: {', '.join(self.options)}; got {value!r}")
+
+
+def choice(options: Iterable[str], *, case_insensitive: bool = True) -> Choice:
+    """One of ``options``, matched after stripping and lowercasing when ``case_insensitive``.
+
+    Returns the option as listed.
+    """
+    return Choice(tuple(options), case_insensitive)
 
 
 def optional(checker: Checker) -> Checker:

@@ -220,7 +220,7 @@ def test_string_energy_needs_a_topology_and_a_known_fidelity(modules):
     plain = {"location": "porto", "annual_consumption_kwh": 4000, "n_modules": 10}
     with pytest.raises(ValueError, match="needs 'inverters'"):
         resolve_app_config({**plain, "electrical_fidelity": "string"})
-    with pytest.raises(ValueError, match="'aggregate' or 'string'"):
+    with pytest.raises(ValueError, match="'electrical_fidelity' must be one of: aggregate, string"):
         resolve_app_config({**EAST_WEST, "electrical_fidelity": "iv"})
 
 

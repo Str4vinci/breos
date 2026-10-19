@@ -59,7 +59,7 @@ SETTINGS = (
             False,
             False,
             tuple((value, TypeError) for value in ("false", 0, 1, None)),
-            "'battery_allow_terminal_replacement' must be a boolean",
+            "'battery_allow_terminal_replacement' must be true or false",
         ),
         optimizer=Layer(
             True,
@@ -130,7 +130,7 @@ SETTINGS = (
             False,
             False,
             (("false", TypeError),),
-            "'battery_enable_replacement' must be a boolean",
+            "'battery_enable_replacement' must be true or false",
         ),
     ),
     # The years that follow a span are set by the projection, never by a user key.

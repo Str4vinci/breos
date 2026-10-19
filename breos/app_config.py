@@ -16,6 +16,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import pandas as pd
 
 from breos.config_schema import (
+    Checker,
+    Choice,
     TableSpec,
     anything,
     boolean,
@@ -39,6 +41,8 @@ from breos.constants import (
     DEFAULT_INDOOR_SETPOINT_C,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
+    DEGRADATION_ENGINES,
+    RESOLUTIONS,
     SKIPPED_REPLACEMENT_ACTIONS,
 )
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
@@ -141,6 +145,10 @@ from breos.utils import get_hours_per_step
 from breos.weather import IRRADIANCE_RESAMPLING_POLICIES, validate_irradiance_resampling
 
 _NO_DEFAULT = object()
+# Checks several keys share: a growth or discount rate, and an efficiency.
+_RATE = number(minimum=-1, min_exclusive=True)
+_EFFICIENCY = number(minimum=0, maximum=1, min_exclusive=True)
+_EFFICIENCY_OR_NONE = number(minimum=0, maximum=1, min_exclusive=True, allow_none=True)
 _TRACKING_MODES = ("fixed", "single_axis", "dual_axis")
 
 
@@ -161,6 +169,10 @@ class AppConfigField:
     ``summary`` is the key's ``"section.name"`` place in the resolved-config
     summary that ``breos validate-config`` and ``breos run --dry-run`` print.
     Only the runner sections have none.
+
+    ``check`` checks the value on its own, after the ``normalizer``; it is
+    not written back. Rules that span keys stay in the validators. A
+    :func:`~breos.config_schema.choice` check also gives ``cli_choices``.
     """
 
     default: Any = _NO_DEFAULT
@@ -172,6 +184,11 @@ class AppConfigField:
     doc: str = ""
     default_doc: str | None = None
     summary: str | None = None
+    check: Checker | None = None
+
+    def __post_init__(self) -> None:
+        if self.cli_choices is None and isinstance(self.check, Choice):
+            object.__setattr__(self, "cli_choices", self.check.options)
 
     @property
     def has_default(self) -> bool:
@@ -244,6 +261,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.n_modules",
     ),
     "annual_consumption_kwh": AppConfigField(
+        check=number(minimum=0, min_exclusive=True),
         cli_flags=("--annual-consumption-kwh",),
         cli_type=float,
         cli_help="Annual electricity demand in kWh.",
@@ -252,6 +270,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="load.annual_consumption_kwh",
     ),
     "battery_kwh": AppConfigField(
+        check=number(minimum=0),
         default=0.0,
         cli_flags=("--battery-kwh",),
         cli_type=float,
@@ -263,6 +282,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.capacity_kwh",
     ),
     "battery_max_charge_power_w": AppConfigField(
+        check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--battery-max-charge-power-w",),
         cli_type=float,
@@ -271,6 +291,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.max_charge_power_w",
     ),
     "battery_max_discharge_power_w": AppConfigField(
+        check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--battery-max-discharge-power-w",),
         cli_type=float,
@@ -279,6 +300,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.max_discharge_power_w",
     ),
     "battery_power_limit_c_rate": AppConfigField(
+        check=number(minimum=0, min_exclusive=True, allow_none=True),
         default=None,
         cli_flags=("--battery-power-limit-c-rate",),
         cli_type=float,
@@ -295,9 +317,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.power_limit_c_rate",
     ),
     "battery_coupling": AppConfigField(
+        check=choice(BATTERY_COUPLINGS, case_insensitive=False),
         default="dc",
         cli_flags=("--battery-coupling",),
-        cli_choices=("dc", "ac"),
         cli_help="Battery topology: 'dc' for a hybrid inverter, 'ac' for a battery inverter of its own.",
         doc=(
             '`"dc"` for a hybrid inverter that PV and the battery share, `"ac"` for a battery with its own '
@@ -307,6 +329,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.coupling",
     ),
     "battery_inverter_ac_rating_kw": AppConfigField(
+        check=number(minimum=0, min_exclusive=True, allow_none=True),
         default=None,
         cli_flags=("--battery-inverter-ac-rating-kw",),
         cli_type=float,
@@ -318,6 +341,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.inverter_ac_rating_kw",
     ),
     "battery_inverter_kw_per_kwh": AppConfigField(
+        check=number(minimum=0, min_exclusive=True, allow_none=True),
         default=None,
         cli_flags=("--battery-inverter-kw-per-kwh",),
         cli_type=float,
@@ -329,6 +353,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.inverter_kw_per_kwh",
     ),
     "battery_inverter_efficiency": AppConfigField(
+        check=_EFFICIENCY_OR_NONE,
         default=None,
         cli_flags=("--battery-inverter-efficiency",),
         cli_type=float,
@@ -341,6 +366,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.inverter_efficiency",
     ),
     "battery_replacement_cost": AppConfigField(
+        check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--battery-replacement-cost",),
         cli_type=float,
@@ -450,6 +476,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="load.load_profile_unit",
     ),
     "tilt": AppConfigField(
+        check=number(minimum=0, maximum=90, allow_none=True),
         default=None,
         cli_flags=("--tilt",),
         cli_type=float,
@@ -458,6 +485,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.tilt",
     ),
     "azimuth": AppConfigField(
+        check=number(minimum=0, maximum=360, allow_none=True),
         default=None,
         cli_flags=("--azimuth",),
         cli_type=float,
@@ -521,9 +549,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="simulation.irradiance_resampling",
     ),
     "solar_position": AppConfigField(
+        check=choice(SOLAR_POSITION_METHODS),
         default=DEFAULT_SOLAR_POSITION,
         cli_flags=("--solar-position",),
-        cli_choices=tuple(SOLAR_POSITION_METHODS),
         cli_help=(
             "Where within each timestep the sun position is evaluated. 'mid-interval' matches "
             "PVWatts/SAM for interval-averaged weather (default: interval-start)."
@@ -536,9 +564,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.solar_position",
     ),
     "iam_model": AppConfigField(
+        check=choice(IAM_MODELS),
         default=DEFAULT_IAM_MODEL,
         cli_flags=("--iam-model",),
-        cli_choices=tuple(IAM_MODELS),
         cli_help="Beam incidence-angle modifier (default: ashrae, historical compatibility).",
         doc=(
             'Beam incidence-angle modifier. `"physical"` uses pvlib\'s physical optics model and `"martin_ruiz"` its '
@@ -547,9 +575,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.iam_model",
     ),
     "diffuse_iam": AppConfigField(
+        check=choice(DIFFUSE_IAM_METHODS),
         default=DEFAULT_DIFFUSE_IAM,
         cli_flags=("--diffuse-iam",),
-        cli_choices=tuple(DIFFUSE_IAM_METHODS),
         cli_help=(
             "Whether IAM is also applied to the diffuse POA components. 'marion' weighs sky- and "
             "ground-diffuse with the view-factor-integrated selected IAM model (default: none, beam-only)."
@@ -562,9 +590,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.diffuse_iam",
     ),
     "temperature_model": AppConfigField(
+        check=choice(TEMPERATURE_MODELS),
         default=DEFAULT_TEMPERATURE_MODEL,
         cli_flags=("--temperature-model",),
-        cli_choices=tuple(TEMPERATURE_MODELS),
         cli_help=(
             "Cell-temperature model / mounting preset. The pvsyst-* and sapm-* presets use documented "
             "mounting coefficients; noct-sam additionally requires sourced module NOCT and efficiency "
@@ -618,9 +646,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.gcr",
     ),
     "resolution": AppConfigField(
+        check=choice(RESOLUTIONS, case_insensitive=False),
         default="h",
         cli_flags=("--resolution",),
-        cli_choices=("h", "15min"),
         cli_help="Simulation time resolution.",
         doc="Simulation time resolution",
         summary="load.resolution",
@@ -634,6 +662,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.projection_years",
     ),
     "inflation_rate": AppConfigField(
+        check=_RATE,
         default=DEFAULT_INFLATION_RATE,
         cli_flags=("--inflation-rate",),
         cli_type=float,
@@ -650,6 +679,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     # ADR 0003 E2: separate escalators. None inherits inflation_rate, so a run
     # that sets none of them prices exactly as before.
     "import_price_escalation": AppConfigField(
+        check=optional(_RATE),
         default=None,
         cli_flags=("--import-price-escalation",),
         cli_type=float,
@@ -658,6 +688,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.import_price_escalation",
     ),
     "om_escalation": AppConfigField(
+        check=optional(_RATE),
         default=None,
         cli_flags=("--om-escalation",),
         cli_type=float,
@@ -666,6 +697,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.om_escalation",
     ),
     "replacement_cost_learning": AppConfigField(
+        check=number(minimum=0, maximum=1, max_exclusive=True),
         default=0.0,
         cli_flags=("--replacement-cost-learning",),
         cli_type=float,
@@ -677,6 +709,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.replacement_cost_learning",
     ),
     "sell_price_inflation": AppConfigField(
+        check=number(minimum=-1, maximum=1, min_exclusive=True, max_exclusive=True),
         default=0.0,
         cli_flags=("--sell-price-inflation",),
         cli_type=float,
@@ -685,6 +718,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.sell_price_inflation",
     ),
     "export_emissions_factor_gco2_kwh": AppConfigField(
+        check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--export-emissions-factor-gco2-kwh",),
         cli_type=float,
@@ -696,6 +730,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="emissions.export_factor_gco2_kwh",
     ),
     "discount_rate": AppConfigField(
+        check=_RATE,
         default=DEFAULT_DISCOUNT_RATE,
         cli_flags=("--discount-rate",),
         cli_type=float,
@@ -704,6 +739,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.discount_rate",
     ),
     "pv_degradation_rate": AppConfigField(
+        check=number(minimum=0, maximum=1, max_exclusive=True),
         default=0.005,
         cli_flags=("--pv-degradation-rate",),
         cli_type=float,
@@ -728,7 +764,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "degradation_engine": AppConfigField(
         default="native",
         cli_flags=("--degradation-engine",),
-        cli_choices=("native", "blast"),
+        cli_choices=DEGRADATION_ENGINES,
         cli_help="Battery degradation engine (default: native Naumann/Lam).",
         doc='`"native"` keeps Naumann/Lam; `"blast"` opts into a vendored BLAST cell model',
         summary="battery.degradation_engine",
@@ -741,6 +777,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.blast_model",
     ),
     "inverter_efficiency": AppConfigField(
+        check=_EFFICIENCY,
         default=0.96,
         cli_flags=("--inverter-efficiency",),
         cli_type=float,
@@ -760,6 +797,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="inverter.loading_ratio",
     ),
     "inverter_ac_rating_kw": AppConfigField(
+        check=number(minimum=0, min_exclusive=True, allow_none=True),
         default=None,
         cli_flags=("--inverter-ac-rating-kw",),
         cli_type=float,
@@ -804,6 +842,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="inverter.ac_cable",
     ),
     "electrical_fidelity": AppConfigField(
+        check=choice(("aggregate", "string"), case_insensitive=False),
         default="aggregate",
         normalizer=_lower,
         doc=(
@@ -973,6 +1012,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.max_soc",
     ),
     "battery_eol_percentage": AppConfigField(
+        check=number(minimum=0, maximum=1, min_exclusive=True, max_exclusive=True),
         default=DEFAULT_EOL_PERCENTAGE,
         doc=(
             "SOH fraction at which the battery reaches end of life: it is replaced, or, when the replacement is "
@@ -981,6 +1021,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.eol_percentage",
     ),
     "battery_enable_replacement": AppConfigField(
+        check=boolean,
         default=True,
         doc=(
             "Whether a battery that reaches end of life is replaced. `false` skips every replacement: the battery "
@@ -990,6 +1031,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.enable_replacement",
     ),
     "battery_allow_terminal_replacement": AppConfigField(
+        check=boolean,
         default=True,
         doc=(
             "Whether a battery that reaches end of life in the horizon's final degradation period is replaced. That "
@@ -1001,6 +1043,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.allow_terminal_replacement",
     ),
     "battery_replacement_min_remaining_years": AppConfigField(
+        check=number(minimum=0),
         default=0.0,
         doc=(
             "Fewest project years a replacement battery must have left to serve. A battery that reaches end of "
@@ -1012,6 +1055,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.replacement_min_remaining_years",
     ),
     "battery_skipped_replacement_action": AppConfigField(
+        check=choice(SKIPPED_REPLACEMENT_ACTIONS, case_insensitive=False),
         default="keep",
         doc=(
             'What happens to a battery whose end-of-life replacement is skipped. `"keep"` leaves it in service '
@@ -1024,6 +1068,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.skipped_replacement_action",
     ),
     "battery_rte": AppConfigField(
+        check=_EFFICIENCY_OR_NONE,
         default=None,
         doc=(
             "Battery round-trip efficiency, split evenly across charge and discharge; `None` is "
@@ -1032,6 +1077,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.round_trip_efficiency",
     ),
     "enable_resistance_fade": AppConfigField(
+        check=boolean,
         default=False,
         doc=(
             "Grow the battery's internal resistance as it ages (Naumann), which lowers its charge and discharge "
@@ -1841,9 +1887,17 @@ def _validate_bifacial_settings(
     _validate_gcr(gcr, prefix)
 
 
+def _check_fields(cfg: Mapping[str, Any]) -> None:
+    """Check each top-level value its registry entry gives a ``check`` for; values are left as given."""
+    for key, field in APP_CONFIG_FIELDS.items():
+        if field.check is not None and key in cfg:
+            field.check(cfg[key], key)
+
+
 def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
     """Validate user-facing App config before resolving derived values."""
     has_arrays = _validate_structure_and_location(cfg)
+    _check_fields(cfg)
     _validate_pv_and_inverter(cfg, has_arrays)
     _validate_time_and_weather(cfg)
     _validate_economics(cfg)
@@ -1871,8 +1925,6 @@ def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
     _validate_smart_charging(cfg, tariff_spec)
     _validate_reachable_gcr(cfg, has_arrays)
     _electrical_inputs(cfg)
-    if cfg["electrical_fidelity"] not in ("aggregate", "string"):
-        raise ValueError(f"'electrical_fidelity' must be 'aggregate' or 'string', got {cfg['electrical_fidelity']!r}")
     if cfg["electrical_fidelity"] == "string" and cfg.get("inverters") is None:
         raise ValueError("electrical_fidelity = 'string' needs 'inverters', 'pv_strings' and 'electrical_environment'")
     return tariff_spec
@@ -2793,19 +2845,9 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
                 f"'pv_arrays[{shaded.index(False)}]' has no 'shading' table. Give every array a shading table "
                 "or strings with module_shading, or none; an unshaded array takes an all-zero table"
             )
-    if _finite_real(cfg["annual_consumption_kwh"], "annual_consumption_kwh") <= 0:
-        raise ValueError("'annual_consumption_kwh' must be > 0")
-    if _finite_real(cfg["battery_kwh"], "battery_kwh") < 0:
-        raise ValueError("'battery_kwh' must be >= 0")
     if cfg.get("pv_module") is not None and cfg["pv_module"] not in MODULES:
         available = ", ".join(sorted(MODULES))
         raise ValueError(f"Unknown PV module {cfg['pv_module']!r}. Available: {available}")
-    tilt = cfg.get("tilt")
-    if tilt is not None and not 0 <= _finite_real(tilt, "tilt") <= 90:
-        raise ValueError("'tilt' must be between 0 and 90")
-    azimuth = cfg.get("azimuth")
-    if azimuth is not None and not 0 <= _finite_real(azimuth, "azimuth") <= 360:
-        raise ValueError("'azimuth' must be between 0 and 360")
     if not has_arrays:
         _validate_bifacial_settings(
             cfg["bifacial_model"],
@@ -2814,12 +2856,11 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
             cfg["pvrow_height"],
             cfg["pvrow_pitch"],
         )
-    if not 0 < _finite_real(cfg["inverter_efficiency"], "inverter_efficiency") <= 1:
-        raise ValueError("'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
-    if cfg["inverter_ac_rating_kw"] is not None:
-        if _finite_real(cfg["inverter_ac_rating_kw"], "inverter_ac_rating_kw") <= 0:
-            raise ValueError("'inverter_ac_rating_kw' must be > 0")
-    elif cfg.get("inverters") is None and _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
+    if (
+        cfg["inverter_ac_rating_kw"] is None
+        and cfg.get("inverters") is None
+        and _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0
+    ):
         raise ValueError("'inverter_loading_ratio' must be > 0")
 
 
@@ -2847,27 +2888,11 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
     """Validate simulation horizon, resolution, and solar-model selections."""
     if not _is_int(cfg["projection_years"]) or cfg["projection_years"] < 1:
         raise ValueError("'projection_years' must be >= 1")
-    if not 0 <= _finite_real(cfg["pv_degradation_rate"], "pv_degradation_rate") < 1:
-        raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
-    if cfg["resolution"] not in ("h", "15min"):
-        raise ValueError("'resolution' must be 'h' or '15min'")
     cfg["irradiance_resampling"] = validate_irradiance_resampling(cfg["irradiance_resampling"])
     _validate_weather_source(cfg)
     _validate_weather_file(cfg)
     cfg["horizon_profile"] = normalise_horizon_profile(cfg["horizon_profile"])
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
-    if not is_known_model(cfg["solar_position"], SOLAR_POSITION_METHODS):
-        valid = ", ".join(SOLAR_POSITION_METHODS)
-        raise ValueError(f"'solar_position' must be one of: {valid}")
-    if not is_known_model(cfg["iam_model"], IAM_MODELS):
-        valid = ", ".join(IAM_MODELS)
-        raise ValueError(f"'iam_model' must be one of: {valid}")
-    if not is_known_model(cfg["diffuse_iam"], DIFFUSE_IAM_METHODS):
-        valid = ", ".join(DIFFUSE_IAM_METHODS)
-        raise ValueError(f"'diffuse_iam' must be one of: {valid}")
-    if not is_known_model(cfg["temperature_model"], TEMPERATURE_MODELS):
-        valid = ", ".join(TEMPERATURE_MODELS)
-        raise ValueError(f"'temperature_model' must be one of: {valid}")
     cfg["bifacial_model"] = normalise_model_name(cfg["bifacial_model"])
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
@@ -2924,16 +2949,6 @@ def _validate_weather_file(cfg: dict[str, Any]) -> None:
 
 def _validate_economics(cfg: dict[str, Any]) -> None:
     """Validate financial and optional export-emissions inputs."""
-    for key in ("inflation_rate", "discount_rate"):
-        if _finite_real(cfg[key], key) <= -1:
-            raise ValueError(f"'{key}' must be greater than -1")
-    if not -1 < _finite_real(cfg["sell_price_inflation"], "sell_price_inflation") < 1:
-        raise ValueError("'sell_price_inflation' must be between -1 and 1 (exclusive)")
-    for key in ("import_price_escalation", "om_escalation"):
-        if cfg[key] is not None and _finite_real(cfg[key], key) <= -1:
-            raise ValueError(f"'{key}' must be greater than -1 when configured")
-    if not 0 <= _finite_real(cfg["replacement_cost_learning"], "replacement_cost_learning") < 1:
-        raise ValueError("'replacement_cost_learning' must be at least 0 and below 1")
     if cfg["terminal_value"] is not None:
         cfg["terminal_value"] = TERMINAL_VALUE_TABLE.validate(cfg["terminal_value"])
         cfg["terminal_value"].setdefault("basis", "none")
@@ -2941,9 +2956,6 @@ def _validate_economics(cfg: dict[str, Any]) -> None:
         COSTS_TABLE.validate(cfg["costs"])
     if cfg["currency"] is not None:
         cfg["currency"] = check_currency(cfg["currency"], "currency")
-    if cfg["export_emissions_factor_gco2_kwh"] is not None:
-        if _finite_real(cfg["export_emissions_factor_gco2_kwh"], "export_emissions_factor_gco2_kwh") < 0:
-            raise ValueError("'export_emissions_factor_gco2_kwh' must be >= 0 when configured")
 
 
 def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
@@ -2952,16 +2964,7 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     max_soc = _finite_real(cfg["battery_max_soc"], "battery_max_soc")
     if not 0 <= min_soc < max_soc <= 1:
         raise ValueError("'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1")
-    if not 0 < _finite_real(cfg["battery_eol_percentage"], "battery_eol_percentage") < 1:
-        raise ValueError("'battery_eol_percentage' must be between 0 and 1 (exclusive)")
-    if cfg["battery_rte"] is not None and not 0 < _finite_real(cfg["battery_rte"], "battery_rte") <= 1:
-        raise ValueError("'battery_rte' must be between 0 (exclusive) and 1 (inclusive)")
-    for key in ("battery_max_charge_power_w", "battery_max_discharge_power_w"):
-        if cfg[key] is not None and _finite_real(cfg[key], key) < 0:
-            raise ValueError(f"'{key}' must be >= 0 when configured")
     if cfg["battery_power_limit_c_rate"] is not None:
-        if _finite_real(cfg["battery_power_limit_c_rate"], "battery_power_limit_c_rate") <= 0:
-            raise ValueError("'battery_power_limit_c_rate' must be greater than 0 when configured")
         if cfg["battery_max_charge_power_w"] is not None or cfg["battery_max_discharge_power_w"] is not None:
             raise ValueError(
                 "'battery_power_limit_c_rate' limits both directions from capacity; do not also "
@@ -2995,22 +2998,7 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
             f"'{start.year}-01-01'. To simulate part of the year, set [period]."
         )
 
-    if not isinstance(cfg["enable_resistance_fade"], bool):
-        raise TypeError("'enable_resistance_fade' must be a boolean")
-    if not isinstance(cfg["battery_enable_replacement"], bool):
-        raise TypeError("'battery_enable_replacement' must be a boolean")
-    if not isinstance(cfg["battery_allow_terminal_replacement"], bool):
-        raise TypeError("'battery_allow_terminal_replacement' must be a boolean")
-    min_remaining = _finite_real(
-        cfg["battery_replacement_min_remaining_years"], "battery_replacement_min_remaining_years"
-    )
-    if min_remaining < 0:
-        raise ValueError("'battery_replacement_min_remaining_years' must be >= 0")
-    cfg["battery_replacement_min_remaining_years"] = min_remaining
-    if cfg["battery_skipped_replacement_action"] not in SKIPPED_REPLACEMENT_ACTIONS:
-        raise ValueError(
-            f"'battery_skipped_replacement_action' must be one of: {', '.join(SKIPPED_REPLACEMENT_ACTIONS)}"
-        )
+    cfg["battery_replacement_min_remaining_years"] = float(cfg["battery_replacement_min_remaining_years"])
 
     # Validated through breos.execution so App and Monte Carlo cannot disagree
     # about which names exist. The default stays "python": the compiled path is
@@ -3018,8 +3006,8 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     cfg["execution_backend"] = validate_execution_backend(cfg["execution_backend"])
 
     degradation_engine = str(cfg["degradation_engine"]).strip().lower()
-    if degradation_engine not in ("native", "blast"):
-        raise ValueError("'degradation_engine' must be one of: native, blast")
+    if degradation_engine not in DEGRADATION_ENGINES:
+        raise ValueError(f"'degradation_engine' must be one of: {', '.join(DEGRADATION_ENGINES)}")
     cfg["degradation_engine"] = degradation_engine
 
     if degradation_engine == "blast":
@@ -3054,8 +3042,6 @@ def _validate_battery_coupling(cfg: dict[str, Any]) -> None:
     costs resolve, since a preset could carry it.
     """
     coupling = cfg["battery_coupling"]
-    if coupling not in BATTERY_COUPLINGS:
-        raise ValueError(f"'battery_coupling' must be one of: {', '.join(BATTERY_COUPLINGS)}; got {coupling!r}")
     if coupling == "dc":
         given = [key for key in BATTERY_INVERTER_KEYS if cfg[key] is not None]
         if "battery_inverter_cost_per_kw" in (cfg.get("costs") or {}):
@@ -3065,17 +3051,12 @@ def _validate_battery_coupling(cfg: dict[str, Any]) -> None:
                 f"{', '.join(repr(key) for key in given)} describe an AC-coupled battery's own inverter; "
                 "set battery_coupling = 'ac' or remove them"
             )
-    for key in ("battery_inverter_ac_rating_kw", "battery_inverter_kw_per_kwh"):
-        if cfg[key] is not None and _finite_real(cfg[key], key) <= 0:
-            raise ValueError(f"'{key}' must be > 0")
     if cfg["battery_inverter_ac_rating_kw"] is not None and cfg["battery_inverter_kw_per_kwh"] is not None:
         raise ValueError(
             "'battery_inverter_ac_rating_kw' and 'battery_inverter_kw_per_kwh' both size the battery inverter; "
             "set one of them"
         )
     efficiency = cfg["battery_inverter_efficiency"]
-    if efficiency is not None and not 0 < _finite_real(efficiency, "battery_inverter_efficiency") <= 1:
-        raise ValueError("'battery_inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
     if coupling == "ac" and config_has_battery(cfg):
         if cfg["battery_inverter_ac_rating_kw"] is None and cfg["battery_inverter_kw_per_kwh"] is None:
             raise ValueError(
@@ -3087,9 +3068,6 @@ def _validate_battery_coupling(cfg: dict[str, Any]) -> None:
                 "An AC-coupled battery needs 'battery_inverter_efficiency', from a source for the product; "
                 "it has no default"
             )
-    replacement = cfg["battery_replacement_cost"]
-    if replacement is not None and _finite_real(replacement, "battery_replacement_cost") < 0:
-        raise ValueError("'battery_replacement_cost' must be >= 0")
 
 
 def battery_inverter_ac_capacity_w(cfg: Mapping[str, Any]) -> float | None:

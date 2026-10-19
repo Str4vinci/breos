@@ -92,10 +92,10 @@ def test_provenance_records_the_rates_used():
 @pytest.mark.parametrize(
     ("config", "message"),
     [
-        ({"import_price_escalation": -1.0}, "'import_price_escalation' must be greater than -1"),
-        ({"om_escalation": -2}, "'om_escalation' must be greater than -1"),
-        ({"replacement_cost_learning": 1.0}, "'replacement_cost_learning' must be at least 0 and below 1"),
-        ({"replacement_cost_learning": -0.1}, "'replacement_cost_learning' must be at least 0 and below 1"),
+        ({"import_price_escalation": -1.0}, "'import_price_escalation' must be > -1"),
+        ({"om_escalation": -2}, "'om_escalation' must be > -1"),
+        ({"replacement_cost_learning": 1.0}, "'replacement_cost_learning' must be between 0 and 1"),
+        ({"replacement_cost_learning": -0.1}, "'replacement_cost_learning' must be between 0 and 1"),
     ],
 )
 def test_escalator_config_is_checked(config, message):

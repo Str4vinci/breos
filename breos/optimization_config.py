@@ -22,6 +22,7 @@ from dataclasses import fields
 from typing import Any, Mapping
 
 from breos.app_config import (
+    APP_CONFIG_FIELDS,
     COSTS_TABLE,
     DEFAULTS,
     INDOOR_MODEL_TABLE,
@@ -44,7 +45,7 @@ from breos.config_schema import (
     table,
     text,
 )
-from breos.constants import BATTERY_COUPLINGS, SKIPPED_REPLACEMENT_ACTIONS
+from breos.constants import BATTERY_COUPLINGS, DEGRADATION_ENGINES, RESOLUTIONS, SKIPPED_REPLACEMENT_ACTIONS
 from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import PV_MODEL_CONFIG_KEYS
@@ -101,6 +102,14 @@ def _integer(minimum: int) -> Any:
             raise ValueError(f"'{where}' must be >= {minimum}")
         return int(value)
 
+    return check
+
+
+def _app_check(key: str) -> Any:
+    """The App's own check of the top-level key ``key``."""
+    check = APP_CONFIG_FIELDS[key].check
+    if check is None:
+        raise KeyError(f"App config key {key!r} has no check")
     return check
 
 
@@ -240,7 +249,7 @@ BATTERY_TABLE = TableSpec(
         # Read by the battery temperature builder, which checks it.
         "temperature": anything,
         "indoor_model": _optional(table(INDOOR_MODEL_TABLE)),
-        "degradation_engine": choice(("native", "blast")),
+        "degradation_engine": choice(DEGRADATION_ENGINES),
         "blast_model": anything,
         "replacement_cost": anything,
         "enable_replacement": boolean,
@@ -265,13 +274,13 @@ BATTERY_INVERTER_KEYS = ("inverter_ac_rating_kw", "inverter_kw_per_kwh", "invert
 FINANCIALS_TABLE = TableSpec(
     "financials",
     keys={
-        # The App's bounds (app_config._validate_economics).
-        "inflation_rate": number(minimum=-1, min_exclusive=True),
-        "sell_price_inflation": number(minimum=-1, maximum=1, min_exclusive=True, max_exclusive=True),
-        "import_price_escalation": _optional(number(minimum=-1, min_exclusive=True)),
-        "om_escalation": _optional(number(minimum=-1, min_exclusive=True)),
-        "replacement_cost_learning": _optional(number(minimum=0, maximum=1, max_exclusive=True)),
-        "discount_rate": number(minimum=-1, min_exclusive=True),
+        # The App's checks, so the two refuse the same rates.
+        **{
+            key: _app_check(key)
+            for key in ("inflation_rate", "sell_price_inflation", "import_price_escalation", "om_escalation")
+        },
+        "replacement_cost_learning": _optional(_app_check("replacement_cost_learning")),
+        "discount_rate": _app_check("discount_rate"),
         "project_lifespan": _integer(1),
         "pv_degradation_rate": number(minimum=0, maximum=1, max_exclusive=True),
         # Flat prices, used when [costs] does not set them.
@@ -342,7 +351,7 @@ OPTIMIZATION_TABLE = TableSpec(
 SIMULATION_TABLE = TableSpec(
     "simulation",
     keys={
-        "resolution": choice(("h", "15min")),
+        "resolution": choice(RESOLUTIONS),
         "years_projection": _integer(1),
         "irradiance_resampling": choice(IRRADIANCE_RESAMPLING_POLICIES),
     },
