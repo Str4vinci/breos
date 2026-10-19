@@ -16,37 +16,7 @@ from breos.electrical import (
     check_topology,
 )
 from breos.equipment import InverterSpec, MpptSpec
-from breos.pv_modules import PVModuleParams
-
-# Trina Solar TSM-450NEG9R.28, datasheet TSM_EN_2024_C, PDF page 2:
-# https://static.trinasolar.com/sites/default/files/Datasheet_Vertex%20S%2B_NEG9R.28_EN_2024_C_web.pdf
-TRINA_450 = PVModuleParams(
-    Mpp=450,
-    Vmp=44.6,
-    Imp=10.09,
-    Voc=52.9,
-    Isc=10.74,
-    T_Pmax_pct=-0.29,
-    T_Voc_pct=-0.24,
-    T_Isc_pct=0.04,
-    N_Cells=144,
-    Max_System_Voltage=1500,
-)
-
-# Jinko Solar JKM440N-54HL4R-B, datasheet EU-JKM430-455N-54HL4R-B-G3-EN, PDF page 2:
-# https://jinkosolar.eu/wp-content/uploads/EU-JKM430-455N-54HL4R-B-G3-EN.pdf
-# The maximum system voltage was not transcribed, so it stays unknown here.
-JINKO_440 = PVModuleParams(
-    Mpp=440,
-    Vmp=32.99,
-    Imp=13.34,
-    Voc=39.57,
-    Isc=13.8,
-    T_Pmax_pct=-0.29,
-    T_Voc_pct=-0.25,
-    T_Isc_pct=0.045,
-    N_Cells=108,
-)
+from tests.sourced_modules import JINKO_440, TRINA_450
 
 # Huawei SUN2000-4KTL-L1, European datasheet, PDF page 2:
 # https://solar.huawei.com/admin/asset/v1/pro/view/fc2bdc8911d8462dbc1a88dae66314cc.pdf
@@ -181,11 +151,6 @@ def test_short_strings_cannot_track_or_restart_on_the_hottest_days():
     assert check.status == "warning"
     assert {f.limit_field for f in check.findings} == {"min_mppt_voltage_v", "startup_voltage_v"}
     assert check_topology([(TRINA_450, 3)], [HUAWEI_4KTL], [PVString(0, 0, 0, 3)], PORTO).findings == ()
-
-
-def test_the_vmp_coefficient_is_derived_when_unpublished():
-    assert TRINA_450.T_Vmp_pct_effective == pytest.approx(-0.33)
-    assert replace(TRINA_450, T_Vmp_pct=-0.25).T_Vmp_pct_effective == -0.25
 
 
 def test_asymmetric_inputs_apply_their_own_limits():
@@ -409,8 +374,11 @@ def test_coefficient_overrides_drive_the_check_as_they_drive_energy():
         [(hot, 6)], [replace(HUAWEI_4KTL, mppts=(MpptSpec(20, 23, 2),))], [PVString(0, 0, 0, 3, parallel=2)], PORTO
     )
     assert next(f for f in two.findings if f.code == "isc_above_mppt_limit").value == pytest.approx(2 * 11.54)
-    # The derived Vmp coefficient follows the overrides too.
+    # The Vmp coefficient is derived when unpublished, follows the overrides
+    # too, and a published value wins.
+    assert TRINA_450.T_Vmp_pct_effective == pytest.approx(-0.33)
     assert replace(TRINA_450, gamma_pmp=-0.35).T_Vmp_pct_effective == pytest.approx(-0.35 - 0.04)
+    assert replace(TRINA_450, T_Vmp_pct=-0.25).T_Vmp_pct_effective == -0.25
 
 
 def test_each_exceeded_voltage_ceiling_is_reported_with_its_source():

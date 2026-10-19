@@ -4,7 +4,6 @@ The AC dispatch step itself is tested in ``test_ac_dispatch.py``.
 """
 
 import dataclasses
-import importlib.util
 
 import numpy as np
 import pandas as pd
@@ -13,14 +12,9 @@ import pytest
 import breos.battery as battery_module
 from breos._dispatch import _LEDGER_COLUMNS, LEDGER_SCHEMA_VERSION
 from breos.battery import BatteryConfig, simulate_energy_balance, simulate_energy_balance_summary
+from tests.backend_parity import BACKENDS
 from tests.energy_conservation import assert_energy_conservation
 
-_BACKENDS = [
-    "python",
-    pytest.param(
-        "numba", marks=pytest.mark.skipif(not importlib.util.find_spec("numba"), reason="numba not installed")
-    ),
-]
 AC_COLUMNS = ("PV_AC_To_Battery", "PV_Charge_Conversion_Loss")
 
 
@@ -68,6 +62,10 @@ def test_ac_coupling_accepts_and_coerces_its_inverter():
     assert isinstance(config.battery_inverter_ac_capacity_w, float)
     assert config.battery_inverter_efficiency == 0.5
     assert _ac().battery_inverter_ac_capacity_w is None
+    # The boundaries are accepted: a zero rating and a lossless inverter.
+    boundaries = _ac(battery_inverter_ac_capacity_w=0.0, battery_inverter_efficiency=1.0)
+    assert boundaries.battery_inverter_ac_capacity_w == 0.0
+    assert boundaries.battery_inverter_efficiency == 1.0
 
 
 @pytest.mark.parametrize("coupling", ["DC", "hybrid", "", None, True])
@@ -111,16 +109,6 @@ def test_ledger_adds_the_pv_ac_charge_columns_after_the_grid_charge_columns():
     assert LEDGER_SCHEMA_VERSION == "3.1"
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_dc_coupled_battery_writes_the_ac_columns_as_zero(backend):
-    config = BatteryConfig(nominal_energy_wh=10000.0, inverter_ac_capacity_w=3000.0)
-    frame = _simulate(config, backend)
-    assert frame["PV_DC_To_Battery"].sum() > 0.0
-    for column in AC_COLUMNS:
-        assert (frame[column] == 0.0).all()
-    assert_energy_conservation(frame, config)
-
-
 def test_ac_coupling_without_a_battery_is_the_pv_only_run():
     # ADR 0004 P2 at the BatteryConfig level: no battery, no battery inverter.
     dc = _simulate(BatteryConfig(nominal_energy_wh=0.0, inverter_ac_capacity_w=3000.0))
@@ -128,12 +116,6 @@ def test_ac_coupling_without_a_battery_is_the_pv_only_run():
     pd.testing.assert_frame_equal(dc, ac, check_exact=True)
     for column in AC_COLUMNS:
         assert (ac[column] == 0.0).all()
-
-
-def test_ac_coupling_accepts_the_boundaries():
-    config = _ac(battery_inverter_ac_capacity_w=0.0, battery_inverter_efficiency=1.0)
-    assert config.battery_inverter_ac_capacity_w == 0.0
-    assert config.battery_inverter_efficiency == 1.0
 
 
 def test_pv_only_summary_and_retired_pack_report_the_ac_columns_as_zero():
@@ -148,7 +130,7 @@ def test_pv_only_summary_and_retired_pack_report_the_ac_columns_as_zero():
         assert (retired[column] == 0.0).all()
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_every_buffer_row_is_written_whatever_the_buffer_held(monkeypatch, backend):
     # The matrix comes from np.empty: poison it so an unwritten row shows.
     original = battery_module._ResultBuffers.__init__
@@ -162,5 +144,8 @@ def test_every_buffer_row_is_written_whatever_the_buffer_held(monkeypatch, backe
     frame = _simulate(config, backend)
     numeric = frame.drop(columns=["Datetime"]).to_numpy(dtype=float)
     assert np.isfinite(numeric).all()
+    # A DC-coupled battery that does charge writes the AC-charge columns as zero.
+    assert frame["PV_DC_To_Battery"].sum() > 0.0
     for column in AC_COLUMNS:
         assert (frame[column] == 0.0).all()
+    assert_energy_conservation(frame, config)

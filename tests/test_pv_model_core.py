@@ -95,68 +95,59 @@ def test_front_irradiance_kernel_dispatches_selected_beam_and_marion_models(iam_
     np.testing.assert_allclose(actual, expected)
 
 
+# Shared cell-temperature kernel inputs: night, part load and full sun.
+POA_GLOBAL = np.array([0.0, 400.0, 900.0])
+TEMP_AIR = np.array([15.0, 20.0, 28.0])
+WIND_SPEED = np.array([1.0, 2.0, 4.0])
+_PVSYST = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"]
+_SAPM = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"]
+
+
 @pytest.mark.parametrize(
-    ("model", "pvlib_function", "parameters"),
+    ("model", "kwargs", "pvlib_function", "parameters"),
     [
-        ("faiman", pvlib.temperature.faiman, {}),
-        (
+        pytest.param("faiman", {}, pvlib.temperature.faiman, {}, id="faiman"),
+        # Metadata-less modules take BREOS's representative c-Si value, not
+        # pvlib's legacy 0.1 default.
+        pytest.param(
             "pvsyst-semi-integrated",
+            {},
             pvlib.temperature.pvsyst_cell,
-            {
-                **pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"]["semi_integrated"],
-                # Metadata-less modules take BREOS's representative c-Si value,
-                # not pvlib's legacy 0.1 default.
-                "module_efficiency": DEFAULT_MODULE_EFFICIENCY,
-            },
+            {**_PVSYST["semi_integrated"], "module_efficiency": DEFAULT_MODULE_EFFICIENCY},
+            id="pvsyst-semi-integrated",
+        ),
+        pytest.param(
+            "pvsyst-freestanding",
+            {},
+            pvlib.temperature.pvsyst_cell,
+            {**_PVSYST["freestanding"], "module_efficiency": DEFAULT_MODULE_EFFICIENCY},
+            id="pvsyst-freestanding",
+        ),
+        # A sourced module efficiency replaces the default.
+        pytest.param(
+            "pvsyst-semi-integrated",
+            {"module_efficiency": 0.213},
+            pvlib.temperature.pvsyst_cell,
+            {**_PVSYST["semi_integrated"], "module_efficiency": 0.213},
+            id="pvsyst-semi-integrated-sourced-efficiency",
+        ),
+        *(
+            pytest.param(f"sapm-{key.replace('_', '-')}", {}, pvlib.temperature.sapm_cell, _SAPM[key], id=f"sapm-{key}")
+            for key in (
+                "open_rack_glass_glass",
+                "close_mount_glass_glass",
+                "open_rack_glass_polymer",
+                "insulated_back_glass_polymer",
+            )
         ),
     ],
 )
-def test_temperature_kernel_preserves_pvlib_dispatch(model, pvlib_function, parameters):
-    poa_global = np.array([0.0, 400.0, 900.0])
-    temp_air = np.array([15.0, 20.0, 28.0])
-    wind_speed = np.array([1.0, 2.0, 4.0])
-    expected = pvlib_function(poa_global, temp_air, wind_speed, **parameters)
+def test_temperature_kernel_preserves_pvlib_dispatch(model, kwargs, pvlib_function, parameters):
+    expected = pvlib_function(POA_GLOBAL, TEMP_AIR, WIND_SPEED, **parameters)
 
-    actual = calculate_cell_temperature(poa_global, temp_air, wind_speed, model)
+    actual = calculate_cell_temperature(POA_GLOBAL, TEMP_AIR, WIND_SPEED, model, **kwargs)
 
     np.testing.assert_allclose(actual, expected)
-
-
-def test_pvsyst_kernel_uses_sourced_module_efficiency():
-    poa_global = np.array([0.0, 400.0, 900.0])
-    temp_air = np.array([15.0, 20.0, 28.0])
-    wind_speed = np.array([1.0, 2.0, 4.0])
-    params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"]["semi_integrated"]
-
-    actual = calculate_cell_temperature(
-        poa_global,
-        temp_air,
-        wind_speed,
-        "pvsyst-semi-integrated",
-        module_efficiency=0.213,
-    )
-    expected = pvlib.temperature.pvsyst_cell(
-        poa_global,
-        temp_air,
-        wind_speed,
-        module_efficiency=0.213,
-        **params,
-    )
-
-    np.testing.assert_allclose(actual, expected)
-
-
-def test_pvsyst_kernel_falls_back_to_breos_default_efficiency():
-    """A metadata-less module must not silently inherit pvlib's legacy 0.1."""
-    poa_global = np.array([0.0, 400.0, 900.0])
-    temp_air = np.array([15.0, 20.0, 28.0])
-    wind_speed = np.array([1.0, 2.0, 4.0])
-    params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"]["freestanding"]
-
-    actual = calculate_cell_temperature(poa_global, temp_air, wind_speed, "pvsyst-freestanding")
-
-    pvlib_legacy_default = pvlib.temperature.pvsyst_cell(poa_global, temp_air, wind_speed, **params)
-    assert actual[-1] < pvlib_legacy_default[-1]
 
 
 def test_breos_default_efficiency_is_representative_of_modern_silicon():
@@ -175,31 +166,8 @@ def test_pvsyst_rejects_nonphysical_supplied_module_efficiency():
         )
 
 
-@pytest.mark.parametrize(
-    ("model", "parameter_key"),
-    [
-        ("sapm-open-rack-glass-glass", "open_rack_glass_glass"),
-        ("sapm-close-mount-glass-glass", "close_mount_glass_glass"),
-        ("sapm-open-rack-glass-polymer", "open_rack_glass_polymer"),
-        ("sapm-insulated-back-glass-polymer", "insulated_back_glass_polymer"),
-    ],
-)
-def test_sapm_temperature_presets_dispatch_to_matching_pvlib_parameters(model, parameter_key):
-    poa_global = np.array([0.0, 400.0, 900.0])
-    temp_air = np.array([15.0, 20.0, 28.0])
-    wind_speed = np.array([1.0, 2.0, 4.0])
-    params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"][parameter_key]
-
-    actual = calculate_cell_temperature(poa_global, temp_air, wind_speed, model)
-    expected = pvlib.temperature.sapm_cell(poa_global, temp_air, wind_speed, **params)
-
-    np.testing.assert_allclose(actual, expected)
-
-
 def test_noct_sam_requires_complete_sourced_module_metadata():
-    poa_global = np.array([0.0, 400.0, 900.0])
-    temp_air = np.array([15.0, 20.0, 28.0])
-    wind_speed = np.array([1.0, 2.0, 4.0])
+    poa_global, temp_air, wind_speed = POA_GLOBAL, TEMP_AIR, WIND_SPEED
 
     with pytest.raises(ValueError, match="Module_Efficiency"):
         calculate_cell_temperature(poa_global, temp_air, wind_speed, "noct-sam")

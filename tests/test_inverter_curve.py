@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity")
 
 from harness import build  # noqa: E402
 
+from tests.backend_parity import assert_frames_bit_equal  # noqa: E402
 from tests.energy_conservation import assert_energy_conservation  # noqa: E402
 
 # A synthetic curve with the CEC shape, for the tests only: three voltages,
@@ -129,6 +130,13 @@ def test_the_pv_only_path_runs_the_kernels_conversion():
     for i in range(len(dc)):
         expected = _dc_ac(float(dc[i]), NAMEPLATE * derate[i], 0.96, 1.0, 2.0, *conversion.kernel_arguments(1.0))
         assert (ac[i], loss[i], clipped[i]) == expected
+    # A per-step row replaces the conversion's own row, step by step.
+    rows = np.linspace(0.0, 2.0, 211)
+    ac, loss, clipped = _calculate_dc_ac_power_arrays(dc, NAMEPLATE, 0.96, conversion=conversion, curve_rows=rows)
+    curve_ac, curve_eff, _, cable_k = conversion.kernel_arguments(1.0)
+    for i in range(len(dc)):
+        expected = _dc_ac(float(dc[i]), NAMEPLATE, 0.96, 1.0, 2.0, curve_ac, curve_eff, float(rows[i]), cable_k)
+        assert (ac[i], loss[i], clipped[i]) == expected
     # Without either, the vectorised PVWatts path is unchanged.
     plain = _calculate_dc_ac_power_arrays(dc, NAMEPLATE, 0.96)
     np.testing.assert_array_equal(
@@ -136,7 +144,7 @@ def test_the_pv_only_path_runs_the_kernels_conversion():
     )
 
 
-def _battery_run(backend: str, *, conversion=None, derate: bool = False):
+def _battery_run(backend: str, *, conversion=None, derate: bool = False, rows: bool = False):
     pv, load, temp, cfg, _ = build("discharge_limited", "h")
     cfg = {**cfg, "inverter_conversion": conversion}
     derating = None
@@ -152,6 +160,7 @@ def _battery_run(backend: str, *, conversion=None, derate: bool = False):
         temperature_series=temp,
         execution_backend=backend,
         inverter_ac_derate=derating,
+        inverter_curve_row=_rows(pv) if rows else None,
     )[0]
 
 
@@ -167,27 +176,20 @@ def test_a_battery_run_uses_the_curve_cable_and_derating():
     np.testing.assert_allclose(dc, curved["PV_DC_To_Inverter"], atol=1e-6)
 
 
-def test_numba_matches_python_with_the_curve_cable_and_derating():
+def test_numba_matches_python_with_the_curve_cable_derating_step_rows_and_night_consumption():
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
-    conversion = _conversion(1.3, cable_k=2e-6)
-    python = _battery_run("python", conversion=conversion, derate=True)
-    compiled = _battery_run("numba", conversion=conversion, derate=True)
-    for column in python.columns:
-        if column == "Datetime":
-            continue
-        assert np.array_equal(python[column].to_numpy(), compiled[column].to_numpy()), column
+    conversion = InverterConversion(
+        np.asarray(CURVE.output_fraction), np.asarray(CURVE.efficiency), 1.3, 2e-6, night_consumption_w=7.5
+    )
+    python = _battery_run("python", conversion=conversion, derate=True, rows=True)
+    compiled = _battery_run("numba", conversion=conversion, derate=True, rows=True)
+    assert python["Inverter_Night_Consumption"].sum() > 0.0
+    assert_frames_bit_equal(python, compiled)
 
 
 @pytest.fixture
-def curved_inverter_config():
-    from breos.pv_modules import MODULES, PVModuleParams
-
-    # Trina Solar TSM-450NEG9R.28, datasheet TSM_EN_2024_C, PDF page 2.
-    MODULES["Trina_TSM_450NEG9R28"] = PVModuleParams(
-        Mpp=450, Vmp=44.6, Imp=10.09, Voc=52.9, Isc=10.74,
-        T_Pmax_pct=-0.29, T_Voc_pct=-0.24, T_Isc_pct=0.04, N_Cells=144, Max_System_Voltage=1500,
-    )  # fmt: skip
-    yield {
+def curved_inverter_config(trina):
+    return {
         "location": "porto",
         "annual_consumption_kwh": 4000,
         "pv_arrays": [{"modules": 14, "module": "Trina_TSM_450NEG9R28", "tilt": 30, "azimuth": 180}],
@@ -213,7 +215,6 @@ def curved_inverter_config():
         "electrical_environment": {"min_design_temp_c": -5, "max_ambient_temp_c": 40},
         "ac_cable": {"length_m": 25, "cross_section_mm2": 4, "phases": 1, "voltage_v": 230},
     }
-    del MODULES["Trina_TSM_450NEG9R28"]
 
 
 def test_app_runs_the_curve_cable_and_derating_and_reports_them(curved_inverter_config, _patch_weather):
@@ -257,17 +258,6 @@ def test_a_curve_with_several_inverters_needs_string_level_energy(curved_inverte
 
 
 # -- per-step operating voltage and night consumption ---------------------------------------------
-
-
-def test_the_pv_only_path_reads_each_steps_row():
-    dc = np.linspace(0.0, 6500.0, 211)
-    rows = np.linspace(0.0, 2.0, 211)
-    conversion = _conversion(1.0, cable_k=1e-6)
-    ac, loss, clipped = _calculate_dc_ac_power_arrays(dc, NAMEPLATE, 0.96, conversion=conversion, curve_rows=rows)
-    curve_ac, curve_eff, _, cable_k = conversion.kernel_arguments(1.0)
-    for i in range(len(dc)):
-        expected = _dc_ac(float(dc[i]), NAMEPLATE, 0.96, 1.0, 2.0, curve_ac, curve_eff, float(rows[i]), cable_k)
-        assert (ac[i], loss[i], clipped[i]) == expected
 
 
 def _rows(pv: pd.Series) -> pd.Series:
@@ -347,19 +337,6 @@ def replace_conversion(config: BatteryConfig, conversion: InverterConversion) ->
     from dataclasses import replace
 
     return replace(config, inverter_conversion=conversion)
-
-
-def test_numba_matches_python_with_each_steps_row_and_the_night_consumption():
-    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
-    conversion = InverterConversion(
-        np.asarray(CURVE.output_fraction), np.asarray(CURVE.efficiency), 1.0, 2e-6, night_consumption_w=7.5
-    )
-    python = _night_run("python", conversion=conversion, rows=True)
-    compiled = _night_run("numba", conversion=conversion, rows=True)
-    for column in python.columns:
-        if column == "Datetime":
-            continue
-        assert np.array_equal(python[column].to_numpy(), compiled[column].to_numpy()), column
 
 
 def test_night_consumption_is_validated():

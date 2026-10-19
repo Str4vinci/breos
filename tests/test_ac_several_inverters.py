@@ -1,7 +1,5 @@
 """An AC-coupled battery beside several PV inverters (ADR 0004 M8, step 5)."""
 
-import importlib.util
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,16 +8,11 @@ from breos import App
 from breos.app_config import resolve_app_config
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.inverter import InverterConversion, InverterUnits
+from tests.backend_parity import BACKENDS
 from tests.energy_conservation import assert_energy_conservation
 from tests.test_inverter_curve import CURVE
-from tests.test_multi_inverter import TWO_INVERTERS, timeseries, trina  # noqa: F401
+from tests.test_multi_inverter import TWO_INVERTERS, timeseries
 
-_BACKENDS = [
-    "python",
-    pytest.param(
-        "numba", marks=pytest.mark.skipif(not importlib.util.find_spec("numba"), reason="numba not installed")
-    ),
-]
 # The PV inverters' side of the ledger, which the battery must not change (P1).
 PV_SIDE = (
     "PV_DC",
@@ -109,7 +102,7 @@ def _ac(**overrides):
 
 @pytest.mark.parametrize("rich", [False, True], ids=["plain", "curve-derate-idle"])
 @pytest.mark.parametrize("freq", ["h", "15min"])
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_each_pv_inverter_converts_as_without_the_battery(backend, freq, rich):
     pv_only = _run(BatteryConfig(nominal_energy_wh=0.0), backend, freq, rich)
     battery = _ac()
@@ -134,7 +127,7 @@ def test_both_backends_agree_beside_several_inverters():
 
 
 @pytest.mark.parametrize("freq", ["h", "15min"])
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_a_retired_pack_is_the_pv_only_run_with_several_inverters(backend, freq):
     pv_only = _run(BatteryConfig(nominal_energy_wh=0.0), backend, freq, rich=True)
     retired = _run(_ac(), backend, freq, rich=True, battery_retired=True, initial_energy_wh=0.0)
@@ -155,7 +148,7 @@ def _retired_steps(frame):
 
 @pytest.mark.parametrize("units", [True, False], ids=["several", "one"])
 @pytest.mark.parametrize("freq", ["h", "15min"])
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_a_pack_retired_during_the_span_reads_the_pv_chain(backend, freq, units):
     # The retired steps read the span's PV chain, with several inverters or one.
     pv, load, temperature, inverter_units = _inputs(3, freq, rich=True)
@@ -185,7 +178,7 @@ def test_a_dc_coupled_battery_beside_several_inverters_is_refused():
 # --- the App ------------------------------------------------------------------
 
 
-def test_an_app_run_keeps_each_inverters_pv_and_charges_the_battery(trina, _patch_weather):  # noqa: F811
+def test_an_app_run_keeps_each_inverters_pv_and_charges_the_battery(trina, _patch_weather):
     pv_only, _ = timeseries(TWO_INVERTERS)
     frame, result = timeseries({**TWO_INVERTERS, **APP_AC})
     for column in PV_SIDE:
@@ -197,7 +190,7 @@ def test_an_app_run_keeps_each_inverters_pv_and_charges_the_battery(trina, _patc
 
 
 def test_two_project_years_carry_the_battery_and_discharge_only_runs(
-    trina,  # noqa: F811
+    trina,
     _patch_weather,
     monkeypatch,
 ):
@@ -243,7 +236,7 @@ def test_two_project_years_carry_the_battery_and_discharge_only_runs(
     assert rows == pv_only["pv_loss_waterfall"]["inverter"]["inverters"]
 
 
-def test_fixed_target_runs_and_the_planner_is_refused_beside_several_inverters(trina, _patch_weather):  # noqa: F811
+def test_fixed_target_runs_and_the_planner_is_refused_beside_several_inverters(trina, _patch_weather):
     fixed = {
         "mode": "fixed_target",
         "target_usable_fraction": 0.5,
@@ -257,13 +250,13 @@ def test_fixed_target_runs_and_the_planner_is_refused_beside_several_inverters(t
         resolve_app_config({**TWO_INVERTERS, **APP_AC, "tariff": TOU, "smart_charging": planner})
 
 
-def test_app_refuses_a_dc_battery_beside_several_inverters(trina):  # noqa: F811
+def test_app_refuses_a_dc_battery_beside_several_inverters(trina):
     with pytest.raises(ValueError, match="a battery beside 2 inverters must be AC-coupled"):
         resolve_app_config({**TWO_INVERTERS, "battery_kwh": 5.0})
     App({**TWO_INVERTERS, **APP_AC})
 
 
-def test_the_daily_target_oracle_refuses_several_inverters_in_both_planning_modes(trina, _patch_weather):  # noqa: F811
+def test_the_daily_target_oracle_refuses_several_inverters_in_both_planning_modes(trina, _patch_weather):
     from tools.oracles.daily_target_dp import YearlyDailyTargetPlanner, daily_target_problem
     from tools.oracles.replay import prepare_replay
 

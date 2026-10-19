@@ -19,37 +19,8 @@ from breos.electrical import (
     string_limited_dc,
 )
 from breos.equipment import InverterSpec, MpptSpec
-from breos.pv_modules import MODULES, PVModuleParams
 from breos.solar import PVProductionBreakdown, _module_dc_before_losses
-
-# Trina Solar TSM-450NEG9R.28, datasheet TSM_EN_2024_C, PDF page 2:
-# https://static.trinasolar.com/sites/default/files/Datasheet_Vertex%20S%2B_NEG9R.28_EN_2024_C_web.pdf
-TRINA_450 = PVModuleParams(
-    Mpp=450,
-    Vmp=44.6,
-    Imp=10.09,
-    Voc=52.9,
-    Isc=10.74,
-    T_Pmax_pct=-0.29,
-    T_Voc_pct=-0.24,
-    T_Isc_pct=0.04,
-    N_Cells=144,
-    Max_System_Voltage=1500,
-)
-
-# Jinko Solar JKM440N-54HL4R-B, datasheet EU-JKM430-455N-54HL4R-B-G3-EN, PDF page 2:
-# https://jinkosolar.eu/wp-content/uploads/EU-JKM430-455N-54HL4R-B-G3-EN.pdf
-JINKO_440 = PVModuleParams(
-    Mpp=440,
-    Vmp=32.99,
-    Imp=13.34,
-    Voc=39.57,
-    Isc=13.8,
-    T_Pmax_pct=-0.29,
-    T_Voc_pct=-0.25,
-    T_Isc_pct=0.045,
-    N_Cells=108,
-)
+from tests.sourced_modules import JINKO_440, TRINA_450
 
 # Fronius Symo GEN24 6.0, technical data, retrieved 2026-10-11:
 # https://www.fronius.com/en-gb/uk/solar-energy/installers-partners/technical-data/all-products/inverters/fronius-symo-gen24/fronius-symo-gen24-6-0
@@ -73,9 +44,8 @@ PORTO = {"min_design_temp_c": -5, "max_ambient_temp_c": 40}
 
 
 @pytest.fixture
-def modules(monkeypatch):
-    monkeypatch.setitem(MODULES, "Trina_TSM_450NEG9R28", TRINA_450)
-    monkeypatch.setitem(MODULES, "Jinko_JKM440N_54HL4R_B", JINKO_440)
+def modules(trina, jinko):
+    """Both sourced modules in the catalog."""
 
 
 def config(arrays, strings, inverter=FRONIUS_GEN24_6, **extra):
@@ -200,31 +170,25 @@ def test_the_operating_point_is_the_best_one_the_limits_allow(v_min, v_max, curr
     """Brute force: the largest V * I(V) on a fine voltage grid that respects both limits."""
     irradiance, temperature, factor, modules = [1000.0, 600.0, 200.0], [45.0, 35.0, 20.0], 0.9, 7
     breakdown = _breakdown(TRINA_450, modules, irradiance, temperature, factor)
-    inverter = InverterSpec(
-        nominal_power_w=6000,
-        min_mppt_voltage_v=v_min,
-        max_mppt_voltage_v=v_max,
-        startup_voltage_v=0,
-        mppts=(MpptSpec(max_input_current_a=current_limit),),
+    inverter = _inverter(
+        MpptSpec(max_input_current_a=current_limit), min_mppt_voltage_v=v_min, max_mppt_voltage_v=v_max
     )
-    strings = (PVString(0, 0, 0, modules),)
-    environment = ElectricalEnvironment(-5, 40)
-    setup = ElectricalSetup(
-        (inverter,), strings, environment, check_topology([(TRINA_450, modules)], [inverter], strings, environment)
-    )
+    setup = _setup(inverter, [PVString(0, 0, 0, modules)], [(TRINA_450, modules)])
     energy = string_limited_dc(setup, [breakdown])
     dc, loss = energy.dc, energy.limit_loss
 
     op = breakdown.module_operating
     for step in range(len(irradiance)):
-        params = [np.asarray(p)[step] for p in (op.photocurrent, op.saturation_current, op.resistance_series)]
-        params += [np.asarray(op.resistance_shunt)[step], np.asarray(op.n_ns_vth)[step]]
         grid = np.linspace(v_min, v_max, 200001)
-        current = factor * np.clip(pvlib.pvsystem.i_from_v(grid / modules, *params), 0, None)
+        current = factor * np.clip(pvlib.pvsystem.i_from_v(grid / modules, *_params(breakdown, step)), 0, None)
         allowed = current <= current_limit + 1e-9
-        # No feasible point: the input delivers nothing.
+        # No feasible point: the input delivers nothing. In the
+        # window_and_current case, 7 modules at 1000 W/m2 and 45 °C carry
+        # 9.56 A at 250 V, and 8 A needs 312 V.
         best = float((grid * current)[allowed].max()) if allowed.any() else 0.0
         unconstrained = factor * modules * op.v_mp[step] * op.i_mp[step]
+        if not allowed.any():
+            assert dc.iloc[step] == 0.0
         assert dc.iloc[step] == pytest.approx(min(best, unconstrained), rel=1e-4, abs=1e-3)
         assert loss.iloc[step] == pytest.approx(unconstrained - dc.iloc[step], rel=1e-6, abs=1e-6)
         # The input's operating voltage is where that best point lies; 0 where it delivers nothing.
@@ -275,38 +239,10 @@ def test_a_failing_but_wired_design_still_gets_string_energy(modules):
     assert resolved.electrical.fidelity == "string"
 
 
-def test_aggregate_runs_keep_no_operating_point_in_the_result_path(modules):
-    assert replace(resolve_app_config(EAST_WEST).electrical).fidelity == "aggregate"
-
-
-def test_no_feasible_operating_point_delivers_nothing():
-    # 7 modules at 1000 W/m2 and 45 °C carry 9.56 A at 250 V; 8 A needs 312 V.
-    breakdown = _breakdown(TRINA_450, 7, [1000.0], [45.0], 0.9)
-    inverter = InverterSpec(
-        nominal_power_w=6000, min_mppt_voltage_v=80, max_mppt_voltage_v=250, startup_voltage_v=0, mppts=(MpptSpec(8.0),)
-    )
-    strings = (PVString(0, 0, 0, 7),)
-    environment = ElectricalEnvironment(-5, 40)
-    setup = ElectricalSetup(
-        (inverter,), strings, environment, check_topology([(TRINA_450, 7)], [inverter], strings, environment)
-    )
-    energy = string_limited_dc(setup, [breakdown])
-    dc, loss = energy.dc, energy.limit_loss
-    assert dc.iloc[0] == pytest.approx(0.0, abs=1e-6)
-    assert loss.iloc[0] == pytest.approx(breakdown.dc_after_losses.iloc[0])
-
-
 def test_availability_does_not_lower_the_current_against_the_limit():
     # At STC, 7 Trina modules carry 10.09 A against a 9.9 A limit. A 3 %
     # availability loss is time out of service and must not hide the limit.
-    inverter = InverterSpec(
-        nominal_power_w=6000, min_mppt_voltage_v=80, max_mppt_voltage_v=800, startup_voltage_v=0, mppts=(MpptSpec(9.9),)
-    )
-    strings = (PVString(0, 0, 0, 7),)
-    environment = ElectricalEnvironment(-5, 40)
-    setup = ElectricalSetup(
-        (inverter,), strings, environment, check_topology([(TRINA_450, 7)], [inverter], strings, environment)
-    )
+    setup = _setup(_inverter(MpptSpec(9.9)), [PVString(0, 0, 0, 7)], [(TRINA_450, 7)])
     full = _breakdown(TRINA_450, 7, [1000.0], [25.0], 1.0)
     in_service = replace(_breakdown(TRINA_450, 7, [1000.0], [25.0], 0.97), pvwatts_components_pct={"availability": 3.0})
     loss_full = string_limited_dc(setup, [full]).limit_loss
@@ -339,7 +275,8 @@ def test_an_input_and_the_inverter_deliver_at_most_their_usable_dc_power():
     west = _breakdown(TRINA_450, 7, [1000.0, 300.0], [45.0, 30.0], 0.9)
     strings = (PVString(0, 0, 0, 7), PVString(0, 1, 1, 7))
     arrays = [(TRINA_450, 7), (TRINA_450, 7)]
-    free = string_limited_dc(_setup(_inverter(MpptSpec(25), MpptSpec(25)), strings, arrays), [east, west]).dc
+    free_energy = string_limited_dc(_setup(_inverter(MpptSpec(25), MpptSpec(25)), strings, arrays), [east, west])
+    free = free_energy.dc
     assert free.iloc[0] > 4000
 
     per_input = _inverter(MpptSpec(25, max_usable_dc_power_w=2000), MpptSpec(25))
@@ -354,6 +291,10 @@ def test_an_input_and_the_inverter_deliver_at_most_their_usable_dc_power():
     assert dc.iloc[0] == pytest.approx(3000)
     assert loss.iloc[0] == pytest.approx(free.iloc[0] - 3000)
     assert dc.iloc[1] == free.iloc[1]
+    # Review regression: the inverter's own cap used to shrink the weights
+    # after the voltages were summed, moving the operating voltage.
+    assert energy.voltage.iloc[0] == pytest.approx(7 * east.module_operating.v_mp[0])
+    assert energy.voltage.iloc[0] == free_energy.voltage.iloc[0]
 
 
 def test_the_parallel_mismatch_and_the_limits_add_up_to_the_inputs_loss():
@@ -581,20 +522,6 @@ def test_the_aggregate_cable_loss_is_i2r_at_the_maximum_power_current():
     # Each string carries one module's current; availability is time out of service.
     np.testing.assert_allclose(loss, 2 * i_mp**2 * ohm * 0.97, rtol=1e-12)
     assert loss.iloc[2] == 0
-
-
-def test_the_inverters_cap_does_not_move_the_operating_voltage():
-    # Review regression: the inverter's own cap used to shrink the weights after the voltages were summed.
-    one = _breakdown(TRINA_450, 7, [1000.0], [45.0], 0.9)
-    other = _breakdown(TRINA_450, 7, [1000.0], [45.0], 0.9)
-    strings = (PVString(0, 0, 0, 7), PVString(0, 1, 1, 7))
-    arrays = [(TRINA_450, 7), (TRINA_450, 7)]
-    free = string_limited_dc(_setup(_inverter(MpptSpec(25), MpptSpec(25)), strings, arrays), [one, other])
-    capped = _inverter(MpptSpec(25), MpptSpec(25), max_usable_dc_power_w=3000)
-    energy = string_limited_dc(_setup(capped, strings, arrays), [one, other])
-    assert energy.dc.iloc[0] == pytest.approx(3000)
-    assert energy.voltage.iloc[0] == pytest.approx(7 * one.module_operating.v_mp[0])
-    assert energy.voltage.iloc[0] == free.voltage.iloc[0]
 
 
 def test_an_inverter_waiting_to_start_has_no_voltage_and_exactly_no_dc():

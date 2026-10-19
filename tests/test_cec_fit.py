@@ -32,38 +32,6 @@ def _mpp_at(params, alpha_sc, irradiance, temp):
         return max_power_point(*cec, method="newton")
 
 
-class TestFitShape:
-    def test_returns_six_finite_physical_parameters(self):
-        params = fit_cec_params(**_KNOWN)
-        assert all(np.isfinite(v) for v in params)
-        i_l, i_o, r_s, r_sh, a, adjust = params
-        assert i_l > 0
-        assert i_o > 0
-        assert r_s > 0
-        assert r_sh > 0
-        assert a > 0
-        assert -100.0 <= adjust <= 100.0
-
-
-class TestParameterRecovery:
-    def test_recovers_stc_maximum_power_point(self):
-        params = fit_cec_params(**_KNOWN)
-        mpp = _mpp_at(params, _KNOWN["alpha_sc"], 1000.0, 25.0)
-        # The fit constrains the model to pass through the datasheet MPP at STC.
-        assert mpp["p_mp"] == pytest.approx(_KNOWN["Vmp"] * _KNOWN["Imp"], rel=2e-3)
-        assert mpp["v_mp"] == pytest.approx(_KNOWN["Vmp"], rel=5e-3)
-        assert mpp["i_mp"] == pytest.approx(_KNOWN["Imp"], rel=5e-3)
-
-    def test_open_circuit_current_is_essentially_zero(self):
-        i_l, i_o, r_s, r_sh, a, adjust = fit_cec_params(**_KNOWN)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            cec = calcparams_cec(1000.0, 25.0, _KNOWN["alpha_sc"], a, i_l, i_o, r_sh, r_s, adjust)
-            current_at_voc = float(i_from_v(_KNOWN["Voc"], *cec))
-        # Dobos validity check: current at Voc must be well under 1.5% of Imp.
-        assert abs(current_at_voc) < 0.015 * _KNOWN["Imp"]
-
-
 class TestGammaMatch:
     def test_modeled_gamma_matches_datasheet(self):
         i_l, i_o, r_s, r_sh, a, adjust = fit_cec_params(**_KNOWN)
@@ -98,28 +66,52 @@ class TestGammaMatch:
         assert _passes_iv_checks((i_l, i_o, r_s, r_sh, a), _KNOWN["Vmp"], _KNOWN["Imp"], _KNOWN["Voc"])
 
 
-class TestCatalogModules:
-    @pytest.mark.parametrize("name", list(MODULES))
-    def test_every_bundled_module_fits_and_recovers_mpp(self, name):
-        module = get_module(name)
-        params = fit_cec_params(
-            celltype=module.celltype,
-            Vmp=module.Vmp,
-            Imp=module.Imp,
-            Voc=module.Voc,
-            Isc=module.Isc,
-            alpha_sc=module.alpha_sc,
-            beta_voc=module.beta_voc,
-            gamma_pmp=module.gamma_pmp_effective,
-            cells_in_series=module.N_Cells,
-        )
+def _catalog_inputs(name):
+    module = get_module(name)
+    return dict(
+        celltype=module.celltype,
+        Vmp=module.Vmp,
+        Imp=module.Imp,
+        Voc=module.Voc,
+        Isc=module.Isc,
+        alpha_sc=module.alpha_sc,
+        beta_voc=module.beta_voc,
+        gamma_pmp=module.gamma_pmp_effective,
+        cells_in_series=module.N_Cells,
+    )
+
+
+class TestDatasheetFits:
+    @pytest.mark.parametrize(
+        "inputs",
+        [pytest.param(_KNOWN, id="known_datasheet"), *(pytest.param(_catalog_inputs(n), id=n) for n in MODULES)],
+    )
+    def test_each_datasheet_fits_a_physical_curve_through_its_mpp(self, inputs):
+        params = fit_cec_params(**inputs)
         assert all(np.isfinite(v) for v in params)
+        i_l, i_o, r_s, r_sh, a, adjust = params
+        assert i_l > 0
+        assert i_o > 0
+        assert r_s > 0
+        assert r_sh > 0
+        assert a > 0
+        assert -100.0 <= adjust <= 100.0
 
-        mpp = _mpp_at(params, module.alpha_sc, 1000.0, 25.0)
-        assert mpp["p_mp"] == pytest.approx(module.Vmp * module.Imp, rel=2e-3)
+        # The fit constrains the model to pass through the datasheet MPP at STC.
+        mpp = _mpp_at(params, inputs["alpha_sc"], 1000.0, 25.0)
+        assert mpp["p_mp"] == pytest.approx(inputs["Vmp"] * inputs["Imp"], rel=2e-3)
+        assert mpp["v_mp"] == pytest.approx(inputs["Vmp"], rel=5e-3)
+        assert mpp["i_mp"] == pytest.approx(inputs["Imp"], rel=5e-3)
 
-        gamma = _modeled_gamma(_to_unknowns(*params[:5]), params[5], module.alpha_sc)
-        assert gamma == pytest.approx(module.gamma_pmp_effective, abs=5e-3)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            cec = calcparams_cec(1000.0, 25.0, inputs["alpha_sc"], a, i_l, i_o, r_sh, r_s, adjust)
+            current_at_voc = float(i_from_v(inputs["Voc"], *cec))
+        # Dobos validity check: current at Voc must be well under 1.5% of Imp.
+        assert abs(current_at_voc) < 0.015 * inputs["Imp"]
+
+        gamma = _modeled_gamma(_to_unknowns(*params[:5]), adjust, inputs["alpha_sc"])
+        assert gamma == pytest.approx(inputs["gamma_pmp"], abs=5e-3)
 
 
 # Frozen datasheet inputs and fit_cec_sam results (PySAM 7.1.1) of CEC database

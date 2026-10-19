@@ -119,21 +119,6 @@ def test_apply_horizon_zeros_beam_and_removes_direct_horizontal_from_ghi():
     assert horizon["profile"]["diffuse_shading"] == "not_modeled"
 
 
-def test_apply_horizon_uses_mid_interval_solar_position():
-    weather = _weather()
-    location = _FakeLocation(_solar_position(weather.index))
-
-    apply_terrain_horizon_profile(
-        weather,
-        location,
-        [[0, 10], [180, 0]],
-        freq="h",
-        solar_position="mid-interval",
-    )
-
-    assert location.requested_times.equals(weather.index + pd.Timedelta(minutes=30))
-
-
 @pytest.mark.parametrize("status", ["applied", "unknown"])
 def test_apply_horizon_refuses_double_counting_or_unknown_weather(status):
     weather = _weather(status)
@@ -193,33 +178,59 @@ def test_active_profile_requests_unshaded_pvgis_weather(monkeypatch, tmp_path):
     assert loaded.attrs["breos_weather_metadata"]["horizon"]["provider"] == "breos"
 
 
+def _clear_sky_weather(names=("ghi", "dni", "dhi")) -> pd.DataFrame:
+    """Two clear June days in Porto, with an unapplied horizon."""
+    idx = pd.date_range("2025-06-01", periods=48, freq="h", tz="UTC")
+    weather = Location(41.15, -8.61).get_clearsky(idx)[["ghi", "dni", "dhi"]]
+    weather.columns = list(names)
+    weather.attrs["breos_weather_metadata"] = {"horizon": {"status": "not_applied"}}
+    return weather
+
+
 def _interval_weather(radiation: dict) -> pd.DataFrame:
     weather = _weather()
     weather.attrs["breos_weather_metadata"].update(radiation)
     return weather
 
 
-def test_apply_horizon_reads_solar_position_timing_from_weather_metadata():
-    # The offset table itself is tested in test_weather.py; one case shows
-    # shading reads it.
-    weather = _interval_weather({"radiation_time_basis": "instant", "irradiance_time_offset_hours": 0.1714})
-    location = _FakeLocation(_solar_position(weather.index))
-
-    shaded = apply_terrain_horizon_profile(weather, location, [[0, 10], [180, 0]], freq="h", solar_position="weather")
-
-    assert location.requested_times.equals(weather.index + pd.Timedelta(hours=0.1714))
-    assert shaded.attrs["breos_weather_metadata"]["horizon"]["profile"]["solar_position"] == "weather"
-
-
-def test_shading_and_transposition_evaluate_the_weather_sun_at_the_same_times():
-    weather = _interval_weather({"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"})
+@pytest.mark.parametrize(
+    ("radiation", "offset"),
+    [
+        pytest.param(
+            {"radiation_time_basis": "instant", "irradiance_time_offset_hours": 0.1714},
+            pd.Timedelta(hours=0.1714),
+            id="instant-provider-offset",
+        ),
+        pytest.param(
+            {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"},
+            pd.Timedelta(minutes=30),
+            id="left-labelled-mean",
+        ),
+        pytest.param(
+            {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"},
+            pd.Timedelta(minutes=-30),
+            id="right-labelled-mean",
+        ),
+    ],
+)
+def test_shading_and_transposition_evaluate_the_weather_sun_at_the_same_times(radiation, offset):
+    # The offset table itself is tested in test_weather.py; these cases show
+    # shading and transposition both read it, at the same absolute times.
+    weather = _interval_weather(radiation)
     shading_location = _FakeLocation(_solar_position(weather.index))
     transposition_location = _FakeLocation(_solar_position(weather.index))
 
-    apply_terrain_horizon_profile(weather, shading_location, [[0, 10], [180, 0]], freq="h", solar_position="weather")
-    _prepare_solarpos_and_weather(weather, transposition_location, "h", solar_position="weather")
+    shaded = apply_terrain_horizon_profile(
+        weather, shading_location, [[0, 10], [180, 0]], freq="h", solar_position="weather"
+    )
+    labels, solar_position, _weather = _prepare_solarpos_and_weather(
+        weather, transposition_location, "h", solar_position="weather"
+    )
 
-    assert shading_location.requested_times.equals(transposition_location.requested_times)
+    assert shading_location.requested_times.equals(weather.index + offset)
+    assert transposition_location.requested_times.equals(weather.index + offset)
+    assert solar_position.index.equals(labels)
+    assert shaded.attrs["breos_weather_metadata"]["horizon"]["profile"]["solar_position"] == "weather"
 
 
 def test_apply_horizon_weather_timing_requires_radiation_metadata():
@@ -267,13 +278,11 @@ def test_interval_mean_beam_is_kept_while_the_mid_interval_sun_clears_the_horizo
 )
 def test_apply_horizon_finds_irradiance_under_every_recognised_name(names):
     # BREOS's own Open-Meteo fetch returns the long names; they used to raise (#211).
-    idx = pd.date_range("2025-06-01", periods=48, freq="h", tz="UTC")
-    location = Location(41.15, -8.61)
-    weather = location.get_clearsky(idx)[["ghi", "dni", "dhi"]]
-    weather.columns = list(names)
-    weather.attrs["breos_weather_metadata"] = {"horizon": {"status": "not_applied"}}
+    weather = _clear_sky_weather(names)
 
-    shaded = apply_terrain_horizon_profile(weather, location, [[0, 30], [90, 30], [180, 30], [270, 30]], freq="h")
+    shaded = apply_terrain_horizon_profile(
+        weather, Location(41.15, -8.61), [[0, 30], [90, 30], [180, 30], [270, 30]], freq="h"
+    )
 
     assert list(shaded.columns) == list(names)
     assert shaded.attrs["breos_weather_metadata"]["horizon"]["profile"]["shaded_timesteps"] == 9
@@ -290,26 +299,28 @@ def test_apply_horizon_names_every_accepted_column_when_one_is_missing():
 
 
 @pytest.mark.parametrize(
-    ("dtype", "shaded_ghi_dtype"),
+    ("dtype", "shaded_ghi_dtype", "missing_row"),
     [
-        ("float64", "float64"),
-        ("float32", "float32"),
-        ("int64", "float64"),
-        ("Float64", "Float64"),
-        ("Float32", "Float32"),
-        ("Int64", "Float64"),
+        ("float64", "float64", False),
+        ("float32", "float32", False),
+        ("int64", "float64", False),
+        ("Float64", "Float64", False),
+        ("Float32", "Float32", False),
+        ("Int64", "Float64", False),
+        # A missing nullable value stays missing in the shaded output.
+        pytest.param("Float64", "Float64", True, id="Float64-missing-row"),
     ],
 )
-def test_apply_horizon_accepts_any_numeric_irradiance_dtype(dtype, shaded_ghi_dtype):
+def test_apply_horizon_accepts_any_numeric_irradiance_dtype(dtype, shaded_ghi_dtype, missing_row):
     # Open-Meteo returns float32 columns; pandas 3 refused to write the
     # float64 shaded GHI into them (#210). Nullable pandas dtypes must not
     # reach NumPy's astype, which cannot interpret them.
-    idx = pd.date_range("2025-06-01", periods=48, freq="h", tz="UTC")
     location = Location(41.15, -8.61)
-    reference = location.get_clearsky(idx)[["ghi", "dni", "dhi"]]
-    reference.attrs["breos_weather_metadata"] = {"horizon": {"status": "not_applied"}}
+    reference = _clear_sky_weather()
     weather = reference.round().astype(dtype)
     weather.attrs = reference.attrs
+    if missing_row:
+        weather.iloc[12, :] = pd.NA
     profile = [[0, 30], [90, 30], [180, 30], [270, 30]]
 
     shaded = apply_terrain_horizon_profile(weather, location, profile, freq="h")
@@ -318,26 +329,8 @@ def test_apply_horizon_accepts_any_numeric_irradiance_dtype(dtype, shaded_ghi_dt
     assert shaded.attrs["breos_weather_metadata"]["horizon"]["profile"]["shaded_timesteps"] == 9
     assert shaded["dhi"].dtype == weather["dhi"].dtype
     assert shaded["ghi"].dtype == shaded_ghi_dtype
-    np.testing.assert_allclose(
-        shaded[["ghi", "dni", "dhi"]].to_numpy(dtype=float), expected[["ghi", "dni", "dhi"]], rtol=1e-6
-    )
-
-
-def test_apply_horizon_treats_missing_nullable_irradiance_as_zero():
-    idx = pd.date_range("2025-06-01", periods=48, freq="h", tz="UTC")
-    location = Location(41.15, -8.61)
-    reference = location.get_clearsky(idx)[["ghi", "dni", "dhi"]]
-    reference.attrs["breos_weather_metadata"] = {"horizon": {"status": "not_applied"}}
-    weather = reference.astype("Float64")
-    weather.attrs = reference.attrs
-    weather.iloc[12, :] = pd.NA
-    profile = [[0, 30], [90, 30], [180, 30], [270, 30]]
-
-    shaded = apply_terrain_horizon_profile(weather, location, profile, freq="h")
-    expected = apply_terrain_horizon_profile(weather.astype("float64"), location, profile, freq="h")
-
-    assert shaded["ghi"].dtype == "Float64"
-    assert shaded.iloc[12].isna().all()
+    if missing_row:
+        assert shaded.iloc[12].isna().all()
     np.testing.assert_allclose(
         shaded[["ghi", "dni", "dhi"]].to_numpy(dtype=float, na_value=np.nan),
         expected[["ghi", "dni", "dhi"]],

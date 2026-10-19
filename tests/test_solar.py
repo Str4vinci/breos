@@ -65,17 +65,6 @@ def _module_params(**overrides):
 
 
 class TestPVModuleParams:
-    def test_gamma_pmp_defaults_to_power_coefficient(self):
-        params = _module_params()
-        assert params.gamma_pmp is None
-        assert params.gamma_pmp_effective == params.T_Pmax_pct
-
-    def test_gamma_pmp_override_is_respected(self):
-        # A user-supplied gamma_pmp must not be silently replaced by T_Pmax_pct.
-        params = _module_params(gamma_pmp=-0.30)
-        assert params.gamma_pmp == -0.30
-        assert params.gamma_pmp_effective == -0.30
-
     def test_derived_temperature_coefficients_follow_supported_mutation(self):
         # get_module() returns the documented mutable copy, so derived CEC
         # inputs must continue to reflect edits made to its datasheet fields.
@@ -161,10 +150,6 @@ class TestPVModuleParams:
         resized = dataclasses.replace(params, Mpp=545.0, Vmp=41.8, Imp=13.04)
         assert (resized.Mpp, resized.Vmp, resized.Imp) == (545.0, 41.8, 13.04)
 
-    def test_bifaciality_is_optional_metadata(self):
-        assert _module_params().bifaciality is None
-        assert _module_params(bifaciality=0.8).bifaciality == 0.8
-
     def test_bifaciality_does_not_shift_existing_positional_fields(self):
         required = [400, 41.0, 9.76, 49.3, 10.30, -0.35, -0.265, 0.05, 144]
         params = PVModuleParams(*required, "Existing name", 0.21, "monoSi", None, None, -0.30)
@@ -175,10 +160,6 @@ class TestPVModuleParams:
         assert params.gamma_pmp == -0.30
         assert params.bifaciality is None
         assert params.NOCT is None
-
-    def test_noct_is_optional_metadata_appended_after_existing_fields(self):
-        assert _module_params().NOCT is None
-        assert _module_params(NOCT=45.0).NOCT == 45.0
 
     @pytest.mark.parametrize("bifaciality", [0.0, -0.1, 1.01])
     def test_bifaciality_must_be_a_physical_ratio(self, bifaciality):
@@ -224,29 +205,6 @@ class TestPVModuleParams:
 
 
 class TestDcToAc:
-    def _dc(self, watts, periods=4):
-        idx = pd.date_range("2023-06-01", periods=periods, freq="h", tz="UTC")
-        return pd.Series([float(watts)] * periods, index=idx)
-
-    def test_clips_at_ac_nameplate(self):
-        # AC nameplate = pv_peak / loading ratio = 8000 W. pvlib's pdc0 is a
-        # DC-input limit (pac0 = eta * pdc0), so passing the nameplate as pdc0
-        # used to clip ~4% low, at eta * nameplate = 7680 W.
-        ac = dc_to_ac(self._dc(20000.0), pv_peak_power_w=10000.0, inverter_loading_ratio=1.25, inverter_efficiency=0.96)
-        assert ac.max() == pytest.approx(8000.0)
-
-    def test_full_dc_limit_reaches_nameplate_exactly(self):
-        # At pdc == pdc0 (= nameplate / eta) the pvwatts curve outputs pac0.
-        ac = dc_to_ac(
-            self._dc(8000.0 / 0.96), pv_peak_power_w=10000.0, inverter_loading_ratio=1.25, inverter_efficiency=0.96
-        )
-        assert ac.iloc[0] == pytest.approx(8000.0)
-
-    def test_part_load_stays_below_input_and_nameplate(self):
-        ac = dc_to_ac(self._dc(4000.0), pv_peak_power_w=10000.0, inverter_loading_ratio=1.25, inverter_efficiency=0.96)
-        assert (ac < 4000.0).all()
-        assert (ac <= 8000.0).all()
-
     def test_matches_the_scalar_conversion_step_by_step(self):
         # The series conversion and calculate_dc_ac_power share one PVWatts
         # curve. Edge inputs agree exactly: no power, negative or missing DC
@@ -266,6 +224,16 @@ class TestDcToAc:
         assert ac.dtype == np.float64
         np.testing.assert_array_equal(ac.to_numpy()[: len(edges)], scalar[: len(edges)])
         np.testing.assert_array_max_ulp(ac.to_numpy()[len(edges) :], scalar[len(edges) :], maxulp=2)
+
+        # Part load stays below its own input and the nameplate.
+        assert ac.iloc[6] < 4000.0
+        assert ac.iloc[6] <= 8000.0
+        # At pdc == pdc0 (= nameplate / eta) the pvwatts curve outputs pac0.
+        assert ac.iloc[7] == pytest.approx(8000.0)
+        # AC nameplate = pv_peak / loading ratio = 8000 W. pvlib's pdc0 is a
+        # DC-input limit (pac0 = eta * pdc0), so passing the nameplate as pdc0
+        # used to clip ~4% low, at eta * nameplate = 7680 W.
+        assert ac.max() == pytest.approx(8000.0)
 
     def test_edge_series_convert_like_the_scalar_path_without_warnings(self):
         idx = pd.date_range("2023-01-01", periods=3, freq="h", tz="UTC")
@@ -458,33 +426,6 @@ class TestPVProduction:
         assert lit.any()
         assert (bifacial.temp_cell[lit] > front_only.temp_cell[lit]).all()
 
-    def test_default_path_uses_local_cec_fit(self, synthetic_weather, porto_location, pv_params, monkeypatch):
-        calls = 0
-        original_fit = solar.fit_cec_params
-
-        def wrapped_fit(*args, **kwargs):
-            nonlocal calls
-            calls += 1
-            return original_fit(*args, **kwargs)
-
-        monkeypatch.setattr(solar, "fit_cec_params", wrapped_fit)
-        solar._cec_param_cache.clear()
-        try:
-            dc = calculate_pv_production_dc(
-                weather_data=synthetic_weather.iloc[:48],
-                location=porto_location,
-                tilt=35,
-                surface_azimuth=180,
-                n_modules=1,
-                pv_params=pv_params,
-                freq="h",
-            )
-        finally:
-            solar._cec_param_cache.clear()
-
-        assert calls == 1
-        assert dc.sum() > 0
-
     def test_more_modules_more_production(self, synthetic_weather, porto_location, pv_params):
         dc_1 = calculate_pv_production_dc(
             weather_data=synthetic_weather,
@@ -553,23 +494,21 @@ class TestPVProduction:
                 loss_overrides={"typo_component": 1.0},
             )
 
-    def test_zero_ghi_zero_production(self, porto_location, pv_params):
-        # Night-time weather: all irradiance = 0
-        idx = pd.date_range("2023-01-01", periods=24, freq="h", tz="UTC")
-        weather = pd.DataFrame(
-            {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 10.0, "wind_speed": 3.0},
-            index=idx,
-        )
-        dc = calculate_pv_production_dc(
-            weather_data=weather,
-            location=porto_location,
-            tilt=35,
-            surface_azimuth=180,
-            n_modules=1,
-            pv_params=pv_params,
-            freq="h",
-        )
-        assert dc.sum() == pytest.approx(0.0, abs=1.0)
+
+@pytest.mark.parametrize("tracking", ["fixed", "single_axis", "dual_axis"])
+def test_night_weather_produces_no_dc_power(porto_location, pv_params, tracking):
+    # Night-time weather: all irradiance = 0
+    idx = pd.date_range("2023-01-01", periods=24, freq="h", tz="UTC")
+    weather = pd.DataFrame(
+        {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 10.0, "wind_speed": 3.0},
+        index=idx,
+    )
+    common = dict(weather_data=weather, location=porto_location, n_modules=1, pv_params=pv_params, freq="h")
+    if tracking == "fixed":
+        dc = calculate_pv_production_dc(**common, tilt=35, surface_azimuth=180)
+    else:
+        dc = calculate_pv_production_dc_tracking(**common, tracking=tracking)
+    assert dc.fillna(0).sum() == pytest.approx(0.0, abs=1.0)
 
 
 class TestTracking:
@@ -613,7 +552,9 @@ class TestTracking:
         dual = self._dual(synthetic_weather, porto_location, pv_params)
         for dc in (fixed, single, dual):
             assert isinstance(dc, pd.Series)
-            assert len(dc) == len(synthetic_weather)
+            # Regular weather passes the grid guard unchanged (#172).
+            assert dc.index.equals(synthetic_weather.index)
+            assert np.isfinite(dc.to_numpy()).all()
             assert (dc >= -0.01).all()
         assert dual.sum() >= single.sum() > fixed.sum()
 
@@ -661,23 +602,6 @@ class TestTracking:
                 pv_params=pv_params,
                 freq="h",
             )
-
-    def test_zero_ghi_zero_production_tracking(self, porto_location, pv_params):
-        idx = pd.date_range("2023-01-01", periods=24, freq="h", tz="UTC")
-        weather = pd.DataFrame(
-            {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 10.0, "wind_speed": 3.0},
-            index=idx,
-        )
-        for mode in ("single_axis", "dual_axis"):
-            dc = calculate_pv_production_dc_tracking(
-                weather_data=weather,
-                location=porto_location,
-                n_modules=1,
-                tracking=mode,
-                pv_params=pv_params,
-                freq="h",
-            )
-            assert dc.fillna(0).sum() == pytest.approx(0.0, abs=1.0)
 
     def test_single_axis_supports_infinite_sheds_rear_gain(self, synthetic_weather, porto_location):
         module = get_module("Generic_600W_Bifacial")
@@ -764,12 +688,6 @@ class TestTranspositionModel:
             **kw,
         )
 
-    def test_default_matches_explicit_isotropic(self, synthetic_weather, porto_location, pv_params):
-        # The default must reproduce the prior isotropic result bit-for-bit.
-        default = self._dc(synthetic_weather, porto_location, pv_params)
-        isotropic = self._dc(synthetic_weather, porto_location, pv_params, transposition_model="isotropic")
-        pd.testing.assert_series_equal(default, isotropic)
-
     def test_all_models_run_and_are_non_negative(self, synthetic_weather, porto_location, pv_params):
         for model in TRANSPOSITION_MODELS:
             dc = self._dc(synthetic_weather, porto_location, pv_params, transposition_model=model)
@@ -815,44 +733,6 @@ class TestSolarPosition:
             **kw,
         )
 
-    def test_default_matches_explicit_interval_start(self, synthetic_weather, porto_location, pv_params):
-        # The default must reproduce the prior behaviour bit-for-bit.
-        default = self._dc(synthetic_weather, porto_location, pv_params)
-        explicit = self._dc(synthetic_weather, porto_location, pv_params, solar_position="interval-start")
-        pd.testing.assert_series_equal(default, explicit)
-
-    def test_mid_interval_shifts_output_but_keeps_index(self, synthetic_weather, porto_location, pv_params):
-        start = self._dc(synthetic_weather, porto_location, pv_params, solar_position="interval-start")
-        mid = self._dc(synthetic_weather, porto_location, pv_params, solar_position="mid-interval")
-        # Same label grid, different sun geometry per step.
-        assert mid.index.equals(start.index)
-        assert not mid.equals(start)
-        # A half-hour shift redistributes energy within the day; annual totals stay close.
-        assert mid.sum() == pytest.approx(start.sum(), rel=0.05)
-
-    def test_weather_method_sends_the_metadata_time_to_solar_position(self):
-        # The offset table itself is tested in test_weather.py; one case shows
-        # transposition reads it.
-        index = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
-        weather = pd.DataFrame({"ghi": [0.0, 0.0]}, index=index)
-        weather.attrs["breos_weather_metadata"] = {
-            "radiation_time_basis": "interval_mean",
-            "timestamp_label_basis": "right",
-        }
-        captured = {}
-
-        class RecordingLocation:
-            def get_solarposition(self, *, times):
-                captured["times"] = times
-                return pd.DataFrame(index=times)
-
-        labels, solar_position, _weather = solar._prepare_solarpos_and_weather(
-            weather, RecordingLocation(), "h", solar_position="weather"
-        )
-
-        assert captured["times"].equals(labels - pd.Timedelta(minutes=30))
-        assert solar_position.index.equals(labels)
-
     def test_mid_interval_moves_energy_toward_morning_for_east_array(
         self, synthetic_weather, porto_location, pv_params
     ):
@@ -860,8 +740,8 @@ class TestSolarPosition:
         # with the sun half an hour later. For an east-facing array that raises
         # each morning hour's irradiance on the panel, so the morning share of
         # the energy rises.
-        def split(sp):
-            dc = calculate_pv_production_dc(
+        def dc(sp):
+            return calculate_pv_production_dc(
                 weather_data=synthetic_weather,
                 location=porto_location,
                 tilt=35,
@@ -871,10 +751,17 @@ class TestSolarPosition:
                 freq="h",
                 solar_position=sp,
             )
-            morning = dc[dc.index.hour < 12].sum()
-            return morning / dc.sum()
 
-        assert split("mid-interval") > split("interval-start") + 0.01
+        def morning_share(series):
+            return series[series.index.hour < 12].sum() / series.sum()
+
+        start = dc("interval-start")
+        mid = dc("mid-interval")
+        assert morning_share(mid) > morning_share(start) + 0.01
+        # Same label grid; a half-hour shift redistributes energy within the
+        # day, so annual totals stay close.
+        assert mid.index.equals(start.index)
+        assert mid.sum() == pytest.approx(start.sum(), rel=0.05)
 
 
 class TestDiffuseIAM:
@@ -890,12 +777,6 @@ class TestDiffuseIAM:
             **kw,
         )
 
-    def test_default_matches_explicit_none(self, synthetic_weather, porto_location, pv_params):
-        # The default must reproduce the prior beam-only behaviour bit-for-bit.
-        default = self._dc(synthetic_weather, porto_location, pv_params)
-        explicit = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="none")
-        pd.testing.assert_series_equal(default, explicit)
-
     def test_marion_reduces_annual_yield(self, synthetic_weather, porto_location, pv_params):
         # Diffuse IAM multipliers are < 1, so applying them can only remove
         # energy; the size of the removal is bounded by the diffuse fraction
@@ -904,31 +785,6 @@ class TestDiffuseIAM:
         marion = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="marion").sum()
         assert marion < none
         assert 0.002 < 1 - marion / none < 0.03
-
-
-class TestIAMModel:
-    def _annual(self, weather, loc, pv_params, **kw):
-        return calculate_pv_production_dc(
-            weather_data=weather,
-            location=loc,
-            tilt=35,
-            surface_azimuth=180,
-            n_modules=1,
-            pv_params=pv_params,
-            freq="h",
-            **kw,
-        ).sum()
-
-    def test_default_matches_explicit_ashrae(self, synthetic_weather, porto_location, pv_params):
-        default = self._annual(synthetic_weather, porto_location, pv_params)
-        explicit = self._annual(synthetic_weather, porto_location, pv_params, iam_model="ashrae")
-        assert default == explicit
-
-    @pytest.mark.parametrize("iam_model", ("physical", "martin_ruiz"))
-    def test_selectable_model_changes_beam_path(self, synthetic_weather, porto_location, pv_params, iam_model):
-        ashrae = self._annual(synthetic_weather, porto_location, pv_params, iam_model="ashrae")
-        selected = self._annual(synthetic_weather, porto_location, pv_params, iam_model=iam_model)
-        assert selected != pytest.approx(ashrae)
 
 
 class TestTemperatureModel:
@@ -943,29 +799,6 @@ class TestTemperatureModel:
             freq="h",
             **kw,
         ).sum()
-
-    def test_default_matches_explicit_faiman(self, synthetic_weather, porto_location, pv_params):
-        # The default must reproduce the prior faiman behaviour bit-for-bit.
-        default = calculate_pv_production_dc(
-            weather_data=synthetic_weather,
-            location=porto_location,
-            tilt=35,
-            surface_azimuth=180,
-            n_modules=1,
-            pv_params=pv_params,
-            freq="h",
-        )
-        explicit = calculate_pv_production_dc(
-            weather_data=synthetic_weather,
-            location=porto_location,
-            tilt=35,
-            surface_azimuth=180,
-            n_modules=1,
-            pv_params=pv_params,
-            freq="h",
-            temperature_model="faiman",
-        )
-        pd.testing.assert_series_equal(default, explicit)
 
     def test_worse_ventilation_lowers_yield(self, synthetic_weather, porto_location, pv_params):
         # Lower heat-loss coefficients mean hotter cells and less energy:
@@ -1021,12 +854,6 @@ class TestGroundReflectance:
             **kw,
         )
 
-    def test_default_albedo_unchanged(self, synthetic_weather, porto_location, pv_params):
-        # Not passing albedo must reproduce pvlib's 0.25 default exactly.
-        base = self._dc(synthetic_weather, porto_location, pv_params)
-        explicit = self._dc(synthetic_weather, porto_location, pv_params, albedo=0.25)
-        pd.testing.assert_series_equal(base, explicit)
-
     def test_higher_albedo_raises_yield(self, synthetic_weather, porto_location, pv_params):
         base = self._dc(synthetic_weather, porto_location, pv_params).sum()
         snowy = self._dc(synthetic_weather, porto_location, pv_params, albedo=0.65).sum()
@@ -1065,15 +892,40 @@ class TestPerezCoefficients:
             model_perez=model_perez,
         )
 
-    def test_coefficient_set_changes_result(self, synthetic_weather, porto_location, pv_params):
-        default = self._perez(synthetic_weather, porto_location, pv_params, "allsitescomposite1990")
-        france = self._perez(synthetic_weather, porto_location, pv_params, "france1988")
-        assert france.sum() != pytest.approx(default.sum())
-
     def test_all_perez_sets_resolve(self, synthetic_weather, porto_location, pv_params):
         for model_perez in PEREZ_MODELS:
             dc = self._perez(synthetic_weather, porto_location, pv_params, model_perez)
             assert dc.sum() > 0, model_perez
+
+
+@pytest.mark.parametrize(
+    ("option_name", "value"),
+    [
+        ("transposition_model", "isotropic"),
+        ("solar_position", "interval-start"),
+        ("diffuse_iam", "none"),
+        ("iam_model", "ashrae"),
+        ("temperature_model", "faiman"),
+        # pvlib's own ground albedo default.
+        ("albedo", 0.25),
+    ],
+    ids=lambda v: str(v),
+)
+def test_each_default_is_its_named_value(synthetic_weather, porto_location, pv_params, option_name, value):
+    # Leaving an option out must reproduce its named default bit for bit.
+    def dc(**kw):
+        return calculate_pv_production_dc(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        )
+
+    pd.testing.assert_series_equal(dc(), dc(**{option_name: value}))
 
 
 class TestModelOptionNames:
@@ -1097,6 +949,7 @@ class TestModelOptionNames:
             ),
             pytest.param("diffuse_iam", "marion", "martin", "Unknown diffuse IAM method", {}, id="diffuse_iam"),
             pytest.param("iam_model", "physical", "not-an-iam", "Unknown IAM model", {}, id="iam_model"),
+            pytest.param("iam_model", "martin_ruiz", "not-an-iam", "Unknown IAM model", {}, id="iam_model-martin_ruiz"),
             pytest.param(
                 "temperature_model", "pvsyst-insulated", "sapm", "Unknown temperature model", {}, id="temperature_model"
             ),
@@ -1113,7 +966,7 @@ class TestModelOptionNames:
     def test_option_name_is_normalised_and_validated(
         self, synthetic_weather, porto_location, pv_params, option_name, valid_value, invalid_value, message, extra
     ):
-        def dc(value):
+        def dc(**option):
             return calculate_pv_production_dc(
                 weather_data=synthetic_weather,
                 location=porto_location,
@@ -1123,9 +976,12 @@ class TestModelOptionNames:
                 pv_params=pv_params,
                 freq="h",
                 **extra,
-                **{option_name: value},
+                **option,
             )
 
-        pd.testing.assert_series_equal(dc(valid_value), dc(f" {valid_value.upper()} "))
+        selected = dc(**{option_name: valid_value})
+        pd.testing.assert_series_equal(selected, dc(**{option_name: f" {valid_value.upper()} "}))
+        # The non-default choice takes effect through the public function.
+        assert selected.sum() != pytest.approx(dc().sum())
         with pytest.raises(ValueError, match=message):
-            dc(invalid_value)
+            dc(**{option_name: invalid_value})

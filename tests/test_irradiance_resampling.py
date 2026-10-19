@@ -34,15 +34,27 @@ def test_overcast_diffuse_is_not_capped(policy):
 
 
 @pytest.mark.parametrize(
-    "names", [("ghi", "dni", "dhi"), ("shortwave_radiation", "direct_normal_irradiance", "diffuse_radiation")]
+    ("names", "kwargs"),
+    [
+        pytest.param(("ghi", "dni", "dhi"), {}, id="pvlib-names"),
+        pytest.param(
+            ("shortwave_radiation", "direct_normal_irradiance", "diffuse_radiation"), {}, id="openmeteo-names"
+        ),
+        # The explicit policy conserves energy whatever the interpolation method.
+        pytest.param(
+            ("ghi", "dni", "dhi"),
+            {"method": "linear", "irradiance_resampling": "clear_sky_energy_conserving"},
+            id="explicit-linear",
+        ),
+    ],
 )
-def test_independent_component_hourly_conservation(names):
+def test_independent_component_hourly_conservation(names, kwargs):
     source = _weather().rename(columns=dict(zip(("ghi", "dni", "dhi"), names, strict=True)))
     source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 700]])
-    result = resample_to_15min(source, **COORDINATES)
+    result = resample_to_15min(source, **kwargs, **COORDINATES)
     np.testing.assert_allclose(result.to_numpy().reshape(-1, 4, 3).mean(axis=1), source, rtol=1e-9, atol=1e-6)
     metadata = result.attrs[WEATHER_METADATA_KEY]
-    assert metadata["irradiance_resampling"] == "auto"
+    assert metadata["irradiance_resampling"] == kwargs.get("irradiance_resampling", "auto")
     assert metadata["irradiance_resampling_resolved"] == "clear_sky_energy_conserving"
     assert "preserve_irradiance_energy" not in metadata
     assert metadata["irradiance_closure"]["after"]["absolute_residual_energy_fraction"] > 0

@@ -351,3 +351,26 @@ def small_mc_settings(tmp_path):
 
     weather = _write_multiyear_weather(tmp_path / "multi.csv")
     return MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
+
+
+# --- D lane shared fixtures ---
+
+
+@pytest.fixture
+def trina(monkeypatch):
+    """Register the sourced Trina 450 W module in the catalog and return its key."""
+    from breos.pv_modules import MODULES
+    from tests.sourced_modules import TRINA_450, TRINA_KEY
+
+    monkeypatch.setitem(MODULES, TRINA_KEY, TRINA_450)
+    return TRINA_KEY
+
+
+@pytest.fixture
+def jinko(monkeypatch):
+    """Register the sourced Jinko 440 W module in the catalog and return its key."""
+    from breos.pv_modules import MODULES
+    from tests.sourced_modules import JINKO_440, JINKO_KEY
+
+    monkeypatch.setitem(MODULES, JINKO_KEY, JINKO_440)
+    return JINKO_KEY
