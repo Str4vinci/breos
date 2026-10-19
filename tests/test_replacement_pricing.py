@@ -25,7 +25,10 @@ from tools.generate_app_golden import SCENARIOS, _fake_fetch
 
 
 def test_battery_config_has_no_price():
+    # The physics reports replacements; the economics prices them (ADR 0003 E4).
     assert "replacement_cost" not in {field.name for field in fields(BatteryConfig)}
+    with pytest.raises(TypeError, match="replacement_cost"):
+        BatteryConfig(nominal_energy_wh=5000, replacement_cost=1000.0)
 
 
 @pytest.mark.parametrize("configured", [None, "auto", "calculate", " Calculate "])
