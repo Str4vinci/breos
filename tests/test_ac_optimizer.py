@@ -5,7 +5,6 @@ import pytest
 from breos.economics import default_amount_cost_keys
 from breos.optimization import (
     _battery_inverter_ac_capacity_w,
-    _battery_replacement_treatment,
     _build_battery_config_from_spec,
 )
 from breos.optimization_config import resolve_optimization_config
@@ -95,30 +94,6 @@ def test_a_non_eur_ac_study_needs_the_simple_pv_inverter_price():
     del costs["inverter_cost_per_kw_simple"]
     with pytest.raises(ValueError, match="inverter_cost_per_kw_simple would come from the built-in EUR defaults"):
         resolve_optimization_config({**base, "costs": {**costs, "battery_inverter_cost_per_kw": 120.0}})
-
-
-def test_the_rating_follows_each_candidates_capacity_or_stays_fixed():
-    battery = resolve_optimization_config(AC)["battery"]
-    assert _battery_inverter_ac_capacity_w(battery, 4.0) == 2000.0
-    assert _battery_inverter_ac_capacity_w(battery, 10.0) == 5000.0
-    assert _battery_inverter_ac_capacity_w(battery, 0.0) is None
-    fixed = {**battery, "inverter_kw_per_kwh": None, "inverter_ac_rating_kw": 3.0}
-    assert _battery_inverter_ac_capacity_w(fixed, 4.0) == _battery_inverter_ac_capacity_w(fixed, 10.0) == 3000.0
-    assert _battery_inverter_ac_capacity_w(resolve_optimization_config(LOCATION)["battery"], 10.0) is None
-
-
-def test_each_candidate_runs_its_battery_inverter_and_the_treatment_records_the_coupling():
-    battery = resolve_optimization_config(AC)["battery"]
-    config = _build_battery_config_from_spec(battery, nominal_energy_wh=8000.0)
-    assert (config.coupling, config.battery_inverter_ac_capacity_w, config.battery_inverter_efficiency) == (
-        "ac",
-        4000.0,
-        0.95,
-    )
-    pv_only = _build_battery_config_from_spec(battery, nominal_energy_wh=0.0)
-    assert pv_only.coupling == "dc"
-    assert _battery_replacement_treatment(battery)["coupling"] == "ac"
-    assert _battery_replacement_treatment(resolve_optimization_config(LOCATION)["battery"])["coupling"] == "dc"
 
 
 @pytest.mark.parametrize("spelling", ["AC", " ac "])

@@ -159,26 +159,6 @@ def test_optimizer_prices_fixed_target_charging(tariff_case, overlap):
     assert "smart_charging" not in greedy.provenance
 
 
-@pytest.mark.parametrize("overlap", [False, True])
-def test_optimizer_search_shares_fixed_target_scoring_and_provenance(tariff_case, overlap):
-    pytest.importorskip("pymoo")
-    weather, load, config = tariff_case
-    config["smart_charging"] = {
-        **FIXED_TARGET,
-        **({"overlap_policy": "hold_target", "discharge_periods": ["peak", "off_peak"]} if overlap else {}),
-    }
-    fixed = evaluate((weather, load, config), battery_kwh=5.0)
-    problem = optimization.SolarDesignProblem(weather, load, config)
-    restored = pickle.loads(pickle.dumps(problem))
-    out = {}
-    restored._evaluate(np.array([4, 5.0, 30.0]), out)
-
-    assert out["Projected_NPV"] == fixed.metrics["Projected_NPV"]
-    assert restored.pricing.instructions == problem.pricing.instructions
-    result = optimization.optimize_system_multi_objective(weather, load, config, pop_size=4, n_gen=1, seed=42)
-    assert result.details["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]
-
-
 def test_optimizer_fixed_target_needs_a_battery(tariff_case):
     weather, load, config = tariff_case
     config["smart_charging"] = FIXED_TARGET
@@ -228,39 +208,38 @@ def test_optimizer_money_matches_the_step_ledger(tariff_case, monkeypatch):
     assert result.provenance["tariff"]["calendar_policy"] == "replay_start_year"
 
 
-def test_search_and_fixed_design_share_tariff_scoring_and_pickle(tariff_case):
+@pytest.mark.parametrize(
+    ("case", "battery_kwh"),
+    [("named", 0.0), ("custom", 0.0), ("fixed-target", 5.0), ("fixed-target-overlap", 5.0)],
+)
+def test_the_pickled_search_problem_scores_a_design_like_the_fixed_evaluation(tariff_case, case, battery_kwh):
     pytest.importorskip("pymoo")
     weather, load, config = tariff_case
-    fixed = evaluate(tariff_case)
+    if case == "custom":
+        config["tariff"] = deepcopy(CUSTOM_TARIFF)
+    elif case.startswith("fixed-target"):
+        overlap = {"overlap_policy": "hold_target", "discharge_periods": ["peak", "off_peak"]}
+        config["smart_charging"] = {**FIXED_TARGET, **(overlap if case.endswith("overlap") else {})}
+    fixed = evaluate(tariff_case, battery_kwh=battery_kwh)
+
     problem = optimization.SolarDesignProblem(weather, load, config)
+    if case == "custom":
+        assert problem.config["tariff"]["custom_schedule"] == CUSTOM_TARIFF["custom_schedule"]
+        assert problem.tariff.schedule.identifier == "optimizer_custom_weekly"
+    # The problem a worker process receives.
     restored = pickle.loads(pickle.dumps(problem))
     out = {}
-    restored._evaluate(np.array([4, 0.0, 30.0]), out)
+    restored._evaluate(np.array([4, battery_kwh, 30.0]), out)
 
     assert out["Projected_NPV"] == fixed.metrics["Projected_NPV"]
     assert out["F"][1] == -fixed.metrics["Projected_NPV"]
-    assert restored.tariff.schedule_hash == fixed.provenance["tariff"]["schedule_hash"]
+    assert restored.pricing.instructions == problem.pricing.instructions
+    assert restored.tariff.schedule_hash == problem.tariff.schedule_hash == fixed.provenance["tariff"]["schedule_hash"]
     with pytest.raises(TypeError):
         restored.tariff.prices.import_prices["peak"] = 100
-
-
-def test_custom_schedule_is_resolved_and_pickles_into_optimizer_worker(tariff_case):
-    pytest.importorskip("pymoo")
-    weather, load, config = tariff_case
-    config["tariff"] = deepcopy(CUSTOM_TARIFF)
-    expected = evaluate(tariff_case)
-
-    problem = optimization.SolarDesignProblem(weather, load, config)
-    assert problem.config["tariff"]["custom_schedule"] == CUSTOM_TARIFF["custom_schedule"]
-    assert problem.tariff.schedule.identifier == "optimizer_custom_weekly"
-
-    worker_problem = pickle.loads(pickle.dumps(problem))
-    out = {}
-    worker_problem._evaluate(np.array([4, 0.0, 30.0]), out)
-
-    assert out["Projected_NPV"] == expected.metrics["Projected_NPV"]
-    assert worker_problem.pricing.instructions == problem.pricing.instructions
-    assert worker_problem.tariff.schedule_hash == problem.tariff.schedule_hash
+    if case.startswith("fixed-target"):
+        result = optimization.optimize_system_multi_objective(weather, load, config, pop_size=4, n_gen=1, seed=42)
+        assert result.details["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]
 
 
 def test_search_result_records_tariff_provenance(tariff_case):
