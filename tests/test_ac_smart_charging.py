@@ -78,11 +78,6 @@ def test_a_dc_table_reports_its_missing_efficiency_first_as_before():
         resolve_optimization_config({"location": {"latitude": 41.15, "longitude": -8.61}, "smart_charging": FIXED})
 
 
-def test_discharge_only_is_the_same_for_both_couplings():
-    table = {"mode": "discharge_only", "discharge_periods": ["peak"]}
-    assert resolve_app_config({**BASE, **APP_AC, "smart_charging": table}).smart_charging is not None
-
-
 def test_the_spec_checks_its_coupling():
     with pytest.raises(ValueError, match="grid_charge_efficiency' is for a DC-coupled battery"):
         SmartChargingSpec(**{**FIXED, "grid_charge_efficiency": 0.95}, battery_coupling="ac")

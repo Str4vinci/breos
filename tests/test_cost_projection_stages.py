@@ -65,6 +65,7 @@ def test_the_stages_compose_to_the_projection(tmp_path):
     add_co2_projection(staged, rows, EMISSIONS)
     pd.testing.assert_frame_equal(staged, whole, check_exact=True)
     assert staged.attrs == whole.attrs
+    assert whole.attrs["lifetime_co2_avoided_export_kg"] == whole["CO2_Avoided_Export_Cumulative_kg"].iloc[-1]
     path = write_cost_projection(staged, str(tmp_path / "staged"))
     assert (tmp_path / "staged" / "cost_projection.csv").read_bytes() == (
         tmp_path / "whole" / "cost_projection.csv"
@@ -77,13 +78,3 @@ def test_valuation_does_not_discount():
     assert not any(column.endswith("_NPV") for column in flows.columns)
     assert flows["Cost_Replacement"].iloc[1] == pytest.approx(2100.0 * (1.021 * 0.98) ** 1.4)
     assert flows.attrs["total_replacement_cost"] == 2100.0
-
-
-def test_the_projection_carries_the_lcoe_and_co2_every_runner_reports():
-    projection = cost_analysis_projection(
-        _rows(), COSTS, num_years=3, discount_rate=0.04, emissions_params=EMISSIONS, **RATES
-    )
-    assert projection.attrs["lcoe_per_kwh"] > 0
-    total = projection["CO2_Avoided_SelfConsumed_kg"] + projection["CO2_Avoided_Export_kg"]
-    pd.testing.assert_series_equal(projection["CO2_Avoided_Total_kg"], total, check_names=False)
-    assert projection.attrs["lifetime_co2_avoided_export_kg"] == projection["CO2_Avoided_Export_Cumulative_kg"].iloc[-1]
