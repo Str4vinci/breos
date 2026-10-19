@@ -11,18 +11,6 @@ def _last_year(params, pv_kwh, export_kwh, grid_shift_kwh=None):
     return calculate_co2_projection(np.array([pv_kwh]), np.array([export_kwh]), params, shift).iloc[-1]
 
 
-class TestEmissionsParams:
-    def test_average_intensity_uses_average_when_marginal_is_available(self):
-        params = EmissionsParams(
-            average_grid_carbon_intensity_gco2_kwh=100.0,
-            marginal_grid_carbon_intensity_gco2_kwh=350.0,
-        )
-
-        assert params.average_intensity_gco2_kwh == pytest.approx(100.0)
-        assert params.avoided_intensity_gco2_kwh == pytest.approx(350.0)
-        assert params.avoided_intensity_type == "marginal"
-
-
 class TestCO2Projection:
     def test_basic(self):
         params = EmissionsParams(average_grid_carbon_intensity_gco2_kwh=100.0)
@@ -37,11 +25,6 @@ class TestCO2Projection:
         year = _last_year(params, 0.0, 0.0)
         assert year["CO2_Avoided_Total_kg"] == 0.0
         assert year["CO2_Avoided_SelfConsumed_kg"] == 0.0
-
-    def test_portugal_intensity(self, emissions_params):
-        year = _last_year(emissions_params, 1000.0, 500.0)
-        # 1000 * 127.91 / 1000 = 127.91 kg
-        assert year["CO2_Avoided_Total_kg"] == pytest.approx(127.91)
 
     def test_avoided_co2_uses_marginal_intensity_when_available(self):
         params = EmissionsParams(

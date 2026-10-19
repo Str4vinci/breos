@@ -43,6 +43,7 @@ from breos.montecarlo import MonteCarloSettings, build_year_cache, run_montecarl
 from breos.optimization_config import resolve_optimization_config
 from breos.smart_charging import SmartChargingSpec, resolve_instructions, stored_energy_by_origin
 from breos.utils import get_hours_per_step
+from tests.offline_app import TOU, offline, simulate_offline
 from tests.test_controller_seam import (
     BACKENDS,
     FREQS,
@@ -54,7 +55,6 @@ from tests.test_controller_seam import (
     _scenario,
     _steps_per_day,
 )
-from tools.generate_app_golden import _fake_fetch
 
 # A coarse planner grid keeps the rolling solves cheap; the policy is the same.
 SPEC = SmartChargingSpec(
@@ -66,13 +66,6 @@ SPEC = SmartChargingSpec(
     target_levels=5,
     soc_states=7,
 )
-TOU = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.28, "off_peak": 0.11},
-    "export_prices": {"all": 0.05},
-    "fixed_charge_per_day": 0.25,
-}
 DAILY = {
     "mode": "daily_persistence",
     "charge_periods": ["off_peak"],
@@ -105,21 +98,6 @@ def _controller(freq: str, backend: str, spec: SmartChargingSpec = SPEC) -> Dail
 
 def _without(table, *keys):
     return {key: value for key, value in table.items() if key not in keys}
-
-
-def _offline():
-    return (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    )
-
-
-def _app(config) -> App:
-    fetch, weather = _offline()
-    with fetch, weather:
-        app = App(config)
-        app.simulate()
-    return app
 
 
 def _planner_calls(monkeypatch):
@@ -828,8 +806,8 @@ def test_the_optimizer_refuses_the_daily_mode_before_any_candidate(monkeypatch):
 
 
 def test_revalue_simulates_again_when_the_planner_prices_change():
-    app = _app({**WINDOW, "period": JANUARY, "smart_charging": {**DAILY, **COARSE}})
-    fetch, weather = _offline()
+    app = simulate_offline({**WINDOW, "period": JANUARY, "smart_charging": {**DAILY, **COARSE}})
+    fetch, weather = offline()
     with fetch, weather:
         priced = app.revalue({"tariff": {"import_prices": {"peak": 0.45, "off_peak": 0.06}}})
         exported = app.revalue({"tariff": {"export_prices": {"all": 0.2}}})
@@ -843,7 +821,7 @@ def test_revalue_simulates_again_when_the_planner_prices_change():
     # Cheaper nights and dearer peaks move the policy's own decisions.
     before = app.result()["provenance"]["smart_charging"]["instruction_hash"]
     assert priced["provenance"]["smart_charging"]["instruction_hash"] != before
-    fresh = _app(
+    fresh = simulate_offline(
         {
             **WINDOW,
             "period": JANUARY,
@@ -856,9 +834,9 @@ def test_revalue_simulates_again_when_the_planner_prices_change():
 
 def test_a_wear_cost_moves_only_the_planned_targets():
     config = {**WINDOW, "period": JANUARY, "smart_charging": {**DAILY, **COARSE}}
-    default = _app(config)
-    zero = _app({**config, "smart_charging": {**DAILY, **COARSE, "wear_cost_per_kwh": 0.0}})
-    worn = _app({**config, "smart_charging": {**DAILY, **COARSE, "wear_cost_per_kwh": 0.5}})
+    default = simulate_offline(config)
+    zero = simulate_offline({**config, "smart_charging": {**DAILY, **COARSE, "wear_cost_per_kwh": 0.0}})
+    worn = simulate_offline({**config, "smart_charging": {**DAILY, **COARSE, "wear_cost_per_kwh": 0.5}})
     frames = {
         name: app._artifacts.first_year_results_df
         for name, app in (("default", default), ("zero", zero), ("worn", worn))
@@ -895,7 +873,7 @@ def test_python_at_15_minutes_recommends_numba_once(backend, resolution, warned)
     }
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        _app(config)
+        simulate_offline(config)
     recommended = [item for item in caught if "execution_backend = 'numba'" in str(item.message)]
     assert len(recommended) == (1 if warned else 0)
     if warned:
@@ -920,7 +898,7 @@ def test_the_daily_mode_takes_hold_target():
 
 @pytest.mark.filterwarnings("ignore:.*execution_backend = 'numba'")
 def test_always_dispatch_holds_each_days_planned_target_at_15_minutes():
-    app = _app({**WINDOW, "resolution": "15min", "period": JANUARY, "smart_charging": {**ALWAYS, **COARSE}})
+    app = simulate_offline({**WINDOW, "resolution": "15min", "period": JANUARY, "smart_charging": {**ALWAYS, **COARSE}})
     assert app.result()["provenance"]["smart_charging"]["overlap_policy"] == "hold_target"
     artifacts = app._artifacts
     executed = artifacts.projection.controller_instructions
@@ -960,7 +938,7 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
 
     monkeypatch.setattr(projection_module, "_simulate_detailed_run", recording)
     config = {**BASE, "smart_charging": {**DAILY, "grid_import_limit_w": 5000, **COARSE}}
-    app = _app(config)
+    app = simulate_offline(config)
     artifacts = app._artifacts
     result = app.result()
     record = result["provenance"]["smart_charging"]
@@ -1069,7 +1047,7 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
 
 
 def test_fixed_target_provenance_is_unchanged_by_the_new_mode():
-    app = _app({**WINDOW, "period": JUNE, "smart_charging": FIXED})
+    app = simulate_offline({**WINDOW, "period": JUNE, "smart_charging": FIXED})
     record = app.result()["provenance"]["smart_charging"]
     assert set(record) == {
         "mode",

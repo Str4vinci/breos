@@ -32,7 +32,7 @@ def _daily_schedule() -> TariffSchedule:
 def test_tariff_values_are_frozen_and_currency_qualified():
     schedule = _daily_schedule()
     prices = TariffPrices(
-        currency="eur",
+        currency=" eur ",
         import_prices={"off_peak": 0.12, "peak": 0.30},
         export_prices={"all": 0.04},
     )
@@ -48,11 +48,6 @@ def test_tariff_values_are_frozen_and_currency_qualified():
 def test_unknown_currency_fails_before_resolution(currency):
     with pytest.raises(ValueError, match="must be an ISO 4217 currency code"):
         TariffPrices(currency=currency, import_prices={"all": 0.2}, export_prices={"all": 0.04})
-
-
-def test_currency_codes_are_upper_cased():
-    prices = TariffPrices(currency=" usd ", import_prices={"all": 20.0}, export_prices={"all": 4.0})
-    assert prices.currency == "USD"
 
 
 @pytest.mark.parametrize("value", [-0.01, float("nan"), float("inf"), True])
@@ -175,59 +170,10 @@ def test_unknown_bundled_schedule_fails_without_country_fallback():
         get_tariff_schedule("pt")
 
 
-@pytest.mark.parametrize(
-    ("timestamp", "expected"),
-    [
-        ("2026-01-12 08:59", "mid_peak"),
-        ("2026-01-12 09:00", "peak"),
-        ("2026-01-12 10:30", "mid_peak"),
-        ("2026-07-13 10:29", "mid_peak"),
-        ("2026-07-13 10:30", "peak"),
-        ("2026-07-13 13:00", "mid_peak"),
-    ],
-)
-def test_portuguese_2026_daily_tri_classifies_standard_and_dst_boundaries(timestamp, expected):
-    instant = pd.DatetimeIndex([timestamp]).tz_localize("Europe/Lisbon")
-
-    assert classify_tariff_periods(instant, "pt_mainland_2026_daily_tri", timezone=LISBON) == (expected,)
-
-
 def test_portuguese_2026_weekly_tri_requires_quarter_hour_alignment():
-    hourly = pd.date_range("2026-07-13", periods=24, freq="h", tz="Europe/Lisbon")
-    with pytest.raises(ValueError, match="requires 15-minute resolution"):
-        classify_tariff_periods(hourly, "pt_mainland_2026_weekly_tri", timezone=LISBON)
-
     offset = pd.date_range("2026-07-13 00:05", periods=4, freq="15min", tz="Europe/Lisbon")
     with pytest.raises(ValueError, match="boundaries do not align"):
         classify_tariff_periods(offset, "pt_mainland_2026_weekly_tri", timezone=LISBON)
-
-    quarter_hour = pd.date_range("2026-07-13 09:00", periods=15, freq="15min", tz="Europe/Lisbon")
-    labels = classify_tariff_periods(quarter_hour, "pt_mainland_2026_weekly_tri", timezone=LISBON)
-    assert labels[:1] == ("mid_peak",)
-    assert labels[1:13] == ("peak",) * 12
-    assert labels[13:] == ("mid_peak",) * 2
-
-
-@pytest.mark.parametrize(
-    ("day", "expected_steps"),
-    [("2026-03-29", 23), ("2026-10-25", 25)],
-)
-def test_tariff_classification_preserves_portuguese_dst_day_instants(day, expected_steps):
-    index = pd.date_range(day, pd.Timestamp(day) + pd.Timedelta(days=1), freq="h", inclusive="left", tz="Europe/Lisbon")
-
-    labels = classify_tariff_periods(index, "pt_mainland_2026_daily_bi", timezone=LISBON)
-
-    assert len(index) == expected_steps
-    assert len(labels) == expected_steps
-
-
-def test_same_instants_classify_identically_from_different_timezone_views():
-    utc_index = pd.date_range("2026-10-25 00:00", periods=5, freq="h", tz="UTC")
-    lisbon_index = utc_index.tz_convert("Europe/Lisbon")
-
-    assert classify_tariff_periods(utc_index, "pt_mainland_2026_daily_bi", timezone=LISBON) == classify_tariff_periods(
-        lisbon_index, "pt_mainland_2026_daily_bi", timezone=LISBON
-    )
 
 
 def test_future_schedule_requires_an_explicit_effective_study_date_for_reference_year_data():

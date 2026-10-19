@@ -369,20 +369,21 @@ def test_a_planner_holds_the_given_health_for_its_window():
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "message"),
+    ("kwargs", "error", "message"),
     [
-        ({"target_levels": 0}, "at least 1"),
-        ({"target_levels": [0.5, 0.2]}, "strictly increasing"),
-        ({"target_levels": [0.5, 1.2]}, "between 0 and 1"),
-        ({"soc_states": 1}, "at least 2"),
-        ({"initial_energy_wh": math.nan}, "must be finite"),
-        ({"wear_cost_per_kwh": -0.01}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
-        ({"wear_cost_per_kwh": math.inf}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
-        ({"wear_cost_per_kwh": math.nan}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"target_levels": 0}, ValueError, "at least 1"),
+        ({"target_levels": [0.5, 0.2]}, ValueError, "strictly increasing"),
+        ({"target_levels": [0.5, 1.2]}, ValueError, "between 0 and 1"),
+        ({"soc_states": 1}, ValueError, "at least 2"),
+        ({"initial_energy_wh": math.nan}, ValueError, "must be finite"),
+        ({"wear_cost_per_kwh": -0.01}, ValueError, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": math.inf}, ValueError, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": math.nan}, ValueError, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": True}, TypeError, "'wear_cost_per_kwh' must be a finite number"),
     ],
 )
-def test_bad_planner_settings_are_rejected(kwargs, message):
-    with pytest.raises(ValueError, match=message):
+def test_bad_planner_settings_are_rejected(kwargs, error, message):
+    with pytest.raises(error, match=message):
         solve_daily_targets(_problem(1), **kwargs)
 
 
@@ -455,11 +456,6 @@ def test_a_higher_wear_cost_never_plans_more_discharge():
     ]
     assert all(later <= earlier + 1e-9 for earlier, later in zip(discharged, discharged[1:]))
     assert discharged[-1] < discharged[0]
-
-
-def test_a_wear_cost_is_a_number():
-    with pytest.raises(TypeError, match="'wear_cost_per_kwh' must be a finite number"):
-        solve_daily_targets(_problem(1), wear_cost_per_kwh=True)
 
 
 # --- held targets (ADR 0002 A18) ----------------------------------------------

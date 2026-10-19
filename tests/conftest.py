@@ -311,3 +311,43 @@ def no_fetch(monkeypatch):
         raise AssertionError("App fetched PVGIS weather instead of reading a local weather file")
 
     monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fail)
+
+
+# --- C lane shared fixtures ---
+
+
+@pytest.fixture
+def tou_optimizer_case(monkeypatch):
+    """Two Lisbon winter days for the projected optimizer: stubbed PV, 1 kW load, daily bi-hourly prices."""
+    from breos import optimization
+
+    index = pd.date_range("2026-01-05", periods=48, freq="h", tz="Europe/Lisbon")
+    weather = pd.DataFrame({"temp_air": 20.0}, index=index)
+    load = pd.DataFrame({"Load": 1000.0}, index=index)
+    pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
+    monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "Europe/Lisbon", "altitude": 100},
+        "simulation": {"resolution": "h", "years_projection": 2},
+        "financials": {"inflation_rate": 0.02, "discount_rate": 0.05},
+        "battery": {"temperature": 20.0},
+        "mode": {"fixed_azimuth": 180.0},
+        "constraints": {"budget": 100000, "max_area_m2": 100, "max_tilt_deg": 60},
+        "tariff": {
+            "schedule": "pt_mainland_2026_daily_bi",
+            "currency": "EUR",
+            "import_prices": {"peak": 0.50, "off_peak": 0.10},
+            "export_prices": {"all": 0.03},
+            "fixed_charge_per_day": 0.40,
+        },
+    }
+    return weather, load, config
+
+
+@pytest.fixture
+def small_mc_settings(tmp_path):
+    """Two Monte Carlo runs of two years over a two-year weather file, with yearly rows."""
+    from breos.montecarlo import MonteCarloSettings
+
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    return MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)

@@ -105,18 +105,12 @@ def test_ac_coupling_without_a_battery_prices_no_battery_inverter():
     # A capacity sweep from 0 keeps one config: without a battery the price
     # and rating are not needed and price nothing.
     pv_only = calculate_costs(**SYSTEM)
-    for params in (CostParams(), PRICES):
+    for params, rating in ((CostParams(), 5000.0), (PRICES, 5000.0), (None, None)):
         costs = calculate_costs(
-            cost_params=params, battery_coupling="ac", battery_inverter_ac_capacity_w=5000.0, **SYSTEM
+            cost_params=params, battery_coupling="ac", battery_inverter_ac_capacity_w=rating, **SYSTEM
         )
         assert costs["battery_inverter_cost"] == 0.0
         assert costs["total_initial_cost"] == pv_only["total_initial_cost"]
-
-
-def test_ac_coupling_without_a_battery_needs_no_rating():
-    costs = calculate_costs(battery_coupling="ac", **SYSTEM)
-    assert costs["battery_inverter_cost"] == 0.0
-    assert costs["total_initial_cost"] == calculate_costs(**SYSTEM)["total_initial_cost"]
 
 
 @pytest.mark.parametrize("battery_capacity_wh", [10000.0, 0.0])

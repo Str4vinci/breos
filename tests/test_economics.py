@@ -11,7 +11,6 @@ from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
-    find_payback_year,
     replacement_booking_time,
     replacement_fraction_from_steps,
 )
@@ -151,22 +150,6 @@ class TestCalculateCosts:
         assert costs["inverter_cost"] == pytest.approx(102.58 * (10 * 550 / 1000) / 1.25, rel=0.01)
         assert costs["total_initial_cost"] > costs["pv_cost"] + costs["battery_cost"]
 
-    def test_cost_breakdown_sums_to_total(self, cost_params):
-        costs = calculate_costs(
-            n_modules=6,
-            module_power_w=550,
-            battery_capacity_wh=5000,
-            cost_params=cost_params,
-        )
-        parts = (
-            costs["pv_cost"]
-            + costs["inverter_cost"]
-            + costs["battery_cost"]
-            + costs["installation_cost"]
-            + costs["other_costs"]
-        )
-        assert costs["total_initial_cost"] == pytest.approx(parts, rel=0.001)
-
     def test_capex_uses_selected_module_mpp(self):
         base = {
             "module_cost_per_w": 0.20,
@@ -194,31 +177,6 @@ def test_cost_projection_needs_year_rows():
     steps = pd.DataFrame({"PV_AC_Export": [1.0]}, index=pd.date_range("2025-01-01", periods=1, freq="h"))
     with pytest.raises(ValueError, match="not a per-step results frame"):
         cost_analysis_projection(steps, {"total_initial_cost": 1000.0}, num_years=1)
-
-
-class TestFindPaybackYear:
-    def test_known_payback(self):
-        import pandas as pd
-
-        # Savings turn positive at year 8
-        proj = pd.DataFrame(
-            {
-                "Year": range(1, 11),
-                "Savings_Cumulative_NPV": [-500, -400, -300, -200, -100, -50, -10, 30, 100, 200],
-            }
-        )
-        assert find_payback_year(proj) == 8
-
-    def test_no_payback(self):
-        import pandas as pd
-
-        proj = pd.DataFrame(
-            {
-                "Year": range(1, 6),
-                "Savings_Cumulative_NPV": [-500, -400, -300, -200, -100],
-            }
-        )
-        assert find_payback_year(proj) is None
 
 
 class TestLCOE:

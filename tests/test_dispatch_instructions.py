@@ -102,6 +102,8 @@ def test_noop_changes_nothing():
     np.testing.assert_array_equal(noop.reserve_fraction, np.zeros(4))
     assert np.isnan(noop.grid_target_fraction).all()
     assert (noop.grid_charge_efficiency, noop.grid_import_limit_w) == (1.0, math.inf)
+    # One no-op set is shared by every run of a length, so it is read-only.
+    assert not noop.grid_target_fraction.flags.writeable
     assert len(DispatchInstructions.noop(0)) == 0
     with pytest.raises(ValueError, match="non-negative integer"):
         DispatchInstructions.noop(-1)

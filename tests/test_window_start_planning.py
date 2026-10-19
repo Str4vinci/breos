@@ -31,8 +31,9 @@ from breos.dispatch_instructions import DispatchInstructions
 from breos.smart_charging import SmartChargingSpec
 from breos.tariffs import resolve_tariff
 from breos.utils import get_hours_per_step
+from tests.offline_app import TOU, simulate_offline
 from tests.test_controller_seam import FREQS, _core, _project, _require, _scenario, _steps_per_day
-from tests.test_daily_persistence import ALWAYS, BASE, COARSE, DAILY, TOU, WINDOW, _app, _planner_calls
+from tests.test_daily_persistence import ALWAYS, BASE, COARSE, DAILY, WINDOW, _planner_calls
 
 WINDOWED = {"decision_boundary": "charge_window_start"}
 # Off-peak 22:00-07:00 local: every charge window crosses midnight.
@@ -337,8 +338,8 @@ def _executed(app):
 
 def test_the_window_boundary_gives_bihourly_windows_one_target_where_civil_days_split_them():
     config = {**WINDOW, "resolution": "h", "period": BIHOURLY_WEEK}
-    civil = _app({**config, "smart_charging": {**DAILY, **COARSE}})
-    windowed = _app({**config, "smart_charging": {**DAILY, **COARSE, **WINDOWED}})
+    civil = simulate_offline({**config, "smart_charging": {**DAILY, **COARSE}})
+    windowed = simulate_offline({**config, "smart_charging": {**DAILY, **COARSE, **WINDOWED}})
 
     executed, charge = _executed(civil)
     split = [window for window in _windows(charge) if len(set(executed.grid_target_fraction[window].tolist())) > 1]
@@ -352,7 +353,7 @@ def test_the_window_boundary_gives_bihourly_windows_one_target_where_civil_days_
 @pytest.mark.filterwarnings("ignore:.*execution_backend = 'numba'")
 def test_a_held_window_has_one_floor_across_midnight():
     config = {**WINDOW, "resolution": "15min", "period": BIHOURLY_WEEK}
-    app = _app({**config, "smart_charging": {**ALWAYS, **COARSE, **WINDOWED}})
+    app = simulate_offline({**config, "smart_charging": {**ALWAYS, **COARSE, **WINDOWED}})
     executed, charge = _executed(app)
     _one_target_per_window(executed, charge)
     planned = ~np.isnan(executed.grid_target_fraction)
@@ -375,7 +376,7 @@ def test_a_weekly_cycle_weekend_is_one_window():
         "period": {"start": "2025-01-08", "end": "2025-01-15"},
         "smart_charging": {**DAILY, **COARSE, **WINDOWED},
     }
-    app = _app(config)
+    app = simulate_offline(config)
     executed, charge = _executed(app)
     index = app._artifacts.resolved_tariff.index.tz_convert("Europe/Lisbon")
     windows = _windows(charge)
@@ -399,12 +400,12 @@ def test_a_weekly_cycle_weekend_is_one_window():
 
 def test_provenance_records_the_window_boundary_and_its_versions():
     config = {**WINDOW, "resolution": "h", "period": {"start": "2025-01-10", "end": "2025-01-12"}}
-    record = _app({**config, "smart_charging": {**DAILY, **COARSE, **WINDOWED}}).result()["provenance"]
+    record = simulate_offline({**config, "smart_charging": {**DAILY, **COARSE, **WINDOWED}}).result()["provenance"]
     windowed = record["smart_charging"]
     assert windowed["decision_boundary"] == "charge_window_start"
     assert {key: windowed[key] for key in WINDOW_POLICY} == WINDOW_POLICY
-    civil = _app({**config, "smart_charging": {**DAILY, **COARSE}}).result()["provenance"]["smart_charging"]
-    explicit = _app({**config, "smart_charging": {**DAILY, **COARSE, "decision_boundary": "civil_day"}})
+    civil = simulate_offline({**config, "smart_charging": {**DAILY, **COARSE}}).result()["provenance"]["smart_charging"]
+    explicit = simulate_offline({**config, "smart_charging": {**DAILY, **COARSE, "decision_boundary": "civil_day"}})
     explicit_record = explicit.result()["provenance"]["smart_charging"]
     # Naming the default changes nothing.
     assert explicit_record == civil
