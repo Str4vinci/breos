@@ -542,6 +542,15 @@ removed in 0.9.0.
   in the planner forecast module, the `prepare` keyword of
   `prepare_simulation_inputs_cached`, and the `_LEDGER_COLUMNS` re-export from
   `breos.battery`. Only the test suite used them.
+- The undocumented `SolarDesignProblem` attributes that copied the resolved
+  config: `budget_limit`, `area_limit`, `max_modules`, `max_battery_kwh`,
+  `min_tilt_deg`, `max_tilt_deg`, `enforce_zeb`, `constraints`, `location`,
+  `loc_obj`, `tmy_data`, `houseload`, `freq`, `model_options`, `opt_cfg`,
+  `projected_years`, `projected_degradation_rate`, `pv_params`,
+  `batt_temp_cfg`, `indoor_model`, `emissions_params`, `dc_ac_ratio`,
+  `inverter_efficiency`, `ac_output_scale`, `dc_output_scale` and
+  `execution_backend`. Read the settings from `problem.config`; the search
+  bounds are also `problem.xl` and `problem.xu`.
 
 ### Fixed
 

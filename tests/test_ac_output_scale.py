@@ -424,20 +424,31 @@ class TestUnlimitedInverterAndOptimizer:
         assert_frames_bit_equal(python_result[0], numba_result[0])
         assert python_result[1] == numba_result[1]
 
-    def test_optimizer_problem_carries_the_configured_scale(self):
+    def test_optimizer_problem_scores_at_the_configured_ac_scale(self, monkeypatch):
         """SolarDesignProblem must not silently evaluate at scale 1.0."""
         from breos.optimization import SolarDesignProblem
 
-        _idx, weather, load = _frames(24)
-        config = _optimizer_config(ac_output_scale=0.9210647508519848, dc_output_scale=0.75)
-        problem = SolarDesignProblem(weather, load, config)
-        assert problem.ac_output_scale == pytest.approx(0.9210647508519848)
-        assert problem.dc_output_scale == pytest.approx(0.75)
+        idx, weather, load = _frames(24)
+        seen = []
+        monkeypatch.setattr(
+            "breos.optimization.calculate_pv_production_dc", lambda **_kwargs: pd.Series(0.0, index=idx)
+        )
 
+        def fake_projected(**kwargs):
+            seen.append(kwargs["ac_output_scale"])
+            return {
+                "Projected_Grid_Independence_%": 100.0,
+                "Projected_NPV": 0.0,
+                "Projected_ZEB_Ratio": 1.0,
+                "Projected_Initial_Cost": 0.0,
+            }
+
+        monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", fake_projected)
+        config = _optimizer_config(ac_output_scale=0.9210647508519848)
+        SolarDesignProblem(weather, load, config)._evaluate(np.array([1.0, 1.0, 35.0, 180.0]), {})
         del config["ac_output_scale"]
-        del config["dc_output_scale"]
-        assert SolarDesignProblem(weather, load, config).ac_output_scale == 1.0
-        assert SolarDesignProblem(weather, load, config).dc_output_scale == 1.0
+        SolarDesignProblem(weather, load, config)._evaluate(np.array([1.0, 1.0, 35.0, 180.0]), {})
+        assert seen == [0.9210647508519848, 1.0]
 
     @pytest.mark.parametrize("scale", [0.0, -1.0, 1.0857, 2.0, float("nan"), float("inf")])
     def test_optimizer_problem_rejects_an_out_of_range_ac_scale(self, scale):

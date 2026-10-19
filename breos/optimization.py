@@ -721,7 +721,8 @@ def _layout_dc_production(
     return total
 
 
-@dataclass(frozen=True)
+# eq=False: a study is compared by identity; its frames have no truth value.
+@dataclass(frozen=True, eq=False)
 class _DesignStudy:
     """What every design of one study shares, resolved once: the site, weather, pricing and models.
 
@@ -1084,15 +1085,9 @@ try:
                 battery_key="constraints.max_battery_kwh",
                 execution_backend=backend,
             )
-            self.pricing = self.study.pricing
-            self.tariff = self.pricing.tariff
-            self.module_area_m2 = self.study.module_area_m2
-            self.ac_output_scale = config["ac_output_scale"]
-            self.dc_output_scale = config["dc_output_scale"]
             # Candidates are scored over the project lifetime only; the
             # resolver refuses the removed annual basis.
             self.objective_basis = config["optimization"]["objective_basis"]
-            self.battery_replacement_treatment = self.study.battery_replacement_treatment
 
             self.fixed_azimuth = config["mode"]["fixed_azimuth"]
             # The layouts searched, in LAYOUTS order, and the fixed tilt of
@@ -1147,6 +1142,22 @@ try:
             # times the search asked for it.
             self.scored: Dict[Tuple[float, ...], Dict[str, Any]] = {}
             self.score_requests: Dict[Tuple[float, ...], int] = {}
+
+        @property
+        def pricing(self) -> _OptimizationTariff:
+            return self.study.pricing
+
+        @property
+        def tariff(self) -> Optional[ResolvedTariff]:
+            return self.study.pricing.tariff
+
+        @property
+        def module_area_m2(self) -> float:
+            return self.study.module_area_m2
+
+        @property
+        def battery_replacement_treatment(self) -> Dict[str, Any]:
+            return self.study.battery_replacement_treatment
 
         def __getstate__(self):
             # Exclude elementwise_runner from pickling as it contains the Pool object.
