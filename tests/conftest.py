@@ -300,7 +300,9 @@ def _patch_weather(monkeypatch, synthetic_weather):
     monkeypatch.setattr("breos.app.load_weather", lambda **kw: None)  # force fetch path
 
 
-# --- lane A shared fixtures ---
+# ---------------------------------------------------------------------------
+# Guard: App must not fetch weather
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -313,7 +315,9 @@ def no_fetch(monkeypatch):
     monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fail)
 
 
-# --- C lane shared fixtures ---
+# ---------------------------------------------------------------------------
+# Shared optimizer and Monte Carlo cases
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -353,7 +357,9 @@ def small_mc_settings(tmp_path):
     return MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
 
 
-# --- D lane shared fixtures ---
+# ---------------------------------------------------------------------------
+# Sourced module datasheets in the catalog
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
