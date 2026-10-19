@@ -139,6 +139,25 @@ row has the configured `Tilt` and a NaN `Azimuth`.
 `evaluate_projected_design` takes `layout="east_west"` with a `tilt` and no
 `azimuth`, and its metrics carry `Layout` too.
 
+`details["evaluated"]` holds every design the search scored, one row per
+distinct design vector in the order first scored. Its columns are the Pareto
+table's, then `Constraint_Budget` (CAPEX minus `budget`), `Constraint_Area`
+(module frame area minus `max_area_m2`) and, with `enforce_zeb`,
+`Constraint_ZEB` (1 minus the projected ZEB ratio); a value of zero or less
+meets the limit. `Feasible` is true when every constraint is met, and
+`Evaluations` is the number of times NSGA-II asked for the design. Like the
+Pareto table, it records the run's currency in `attrs["currency"]`.
+`details["evaluation_counts"]` holds `evaluations` (pymoo's evaluation count),
+`simulations` (the projections run) and `distinct_designs`.
+
+Each design vector is simulated once per search. pymoo removes duplicates
+only within a population and its offspring, so a design that left the
+population and comes back would otherwise be simulated again. A repeat takes
+the scores of its first simulation instead. A projection depends on the
+design alone, so the search, its front and every value are the same as
+without the cache. The record of scored designs stays in the parent process,
+and worker processes simulate only designs not yet scored.
+
 Results expose `Projected_*` diagnostics. The ordinary `Grid_Independence_%`
 and `NPV` columns equal `Projected_Grid_Independence_%` and
 `Projected_NPV`. `ZEB_Ratio` mirrors `Projected_ZEB_Ratio` but is not an

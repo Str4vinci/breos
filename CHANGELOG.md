@@ -427,6 +427,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
   only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
   coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.
+- The NSGA-II search returns every design it scored
+  ([#416](https://github.com/Str4vinci/breos/issues/416)).
+  `details["evaluated"]` has one row per distinct design, in the order first
+  scored, with the Pareto table's columns, the constraint values
+  `Constraint_Budget`, `Constraint_Area` and, with `enforce_zeb`,
+  `Constraint_ZEB` (zero or less meets the limit), `Feasible`, and
+  `Evaluations`, the number of times the search asked for the design, and
+  records its currency in `attrs` as the front does.
+  `details["evaluation_counts"]` gives the `evaluations`, `simulations` and
+  `distinct_designs` of the search. Counting evaluations or building a front
+  over every evaluated design no longer needs the private
+  `_serial_elementwise_runner`.
 
 ### Changed
 
@@ -447,6 +459,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   versions, `floors` and `no-numba`. The lint, format and type checks, the
   release artifact check and the docs build run once, on 3.12, instead of on
   all four versions.
+- The NSGA-II search simulates each design once
+  ([#416](https://github.com/Str4vinci/breos/issues/416)). pymoo removes
+  duplicates only within a population and its offspring, so a design that
+  came back after leaving the population was simulated again. A repeat now
+  takes the scores of its first simulation, kept in the parent process. The
+  same seed gives the same search, front and values as before. On the
+  shipped `projected-optimization.toml` at Porto (population 40, 30
+  generations, 8 workers), 1200 evaluations took 661 simulations instead of
+  1200 with the azimuth fixed at 180 (376 s to 236 s), and 1001 with the
+  azimuth searched (386 s to 301 s).
 - A change to `[reference_tariff]` no longer invalidates the App input cache
   or the Monte Carlo year cache: it prices only the household load.
 - Tariff period classification finds each step's day type and season once

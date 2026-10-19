@@ -113,6 +113,34 @@ generation counts for a denser front and a longer runtime. Pass `n_procs` to
 `optimize_system_multi_objective` to evaluate candidates in parallel
 processes; each runs NumPy's BLAS library on one thread.
 
+### Every evaluated design
+
+The front is a small part of what the search scored. `details["evaluated"]`
+holds every design it scored, one row per design in the order first scored:
+
+```python
+evaluated = result.details["evaluated"]
+feasible = evaluated[evaluated["Feasible"]]
+print(result.details["evaluation_counts"])
+```
+
+The table has the columns of the front, then one column per constraint:
+`Constraint_Budget`, `Constraint_Area` and, with `enforce_zeb`,
+`Constraint_ZEB`: CAPEX minus `budget`, module frame area minus
+`max_area_m2`, and 1 minus the projected ZEB ratio. Zero or less meets the
+limit. `Feasible` is true when the design meets every limit,
+and `Evaluations` counts how often the search asked for the design. Use the
+table to build a front over every design the search tried, or to see how
+much of the design space it covered.
+
+The genes sit on a discrete grid, so NSGA-II often returns to a design it
+has already scored. The search simulates each design once and reuses that
+score afterwards. This changes only the run time: the same seed gives the
+same search and the same front. `details["evaluation_counts"]` gives
+`evaluations`, the designs the search asked for, `simulations`, the
+simulations it ran, and `distinct_designs`. Within one search every
+distinct design is simulated once, so the last two are equal.
+
 ### Search East–West layouts too
 
 By default every candidate is one array whose tilt and azimuth are searched.

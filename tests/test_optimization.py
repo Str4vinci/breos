@@ -542,3 +542,215 @@ def test_optimizer_needs_a_positive_worker_count(n_procs):
 
     with pytest.raises(ValueError, match="n_procs must be a positive integer"):
         optimize_system_multi_objective(weather, load, config, pop_size=4, n_gen=1, n_procs=n_procs)
+
+
+def _stubbed_search(monkeypatch, *, cached: bool):
+    """Run a seeded search on a stubbed projection, with or without the score cache.
+
+    Returns the result, the design batches the search asked for, and the
+    number of projections it ran.
+    """
+    from pymoo.core.problem import ElementwiseProblem
+
+    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
+    dc = pd.Series([0.0, 1000.0, 1000.0, 0.0], index=idx)
+    projections = []
+
+    def fake_projected(**kwargs):
+        projections.append(kwargs["n_modules"])
+        modules, battery = kwargs["n_modules"], kwargs["battery_kwh"]
+        yield_kwh = float(kwargs["base_dc_power"].sum()) / 1000.0
+        return {
+            **_PROJECTED_STUB,
+            "Projected_Grid_Independence_%": min(95.0, 6.0 * modules * yield_kwh + 4.0 * battery),
+            "Projected_ZEB_Ratio": 0.3 * modules * yield_kwh,
+            "Projected_NPV": 900.0 * modules * yield_kwh - 700.0 * battery - 40.0 * modules**2,
+            "Projected_Initial_Cost": 400.0 * modules + 600.0 * battery,
+        }
+
+    # Tilt changes the yield, so every gene moves the objectives.
+    monkeypatch.setattr(
+        "breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc * (1.0 + kwargs["tilt"] / 100.0)
+    )
+    monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", fake_projected)
+    implementation = SolarDesignProblem._evaluate_elementwise if cached else ElementwiseProblem._evaluate_elementwise
+    batches = []
+
+    def recording(problem, X, out, *args, **kwargs):
+        batches.append(np.array(X, copy=True))
+        implementation(problem, X, out, *args, **kwargs)
+
+    monkeypatch.setattr(SolarDesignProblem, "_evaluate_elementwise", recording)
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "simulation": {"resolution": "h"},
+        # The budget and the ZEB constraint leave part of the space infeasible.
+        "constraints": {
+            "budget": 3000.0,
+            "max_area_m2": 100.0,
+            "max_modules": 5,
+            "max_battery_kwh": 3.0,
+            "min_tilt_deg": 10.0,
+            "max_tilt_deg": 30.0,
+            "enforce_zeb": True,
+        },
+        "mode": {"fixed_azimuth": 180},
+        "battery": {"temperature": 20.0},
+    }
+    result = optimize_system_multi_objective(
+        pd.DataFrame({"temp_air": 15.0, "ghi": 0.0}, index=idx),
+        pd.DataFrame({"Load": 500.0}, index=idx),
+        config,
+        pop_size=8,
+        n_gen=12,
+        seed=3,
+    )
+    return result, batches, len(projections)
+
+
+def test_score_cache_keeps_the_search_and_front_of_an_uncached_search(monkeypatch):
+    # The cache only skips repeat simulations: the same seed asks for the same
+    # designs, generation by generation, and ends on the same front.
+    cached, cached_batches, cached_projections = _stubbed_search(monkeypatch, cached=True)
+    monkeypatch.undo()
+    uncached, uncached_batches, uncached_projections = _stubbed_search(monkeypatch, cached=False)
+
+    assert len(cached_batches) == len(uncached_batches)
+    for cached_batch, uncached_batch in zip(cached_batches, uncached_batches):
+        np.testing.assert_array_equal(cached_batch, uncached_batch)
+    cached_result, uncached_result = cached.details["pymoo_result"], uncached.details["pymoo_result"]
+    for name in ("X", "F", "G"):
+        np.testing.assert_array_equal(cached_result.pop.get(name), uncached_result.pop.get(name))
+        np.testing.assert_array_equal(cached_result.opt.get(name), uncached_result.opt.get(name))
+    pd.testing.assert_frame_equal(cached.details["pareto"], uncached.details["pareto"])
+
+    # Without the cache every evaluation is a simulation; with it, every
+    # distinct design is simulated once.
+    n_eval = cached_result.algorithm.evaluator.n_eval
+    distinct = {tuple(row) for row in np.vstack(cached_batches)}
+    assert uncached_projections == n_eval == uncached_result.algorithm.evaluator.n_eval
+    assert cached_projections == len(distinct) < n_eval
+    assert cached.details["evaluation_counts"] == {
+        "evaluations": n_eval,
+        "simulations": len(distinct),
+        "distinct_designs": len(distinct),
+    }
+
+
+def test_evaluated_designs_hold_every_scored_design_and_its_constraints(monkeypatch):
+    import pickle
+
+    result, batches, _ = _stubbed_search(monkeypatch, cached=True)
+    evaluated = result.details["evaluated"]
+    pareto = result.details["pareto"]
+    problem = result.details["problem"]
+
+    # One row per distinct design, in the order first asked for.
+    designs = list(dict.fromkeys(tuple(row) for row in np.vstack(batches)))
+    assert len(evaluated) == len(designs)
+    np.testing.assert_array_equal(evaluated[["Modules", "Battery_kWh", "Tilt"]].to_numpy(dtype=float), designs)
+    assert evaluated["Evaluations"].sum() == result.details["evaluation_counts"]["evaluations"]
+    assert evaluated["Evaluations"].max() > 1
+
+    # The Pareto columns, then the constraints the search checked.
+    assert list(evaluated.columns) == [
+        *pareto.columns,
+        "Constraint_Budget",
+        "Constraint_Area",
+        "Constraint_ZEB",
+        "Feasible",
+        "Evaluations",
+    ]
+    np.testing.assert_allclose(evaluated["Constraint_Budget"], evaluated["Projected_Initial_Cost"] - 3000.0)
+    np.testing.assert_allclose(evaluated["Constraint_ZEB"], 1.0 - evaluated["Projected_ZEB_Ratio"])
+    assert evaluated["Feasible"].any() and not evaluated["Feasible"].all()
+
+    # Every front design is an evaluated, feasible row with the same values.
+    front = pareto.merge(evaluated, on=["Modules", "Battery_kWh", "Tilt"], suffixes=("", "_evaluated"))
+    assert len(front) == len(pareto)
+    assert front["Feasible"].all()
+    np.testing.assert_array_equal(front["NPV"], front["NPV_evaluated"])
+
+    # Worker tasks pickle the problem without the growing record.
+    assert pickle.loads(pickle.dumps(problem)).scored == {}
+
+
+def test_parallel_search_scores_and_reports_the_designs_of_a_serial_search(synthetic_weather):
+    from breos.load_profiles import load_profile
+
+    load = load_profile("demandlib_h0", 3500, start_date="2023-01-01", timezone="UTC")
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "constraints": {"budget": 8000.0, "max_area_m2": 100.0, "max_modules": 6, "max_battery_kwh": 2.0},
+        "simulation": {"resolution": "h", "years_projection": 1},
+        "mode": {"fixed_azimuth": 180},
+    }
+    run = {"pop_size": 6, "n_gen": 4, "seed": 2}
+
+    serial = optimize_system_multi_objective(synthetic_weather, load, config, **run)
+    parallel = optimize_system_multi_objective(synthetic_weather, load, config, n_procs=2, **run)
+
+    pd.testing.assert_frame_equal(serial.details["evaluated"], parallel.details["evaluated"])
+    pd.testing.assert_frame_equal(serial.details["pareto"], parallel.details["pareto"])
+    assert serial.details["evaluation_counts"] == parallel.details["evaluation_counts"]
+
+    # The public Pareto columns, in their order and with their types, written
+    # out rather than built by the code under test (as on 567df2a).
+    pareto = serial.details["pareto"]
+    assert list(pareto.columns) == [
+        "Modules",
+        "Battery_kWh",
+        "Tilt",
+        "Azimuth",
+        "Layout",
+        "Grid_Independence_%",
+        "NPV",
+        "Objective_Grid_Independence_%",
+        "Objective_NPV",
+        "Projected_Final_SOH_%",
+        "Projected_First_End_Of_Life_Action",
+        "Projected_First_End_Of_Life_Reason",
+        "Projected_First_End_Of_Life_SOH_%",
+        "Projected_First_End_Of_Life_Years",
+        "Projected_Grid_Independence_%",
+        "Projected_Grid_Independence_FinalYear_%",
+        "Projected_Grid_Independence_Mean_%",
+        "Projected_Grid_Independence_Min_%",
+        "Projected_Grid_Independence_Year1_%",
+        "Projected_Initial_Cost",
+        "Projected_Inverter_Loss_Year1_kWh",
+        "Projected_LCOE_per_kWh",
+        "Projected_NPV",
+        "Projected_PV_DC_Curtailed_Year1_kWh",
+        "Projected_PV_DC_FinalYear_kWh",
+        "Projected_PV_DC_Year1_kWh",
+        "Projected_PV_Production_FinalYear_kWh",
+        "Projected_PV_Production_Year1_kWh",
+        "Projected_Payback_Year",
+        "Projected_Payback_Year_Interpolated",
+        "Projected_Replacement_Cost_T0_Prices",
+        "Projected_Total_Replacements",
+        "Projected_ZEB_Ratio",
+        "Projected_ZEB_Ratio_FinalYear",
+        "Projected_ZEB_Ratio_Mean",
+        "Projected_ZEB_Ratio_Min",
+        "Projected_ZEB_Ratio_Year1",
+        "ZEB_Ratio",
+    ]
+    assert pareto["Modules"].dtype == np.int64 and pareto["Azimuth"].dtype == np.int64
+    assert (pareto["Grid_Independence_%"] == pareto["Projected_Grid_Independence_%"]).all()
+    assert (pareto["NPV"] == pareto["Projected_NPV"]).all()
+    assert (pareto["ZEB_Ratio"] == pareto["Projected_ZEB_Ratio"]).all()
+
+
+def test_evaluated_designs_record_the_currency_of_the_search(monkeypatch):
+    # Like the front, the evaluated table names its currency, so a plot of it
+    # labels money in it and refuses another.
+    from breos.plotting import plot_pareto_front
+
+    result, _, _ = _stubbed_search(monkeypatch, cached=True)
+    evaluated = result.details["evaluated"]
+
+    assert evaluated.attrs["currency"] == result.details["provenance"]["currency"] == "EUR"
+    with pytest.raises(ValueError, match="records its currency as 'EUR'"):
+        plot_pareto_front(evaluated, currency="USD")

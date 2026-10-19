@@ -1174,12 +1174,47 @@ try:
                 xu=xu,
                 elementwise_runner=elementwise_runner or _serial_elementwise_runner,
             )
+            # Every design scored so far, in the order first scored: the
+            # design vector maps to its ``out`` record, and to the number of
+            # times the search asked for it.
+            self.scored: Dict[Tuple[float, ...], Dict[str, Any]] = {}
+            self.score_requests: Dict[Tuple[float, ...], int] = {}
 
         def __getstate__(self):
-            # Exclude elementwise_runner from pickling as it contains the Pool object
+            # Exclude elementwise_runner from pickling as it contains the Pool object.
+            # The scored designs stay in the parent: every worker task pickles
+            # the problem, and the record grows with the search.
             state = self.__dict__.copy()
             state["elementwise_runner"] = None
+            state["scored"] = {}
+            state["score_requests"] = {}
             return state
+
+        def _evaluate_elementwise(self, X, out, *args, **kwargs):
+            # Simulate each design vector once per problem. NSGA-II drops
+            # duplicates within a population and its offspring only, so a
+            # design it discarded and finds again would be simulated again;
+            # here it takes the record of its first scoring instead. The
+            # repair puts every gene on its grid, so equal designs are equal
+            # floats, and a design's record depends on its vector alone.
+            keys = [tuple(float(value) for value in x) for x in X]
+            unscored = list(dict.fromkeys(key for key in keys if key not in self.scored))
+            if unscored:
+                f = self.elementwise_func(self, args, kwargs)
+                records = self.elementwise_runner(f, np.array(unscored, dtype=float))
+                self.scored.update(zip(unscored, records, strict=True))
+            for key in keys:
+                self.score_requests[key] = self.score_requests.get(key, 0) + 1
+
+            # As pymoo's ElementwiseProblem gathers the records.
+            for key in keys:
+                for name, value in self.scored[key].items():
+                    if out.get(name) is None:
+                        out[name] = []
+                    out[name].append(value)
+            for name in out:
+                if out[name] is not None:
+                    out[name] = np.array(out[name])
 
         def design_layout(self, x) -> str:
             """The layout a design vector encodes."""
@@ -1371,6 +1406,57 @@ def _design_columns(problem: Any, x: np.ndarray) -> pd.DataFrame:
     return designs
 
 
+def _design_table(problem: Any, x: np.ndarray, records: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """The design columns and scored values of each design vector.
+
+    ``records`` holds each design's ``out`` record, in the order of ``x``.
+    Every ``Projected_*`` and ``Objective_*`` key is kept, so optional
+    diagnostics such as emissions need no extra projection.
+    """
+    table = _design_columns(problem, x)
+    table["Modules"] = table["Modules"].round().astype(int)
+    table["Battery_kWh"] = table["Battery_kWh"].round().astype(float)
+    diagnostic_keys = sorted(
+        {
+            key
+            for record in records
+            for key in record
+            if key.startswith("Projected_")
+            or key.startswith("Objective_")
+            or key in ("ZEB_Ratio", "Battery_Inverter_AC_Rating_kW")
+        }
+    )
+    table["Grid_Independence_%"] = np.array([record["Projected_Grid_Independence_%"] for record in records])
+    table["NPV"] = np.array([record["Projected_NPV"] for record in records])
+    for key in diagnostic_keys:
+        table[key] = np.array([record.get(key) for record in records])
+    table["ZEB_Ratio"] = np.array([record["Projected_ZEB_Ratio"] for record in records])
+    return table
+
+
+# The search's inequality constraints, in the order of ``out["G"]``.
+_CONSTRAINT_COLUMNS = ("Constraint_Budget", "Constraint_Area", "Constraint_ZEB")
+
+
+def _evaluated_designs(problem: Any) -> pd.DataFrame:
+    """Every design the search scored, one row each, in the order first scored.
+
+    The columns of the Pareto table, then ``Constraint_Budget``,
+    ``Constraint_Area`` and, with ``enforce_zeb``, ``Constraint_ZEB`` (each
+    at most zero when met), ``Feasible``, and ``Evaluations``, the number of
+    times the search asked for the design.
+    """
+    keys = list(problem.scored)
+    records = [problem.scored[key] for key in keys]
+    table = _design_table(problem, np.array(keys, dtype=float).reshape(len(keys), problem.n_var), records)
+    constraints = np.array([record["G"] for record in records], dtype=float).reshape(len(keys), problem.n_ieq_constr)
+    for column, values in zip(_CONSTRAINT_COLUMNS[: problem.n_ieq_constr], constraints.T, strict=True):
+        table[column] = values
+    table["Feasible"] = (constraints <= 0.0).all(axis=1)
+    table["Evaluations"] = np.array([problem.score_requests[key] for key in keys], dtype=int)
+    return table
+
+
 def optimize_system_multi_objective(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -1420,6 +1506,12 @@ def optimize_system_multi_objective(
         with ``Modules``, ``Battery_kWh``, ``Tilt``, ``Azimuth``, ``Layout``,
         objective values, ZEB diagnostics, and the ``Projected_*`` fields. An
         East-West row has the configured tilt and a NaN azimuth.
+        ``details["evaluated"]`` holds every design the search scored, with
+        the same columns plus the constraint values, ``Feasible`` and
+        ``Evaluations``. ``details["evaluation_counts"]`` gives the
+        evaluations the search asked for, the simulations it ran and the
+        distinct designs: a design is simulated once per search, however
+        often NSGA-II returns to it.
 
     Raises:
         ImportError: If pymoo is not installed.
@@ -1495,33 +1587,16 @@ def optimize_system_multi_objective(
     if result.X is None or result.F is None:
         raise RuntimeError("Multi-objective optimization found no feasible solutions.")
 
-    x = np.atleast_2d(result.X)
-    f = np.atleast_2d(result.F)
-    pareto = _design_columns(problem, x)
-    pareto["Modules"] = pareto["Modules"].round().astype(int)
-    pareto["Battery_kWh"] = pareto["Battery_kWh"].round().astype(float)
-    pareto["Grid_Independence_%"] = (1 - f[:, 0]) * 100
-    pareto["NPV"] = -f[:, 1]
     # pymoo stores every ``out`` value on the evaluated individual, so the
     # Pareto diagnostics are already available even when workers performed
-    # the scoring. Enumerate custom data keys to keep optional diagnostics
-    # (such as emissions) without re-running each expensive projection.
-    diagnostic_keys = sorted(
-        {
-            key
-            for individual in result.opt
-            for key in individual.data
-            if key.startswith("Projected_")
-            or key.startswith("Objective_")
-            or key in ("ZEB_Ratio", "Battery_Inverter_AC_Rating_kW")
-        }
-    )
-    diagnostics_df = pd.DataFrame({key: result.opt.get(key) for key in diagnostic_keys})
-    for column in diagnostics_df.columns:
-        pareto[column] = diagnostics_df[column].to_numpy()
-    pareto["Grid_Independence_%"] = pareto["Projected_Grid_Independence_%"]
-    pareto["NPV"] = pareto["Projected_NPV"]
-    pareto["ZEB_Ratio"] = pareto["Projected_ZEB_Ratio"]
+    # the scoring.
+    pareto = _design_table(problem, np.atleast_2d(result.X), [individual.data for individual in result.opt])
+    evaluated = _evaluated_designs(problem)
+    evaluation_counts = {
+        "evaluations": int(sum(problem.score_requests.values())),
+        "simulations": len(problem.scored),
+        "distinct_designs": len(problem.scored),
+    }
 
     # pymoo advances the counter after its termination update. Report the last
     # completed generation, matching the research workflow's saved metadata.
@@ -1538,10 +1613,13 @@ def optimize_system_multi_objective(
         "battery_replacement_treatment": dict(problem.battery_replacement_treatment),
     }
     pareto.attrs["currency"] = provenance["currency"]
+    evaluated.attrs["currency"] = provenance["currency"]
     return OptimizationResult(
         iterations=actual_generations,
         details={
             "pareto": pareto,
+            "evaluated": evaluated,
+            "evaluation_counts": evaluation_counts,
             "pymoo_result": result,
             "problem": problem,
             "objective_basis": problem.objective_basis,
