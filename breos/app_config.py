@@ -85,11 +85,9 @@ from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, catalogue_snapshot, get_module
 from breos.resources import load_config_json
 from breos.smart_charging import (
-    AC_GRID_CHARGE_EFFICIENCY_REFUSAL,
     DECISION_BOUNDARIES,
     DECISION_BOUNDARY_KEY,
     DEFAULT_PUBLICATION_DELAY_HOURS,
-    DISCHARGE_ONLY_MODES,
     FORECAST_FILES_KEY,
     FORECAST_KEY,
     FORECASTS,
@@ -102,7 +100,9 @@ from breos.smart_charging import (
     WEAR_COST_KEY,
     SmartChargingSpec,
     check_charge_windows,
+    check_mode_settings,
     check_overlap_policy,
+    check_period_overlap,
 )
 from breos.solar import (
     BIFACIAL_MODELS,
@@ -2373,76 +2373,12 @@ def resolve_reference_tariff_spec(cfg: dict[str, Any], timezone: str, currency: 
     )
 
 
-# Keys each mode must set. grid_charge_efficiency has no default: a
-# DC-coupled battery's inverter model has no AC-to-DC path to derive one from
-# (ADR 0002 A6); an AC-coupled battery's own inverter replaces it (ADR 0004
-# C7), so AC_SMART_CHARGING_TABLE refuses it instead.
-# daily_persistence plans its target, so it sets none; discharge_only never
-# charges from the grid, so it sets its discharge periods alone.
-_COMMON_REQUIRED = ("charge_periods", "discharge_periods", "grid_charge_efficiency")
-_MODE_REQUIRED = {
-    "fixed_target": ("target_usable_fraction", *_COMMON_REQUIRED),
-    "daily_persistence": _COMMON_REQUIRED,
-    "discharge_only": ("discharge_periods",),
-}
-# Keys a mode refuses: the fixed target where the planner picks it, the
-# planner settings where there is no planner, and every grid-charging
-# setting where the grid never charges.
-_GRID_CHARGE_KEYS = ("target_usable_fraction", "charge_periods", "grid_charge_efficiency", "grid_import_limit_w")
-_MODE_REFUSED = {
-    "fixed_target": PLANNER_KEYS,
-    "daily_persistence": ("target_usable_fraction",),
-    "discharge_only": (*_GRID_CHARGE_KEYS, *PLANNER_KEYS),
-}
-
-
 def _check_smart_charging_keys(table: dict[str, Any], where: str, coupling: str = "dc") -> None:
-    mode = table["mode"]
-    check_overlap_policy(mode, table.get("overlap_policy", "reject"))
-    if mode == "disabled":
-        extra = sorted(key for key in table if key != "mode")
-        if extra:
-            raise ValueError(
-                f"'{where}.mode' = 'disabled' takes no other keys; remove {', '.join(f'{where}.{k}' for k in extra)}"
-            )
-        return
-    refused = [key for key in _MODE_REFUSED[mode] if key in table]
-    if refused:
-        if mode in DISCHARGE_ONLY_MODES:
-            reason = "it never charges from the grid and takes only discharge_periods"
-        elif mode in PLANNER_MODES:
-            reason = "the planner chooses each day's target"
-        else:
-            reason = f"they set the planner of mode = {' or '.join(repr(m) for m in PLANNER_MODES)}"
-        raise ValueError(
-            f"'{where}.mode' = '{mode}' does not take {', '.join(f'{where}.{k}' for k in refused)}: {reason}"
-        )
-    required = _MODE_REQUIRED[mode]
-    if coupling == "ac":
-        if "grid_charge_efficiency" in table:
-            raise ValueError(AC_GRID_CHARGE_EFFICIENCY_REFUSAL)
-        required = tuple(key for key in required if key != "grid_charge_efficiency")
-    missing = [key for key in required if key not in table]
-    if missing:
-        raise ValueError(f"'{where}' needs {', '.join(f'{where}.{k}' for k in missing)} for mode = '{mode}'")
-    if mode in PLANNER_MODES:
-        forecast = table.get(FORECAST_KEY, "persistence")
-        if forecast == "weather" and FORECAST_FILES_KEY not in table:
-            raise ValueError(
-                f"'{where}.{FORECAST_KEY}' = 'weather' needs {where}.{FORECAST_FILES_KEY}: the forecast weather "
-                "files, the first for lead day 1"
-            )
-        given = [key for key in (FORECAST_FILES_KEY, PUBLICATION_DELAY_KEY) if key in table]
-        if forecast != "weather" and given:
-            raise ValueError(
-                f"{', '.join(f'{where}.{k}' for k in given)} needs {where}.{FORECAST_KEY} = 'weather', not '{forecast}'"
-            )
-    overlap = sorted(set(table.get("charge_periods", ())) & set(table["discharge_periods"]))
-    if overlap and table.get("overlap_policy", "reject") == "reject":
-        raise ValueError(
-            f"'{where}.charge_periods' and '{where}.discharge_periods' share {', '.join(overlap)}; "
-            "every step either charges or discharges; "
-            "set overlap_policy = 'hold_target' with mode = 'fixed_target' or 'daily_persistence' to allow overlap"
+    check_overlap_policy(table["mode"], table.get("overlap_policy", "reject"))
+    check_mode_settings(table["mode"], [key for key in table if key != "mode"], coupling, table.get(FORECAST_KEY))
+    if table["mode"] != "disabled":
+        check_period_overlap(
+            table.get("charge_periods", ()), table["discharge_periods"], table.get("overlap_policy", "reject")
         )
 
 

@@ -274,7 +274,7 @@ def test_the_daily_mode_is_checked_before_any_input_is_prepared(table, extra, er
 @pytest.mark.parametrize(
     ("fields", "message"),
     [
-        ({"target_usable_fraction": 0.5}, r"not a setting of mode = 'daily_persistence'"),
+        ({"target_usable_fraction": 0.5}, r"'daily_persistence' does not take smart_charging\.target_usable_fraction"),
         ({"soc_states": 1}, r"'smart_charging\.soc_states' must be an integer of at least 2"),
         ({"target_levels": False}, r"'smart_charging\.target_levels' must be an integer of at least 1"),
         ({"forecast_horizon_days": 2.0}, r"'smart_charging\.forecast_horizon_days' must be an integer of at least 1"),
@@ -287,7 +287,7 @@ def test_a_daily_spec_built_directly_stays_coherent(fields, message):
         dataclasses.replace(SPEC, **fields)
     with pytest.raises(TypeError, match=r"'smart_charging\.wear_cost_per_kwh' must be a finite number"):
         dataclasses.replace(SPEC, wear_cost_per_kwh=True)
-    with pytest.raises(ValueError, match=r"takes no planner settings; remove smart_charging\.soc_states"):
+    with pytest.raises(ValueError, match=r"'fixed_target' does not take smart_charging\.soc_states"):
         SmartChargingSpec(
             mode="fixed_target",
             target_usable_fraction=0.5,

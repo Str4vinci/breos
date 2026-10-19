@@ -148,7 +148,7 @@ def test_the_boundary_is_a_daily_persistence_setting():
         resolve_app_config({**BASE, "smart_charging": {**DAILY, "decision_boundary": "hourly"}})
     with pytest.raises(ValueError, match="must be one of: civil_day, charge_window_start"):
         dataclasses.replace(SPEC, decision_boundary="hourly")
-    with pytest.raises(ValueError, match="takes no planner settings"):
+    with pytest.raises(ValueError, match="does not take smart_charging"):
         SmartChargingSpec(
             mode="fixed_target",
             target_usable_fraction=0.5,

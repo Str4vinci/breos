@@ -127,7 +127,10 @@ def test_a_discharge_only_table_resolves_to_a_spec_without_grid_settings():
     ("fields", "message"),
     [
         ({}, r"needs smart_charging\.discharge_periods"),
-        ({"discharge_periods": ("peak",), "charge_periods": ("off_peak",)}, r"remove smart_charging\.charge_periods"),
+        (
+            {"discharge_periods": ("peak",), "charge_periods": ("off_peak",)},
+            r"'discharge_only' does not take smart_charging\.charge_periods",
+        ),
         ({"discharge_periods": ("peak",), "grid_charge_efficiency": 0.9}, r"smart_charging\.grid_charge_efficiency"),
         ({"discharge_periods": ("peak",), "soc_states": 5}, r"smart_charging\.soc_states"),
     ],

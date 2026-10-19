@@ -407,7 +407,7 @@ def test_the_controller_checks_its_tariff():
     ("fields", "message"),
     [
         ({"mode": "greedy"}, r"'smart_charging\.mode' must be one of"),
-        ({"mode": "disabled", "target_usable_fraction": 0.5}, "takes no other settings"),
+        ({"mode": "disabled", "target_usable_fraction": 0.5}, "takes no other keys"),
         ({"mode": "fixed_target", "charge_periods": ("off_peak",)}, r"needs smart_charging\.target_usable_fraction"),
         (
             {

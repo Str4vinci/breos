@@ -40,7 +40,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from numbers import Integral
-from typing import Any
+from typing import Any, Collection
 
 import numpy as np
 
@@ -100,6 +100,96 @@ AC_GRID_CHARGE_EFFICIENCY_REFUSAL = (
     "charge in its own inverter, at battery_inverter_efficiency. Remove it"
 )
 
+# Settings each mode must give. grid_charge_efficiency has no default: a
+# DC-coupled battery's inverter model has no AC-to-DC path to derive one from
+# (ADR 0002 A6); an AC-coupled battery's own inverter replaces it (ADR 0004
+# C7), so it is refused there instead. daily_persistence plans its target, so
+# it sets none; discharge_only never charges from the grid, so it sets its
+# discharge periods alone.
+_COMMON_REQUIRED = ("charge_periods", "discharge_periods", "grid_charge_efficiency")
+_MODE_REQUIRED = {
+    "fixed_target": ("target_usable_fraction", *_COMMON_REQUIRED),
+    "daily_persistence": _COMMON_REQUIRED,
+    "discharge_only": ("discharge_periods",),
+}
+# Settings a mode refuses: the fixed target where the planner picks it, the
+# planner settings where there is no planner, and every grid-charging
+# setting where the grid never charges.
+_GRID_CHARGE_KEYS = ("target_usable_fraction", "charge_periods", "grid_charge_efficiency", "grid_import_limit_w")
+_MODE_REFUSED = {
+    "fixed_target": PLANNER_KEYS,
+    "daily_persistence": ("target_usable_fraction",),
+    "discharge_only": (*_GRID_CHARGE_KEYS, *PLANNER_KEYS),
+}
+
+
+def check_mode_settings(mode: str, given: Collection[str], coupling: str = "dc", forecast: str | None = None) -> None:
+    """Raise unless the settings named in ``given`` suit ``mode`` and the battery's ``coupling``.
+
+    ``given`` names the settings a ``[smart_charging]`` table or a spec sets,
+    besides ``mode``; ``overlap_policy`` counts only against ``"disabled"``. ``forecast`` is the planner's
+    forecast, ``"persistence"`` when None. The App's table check and
+    :class:`SmartChargingSpec` share these rules.
+    """
+    if mode == "disabled":
+        extra = sorted(given)
+        if extra:
+            raise ValueError(
+                "'smart_charging.mode' = 'disabled' takes no other keys; "
+                f"remove {', '.join(f'smart_charging.{key}' for key in extra)}"
+            )
+        return
+    refused = [key for key in _MODE_REFUSED[mode] if key in given]
+    if refused:
+        if mode in DISCHARGE_ONLY_MODES:
+            reason = "it never charges from the grid and takes only discharge_periods"
+        elif mode in PLANNER_MODES:
+            reason = "the planner chooses each day's target"
+        else:
+            reason = f"they set the planner of mode = {' or '.join(repr(m) for m in PLANNER_MODES)}"
+        raise ValueError(
+            f"'smart_charging.mode' = '{mode}' does not take "
+            f"{', '.join(f'smart_charging.{key}' for key in refused)}: {reason}"
+        )
+    required = _MODE_REQUIRED[mode]
+    if coupling == "ac":
+        if "grid_charge_efficiency" in given:
+            raise ValueError(AC_GRID_CHARGE_EFFICIENCY_REFUSAL)
+        required = tuple(key for key in required if key != "grid_charge_efficiency")
+    missing = [key for key in required if key not in given]
+    if missing:
+        raise ValueError(
+            f"'smart_charging' needs {', '.join(f'smart_charging.{key}' for key in missing)} for mode = '{mode}'"
+        )
+    if mode in PLANNER_MODES:
+        forecast = "persistence" if forecast is None else forecast
+        if forecast == "weather" and FORECAST_FILES_KEY not in given:
+            raise ValueError(
+                f"'smart_charging.{FORECAST_KEY}' = 'weather' needs smart_charging.{FORECAST_FILES_KEY}: the "
+                "forecast weather files, the first for lead day 1"
+            )
+        paired = [key for key in (FORECAST_FILES_KEY, PUBLICATION_DELAY_KEY) if key in given]
+        if forecast != "weather" and paired:
+            raise ValueError(
+                f"{', '.join(f'smart_charging.{key}' for key in paired)} needs "
+                f"smart_charging.{FORECAST_KEY} = 'weather', not '{forecast}'"
+            )
+
+
+# The spec's settings that check_mode_settings judges by whether they are set.
+_SPEC_SETTINGS = (*_GRID_CHARGE_KEYS, "discharge_periods", *PLANNER_KEYS)
+
+
+def check_period_overlap(charge_periods: Collection[str], discharge_periods: Collection[str], policy: str) -> None:
+    """Refuse a period that both charges and discharges, unless ``policy`` holds the target there."""
+    overlap = sorted(set(charge_periods) & set(discharge_periods))
+    if overlap and policy == "reject":
+        raise ValueError(
+            f"'smart_charging.charge_periods' and 'smart_charging.discharge_periods' share {', '.join(overlap)}; "
+            "every step either charges or discharges; "
+            "set overlap_policy = 'hold_target' with mode = 'fixed_target' or 'daily_persistence' to allow overlap"
+        )
+
 
 @dataclass(frozen=True)
 class SmartChargingSpec:
@@ -152,60 +242,11 @@ class SmartChargingSpec:
         object.__setattr__(self, "charge_periods", tuple(self.charge_periods))
         object.__setattr__(self, "discharge_periods", tuple(self.discharge_periods))
         object.__setattr__(self, FORECAST_FILES_KEY, tuple(self.forecast_weather_files))
-        planner = {name: getattr(self, name) for name in PLANNER_KEYS}
-        if self.mode == "disabled":
-            settings = (
-                self.target_usable_fraction,
-                self.charge_periods,
-                self.discharge_periods,
-                self.grid_charge_efficiency,
-                self.grid_import_limit_w,
-                *planner.values(),
-            )
-            if any(value not in (None, ()) for value in settings):
-                raise ValueError("'smart_charging' with mode = 'disabled' takes no other settings")
-            return
-        if self.mode in DISCHARGE_ONLY_MODES:
-            if not self.discharge_periods:
-                raise ValueError(f"'smart_charging' needs smart_charging.discharge_periods for mode = '{self.mode}'")
-            given = [
-                name
-                for name in (
-                    "target_usable_fraction",
-                    "charge_periods",
-                    "grid_charge_efficiency",
-                    "grid_import_limit_w",
-                    *PLANNER_KEYS,
-                )
-                if getattr(self, name) not in (None, ())
-            ]
-            if given:
-                raise ValueError(
-                    f"'smart_charging' with mode = '{self.mode}' never charges from the grid and takes only "
-                    f"discharge_periods; remove {', '.join(f'smart_charging.{name}' for name in given)}"
-                )
-            return
-        if self.battery_coupling == "ac" and self.grid_charge_efficiency is not None:
-            raise ValueError(AC_GRID_CHARGE_EFFICIENCY_REFUSAL)
-        required = ["charge_periods", "discharge_periods"]
-        if self.battery_coupling == "dc":
-            required.append("grid_charge_efficiency")
-        if self.mode == "fixed_target":
-            required.insert(0, "target_usable_fraction")
-        missing = [name for name in required if getattr(self, name) in (None, ())]
-        if missing:
-            raise ValueError(
-                f"'smart_charging' needs {', '.join(f'smart_charging.{name}' for name in missing)} "
-                f"for mode = '{self.mode}'"
-            )
+        given = [name for name in _SPEC_SETTINGS if getattr(self, name) not in (None, ())]
+        check_mode_settings(self.mode, given, self.battery_coupling, self.forecast)
         if self.mode in PLANNER_MODES:
-            if self.target_usable_fraction is not None:
-                raise ValueError(
-                    f"'smart_charging.target_usable_fraction' is not a setting of mode = '{self.mode}': "
-                    "the planner chooses each day's target"
-                )
             for name, (default, minimum) in PLANNER_SETTINGS.items():
-                value = default if planner[name] is None else planner[name]
+                value = default if getattr(self, name) is None else getattr(self, name)
                 if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
                     raise ValueError(f"'smart_charging.{name}' must be an integer of at least {minimum}")
                 object.__setattr__(self, name, int(value))
@@ -218,46 +259,20 @@ class SmartChargingSpec:
                 )
             object.__setattr__(self, DECISION_BOUNDARY_KEY, boundary)
             self._check_forecast()
-        else:
-            given = [name for name, value in planner.items() if value not in (None, ())]
-            if given:
-                raise ValueError(
-                    f"'smart_charging' with mode = '{self.mode}' takes no planner settings; "
-                    f"remove {', '.join(f'smart_charging.{name}' for name in given)}"
-                )
-        overlap = sorted(set(self.charge_periods) & set(self.discharge_periods))
-        if overlap and self.overlap_policy == "reject":
-            raise ValueError(
-                f"'smart_charging.charge_periods' and 'smart_charging.discharge_periods' share {', '.join(overlap)}; "
-                "every step either charges or discharges; "
-                "set overlap_policy = 'hold_target' with mode = 'fixed_target' or 'daily_persistence' "
-                "to allow overlap"
-            )
+        check_period_overlap(self.charge_periods, self.discharge_periods, self.overlap_policy)
 
     def _check_forecast(self) -> None:
-        """Fill and check the forecast settings of a planner spec (A20)."""
+        """Fill and check the forecast settings of a planner spec (A20); check_mode_settings pairs them."""
         forecast = "persistence" if self.forecast is None else self.forecast
         if forecast not in FORECASTS:
             raise ValueError(f"'smart_charging.{FORECAST_KEY}' must be one of: {', '.join(FORECASTS)}")
         object.__setattr__(self, FORECAST_KEY, forecast)
         if forecast == "weather":
-            if not self.forecast_weather_files:
-                raise ValueError(
-                    f"'smart_charging.{FORECAST_KEY}' = 'weather' needs smart_charging.{FORECAST_FILES_KEY}: "
-                    "the forecast weather files, the first for lead day 1"
-                )
             delay = self.forecast_publication_delay_hours
             delay = DEFAULT_PUBLICATION_DELAY_HOURS if delay is None else delay
             if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < 0:
                 raise ValueError(f"'smart_charging.{PUBLICATION_DELAY_KEY}' must be a number of at least 0")
             object.__setattr__(self, PUBLICATION_DELAY_KEY, float(delay))
-            return
-        given = [name for name in (FORECAST_FILES_KEY, PUBLICATION_DELAY_KEY) if getattr(self, name) not in (None, ())]
-        if given:
-            raise ValueError(
-                f"{', '.join(f'smart_charging.{name}' for name in given)} needs "
-                f"smart_charging.{FORECAST_KEY} = 'weather'"
-            )
 
 
 def check_overlap_policy(mode: str, policy: str) -> None:

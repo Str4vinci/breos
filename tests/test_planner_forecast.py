@@ -151,7 +151,7 @@ def test_a_spec_built_directly_checks_its_forecast():
         SmartChargingSpec(**common, forecast="weather")
     with pytest.raises(ValueError, match="needs smart_charging.forecast = 'weather'"):
         SmartChargingSpec(**common, forecast_publication_delay_hours=2.0)
-    with pytest.raises(ValueError, match="takes no planner settings"):
+    with pytest.raises(ValueError, match="does not take smart_charging"):
         SmartChargingSpec(
             mode="fixed_target",
             target_usable_fraction=0.5,
