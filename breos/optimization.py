@@ -1325,7 +1325,6 @@ def _design_table(problem: Any, x: np.ndarray, records: Sequence[Mapping[str, An
     table["NPV"] = np.array([record["Projected_NPV"] for record in records])
     for key in diagnostic_keys:
         table[key] = np.array([record.get(key) for record in records])
-    table["ZEB_Ratio"] = np.array([record["Projected_ZEB_Ratio"] for record in records])
     return table
 
 
@@ -1492,8 +1491,8 @@ def optimize_system_multi_objective(
         "distinct_designs": len(problem.scored),
     }
 
-    # pymoo advances the counter after its termination update. Report the last
-    # completed generation, matching the research workflow's saved metadata.
+    # pymoo advances the counter after its termination update, so this is the
+    # last completed generation.
     actual_generations = max(0, int(getattr(result.algorithm, "n_gen", n_gen + 1)) - 1)
     # The search bounds and run settings the search used, defaults included.
     provenance = problem.study.provenance(
