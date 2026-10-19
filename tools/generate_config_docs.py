@@ -263,9 +263,13 @@ def _nested_rows(spec: TableSpec, name: str) -> tuple[tuple[str, ...], list[tupl
 def generate() -> str:
     # The AC-coupled variant of [smart_charging] has the same keys and docs.
     # [montecarlo] is a runner section; the Monte Carlo page describes it.
+    # A custom tariff schedule is described under Time-of-use tariffs.
     sectioned = {id(spec) for _, spec, _ in TABLES} | {
         id(app_config.AC_SMART_CHARGING_TABLE),
         id(app_config.MONTECARLO_TABLE),
+        id(app_config._CUSTOM_SCHEDULE_TABLE),
+        id(app_config._CUSTOM_RULE_TABLE),
+        id(app_config._CUSTOM_HOLIDAYS_TABLE),
     }
     specs = [
         *NESTED_TABLE_SPECS.values(),

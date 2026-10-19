@@ -27,6 +27,7 @@ from breos.config_schema import (
     mapping_of,
     number,
     optional,
+    table,
     text,
 )
 from breos.constants import (
@@ -1953,46 +1954,6 @@ def _tariff_study_date(value: Any, where: str) -> date:
     raise TypeError(f"'{where}' must be a date")
 
 
-def _strict_custom_table(
-    value: Any,
-    where: str,
-    *,
-    allowed: frozenset[str],
-    required: frozenset[str],
-) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"'{where}' must be a table/dict")
-    unknown = sorted(str(key) for key in value if key not in allowed)
-    if unknown:
-        raise ValueError(f"Unknown key(s) in '{where}': {', '.join(f'{where}.{key}' for key in unknown)}")
-    missing = sorted(key for key in required if key not in value)
-    if missing:
-        raise ValueError(f"'{where}' needs {', '.join(f'{where}.{key}' for key in missing)}")
-    return value
-
-
-_CUSTOM_SCHEDULE_KEYS = frozenset(
-    {
-        "identifier",
-        "version",
-        "timezone",
-        "cycle",
-        "periods",
-        "rules",
-        "source",
-        "source_url",
-        "note",
-        "effective_from",
-        "effective_to",
-        "holidays",
-        "seasons",
-    }
-)
-_CUSTOM_SCHEDULE_REQUIRED = frozenset({"identifier", "version", "timezone", "cycle", "periods", "rules"})
-_CUSTOM_RULE_KEYS = frozenset({"days", "season", "intervals"})
-_CUSTOM_HOLIDAY_KEYS = frozenset({"day_type", "dates", "source"})
-
-
 def _month(value: Any, where: str) -> int:
     month = integer(minimum=1)(value, where)
     if month > 12:
@@ -2000,94 +1961,77 @@ def _month(value: Any, where: str) -> int:
     return month
 
 
-def _custom_schedule(value: Any, where: str) -> ScheduleDefinition:
-    """Validate the App's strict nested shape, then use the shared parser."""
-    raw = _strict_custom_table(
-        value,
-        where,
-        allowed=_CUSTOM_SCHEDULE_KEYS,
-        required=_CUSTOM_SCHEDULE_REQUIRED,
-    )
-    identifier = text(raw["identifier"], f"{where}.identifier")
-    text(raw["version"], f"{where}.version")
-    timezone = text(raw["timezone"], f"{where}.timezone")
+def _tariff_timezone(value: Any, where: str) -> str:
+    timezone = text(value, where)
     try:
         ZoneInfo(timezone)
     except ZoneInfoNotFoundError as exc:
-        raise ValueError(f"Unknown IANA tariff timezone: {timezone!r} at '{where}.timezone'") from exc
-    normalized_raw = dict(raw)
-    normalized_raw["cycle"] = choice(tuple(sorted(SCHEDULE_CYCLES)))(raw["cycle"], f"{where}.cycle")
-    periods = raw["periods"]
-    if not isinstance(periods, (list, tuple)):
-        raise TypeError(f"'{where}.periods' must be a list of period names")
+        raise ValueError(f"Unknown IANA tariff timezone: {timezone!r} at '{where}'") from exc
+    return timezone
 
+
+def _holiday_dates(value: Any, where: str) -> Any:
+    """Holiday dates by year; the parser checks the dates, this the four-digit year keys TOML gives."""
+    if not isinstance(value, Mapping) or not value:
+        raise TypeError(f"'{where}' must map years to lists of ISO dates")
+    for year in value:
+        if not (isinstance(year, str) and re.fullmatch(r"\d{4}", year)) or year == "0000":
+            raise ValueError(f"'{where}' keys must be four-digit years from 0001 through 9999, not {year!r}")
+    return value
+
+
+# The keys a [tariff].custom_schedule allows. Their values are checked by
+# breos.tariffs.parse_schedule_definition; these tables refuse unknown keys,
+# which the parser ignores, and lowercase the selectors. A rule's season is
+# checked against the schedule's own seasons in _custom_schedule.
+_CUSTOM_RULE_TABLE = TableSpec(
+    "custom_schedule.rules[i]",
+    keys={"days": choice(("all", "saturday", "sunday", "weekday")), "season": text, "intervals": anything},
+    required=frozenset({"days", "season", "intervals"}),
+)
+
+
+def _custom_rules(value: Any, where: str) -> list[dict[str, Any]]:
+    if not isinstance(value, (list, tuple)) or not value:
+        raise TypeError(f"'{where}' must be a non-empty list")
+    return [_CUSTOM_RULE_TABLE.validate(rule, f"{where}[{position}]") for position, rule in enumerate(value)]
+
+
+_CUSTOM_HOLIDAYS_TABLE = TableSpec(
+    "custom_schedule.holidays",
+    keys={"day_type": choice(("saturday", "sunday", "weekday")), "dates": _holiday_dates, "source": text},
+    required=frozenset({"day_type", "dates"}),
+)
+_CUSTOM_SCHEDULE_TABLE = TableSpec(
+    "custom_schedule",
+    keys={
+        "identifier": text,
+        "version": text,
+        "timezone": _tariff_timezone,
+        "cycle": choice(tuple(sorted(SCHEDULE_CYCLES))),
+        "periods": anything,
+        "rules": _custom_rules,
+        "source": text,
+        "source_url": text,
+        "note": text,
+        "effective_from": anything,
+        "effective_to": anything,
+        "holidays": table(_CUSTOM_HOLIDAYS_TABLE),
+        "seasons": mapping_of(text, list_of(_month, min_length=1)),
+    },
+    required=frozenset({"identifier", "version", "timezone", "cycle", "periods", "rules"}),
+)
+
+
+def _custom_schedule(value: Any, where: str) -> ScheduleDefinition:
+    """Check the App's strict nested shape, then build the schedule with the shared parser."""
+    raw = _CUSTOM_SCHEDULE_TABLE.validate(value, where)
     seasons = raw.get("seasons")
-    season_selectors: tuple[str, ...] = ("all", "dst", "standard")
-    if seasons is not None:
-        if not isinstance(seasons, Mapping) or not seasons:
-            raise TypeError(f"'{where}.seasons' must be a table of season names to lists of months")
-        normalized_seasons: dict[str, list[int]] = {}
-        for name, months in seasons.items():
-            season = text(name, f"{where}.seasons key")
-            normalized_seasons[season] = list_of(_month, min_length=1)(months, f"{where}.seasons.{season}")
-        normalized_raw["seasons"] = normalized_seasons
-        season_selectors = ("all", *sorted(normalized_seasons))
-
-    rules = raw["rules"]
-    if not isinstance(rules, (list, tuple)) or not rules:
-        raise TypeError(f"'{where}.rules' must be a non-empty list")
-    normalized_rules = []
-    for position, rule in enumerate(rules):
-        rule_where = f"{where}.rules[{position}]"
-        rule_table = _strict_custom_table(
-            rule,
-            rule_where,
-            allowed=_CUSTOM_RULE_KEYS,
-            required=_CUSTOM_RULE_KEYS,
-        )
-        normalized_rule = dict(rule_table)
-        normalized_rule["days"] = choice(("all", "saturday", "sunday", "weekday"))(
-            rule_table["days"], f"{rule_where}.days"
-        )
-        normalized_rule["season"] = choice(season_selectors)(rule_table["season"], f"{rule_where}.season")
-        if not isinstance(rule_table["intervals"], Mapping):
-            raise TypeError(f"'{rule_where}.intervals' must be a table/dict")
-        normalized_rules.append(normalized_rule)
-    normalized_raw["rules"] = normalized_rules
-
-    holidays = raw.get("holidays")
-    if holidays is not None:
-        holiday_table = _strict_custom_table(
-            holidays,
-            f"{where}.holidays",
-            allowed=_CUSTOM_HOLIDAY_KEYS,
-            required=frozenset({"day_type", "dates"}),
-        )
-        normalized_holidays = dict(holiday_table)
-        normalized_holidays["day_type"] = choice(("saturday", "sunday", "weekday"))(
-            holiday_table["day_type"], f"{where}.holidays.day_type"
-        )
-        normalized_raw["holidays"] = normalized_holidays
-        holiday_dates = holiday_table["dates"]
-        if not isinstance(holiday_dates, Mapping) or not holiday_dates:
-            raise TypeError(f"'{where}.holidays.dates' must map years to lists of ISO dates")
-        for raw_year in holiday_dates:
-            if not (isinstance(raw_year, str) and re.fullmatch(r"\d{4}", raw_year)):
-                raise ValueError(f"'{where}.holidays.dates' keys must be four-digit years, not {raw_year!r}")
-            year = int(raw_year)
-            if not 1 <= year <= 9999:
-                raise ValueError(f"'{where}.holidays.dates' keys must be years from 0001 through 9999")
-        if "source" in holiday_table:
-            text(holiday_table["source"], f"{where}.holidays.source")
-
-    for name in ("source", "source_url", "note"):
-        if name in raw:
-            text(raw[name], f"{where}.{name}")
-
-    definition = parse_schedule_definition(
-        identifier, {key: item for key, item in normalized_raw.items() if key != "identifier"}, where=where
-    )
-    return definition
+    selectors = ("all", *sorted(seasons)) if seasons else ("all", "dst", "standard")
+    for position, rule in enumerate(raw["rules"]):
+        rule["season"] = choice(selectors)(rule["season"], f"{where}.rules[{position}].season")
+    identifier = raw.pop("identifier")
+    return parse_schedule_definition(identifier, raw, where=where)
 
 
 def _selected_schedule(table: Mapping[str, Any]) -> ScheduleDefinition:
