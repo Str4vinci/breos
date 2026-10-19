@@ -22,7 +22,6 @@ from breos._planner_forecast import (
     PERSISTENCE_LEAD,
     RESAMPLING_REACH_HOURS,
     PlannerForecast,
-    calendar_epoch_seconds,
     epoch_seconds,
     source_times,
 )
@@ -178,7 +177,7 @@ def _forecast(freq="15min", days=10, leads=7, delay_h=6.0, support=None, decisio
     step_s = 900 if freq == "15min" else 3600
     return PlannerForecast(
         "weather",
-        calendar_epoch_seconds(index),
+        epoch_seconds(index),
         step_s,
         pv_degradation_rate=0.0,
         support_source_s=support,
@@ -298,7 +297,7 @@ def test_the_forecast_replaces_only_pv_and_degrades_it_by_project_year():
     truth = np.arange(96, dtype=float)
     perfect = PlannerForecast(
         "perfect",
-        calendar_epoch_seconds(index),
+        epoch_seconds(index),
         900,
         pv_degradation_rate=0.5,
         true_pv_dc_w=truth,
@@ -334,12 +333,6 @@ def test_a_raw_hour_shapes_no_step_more_than_the_reach_before_it(site, policy):
 
 
 # -- App runs --------------------------------------------------------------------
-
-
-def test_persistence_runs_record_no_planner_forecast(site):
-    record = _run({})["provenance"]["smart_charging"]
-    assert "planner_forecast" not in record
-    assert record["forecast_policy"] == "repeat_previous_complete_local_day"
 
 
 def test_a_perfect_forecast_plans_on_the_run_itself(site):

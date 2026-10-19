@@ -433,18 +433,6 @@ def _replacement_npv(replacement: pd.Series, replacement_exponents: np.ndarray, 
     return float(np.sum(outlay * discount))
 
 
-# Year-row money columns at year-1 prices (ADR 0003 E7). The projection
-# escalates, times and discounts them; TOU valuation fills them from per-step
-# energy and prices in the year loop.
-YEAR_ROW_MONEY_COLUMNS = (
-    "Import_Cost",
-    "Export_Revenue",
-    "Fixed_Charge",
-    "Baseline_Import_Cost",
-    "Baseline_Fixed_Charge",
-)
-
-
 def _replacement_outlays_t0(counts: Any, each: float) -> np.ndarray:
     """``each`` summed once per replacement, for each entry of ``counts``.
 
