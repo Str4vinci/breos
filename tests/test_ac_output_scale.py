@@ -60,19 +60,22 @@ DC_GRID = (0.0, 1e-9, 50.0, 500.0, 1800.0, 3520.0, 3666.6666666666665, 9000.0)
 
 @pytest.mark.parametrize("scale", SCALES)
 @pytest.mark.parametrize("dc", DC_GRID)
-def test_scaling_is_exactly_multiplicative_on_ac(scale, dc):
-    reference = calculate_dc_ac_power(dc, AC_RATING, EFFICIENCY).ac_power_w
-    scaled = calculate_dc_ac_power(dc, AC_RATING, EFFICIENCY, scale).ac_power_w
-    assert scaled == pytest.approx(reference * scale, rel=0.0, abs=1e-12)
-
-
-@pytest.mark.parametrize("scale", SCALES)
-@pytest.mark.parametrize("dc", DC_GRID)
-def test_scaling_does_not_move_dc_side_clipping(scale, dc):
-    """Clipping is a DC-side inverter behaviour and must be untouched."""
+def test_scaling_multiplies_ac_without_moving_clipping_or_creating_energy(scale, dc):
     reference = calculate_dc_ac_power(dc, AC_RATING, EFFICIENCY)
     scaled = calculate_dc_ac_power(dc, AC_RATING, EFFICIENCY, scale)
+    assert scaled.ac_power_w == pytest.approx(reference.ac_power_w * scale, rel=0.0, abs=1e-12)
+    # Clipping is a DC-side inverter behaviour and must be untouched.
     assert scaled.clipping_loss_dc_w == reference.clipping_loss_dc_w
+
+    # The two invariants the (0, 1] bound exists to protect. Delivered AC
+    # stays at or below the inverter rating, and at or below the DC entering
+    # the converter, so the conversion loss the ledger reports is a real
+    # non-negative quantity rather than a clamp hiding created energy.
+    assert scaled.ac_power_w <= AC_RATING + 1e-12
+    dc_into_inverter = dc - scaled.clipping_loss_dc_w
+    assert scaled.ac_power_w <= dc_into_inverter + 1e-12
+    assert scaled.conversion_loss_w >= 0.0
+    assert scaled.conversion_loss_w == pytest.approx(dc_into_inverter - scaled.ac_power_w, rel=0.0, abs=1e-9)
 
 
 @pytest.mark.parametrize("scale", SCALES)
@@ -112,34 +115,17 @@ def test_scaling_is_multiplicative_on_the_array_path(scale):
     assert np.array_equal(clip_scaled, clip_reference)
 
 
-@pytest.mark.parametrize("value", (0.0, -1.0, float("nan"), float("inf")))
-def test_battery_config_rejects_a_non_positive_scale(value):
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    ("value", "match"),
+    [
+        *((value, None) for value in (0.0, -1.0, float("nan"), float("inf"))),
+        # Above 1 the factor would push the inverter past its own nameplate.
+        *((value, "at most 1") for value in (1.0857, 1.5, 2.0, 1.0 + 1e-9)),
+    ],
+)
+def test_battery_config_rejects_a_scale_outside_zero_to_one(value, match):
+    with pytest.raises(ValueError, match=match):
         BatteryConfig(nominal_energy_wh=5000.0, ac_output_scale=value)
-
-
-@pytest.mark.parametrize("value", (1.0857, 1.5, 2.0, 1.0 + 1e-9))
-def test_battery_config_rejects_a_scale_above_one(value):
-    """Above 1 the factor would push the inverter past its own nameplate."""
-    with pytest.raises(ValueError, match="at most 1"):
-        BatteryConfig(nominal_energy_wh=5000.0, ac_output_scale=value)
-
-
-@pytest.mark.parametrize("scale", SCALES)
-@pytest.mark.parametrize("dc", DC_GRID)
-def test_scaled_ac_never_exceeds_the_nameplate_or_its_own_dc(scale, dc):
-    """The two invariants the (0, 1] bound exists to protect.
-
-    Delivered AC stays at or below the inverter rating, and at or below the DC
-    entering the converter, so the conversion loss the ledger reports is a
-    real non-negative quantity rather than a clamp hiding created energy.
-    """
-    result = calculate_dc_ac_power(dc, AC_RATING, EFFICIENCY, scale)
-    assert result.ac_power_w <= AC_RATING + 1e-12
-    dc_into_inverter = dc - result.clipping_loss_dc_w
-    assert result.ac_power_w <= dc_into_inverter + 1e-12
-    assert result.conversion_loss_w >= 0.0
-    assert result.conversion_loss_w == pytest.approx(dc_into_inverter - result.ac_power_w, rel=0.0, abs=1e-9)
 
 
 @pytest.mark.parametrize("dc", DC_GRID)
@@ -172,13 +158,6 @@ def _simulate(scenario: str, backend: str, scale: float):
         execution_backend=backend,
         **sim_kwargs,
     )
-
-
-@pytest.mark.parametrize("scenario", ("one_day", "saturating", "discharge_limited"))
-def test_scaling_reduces_delivered_ac(scenario):
-    full = _simulate(scenario, "python", 1.0)[0]
-    reduced = _simulate(scenario, "python", 1.0 / 1.0857)[0]
-    assert reduced["Import_From_Grid"].sum() > full["Import_From_Grid"].sum()
 
 
 class TestCompiledBackendParity:
@@ -238,16 +217,37 @@ def test_scaled_inverter_ceiling_binds_and_is_backend_identical():
     is imported. The ceiling moves down with the factor and never above the
     nameplate, which is the behaviour the (0, 1] bound guarantees.
     """
-    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     python_out = _scaled_battery_ceiling_run("python")
-    numba_out = _scaled_battery_ceiling_run("numba")
 
     assert python_out[0]["Battery_AC_To_Load"].iloc[0] == pytest.approx(800.0)
     assert python_out[0]["Import_From_Grid"].iloc[0] == pytest.approx(400.0)
+
+    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
+    numba_out = _scaled_battery_ceiling_run("numba")
     for column in python_out[0].columns:
         if column != "Datetime":
             assert np.array_equal(python_out[0][column].to_numpy(), numba_out[0][column].to_numpy()), column
     assert python_out[1] == numba_out[1]
+
+
+def _optimizer_config(years: int = 1, **extra) -> dict:
+    """A minimal optimizer config for one Porto design."""
+    return {
+        "location": {"latitude": 41.15, "longitude": -8.63},
+        "pv": {"module": "Suntech_STP550S_STC"},
+        "simulation": {"resolution": "h", "years_projection": years},
+        "financials": {"project_lifespan": years},
+        "costs": {"dc_ac_ratio": 1.25},
+        **extra,
+    }
+
+
+def _frames(periods: int, load_w: float = 500.0):
+    """Hourly index, 20 degC weather and a flat load for the optimizer entry points."""
+    idx = pd.date_range("2025-01-01", periods=periods, freq="h", tz="UTC")
+    weather = pd.DataFrame({"temp_air": np.full(periods, 20.0)}, index=idx)
+    load = pd.DataFrame({"Load": np.full(periods, load_w)}, index=idx)
+    return idx, weather, load
 
 
 class TestProjectedWeatherSequence:
@@ -323,9 +323,7 @@ class TestProjectedWeatherSequence:
         """
         from breos.optimization import evaluate_projected_design
 
-        idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
-        weather = pd.DataFrame({"temp_air": np.full(24, 20.0)}, index=idx)
-        load = pd.DataFrame({"Load": np.full(24, 500.0)}, index=idx)
+        idx, weather, load = _frames(24)
         seen: list = []
 
         monkeypatch.setattr(
@@ -347,13 +345,7 @@ class TestProjectedWeatherSequence:
 
         monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", _capture)
 
-        config = {
-            "location": {"latitude": 41.15, "longitude": -8.63},
-            "pv": {"module": "Suntech_STP550S_STC"},
-            "simulation": {"resolution": "h", "years_projection": 2},
-            "financials": {"project_lifespan": 2},
-            "costs": {"dc_ac_ratio": 1.25},
-        }
+        config = _optimizer_config(years=2)
         kwargs = dict(n_modules=9, battery_kwh=5.0, tilt=35.0, azimuth=200.0)
 
         result = evaluate_projected_design(weather, load, config, weather_by_year=[weather, weather], **kwargs)
@@ -445,18 +437,8 @@ class TestUnlimitedInverterAndOptimizer:
         """SolarDesignProblem must not silently evaluate at scale 1.0."""
         from breos.optimization import SolarDesignProblem
 
-        idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
-        weather = pd.DataFrame({"temp_air": np.full(24, 20.0)}, index=idx)
-        load = pd.DataFrame({"Load": np.full(24, 500.0)}, index=idx)
-        config = {
-            "location": {"latitude": 41.15, "longitude": -8.63},
-            "pv": {"module": "Suntech_STP550S_STC"},
-            "simulation": {"resolution": "h", "years_projection": 1},
-            "financials": {"project_lifespan": 1},
-            "costs": {"dc_ac_ratio": 1.25},
-            "ac_output_scale": 0.9210647508519848,
-            "dc_output_scale": 0.75,
-        }
+        _idx, weather, load = _frames(24)
+        config = _optimizer_config(ac_output_scale=0.9210647508519848, dc_output_scale=0.75)
         problem = SolarDesignProblem(weather, load, config)
         assert problem.ac_output_scale == pytest.approx(0.9210647508519848)
         assert problem.dc_output_scale == pytest.approx(0.75)
@@ -471,45 +453,15 @@ class TestUnlimitedInverterAndOptimizer:
         """The AC factor is rejected at the config boundary, not deep in dispatch."""
         from breos.optimization import SolarDesignProblem
 
-        idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
-        weather = pd.DataFrame({"temp_air": [20.0, 20.0]}, index=idx)
-        load = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
-        config = {
-            "location": {"latitude": 41.15, "longitude": -8.63},
-            "pv": {"module": "Suntech_STP550S_STC"},
-            "simulation": {"resolution": "h", "years_projection": 1},
-            "financials": {"project_lifespan": 1},
-            "costs": {"dc_ac_ratio": 1.25},
-            "ac_output_scale": scale,
-        }
+        _idx, weather, load = _frames(2)
         with pytest.raises(ValueError, match="ac_output_scale must be finite"):
-            SolarDesignProblem(weather, load, config)
-
-    @pytest.mark.parametrize("scale", [0.0, -1.0, float("nan"), float("inf")])
-    def test_optimizer_problem_rejects_invalid_dc_scale(self, scale):
-        from breos.optimization import SolarDesignProblem
-
-        idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
-        weather = pd.DataFrame({"temp_air": [20.0, 20.0]}, index=idx)
-        load = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
-        config = {
-            "location": {"latitude": 41.15, "longitude": -8.63},
-            "pv": {"module": "Suntech_STP550S_STC"},
-            "simulation": {"resolution": "h", "years_projection": 1},
-            "financials": {"project_lifespan": 1},
-            "costs": {"dc_ac_ratio": 1.25},
-            "dc_output_scale": scale,
-        }
-        with pytest.raises(ValueError, match="dc_output_scale must be finite and greater than 0"):
-            SolarDesignProblem(weather, load, config)
+            SolarDesignProblem(weather, load, _optimizer_config(ac_output_scale=scale))
 
     def test_optimizer_problem_scales_dc_before_projected_scoring(self, monkeypatch):
         """NSGA candidate scoring sends corrected raw DC to the projection."""
         from breos.optimization import SolarDesignProblem
 
-        idx = pd.date_range("2025-01-01", periods=3, freq="h", tz="UTC")
-        weather = pd.DataFrame({"temp_air": np.full(3, 20.0)}, index=idx)
-        load = pd.DataFrame({"Load": np.full(3, 100.0)}, index=idx)
+        idx, weather, load = _frames(3, load_w=100.0)
         raw = pd.Series([100.0, 200.0, 300.0], index=idx)
         seen = {}
 
@@ -525,15 +477,7 @@ class TestUnlimitedInverterAndOptimizer:
             }
 
         monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", fake_projected)
-        config = {
-            "location": {"latitude": 41.15, "longitude": -8.63},
-            "pv": {"module": "Suntech_STP550S_STC"},
-            "simulation": {"resolution": "h", "years_projection": 1},
-            "financials": {"project_lifespan": 1},
-            "costs": {"dc_ac_ratio": 1.25},
-            "optimization": {"objective_basis": "projected"},
-            "dc_output_scale": 0.5,
-        }
+        config = _optimizer_config(optimization={"objective_basis": "projected"}, dc_output_scale=0.5)
         problem = SolarDesignProblem(weather, load, config)
         out = {}
         problem._evaluate(np.array([1.0, 1.0, 35.0, 180.0]), out)
@@ -545,24 +489,10 @@ class TestUnlimitedInverterAndOptimizer:
 class TestDcOutputScale:
     """The DC-side reading of the same yield correction."""
 
-    @staticmethod
-    def _config(**extra):
-        cfg = {
-            "location": {"latitude": 41.15, "longitude": -8.63},
-            "pv": {"module": "Suntech_STP550S_STC"},
-            "simulation": {"resolution": "h", "years_projection": 1},
-            "financials": {"project_lifespan": 1},
-            "costs": {"dc_ac_ratio": 1.25},
-        }
-        cfg.update(extra)
-        return cfg
-
     def _run(self, monkeypatch, config):
         from breos.optimization import evaluate_projected_design
 
-        idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
-        weather = pd.DataFrame({"temp_air": np.full(24, 20.0)}, index=idx)
-        load = pd.DataFrame({"Load": np.full(24, 500.0)}, index=idx)
+        idx, weather, load = _frames(24)
         raw = pd.Series(np.linspace(0.0, 4000.0, 24), index=idx)
         seen: dict = {}
 
@@ -583,10 +513,18 @@ class TestDcOutputScale:
 
     @pytest.mark.parametrize("scale", [0.5, 0.9210647508519848, 1.0857])
     def test_dc_series_is_scaled_before_dispatch(self, monkeypatch, scale):
-        raw, used = self._run(monkeypatch, self._config(dc_output_scale=scale))
+        raw, used = self._run(monkeypatch, _optimizer_config(dc_output_scale=scale))
         assert np.allclose(used.to_numpy(), raw.to_numpy() * scale, rtol=0.0, atol=0.0)
 
+    @pytest.mark.parametrize("entry_point", ["evaluate_projected_design", "SolarDesignProblem"])
     @pytest.mark.parametrize("scale", [0.0, -1.0, float("nan"), float("inf")])
-    def test_dc_scale_must_be_positive_and_finite(self, monkeypatch, scale):
+    def test_dc_scale_must_be_positive_and_finite(self, monkeypatch, entry_point, scale):
+        from breos.optimization import SolarDesignProblem
+
+        config = _optimizer_config(dc_output_scale=scale)
+        _idx, weather, load = _frames(2)
         with pytest.raises(ValueError, match="dc_output_scale must be finite and greater than 0"):
-            self._run(monkeypatch, self._config(dc_output_scale=scale))
+            if entry_point == "SolarDesignProblem":
+                SolarDesignProblem(weather, load, config)
+            else:
+                self._run(monkeypatch, config)

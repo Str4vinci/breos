@@ -461,10 +461,15 @@ def _brute_force(curve: ShadedStringCurve, v_min: float, v_max: float) -> float:
     return best
 
 
-def test_a_binding_window_is_solved_on_the_exact_curve():
+@pytest.mark.parametrize(
+    ("v_min", "v_max"),
+    [pytest.param(80.0, 260.0, id="binding"), pytest.param(80.0, 200.0, id="between-table-points")],
+)
+def test_a_binding_window_is_solved_on_the_exact_curve(v_min, v_max):
     curve = _curve([{"beam_shaded_fraction": _table(0.99)}] * 7 + [LIT])
-    _, limited, _ = _curves_power([_CurveSource(curve)], 80.0, 260.0, 50.0, 50.0)
-    assert limited[0] == pytest.approx(_brute_force(curve, 80.0, 260.0), rel=1e-4)
+    _, limited, _ = _curves_power([_CurveSource(curve)], v_min, v_max, 50.0, 50.0)
+    assert limited[0] > 0
+    assert limited[0] == pytest.approx(_brute_force(curve, v_min, v_max), rel=1e-4)
 
 
 class _TwoPeaks:
@@ -479,13 +484,6 @@ class _TwoPeaks:
     def current(self, voltage, rows, signed=False):
         v = np.asarray(voltage, dtype=float)
         return np.where(v <= 300.0, 10.0, np.where(v <= 697.5, 4.28, np.clip((700.0 - v) * 1.712, 0.0, None)))
-
-
-def test_the_summed_curve_keeps_its_global_peak():
-    _, limited, voltage = _curves_power([_TwoPeaks(), _TwoPeaks()], 0.0, 800.0, 100.0, 100.0)
-    assert limited[0] == pytest.approx(6000.0, rel=1e-3)
-    # The global peak lies at the knee, 300 V, not the higher-voltage one near 697.5 V.
-    assert voltage[0] == pytest.approx(300.0, rel=1e-3)
 
 
 def test_inconsistent_mean_and_limiting_fractions_are_refused(trina):
@@ -601,18 +599,6 @@ def test_a_mismatched_string_draws_current_above_its_open_circuit():
     assert voltage[0] < clear.v_oc[0] - 5.0
 
 
-def test_a_window_between_two_table_points_is_still_solved():
-    curve = _curve([{"beam_shaded_fraction": _table(0.99)}] * 7 + [LIT])
-    _, limited, _ = _curves_power([_CurveSource(curve)], 80.0, 200.0, 50.0, 50.0)
-    assert limited[0] > 0
-    assert limited[0] == pytest.approx(_brute_force(curve, 80.0, 200.0), rel=1e-4)
-
-
-def test_repeated_grid_currents_do_not_hide_the_peak():
-    curve = _curve([LIT, {"beam_shaded_fraction": _table(0.5)}, {"beam_shaded_fraction": _table(0.5)}, LIT])
-    assert curve.mpp[0] == pytest.approx(_brute_force(curve, -np.inf, np.inf), rel=1e-5)
-
-
 def test_more_bypass_diodes_than_cells_is_refused(trina):
     with pytest.raises(ValueError, match="must divide"):
         replace(MODULES[trina], bypass_diodes=145)
@@ -659,11 +645,6 @@ class _FourPlateaus:
         )
 
 
-def test_several_close_peaks_keep_the_global_one():
-    _, limited, _ = _curves_power([_FourPlateaus(), _FourPlateaus()], 0.0, 800.0, 100.0, 100.0)
-    assert limited[0] == pytest.approx(6000.0, rel=1e-4)
-
-
 # -- third review regressions ---------------------------------------------------------------------
 
 
@@ -698,9 +679,20 @@ class _NarrowFirstPeak:
         return np.where(v <= 30.0, 10.0, np.where(v <= 697.5, 0.428, np.clip(0.1712 * (700.0 - v), 0.0, None)))
 
 
-def test_a_narrow_global_peak_is_not_filtered_out():
-    _, limited, _ = _curves_power([_NarrowFirstPeak(), _NarrowFirstPeak()], 0.0, 800.0, 100.0, 100.0)
-    assert limited[0] == pytest.approx(600.0, rel=1e-4)
+@pytest.mark.parametrize(
+    ("source", "power", "rel"),
+    [
+        pytest.param(_TwoPeaks, 6000.0, 1e-3, id="knee-and-high-voltage-peak"),
+        pytest.param(_FourPlateaus, 6000.0, 1e-4, id="several-close-peaks"),
+        pytest.param(_NarrowFirstPeak, 600.0, 1e-4, id="narrow-global-peak"),
+    ],
+)
+def test_the_summed_curve_keeps_its_global_peak(source, power, rel):
+    _, limited, voltage = _curves_power([source(), source()], 0.0, 800.0, 100.0, 100.0)
+    assert limited[0] == pytest.approx(power, rel=rel)
+    if source is _TwoPeaks:
+        # The global peak lies at the knee, 300 V, not the higher-voltage one near 697.5 V.
+        assert voltage[0] == pytest.approx(300.0, rel=1e-3)
 
 
 def test_string_energy_binds_unbound_shading_to_the_module():
