@@ -30,6 +30,24 @@ from breos.inverter import calculate_dc_ac_power
 from breos.solar import dc_to_ac
 from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 
+BLAST_LFP = {"degradation_engine": "blast", "blast_model": "lfp_gr_250ah_prismatic"}
+
+
+def _simulate(pv_w, load_w, battery_config, *, periods=None, freq="h", start="2025-01-01", temperature=25.0, **kwargs):
+    """Run the detailed energy balance on a UTC index from scalar or per-step PV, load and temperature.
+
+    ``temperature=None`` leaves the temperature series out.
+    """
+    idx = pd.date_range(start, periods=len(pv_w) if periods is None else periods, freq=freq, tz="UTC")
+    return simulate_energy_balance(
+        pv_dc=pd.Series(pv_w, index=idx, dtype=float),
+        houseload=pd.DataFrame({"Load": load_w}, index=idx, dtype=float),
+        battery_config=battery_config,
+        freq=freq,
+        temperature_series=None if temperature is None else pd.Series(temperature, index=idx, dtype=float),
+        **kwargs,
+    )
+
 
 class TestBatteryConfig:
     def test_defaults(self):
@@ -445,36 +463,24 @@ class TestSimulateEnergyBalance:
         ],
     )
     def test_full_buffers_are_kept_where_the_reduced_ones_are_unsafe(self, monkeypatch, battery_config, reason):
-        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
-
         def fail_if_called(n_steps):
             raise AssertionError(f"reduced buffers are not usable here: {reason}")
 
         monkeypatch.setattr(battery_module, "_PvOnlySummaryBuffers", fail_if_called)
-        results_df, *_ = simulate_energy_balance(
-            pv_dc=pd.Series(1000.0, index=index),
-            houseload=pd.DataFrame({"Load": 500.0}, index=index),
-            battery_config=battery_config,
-            freq="15min",
-        )
+        results_df, *_ = _simulate(1000.0, 500.0, battery_config, periods=96, freq="15min", temperature=None)
 
         # Aliased columns would make these two the same array.
         results_df.loc[0, "PV_Direct_Inverter_Loss"] = 1234.5
         assert results_df.loc[0, "Inverter_Loss"] != 1234.5
 
     def test_zero_battery_skips_daily_degradation(self, monkeypatch):
-        index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
-
         def fail_if_called(*args, **kwargs):
             raise AssertionError("a zero-capacity battery cannot degrade")
 
         monkeypatch.setattr(battery_module, "_apply_daily_degradation", fail_if_called)
 
-        results, _, _, _, degradation = simulate_energy_balance(
-            pv_dc=pd.Series(1000.0, index=index),
-            houseload=pd.DataFrame({"Load": 500.0}, index=index),
-            battery_config=BatteryConfig(nominal_energy_wh=0.0),
-            freq="h",
+        results, _, _, _, degradation = _simulate(
+            1000.0, 500.0, BatteryConfig(nominal_energy_wh=0.0), periods=24, temperature=None
         )
 
         assert len(results) == 24
@@ -549,24 +555,12 @@ class TestSimulateEnergyBalance:
         # enable_resistance_fade must feed the effective RTE back into the
         # charge/discharge flows, not just record it: with substantial
         # resistance growth the same scenario delivers less battery energy.
-        idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
-        pv = pd.Series([0.0] * 8 + [2000.0] * 8 + [0.0] * 8, index=idx)
-        houseload = pd.DataFrame({"Load": [800.0] * 8 + [0.0] * 8 + [800.0] * 8}, index=idx)
+        pv = [0.0] * 8 + [2000.0] * 8 + [0.0] * 8
+        load = [800.0] * 8 + [0.0] * 8 + [800.0] * 8
 
         def _run(**kwargs):
-            config = BatteryConfig(
-                nominal_energy_wh=5000,
-                standby_loss_wh=0.0,
-                enable_replacement=False,
-                **kwargs,
-            )
-            results_df, *_ = simulate_energy_balance(
-                pv_dc=pv,
-                houseload=houseload,
-                battery_config=config,
-                freq="h",
-                temperature_series=pd.Series(25.0, index=idx),
-            )
+            config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False, **kwargs)
+            results_df, *_ = _simulate(pv, load, config)
             return results_df["Import_From_Grid"].sum()
 
         import_base = _run()
@@ -609,7 +603,6 @@ class TestSimulateEnergyBalance:
 
     @pytest.mark.parametrize("nominal_energy_wh", [0.0, 1000.0])
     def test_negative_pv_input_is_clamped_before_dispatch(self, nominal_energy_wh):
-        idx = pd.date_range("2025-01-01", periods=1, freq="h", tz="UTC")
         config = BatteryConfig(
             nominal_energy_wh=nominal_energy_wh,
             inverter_ac_capacity_w=1000.0,
@@ -617,12 +610,7 @@ class TestSimulateEnergyBalance:
             enable_replacement=False,
         )
 
-        results, *_ = simulate_energy_balance(
-            pv_dc=pd.Series([-100.0], index=idx),
-            houseload=pd.DataFrame({"Load": [500.0]}, index=idx),
-            battery_config=config,
-            temperature_series=pd.Series(25.0, index=idx),
-        )
+        results, *_ = _simulate([-100.0], [500.0], config)
 
         assert results["PV_DC"].iloc[0] == 0.0
         assert results["PV_DC_To_Battery"].iloc[0] == 0.0
@@ -633,9 +621,6 @@ class TestSimulateEnergyBalance:
         )
 
     def test_battery_shares_inverter_cap_and_charges_from_clipped_dc(self):
-        idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
-        pv_dc = pd.Series([0.0, 3000.0], index=idx)
-        houseload = pd.DataFrame({"Load": [2000.0, 0.0]}, index=idx)
         config = BatteryConfig(
             nominal_energy_wh=2000,
             inverter_ac_capacity_w=1000.0,
@@ -643,13 +628,7 @@ class TestSimulateEnergyBalance:
             enable_replacement=False,
         )
 
-        results_df, *_ = simulate_energy_balance(
-            pv_dc=pv_dc,
-            houseload=houseload,
-            battery_config=config,
-            freq="h",
-            temperature_series=pd.Series(25.0, index=idx),
-        )
+        results_df, *_ = _simulate([0.0, 3000.0], [2000.0, 0.0], config)
 
         # Hour 0: battery discharge AC is capped at the rating; the rest imports
         assert results_df["Import_From_Grid"].iloc[0] == pytest.approx(1000.0)
@@ -663,36 +642,23 @@ class TestSimulateEnergyBalance:
         # stored energy (lfp cold derate). charge_room went negative and the
         # battery silently drained into PV_AC_Export: 100 Wh of PV exported
         # ~539 Wh in the first cold hour. Export must never exceed PV AC.
-        idx = pd.date_range("2025-01-01 00:00", periods=6, freq="h", tz="UTC")
-        pv_dc = pd.Series(100.0, index=idx)
-        houseload = pd.DataFrame({"Load": 0.0}, index=idx)
         config = BatteryConfig(nominal_energy_wh=10000)
-        temperature = pd.Series([25.0, 25.0, 0.0, 0.0, 0.0, 0.0], index=idx)
 
-        results_df, *_ = simulate_energy_balance(
-            pv_dc=pv_dc,
-            houseload=houseload,
-            battery_config=config,
-            temperature_series=temperature,
-            freq="h",
-        )
+        results_df, *_ = _simulate(100.0, 0.0, config, periods=6, temperature=[25.0, 25.0, 0.0, 0.0, 0.0, 0.0])
 
         pv_ac_max = 100.0 * config.inverter_efficiency
         assert results_df["PV_AC_Export"].max() <= pv_ac_max + 1e-9
         # Stored energy is clamped into the temperature-derated window
-        from breos.battery import lfp_capacity_factor
-
         emax_cold = 10000 * config.max_soc * lfp_capacity_factor(0.0)
         assert results_df["Battery_Energy"].iloc[-1] <= emax_cold + 1e-9
 
     def test_native_degradation_engine_preserves_final_state_shape(self):
-        idx = pd.date_range("2025-01-01 00:00", periods=1, freq="h", tz="UTC")
         config = BatteryConfig(nominal_energy_wh=5000, enable_replacement=False)
-        result = simulate_energy_balance(
-            pv_dc=pd.Series(0.0, index=idx),
-            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
-            battery_config=config,
-            freq="h",
+        result = _simulate(
+            [0.0],
+            [0.0],
+            config,
+            temperature=None,
             initial_fec=3.0,
             initial_calendar_seconds=86400.0,
             initial_resistance_growth=0.05,
@@ -815,14 +781,8 @@ class TestSimulateEnergyBalance:
             max_discharge_power_w=2500.0,
         )
 
-        results, _, _, _, degradation, state = simulate_energy_balance(
-            pv_dc=pd.Series(pv_values, index=idx),
-            houseload=pd.DataFrame({"Load": load_values}, index=idx),
-            battery_config=config,
-            temperature_series=pd.Series(25.0, index=idx),
-            freq="h",
-            return_degradation_state=True,
-            finalize_degradation=True,
+        results, _, _, _, degradation, state = _simulate(
+            pv_values, load_values, config, return_degradation_state=True, finalize_degradation=True
         )
 
         ticks, ticks_per_second = _datetime_index_ticks(idx)
@@ -884,7 +844,6 @@ class TestSimulateEnergyBalance:
         assert summary.final_degradation_state == default_state
 
     def test_native_rainflow_residue_continues_across_simulation_calls(self):
-        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
         pv_values = np.tile(np.asarray([0.0] * 8 + [1200.0] * 8 + [0.0] * 8), 2)
         load_values = np.tile(np.asarray([900.0] * 8 + [0.0] * 8 + [900.0] * 8), 2)
         config = BatteryConfig(
@@ -894,33 +853,17 @@ class TestSimulateEnergyBalance:
             max_charge_power_w=2500.0,
             max_discharge_power_w=2500.0,
         )
-        pv = pd.Series(pv_values, index=idx)
-        load = pd.DataFrame({"Load": load_values}, index=idx)
-        temperature = pd.Series(25.0, index=idx)
 
-        full = simulate_energy_balance(
-            pv_dc=pv,
-            houseload=load,
-            battery_config=config,
-            temperature_series=temperature,
-            freq="h",
-        )
-        first = simulate_energy_balance(
-            pv_dc=pv.iloc[:24],
-            houseload=load.iloc[:24],
-            battery_config=config,
-            temperature_series=temperature.iloc[:24],
-            freq="h",
-            return_degradation_state=True,
-            finalize_degradation=False,
+        full = _simulate(pv_values, load_values, config)
+        first = _simulate(
+            pv_values[:24], load_values[:24], config, return_degradation_state=True, finalize_degradation=False
         )
         first_results, *_, state = first
-        second = simulate_energy_balance(
-            pv_dc=pv.iloc[24:],
-            houseload=load.iloc[24:],
-            battery_config=config,
-            temperature_series=temperature.iloc[24:],
-            freq="h",
+        second = _simulate(
+            pv_values[24:],
+            load_values[24:],
+            config,
+            start="2025-01-02",
             initial_energy_wh=float(first_results["Battery_Energy_End"].iloc[-1]),
             initial_pv_origin_energy_wh=float(first_results["Battery_PV_Origin_Energy_End"].iloc[-1]),
             initial_degradation_state=state,
@@ -940,9 +883,8 @@ class TestSimulateEnergyBalance:
         )
 
     def test_native_replacement_discards_residue_after_retired_fec_is_counted(self, monkeypatch):
-        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
-        pv_values = np.zeros(len(idx))
-        load_values = np.zeros(len(idx))
+        pv_values = np.zeros(48)
+        load_values = np.zeros(48)
         load_values[:8] = 900.0
         pv_values[8:16] = 1200.0
         load_values[16:24] = 900.0
@@ -970,23 +912,15 @@ class TestSimulateEnergyBalance:
             max_charge_power_w=2500.0,
             max_discharge_power_w=2500.0,
         )
-        baseline = simulate_energy_balance(
-            pv_dc=pd.Series(pv_values[:24], index=idx[:24]),
-            houseload=pd.DataFrame({"Load": load_values[:24]}, index=idx[:24]),
-            battery_config=retired_pack_baseline_config,
-            temperature_series=pd.Series(25.0, index=idx[:24]),
-            freq="h",
+        baseline = _simulate(
+            pv_values[:24],
+            load_values[:24],
+            retired_pack_baseline_config,
             return_degradation_state=True,
             finalize_degradation=True,
         )
-        results, _, _, replacements, degradation, state = simulate_energy_balance(
-            pv_dc=pd.Series(pv_values, index=idx),
-            houseload=pd.DataFrame({"Load": load_values}, index=idx),
-            battery_config=config,
-            temperature_series=pd.Series(25.0, index=idx),
-            freq="h",
-            return_degradation_state=True,
-            finalize_degradation=False,
+        results, _, _, replacements, degradation, state = _simulate(
+            pv_values, load_values, config, return_degradation_state=True, finalize_degradation=False
         )
 
         assert replacements == 1
@@ -1006,22 +940,9 @@ class TestSimulateEnergyBalance:
         assert residue[0][2] == 0
 
     def test_blast_degradation_engine_returns_final_state(self):
-        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
-        pv_dc = pd.Series(0.0, index=idx)
-        houseload = pd.DataFrame({"Load": 0.0}, index=idx)
-        temperature = pd.Series(25.0, index=idx)
         config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
 
-        result = simulate_energy_balance(
-            pv_dc=pv_dc,
-            houseload=houseload,
-            battery_config=config,
-            freq="h",
-            temperature_series=temperature,
-            degradation_engine="blast",
-            blast_model="lfp_gr_250ah_prismatic",
-            return_degradation_state=True,
-        )
+        result = _simulate(0.0, 0.0, config, periods=48, return_degradation_state=True, **BLAST_LFP)
 
         assert len(result) == 6
         results_df, _, summary_df, _, degradation_df, degradation_state = result
@@ -1035,44 +956,23 @@ class TestSimulateEnergyBalance:
         assert degradation_state["day_start_soc_absolute"] == pytest.approx(results_df["Battery_SOC_Absolute"].iloc[-1])
 
     def test_blast_split_preserves_stored_energy_and_pv_origin_inventory(self):
-        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
-        pv_dc = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=idx)
-        houseload = pd.DataFrame({"Load": ([400.0] * 8 + [0.0] * 8 + [400.0] * 8) * 2}, index=idx)
-        temperature = pd.Series(25.0, index=idx)
+        pv = [0.0] * 8 + [2500.0] * 8 + [0.0] * 8
+        load = [400.0] * 8 + [0.0] * 8 + [400.0] * 8
         config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
 
-        full_results, *_, full_degradation = simulate_energy_balance(
-            pv_dc=pv_dc,
-            houseload=houseload,
-            battery_config=config,
-            freq="h",
-            temperature_series=temperature,
-            degradation_engine="blast",
-            blast_model="lfp_gr_250ah_prismatic",
-        )
-        first_results, *_, degradation_state = simulate_energy_balance(
-            pv_dc=pv_dc.iloc[:24],
-            houseload=houseload.iloc[:24],
-            battery_config=config,
-            freq="h",
-            temperature_series=temperature.iloc[:24],
-            degradation_engine="blast",
-            blast_model="lfp_gr_250ah_prismatic",
-            return_degradation_state=True,
-        )
+        full_results, *_, full_degradation = _simulate(pv * 2, load * 2, config, **BLAST_LFP)
+        first_results, *_, degradation_state = _simulate(pv, load, config, return_degradation_state=True, **BLAST_LFP)
         carried_energy = float(first_results["Battery_Energy_End"].iloc[-1])
         carried_pv_origin = float(first_results["Battery_PV_Origin_Energy_End"].iloc[-1])
-        second_results, *_, second_degradation = simulate_energy_balance(
-            pv_dc=pv_dc.iloc[24:],
-            houseload=houseload.iloc[24:],
-            battery_config=config,
-            freq="h",
-            temperature_series=temperature.iloc[24:],
+        second_results, *_, second_degradation = _simulate(
+            pv,
+            load,
+            config,
+            start="2025-01-02",
             initial_energy_wh=carried_energy,
             initial_pv_origin_energy_wh=carried_pv_origin,
-            degradation_engine="blast",
-            blast_model="lfp_gr_250ah_prismatic",
             initial_degradation_state=degradation_state,
+            **BLAST_LFP,
         )
 
         assert carried_energy < config.nominal_energy_wh * config.max_soc
@@ -1096,35 +996,24 @@ class TestSimulateEnergyBalance:
         assert second_degradation["SOH"].iloc[-1] == pytest.approx(full_degradation["SOH"].iloc[-1], abs=1e-12)
 
     def test_blast_carried_energy_above_restored_soh_window_is_ledgered(self):
-        first_idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
         config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
-        *_, degradation_state = simulate_energy_balance(
-            pv_dc=pd.Series(0.0, index=first_idx),
-            houseload=pd.DataFrame({"Load": 0.0}, index=first_idx),
-            battery_config=config,
-            freq="h",
-            temperature_series=pd.Series(45.0, index=first_idx),
-            degradation_engine="blast",
-            blast_model="lfp_gr_250ah_prismatic",
-            return_degradation_state=True,
+        *_, degradation_state = _simulate(
+            0.0, 0.0, config, periods=24, temperature=45.0, return_degradation_state=True, **BLAST_LFP
         )
         restored_soh = degradation_state["blast_engine"]["outputs"]["q"][-1]
         assert restored_soh < 1.0
 
-        second_idx = pd.date_range("2025-01-02 00:00", periods=1, freq="h", tz="UTC")
         initial_energy = config.nominal_energy_wh
         initial_pv_origin = initial_energy / 2.0
-        results, *_ = simulate_energy_balance(
-            pv_dc=pd.Series(0.0, index=second_idx),
-            houseload=pd.DataFrame({"Load": 0.0}, index=second_idx),
-            battery_config=config,
-            freq="h",
-            temperature_series=pd.Series(25.0, index=second_idx),
+        results, *_ = _simulate(
+            [0.0],
+            [0.0],
+            config,
+            start="2025-01-02",
             initial_energy_wh=initial_energy,
             initial_pv_origin_energy_wh=initial_pv_origin,
-            degradation_engine="blast",
-            blast_model="lfp_gr_250ah_prismatic",
             initial_degradation_state=degradation_state,
+            **BLAST_LFP,
         )
 
         restored_emax = config.nominal_energy_wh * restored_soh * config.max_soc
@@ -1150,19 +1039,13 @@ class TestSimulateEnergyBalance:
         for capacity_key in ("q", "q_t", "q_EFC"):
             assert perturbed_snapshot["outputs"][capacity_key] == baseline_snapshot["outputs"][capacity_key]
 
-        idx = pd.date_range("2025-01-01", periods=48, freq="h", tz="UTC")
-        pv_dc = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=idx)
-        houseload = pd.DataFrame({"Load": ([600.0] * 8 + [0.0] * 8 + [600.0] * 8) * 2}, index=idx)
-        temperature = pd.Series(25.0, index=idx)
         config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
 
         def run(snapshot):
-            return simulate_energy_balance(
-                pv_dc=pv_dc,
-                houseload=houseload,
-                battery_config=config,
-                freq="h",
-                temperature_series=temperature,
+            return _simulate(
+                ([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2,
+                ([600.0] * 8 + [0.0] * 8 + [600.0] * 8) * 2,
+                config,
                 degradation_engine="blast",
                 blast_model=model_key,
                 initial_degradation_state=snapshot,
@@ -1246,16 +1129,9 @@ class TestSimulateEnergyBalance:
         ids=["native-with-blast-model", "native-with-blast-state", "blast-with-resistance-fade"],
     )
     def test_contradictory_degradation_engine_arguments_are_rejected(self, config_kwargs, engine_kwargs, message):
-        idx = pd.date_range("2025-01-01 00:00", periods=1, freq="h", tz="UTC")
-
+        config = BatteryConfig(nominal_energy_wh=5000, **config_kwargs)
         with pytest.raises(ValueError, match=message):
-            simulate_energy_balance(
-                pv_dc=pd.Series(0.0, index=idx),
-                houseload=pd.DataFrame({"Load": 0.0}, index=idx),
-                battery_config=BatteryConfig(nominal_energy_wh=5000, **config_kwargs),
-                freq="h",
-                **engine_kwargs,
-            )
+            _simulate([0.0], [0.0], config, temperature=None, **engine_kwargs)
 
     @pytest.mark.parametrize(
         ("engine", "engine_kwargs"),
@@ -1265,7 +1141,6 @@ class TestSimulateEnergyBalance:
         ],
     )
     def test_replacement_resets_the_degradation_state(self, engine, engine_kwargs):
-        idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
         config = BatteryConfig(
             nominal_energy_wh=5000,
             standby_loss_wh=0.0,
@@ -1273,12 +1148,12 @@ class TestSimulateEnergyBalance:
             enable_replacement=True,
         )
 
-        results_df, _, summary_df, n_replacements, degradation_df, degradation_state = simulate_energy_balance(
-            pv_dc=pd.Series(0.0, index=idx),
-            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
-            battery_config=config,
-            freq="h",
-            temperature_series=pd.Series(45.0, index=idx),
+        results_df, _, summary_df, n_replacements, degradation_df, degradation_state = _simulate(
+            0.0,
+            0.0,
+            config,
+            periods=24,
+            temperature=45.0,
             degradation_engine=engine,
             return_degradation_state=True,
             **engine_kwargs,
@@ -1304,18 +1179,11 @@ class TestSimulateEnergyBalance:
 class TestEnergyLedger:
     @staticmethod
     def _run(pv_w, load_w, freq="h", **config_kwargs):
-        idx = pd.date_range("2025-01-01", periods=len(pv_w), freq=freq, tz="UTC")
         config_kwargs.setdefault("nominal_energy_wh", 4000.0)
         config_kwargs.setdefault("standby_loss_wh", 0.0)
         config_kwargs.setdefault("enable_replacement", False)
         config = BatteryConfig(**config_kwargs)
-        results, total_pv, *_ = simulate_energy_balance(
-            pv_dc=pd.Series(pv_w, index=idx, dtype=float),
-            houseload=pd.DataFrame({"Load": load_w}, index=idx, dtype=float),
-            battery_config=config,
-            temperature_series=pd.Series(25.0, index=idx),
-            freq=freq,
-        )
+        results, total_pv, *_ = _simulate(pv_w, load_w, config, freq=freq)
         return results, total_pv, config
 
     @pytest.mark.parametrize("freq,repeats", [("h", 1), ("15min", 4)])
@@ -1426,22 +1294,13 @@ class TestEnergyLedger:
         assert results["Battery_Energy_Delta"].iloc[0] == pytest.approx(-20.0)
 
     def test_temperature_capacity_reduction_is_explicit_loss(self):
-        idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
         config = BatteryConfig(nominal_energy_wh=10000.0, standby_loss_wh=0.0, enable_replacement=False)
-        results, *_ = simulate_energy_balance(
-            pv_dc=pd.Series(0.0, index=idx),
-            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
-            battery_config=config,
-            temperature_series=pd.Series([25.0, 0.0], index=idx),
-            freq="h",
-        )
+        results, *_ = _simulate([0.0, 0.0], [0.0, 0.0], config, temperature=[25.0, 0.0])
         assert_energy_conservation(results, config)
         assert results["Capacity_Window_Loss"].iloc[1] > 0.0
         assert results["Battery_Energy_End"].iloc[1] < results["Battery_Energy_Beginning"].iloc[1]
 
     def test_resistance_calendar_uses_daily_mean_cell_temperature(self, monkeypatch):
-        import breos.battery as battery_module
-
         seen_temperatures = []
 
         def capture_temperature(resistance_growth, T_cell_C, **kwargs):
@@ -1449,24 +1308,16 @@ class TestEnergyLedger:
             return resistance_growth, 0.0
 
         monkeypatch.setattr(battery_module, "update_battery_resistance_calendar", capture_temperature)
-        idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
-        simulate_energy_balance(
-            pv_dc=pd.Series(0.0, index=idx),
-            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
-            battery_config=BatteryConfig(
-                nominal_energy_wh=1000.0,
-                enable_replacement=False,
-                enable_resistance_fade=True,
-                thermal_resistance_k_per_w=0.0,
-            ),
-            temperature_series=pd.Series([10.0] * 12 + [30.0] * 12, index=idx),
-            freq="h",
+        config = BatteryConfig(
+            nominal_energy_wh=1000.0,
+            enable_replacement=False,
+            enable_resistance_fade=True,
+            thermal_resistance_k_per_w=0.0,
         )
+        _simulate(0.0, 0.0, config, periods=24, temperature=[10.0] * 12 + [30.0] * 12)
         assert seen_temperatures == pytest.approx([20.0])
 
     def test_replacement_energy_closes_timestep_boundary(self, monkeypatch):
-        import breos.battery as battery_module
-
         def force_eol(soh_start_fraction, cumulative_cal_seconds, **kwargs):
             return 0.5, soh_start_fraction - 0.5, cumulative_cal_seconds + 86400.0
 
@@ -1501,44 +1352,33 @@ class TestEnergyLedger:
         ],
     )
     def test_invalid_initial_state_cannot_create_energy(self, initial_energy, initial_origin, match):
-        idx = pd.date_range("2025-01-01", periods=1, freq="h", tz="UTC")
+        config = BatteryConfig(nominal_energy_wh=1000.0, standby_loss_wh=0.0)
         with pytest.raises(ValueError, match=match):
-            simulate_energy_balance(
-                pv_dc=pd.Series(0.0, index=idx),
-                houseload=pd.DataFrame({"Load": 0.0}, index=idx),
-                battery_config=BatteryConfig(nominal_energy_wh=1000.0, standby_loss_wh=0.0),
+            _simulate(
+                [0.0],
+                [0.0],
+                config,
+                temperature=None,
                 initial_energy_wh=initial_energy,
                 initial_pv_origin_energy_wh=initial_origin,
             )
 
     def test_zero_passed_state_is_not_raised_to_minimum_soc(self):
-        idx = pd.date_range("2025-01-01", periods=1, freq="h", tz="UTC")
-        results, *_ = simulate_energy_balance(
-            pv_dc=pd.Series(0.0, index=idx),
-            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
-            battery_config=BatteryConfig(nominal_energy_wh=1000.0, standby_loss_wh=0.0),
-            initial_energy_wh=0.0,
-            initial_pv_origin_energy_wh=0.0,
+        config = BatteryConfig(nominal_energy_wh=1000.0, standby_loss_wh=0.0)
+        results, *_ = _simulate(
+            [0.0], [0.0], config, temperature=None, initial_energy_wh=0.0, initial_pv_origin_energy_wh=0.0
         )
         assert results["Battery_Energy_Beginning"].iloc[0] == 0.0
         assert results["Battery_Energy_End"].iloc[0] == 0.0
 
     def test_carried_energy_above_new_soh_window_becomes_capacity_loss(self):
-        idx = pd.date_range("2025-01-01", periods=1, freq="h", tz="UTC")
         config = BatteryConfig(
             nominal_energy_wh=1000.0,
             initial_soh=50.0,
             standby_loss_wh=0.0,
             enable_replacement=False,
         )
-        results, *_ = simulate_energy_balance(
-            pv_dc=pd.Series(0.0, index=idx),
-            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
-            battery_config=config,
-            temperature_series=pd.Series(25.0, index=idx),
-            initial_energy_wh=700.0,
-            initial_pv_origin_energy_wh=350.0,
-        )
+        results, *_ = _simulate([0.0], [0.0], config, initial_energy_wh=700.0, initial_pv_origin_energy_wh=350.0)
         assert results["Battery_Energy_Beginning"].iloc[0] == pytest.approx(700.0)
         assert results["Capacity_Window_Loss"].iloc[0] == pytest.approx(250.0)
         assert results["Battery_Energy_End"].iloc[0] == pytest.approx(450.0)
@@ -1555,23 +1395,16 @@ class TestEnergyLedger:
             discharge_efficiency=0.9,
             inverter_efficiency=0.8,
         )
-        first_idx = pd.date_range("2025-01-01", periods=3, freq="h", tz="UTC")
-        first, *_ = simulate_energy_balance(
-            pv_dc=pd.Series([0.0, 5000.0, 0.0], index=first_idx),
-            houseload=pd.DataFrame({"Load": [1000.0, 0.0, 500.0]}, index=first_idx),
-            battery_config=config,
-            temperature_series=pd.Series(25.0, index=first_idx),
-        )
+        first, *_ = _simulate([0.0, 5000.0, 0.0], [1000.0, 0.0, 500.0], config)
         carried_energy = first["Battery_Energy_End"].iloc[-1]
         carried_origin = first["Battery_PV_Origin_Energy_End"].iloc[-1]
         assert carried_origin > 0.0
 
-        second_idx = pd.date_range("2025-01-01 03:00", periods=2, freq="h", tz="UTC")
-        second, *_ = simulate_energy_balance(
-            pv_dc=pd.Series(0.0, index=second_idx),
-            houseload=pd.DataFrame({"Load": 0.0}, index=second_idx),
-            battery_config=config,
-            temperature_series=pd.Series(25.0, index=second_idx),
+        second, *_ = _simulate(
+            [0.0, 0.0],
+            [0.0, 0.0],
+            config,
+            start="2025-01-01 03:00",
             initial_energy_wh=carried_energy,
             initial_pv_origin_energy_wh=carried_origin,
         )
