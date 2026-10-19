@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 import pvlib
 from pvlib.location import Location
-from scipy.interpolate import Akima1DInterpolator
+from scipy.interpolate import Akima1DInterpolator, interp1d
 
 from breos.constants import (
     DEFAULT_INDOOR_CEILING_C,
@@ -967,6 +967,21 @@ def _require_regular_hourly_index(df_hourly: pd.DataFrame, policy: str) -> None:
             raise ValueError(f"irradiance_resampling={policy} requires a regular hourly index")
 
 
+def _interpolate(x_original: np.ndarray, y_original: np.ndarray, x_target: np.ndarray, method: str) -> np.ndarray:
+    """``y_original`` read at ``x_target`` with ``method``.
+
+    Makima does not extrapolate, so target points before the first or after
+    the last source point hold the edge value; the scipy ``interp1d`` kinds
+    extrapolate.
+    """
+    if method != "makima":
+        return interp1d(x_original, y_original, kind=method, fill_value="extrapolate")(x_target)
+    values = Akima1DInterpolator(x_original, y_original, method="makima")(x_target)
+    values[x_target < x_original[0]] = y_original[0]
+    values[x_target > x_original[-1]] = y_original[-1]
+    return values
+
+
 def _clear_sky_ratio_interpolation(
     x_original: np.ndarray,
     y_original: np.ndarray,
@@ -983,29 +998,15 @@ def _clear_sky_ratio_interpolation(
     and the mask of target points the dawn/dusk linear fallback supplied.
     """
     k_hourly = np.clip(y_original / (source_clear_sky + epsilon), 0, None)
-    if method == "makima":
-        interp_k = Akima1DInterpolator(x_original, k_hourly, method="makima")
-    else:
-        from scipy.interpolate import interp1d
-
-        interp_k = interp1d(x_original, k_hourly, kind=method, fill_value="extrapolate")
-    k_target = interp_k(x_target)
-    # Makima does not extrapolate: points before the first or after the last
-    # source point hold the edge value.
-    before_first = x_target < x_original[0]
-    after_last = x_target > x_original[-1]
-    if method == "makima":
-        k_target[before_first] = k_hourly[0]
-        k_target[after_last] = k_hourly[-1]
-    reconstructed = k_target * (target_clear_sky + epsilon)
+    reconstructed = _interpolate(x_original, k_hourly, x_target, method) * (target_clear_sky + epsilon)
     # Brackets are evaluated on representative times, including provider offsets.
     right = np.clip(np.searchsorted(x_original, x_target, side="right"), 1, len(x_original) - 1)
     left = right - 1
     fallback = (source_clear_sky[left] <= epsilon) | (source_clear_sky[right] <= epsilon)
     # Outside the source range use the edge point's support, not an
     # unrelated neighbouring hour; np.interp holds that edge value.
-    fallback[before_first] = source_clear_sky[0] <= epsilon
-    fallback[after_last] = source_clear_sky[-1] <= epsilon
+    fallback[x_target < x_original[0]] = source_clear_sky[0] <= epsilon
+    fallback[x_target > x_original[-1]] = source_clear_sky[-1] <= epsilon
     reconstructed[fallback] = np.interp(x_target[fallback], x_original, y_original)
     return reconstructed, fallback
 
@@ -1130,6 +1131,11 @@ def _quadrature_irradiance(
     return columns, record
 
 
+# Name parts of the solar and wind columns beside the GHI/DNI/DHI components,
+# such as global_tilted_irradiance or wind_speed_10m, that cannot be negative.
+_NON_NEGATIVE_NAME_PARTS = ("irrad", "radiation", "tilted", "terrestrial", "wind", "speed")
+
+
 def resample_to_15min(
     df_hourly: pd.DataFrame,
     method: str = "makima",
@@ -1216,10 +1222,6 @@ def resample_to_15min(
     target_offset = _representative_time_offset(weather_metadata, pd.Timedelta(minutes=15), require_metadata=False)
     x_original = _datetime_index_seconds(df_hourly.index) + (source_offset - target_offset).total_seconds()
     x_target = _datetime_index_seconds(target_index)
-    # Makima does not extrapolate: quarter-hours before the first or after the
-    # last representative time hold the edge value.
-    before_first = x_target < x_original[0]
-    after_last = x_target > x_original[-1]
 
     # Map column names to irradiance type (supports TMY and Open-Meteo conventions)
     irrad_col_map = {}  # column_name -> clear-sky component ('ghi', 'dni', 'dhi')
@@ -1302,28 +1304,12 @@ def resample_to_15min(
             reconstructed[clear_sky <= 0.0] = 0.0
             df_15min[col] = np.clip(reconstructed, 0, None)
         else:
-            # Direct interpolation for non-irradiance columns
-            if method == "makima":
-                interp = Akima1DInterpolator(x_original, y_original, method="makima")
-            else:
-                from scipy.interpolate import interp1d
-
-                interp = interp1d(x_original, y_original, kind=method, fill_value="extrapolate")
-            interpolated = interp(x_target)
-            if method == "makima":
-                interpolated[before_first] = y_original[0]
-                interpolated[after_last] = y_original[-1]
+            interpolated = _interpolate(x_original, y_original, x_target, method)
+            # The interpolant can overshoot below zero, which irradiance and
+            # wind cannot; the clear-sky paths clip their own.
+            if col in irrad_col_map or any(part in col.lower() for part in _NON_NEGATIVE_NAME_PARTS):
+                interpolated = np.clip(interpolated, 0, None)
             df_15min[col] = interpolated
-
-    # Clip negative values in the solar and wind columns that clear-sky
-    # scaling has not already clipped
-    for col in df_15min.columns:
-        if col in irrad_col_map and use_clearsky:
-            continue
-        if col in irrad_col_map or any(
-            x in col.lower() for x in ["irrad", "radiation", "tilted", "terrestrial", "wind", "speed"]
-        ):
-            df_15min[col] = np.clip(df_15min[col], 0, None)
 
     # Diagnostics describe quarter-hours before and after hourly conservation,
     # at exactly the representative solar times used by clear-sky reconstruction.
