@@ -663,8 +663,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.iam_model",
     ),
     "diffuse_iam": AppConfigField(
-        check=choice(DIFFUSE_IAM_METHODS),
+        # None reads as "none": the PV model resolves the name with str().
+        check=optional(choice(DIFFUSE_IAM_METHODS)),
         default=DEFAULT_DIFFUSE_IAM,
+        cli_choices=tuple(DIFFUSE_IAM_METHODS),
         cli_flags=("--diffuse-iam",),
         cli_help=(
             "Whether IAM is also applied to the diffuse POA components. 'marion' weighs sky- and "
