@@ -4,8 +4,8 @@ Two things are asserted here, and both matter. The first is that the compiled
 backend reproduces the Python reference exactly, column by column and timestep
 by timestep. The second is that each scenario actually reaches the branch it
 was built for: a parity test over a scenario that never exercises the
-discharge cap passes without testing anything, so every branch case asserts
-its own precondition before asserting parity.
+discharge cap passes without testing anything, so every branch scenario has a
+test of its own precondition next to the parity test that runs all of them.
 
 Typical sizing studies do not cover this ground. PV-only designs have no
 battery, and battery designs often reach their power limits only through a
@@ -147,17 +147,15 @@ def test_compiled_backend_compiles_the_python_backends_own_day_loop():
     assert _kernel().py_func is _dispatch._dispatch_day
 
 
-def test_trailing_partial_day_matches():
-    """A trailing partial day must age the battery identically in both backends."""
+def test_the_partial_day_scenario_ages_its_trailing_partial_day():
     python_out = _run("partial_day", "python")
     assert len(python_out[0]) % 96 != 0, "scenario no longer has a trailing partial day"
     assert len(python_out[4]) == 2
     assert python_out[4]["Datetime"].iloc[-1] == python_out[0]["Datetime"].iloc[-1]
     assert python_out[4]["Cumulative_Calendar_Seconds"].iloc[-1] == pytest.approx(len(python_out[0]) * 900.0)
-    _assert_identical("partial_day", python_out, _run("partial_day", "numba"))
 
 
-def test_discharge_power_limit_binds_and_matches():
+def test_the_discharge_power_limit_binds():
     df = _run("discharge_limited", "python")[0]
     cap_ac_wh = 900.0 * 0.25
     delivered = df["Battery_AC_To_Load"].to_numpy() * 0.25
@@ -166,16 +164,14 @@ def test_discharge_power_limit_binds_and_matches():
     # steps sit just under it rather than exactly on it.
     assert np.isclose(delivered.max(), cap_ac_wh, rtol=1e-6), delivered.max()
     assert (delivered > cap_ac_wh * 0.999).sum() > 50, "discharge cap barely binds"
-    _assert_identical("discharge_limited", _run("discharge_limited", "python"), _run("discharge_limited", "numba"))
 
 
-def test_charge_power_limit_binds_and_matches():
+def test_the_charge_power_limit_binds():
     df = _run("charge_limited", "python")[0]
     cap_wh = 700.0 * 0.25
     charged = df["Battery_Charge_Input"].to_numpy() * 0.25
     assert np.isclose(charged.max(), cap_wh, rtol=1e-9), charged.max()
     assert (charged >= cap_wh - 1e-9).sum() > 50, "charge cap barely binds"
-    _assert_identical("charge_limited", _run("charge_limited", "python"), _run("charge_limited", "numba"))
 
 
 def test_state_of_charge_saturates_at_both_bounds():
@@ -184,17 +180,11 @@ def test_state_of_charge_saturates_at_both_bounds():
     assert (soc >= 1.0).sum() > 20, "upper SOC bound never reached"
     assert (soc <= 0.0).sum() > 20, "lower SOC bound never reached"
     assert df["PV_DC_Curtailed"].to_numpy().max() > 0.0, "inverter never clips"
-    _assert_identical("saturating", _run("saturating", "python"), _run("saturating", "numba"))
 
 
-def test_capacity_window_loss_occurs_and_matches():
+def test_the_baseline_derates_its_capacity_window_and_fills_both_inverter_loss_channels():
     df = _run("baseline", "python")[0]
     assert df["Capacity_Window_Loss"].to_numpy().max() > 0.0, "capacity window never derates"
-    _assert_identical("baseline", _run("baseline", "python"), _run("baseline", "numba"))
-
-
-def test_both_inverter_loss_channels_are_populated():
-    df = _run("baseline", "python")[0]
     direct = df["PV_Direct_Inverter_Loss"].to_numpy()
     battery = df["Battery_Inverter_Loss"].to_numpy()
     assert direct.max() > 0.0, "no direct-solar inverter loss"
@@ -204,7 +194,7 @@ def test_both_inverter_loss_channels_are_populated():
     assert np.allclose(df["Inverter_Loss"].to_numpy(), direct + battery)
 
 
-def test_replacement_at_threshold_matches():
+def test_the_replacement_scenario_replaces_at_its_threshold():
     python_out = _run("replacement", "python")
     df, deg = python_out[0], python_out[4]
     assert python_out[3] > 0, "scenario never replaces the pack"
@@ -222,15 +212,12 @@ def test_replacement_at_threshold_matches():
     eol_percent = 99.5
     lowest_surviving = deg["SOH"].to_numpy().min()
     assert eol_percent < lowest_surviving < eol_percent + 0.05, lowest_surviving
-    _assert_identical("replacement", python_out, _run("replacement", "numba"))
 
 
-def test_carried_state_between_years_matches():
-    python_out = _run("carried_state", "python")
-    df = python_out[0]
+def test_the_carried_state_scenario_opens_with_stored_energy():
+    df = _run("carried_state", "python")[0]
     assert df["Battery_Energy_Beginning"].iloc[0] > 0.0
     assert df["Battery_PV_Origin_Energy_Beginning"].iloc[0] > 0.0
-    _assert_identical("carried_state", python_out, _run("carried_state", "numba"))
 
 
 def test_summary_path_matches_detailed_path_under_numba():
