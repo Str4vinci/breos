@@ -164,7 +164,7 @@ def test_the_chosen_backend_survives_pickling_to_a_worker(_optimization_inputs, 
     restored = pickle.loads(pickle.dumps(problem))
     restored._evaluate(np.array([DESIGN["n_modules"], DESIGN["battery_kwh"], DESIGN["tilt"]], dtype=float), {})
 
-    assert restored.execution_backend == "numba"
+    assert restored.study.execution_backend == "numba"
     assert _dispatch_backends and set(_dispatch_backends) == {"numba"}
 
 

@@ -469,6 +469,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and a top-level `bifacial_model`, `pvrow_height` or `pvrow_pitch` that
   every entry of `pv_arrays` overrides. The optimizer's integer settings,
   such as `pop_size`, now take NumPy integers.
+- The optimizer builds the battery temperature series once per search
+  instead of once per candidate, with the same values. A battery
+  temperature it cannot build, such as a missing file, is now reported when
+  `SolarDesignProblem` is created, and by `evaluate_projected_design` before
+  the PV model runs.
 - The ledger schema is now "3.1" (`ledger_schema_version` in the results,
   the PV loss waterfall and `SimulationSummary`). It adds without changing a
   3.0 field: the `Inverter_Night_Consumption` column; the `near_shading`,

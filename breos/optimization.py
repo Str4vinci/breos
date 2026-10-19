@@ -741,12 +741,11 @@ class _DesignStudy:
     pv_params: PVModuleParams
     module_area_m2: float
     model_options: Mapping[str, Any]
-    years: int
-    pv_degradation_rate: float
     dc_ac_ratio: float
     emissions_params: Optional[EmissionsParams]
     # On the weather grid, which every design's PV output is indexed on.
     temperature_series: pd.Series
+    battery_replacement_treatment: Dict[str, Any]
     execution_backend: str
 
     @classmethod
@@ -774,7 +773,7 @@ class _DesignStudy:
             frames = tuple(_prepare_study_weather(frame, config, location) for frame in weather_by_year)
         grid = frames[0].index if frames else weather.index
         pricing = _resolve_optimization_tariff(config, grid, battery_kwh, battery_key)
-        years = int(config["simulation"]["years_projection"])
+        years = config["simulation"]["years_projection"]
         if frames is not None and len(frames) != years:
             raise ValueError(f"weather_by_year has {len(frames)} years, expected {years}")
         pv_cfg = config["pv"]
@@ -798,8 +797,6 @@ class _DesignStudy:
             pv_params=pv_params,
             module_area_m2=_module_area_from_dimensions(_dimensions_from_section(pv_cfg)),
             model_options=configured_pv_model_kwargs(config),
-            years=years,
-            pv_degradation_rate=float(pv_cfg["degradation_rate"]),
             # The inverter each design pays for is the one that clips its
             # output: nameplate = DC peak / dc_ac_ratio, as App sizes it.
             dc_ac_ratio=cost_params_from_config(config["costs"], config["financials"]).dc_ac_ratio,
@@ -815,6 +812,7 @@ class _DesignStudy:
                 indoor_model=battery["indoor_model"],
                 align_weather_year=frames is not None,
             ),
+            battery_replacement_treatment=_battery_replacement_treatment(battery, config["costs"]),
             execution_backend=execution_backend,
         )
 
@@ -875,8 +873,8 @@ class _DesignStudy:
             costs_cfg=config["costs"],
             fin_cfg=config["financials"],
             freq=config["simulation"]["resolution"],
-            years_projection=self.years,
-            degradation_rate=self.pv_degradation_rate,
+            years_projection=int(config["simulation"]["years_projection"]),
+            degradation_rate=float(config["pv"]["degradation_rate"]),
             n_modules=n_modules,
             battery_kwh=battery_kwh,
             inverter_efficiency=float(config["inverter_efficiency"]),
@@ -894,13 +892,15 @@ class _DesignStudy:
     def provenance(self, **extra: Any) -> Dict[str, Any]:
         """The study's provenance record; ``extra`` entries go before the battery replacement treatment."""
         config = self.config
+        frames = self.weather_by_year
         return {
             **self.pricing.provenance(),
             "economics": projection_rates_record(_projection_rates(config["financials"])),
             "simulation": dict(config["simulation"]),
             "weather": weather_metadata(self.weather),
+            **({"weather_by_year": [weather_metadata(frame) for frame in frames]} if frames is not None else {}),
             **extra,
-            "battery_replacement_treatment": _battery_replacement_treatment(config["battery"], config["costs"]),
+            "battery_replacement_treatment": dict(self.battery_replacement_treatment),
         }
 
 
@@ -989,11 +989,7 @@ def evaluate_projected_design(
         "Layout": layout,
         **raw_metrics,
     }
-    frames = study.weather_by_year
-    provenance = study.provenance(
-        **({"weather_by_year": [weather_metadata(frame) for frame in frames]} if frames is not None else {})
-    )
-    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=provenance)
+    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=study.provenance())
 
 
 # ==========================================
@@ -1072,7 +1068,7 @@ try:
             # Candidate scoring is the hottest loop in the package, which makes
             # it exactly the place where a silently-inherited backend would be
             # hardest to notice and hardest to attribute afterwards.
-            self.execution_backend = validate_execution_backend(execution_backend)
+            backend = validate_execution_backend(execution_backend)
             # Checked and defaulted once, before any model preparation: an
             # unknown key raises, and every default is in the resolved config.
             config = resolve_optimization_config(config)
@@ -1086,7 +1082,7 @@ try:
                 config,
                 battery_kwh=float(constraints["max_battery_kwh"]),
                 battery_key="constraints.max_battery_kwh",
-                execution_backend=self.execution_backend,
+                execution_backend=backend,
             )
             self.pricing = self.study.pricing
             self.tariff = self.pricing.tariff
@@ -1096,7 +1092,7 @@ try:
             # Candidates are scored over the project lifetime only; the
             # resolver refuses the removed annual basis.
             self.objective_basis = config["optimization"]["objective_basis"]
-            self.battery_replacement_treatment = _battery_replacement_treatment(config["battery"], config["costs"])
+            self.battery_replacement_treatment = self.study.battery_replacement_treatment
 
             self.fixed_azimuth = config["mode"]["fixed_azimuth"]
             # The layouts searched, in LAYOUTS order, and the fixed tilt of
