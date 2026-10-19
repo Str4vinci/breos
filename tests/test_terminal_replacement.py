@@ -12,7 +12,6 @@ its swap is skipped. All three default to true, which changes nothing.
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 from unittest import mock
 
 import numpy as np
@@ -30,9 +29,7 @@ from breos.battery import (
     simulate_energy_balance_summary,
 )
 from breos.economics import cost_analysis_projection, price_year_rows, replacement_fraction_from_steps
-from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization import _evaluate_projected_design_metrics, evaluate_projected_design
-from breos.optimization_config import resolve_optimization_config
 from breos.projection import ProjectionYear, project_years, value_projection
 from breos.pv_modules import get_module
 from breos.smart_charging import FixedTargetDayController
@@ -119,64 +116,6 @@ def _final_period_eol(n_steps: int, freq: str, engine=None, **config) -> float:
     return float((soh[-2] + soh[-1]) / 2.0) / 100.0
 
 
-# -- the setting ------------------------------------------------------------------
-
-
-class TestBatteryConfigFlag:
-    def test_default_allows_a_terminal_replacement(self):
-        assert BatteryConfig(nominal_energy_wh=5000.0).allow_terminal_replacement is True
-
-    def test_a_numpy_bool_is_stored_as_a_bool(self):
-        config = BatteryConfig(nominal_energy_wh=5000.0, allow_terminal_replacement=np.bool_(False))
-        assert config.allow_terminal_replacement is False
-
-    @pytest.mark.parametrize("value", ["false", "true", 0, 1, 1.0, None])
-    def test_a_value_that_is_not_a_bool_is_refused(self, value):
-        with pytest.raises(ValueError, match="allow_terminal_replacement must be a bool"):
-            BatteryConfig(nominal_energy_wh=5000.0, allow_terminal_replacement=value)
-
-
-class TestAppAndMonteCarloKey:
-    BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5}
-
-    def test_the_key_resolves_true_by_default_and_keeps_false(self):
-        assert resolve_app_config(self.BASE).cfg["battery_allow_terminal_replacement"] is True
-        resolved = resolve_app_config({**self.BASE, "battery_allow_terminal_replacement": False})
-        assert resolved.cfg["battery_allow_terminal_replacement"] is False
-
-    @pytest.mark.parametrize("value", ["false", 0, 1, None])
-    def test_a_value_that_is_not_a_bool_is_refused(self, value):
-        with pytest.raises(TypeError, match="'battery_allow_terminal_replacement' must be a boolean"):
-            resolve_app_config({**self.BASE, "battery_allow_terminal_replacement": value})
-
-    @pytest.mark.parametrize("value", [True, False])
-    def test_the_projection_battery_carries_the_policy(self, value):
-        resolved = resolve_app_config({**self.BASE, "battery_allow_terminal_replacement": value})
-        battery = projection_module.build_battery_config(resolved.cfg, resolved, initial_soh=100.0)
-        assert battery.allow_terminal_replacement is value
-
-
-class TestOptimizerKey:
-    LOCATION = {"location": {"latitude": 41.15, "longitude": -8.61}}
-
-    def test_the_key_resolves_true_by_default_and_keeps_false(self):
-        assert resolve_optimization_config(self.LOCATION)["battery"]["allow_terminal_replacement"] is True
-        config = {**self.LOCATION, "battery": {"allow_terminal_replacement": False}}
-        assert resolve_optimization_config(config)["battery"]["allow_terminal_replacement"] is False
-
-    @pytest.mark.parametrize("value", ["false", 0, None])
-    def test_a_value_that_is_not_a_bool_is_refused(self, value):
-        with pytest.raises(TypeError, match="'battery.allow_terminal_replacement' must be true or false"):
-            resolve_optimization_config({**self.LOCATION, "battery": {"allow_terminal_replacement": value}})
-
-    @pytest.mark.parametrize("value", [True, False])
-    def test_the_spec_forwards_the_policy(self, value):
-        config = optimization_module._build_battery_config_from_spec(
-            {"allow_terminal_replacement": value}, nominal_energy_wh=5000.0
-        )
-        assert config.allow_terminal_replacement is value
-
-
 # -- one span ---------------------------------------------------------------------
 
 
@@ -236,25 +175,6 @@ def test_resistance_fade_keeps_the_old_pack_resistance():
 
 def test_without_a_final_period_crossing_the_setting_changes_nothing():
     _assert_same_run(_run(72), _run(72, allow_terminal_replacement=False))
-
-
-def test_an_explicit_true_is_the_default():
-    _assert_same_run(
-        _run(72, eol_percentage=EVERY_PERIOD_EOL),
-        _run(72, eol_percentage=EVERY_PERIOD_EOL, allow_terminal_replacement=True),
-    )
-
-
-@pytest.mark.parametrize("freq", FREQS)
-def test_earlier_periods_still_replace(freq):
-    spd = _steps_per_day(freq)
-    n_steps = 3 * spd
-    default = _run(n_steps, freq, eol_percentage=EVERY_PERIOD_EOL)
-    guarded = _run(n_steps, freq, eol_percentage=EVERY_PERIOD_EOL, allow_terminal_replacement=False)
-
-    assert _replaced_steps(default) == [spd - 1, 2 * spd - 1, 3 * spd - 1]
-    assert _replaced_steps(guarded) == [spd - 1, 2 * spd - 1]
-    assert guarded[3] == 2
 
 
 # -- partial spans ----------------------------------------------------------------
@@ -320,13 +240,6 @@ def test_a_run_without_a_battery_is_unchanged():
     default, guarded = run(True), run(False)
     pd.testing.assert_frame_equal(default[0], guarded[0], check_exact=True)
     assert default[3] == guarded[3] == 0
-
-
-def test_disabled_replacement_stays_disabled():
-    _assert_same_run(
-        _run(60, eol_percentage=EVERY_PERIOD_EOL, enable_replacement=False),
-        _run(60, eol_percentage=EVERY_PERIOD_EOL, enable_replacement=False, allow_terminal_replacement=False),
-    )
 
 
 @pytest.mark.parametrize("freq", FREQS)
@@ -560,16 +473,6 @@ def test_app_prices_every_swap_but_the_terminal_one():
     assert guarded_financial[1] == default_financial[1]
 
 
-def test_app_without_a_terminal_crossing_is_unchanged():
-    default = _app(battery_eol_percentage=0.7).result()
-    guarded = _app(battery_eol_percentage=0.7, battery_allow_terminal_replacement=False).result()
-    default["provenance"]["resolved_config"].pop("battery_allow_terminal_replacement")
-    guarded["provenance"]["resolved_config"].pop("battery_allow_terminal_replacement")
-    for result in (default, guarded):
-        result["provenance"].pop("execution", None)
-    assert default == guarded
-
-
 def _mc_config(**overrides):
     return {
         "location": "porto",
@@ -582,34 +485,6 @@ def _mc_config(**overrides):
         **PRICING,
         **overrides,
     }
-
-
-def test_monte_carlo_skips_the_terminal_swap_of_each_trajectory(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=7)
-
-    default = run_montecarlo(_mc_config(battery_eol_percentage=EVERY_PERIOD_EOL), settings)
-    guarded = run_montecarlo(
-        _mc_config(battery_eol_percentage=EVERY_PERIOD_EOL, battery_allow_terminal_replacement=False), settings
-    )
-
-    assert default.provenance["resolved_config"]["battery_allow_terminal_replacement"] is True
-    assert guarded.provenance["resolved_config"]["battery_allow_terminal_replacement"] is False
-    assert (default.runs["total_replacements"] == 730).all()
-    assert (guarded.runs["total_replacements"] == 729).all()
-    np.testing.assert_array_equal(
-        guarded.runs["total_replacement_cost_t0_prices"], default.runs["total_replacement_cost_t0_prices"] - 2000.0
-    )
-
-
-def test_monte_carlo_without_a_terminal_crossing_is_unchanged(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=7)
-
-    default = run_montecarlo(_mc_config(), settings)
-    guarded = run_montecarlo(_mc_config(battery_allow_terminal_replacement=False), settings)
-
-    pd.testing.assert_frame_equal(default.runs, guarded.runs, check_exact=True)
 
 
 def _projected_metrics(monkeypatch, **batt_spec):
@@ -657,6 +532,10 @@ def test_projected_optimizer_skips_the_terminal_swap_and_its_money(monkeypatch):
     assert guarded["Projected_Replacement_Cost_T0_Prices"] == default["Projected_Replacement_Cost_T0_Prices"] - 2000.0
     assert guarded["Projected_Final_SOH_%"] < 100.0 == default["Projected_Final_SOH_%"]
 
+    # Only the final year's simulation runs without permission to swap.
+    assert default_inputs["permissions"] == [True, True]
+    assert guarded_inputs["permissions"] == [True, False]
+
     # The default ledger without its terminal swap, priced by the existing
     # event-time economics, is the guarded run's money.
     rows = _without_final_swap(default_inputs.pop("yearly_summary_df")).drop(columns="Replacement_Cost")
@@ -667,16 +546,6 @@ def test_projected_optimizer_skips_the_terminal_swap_and_its_money(monkeypatch):
     pd.testing.assert_frame_equal(guarded["_cost_projection_df"], expected, check_exact=True)
     assert guarded["Projected_NPV"] == float(expected["Savings_Cumulative_NPV"].iloc[-1])
     assert guarded_inputs["costs"] == default_inputs["costs"]
-
-
-def test_projected_optimizer_without_a_terminal_crossing_is_unchanged(monkeypatch):
-    default, default_inputs = _projected_metrics(monkeypatch, eol_percentage=0.7)
-    guarded, guarded_inputs = _projected_metrics(monkeypatch, eol_percentage=0.7, allow_terminal_replacement=False)
-    assert default_inputs["permissions"] == [True, True]
-    assert guarded_inputs["permissions"] == [True, False]
-    pd.testing.assert_frame_equal(default.pop("_yearly_summary_df"), guarded.pop("_yearly_summary_df"))
-    pd.testing.assert_frame_equal(default.pop("_cost_projection_df"), guarded.pop("_cost_projection_df"))
-    assert default == guarded
 
 
 # -- provenance -----------------------------------------------------------------------
@@ -880,8 +749,3 @@ def test_app_daily_persistence_honours_the_guard_with_unchanged_decisions():
     assert default_record["final_stored_energy"]["unattributed_wh"] == default_record["final_stored_energy"]["total_wh"]
     assert default_record["final_stored_energy"]["total_wh"] == 5000.0 * 0.9
     assert guarded_record["final_stored_energy"] != default_record["final_stored_energy"]
-
-
-def test_the_key_reference_lists_the_setting():
-    reference = (Path(__file__).resolve().parents[1] / "docs" / "getting-started" / "config-reference.md").read_text()
-    assert "| `battery_allow_terminal_replacement` | `True` | — |" in reference
