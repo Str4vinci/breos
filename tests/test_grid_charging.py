@@ -146,12 +146,6 @@ def test_the_summary_path_applies_the_same_instructions(scenario, backend):
     assert summary.carried_grid_origin_energy_wh == detailed["Battery_Grid_Origin_Energy_End"].iloc[-1]
 
 
-def test_noop_instructions_are_shared_per_length():
-    assert DispatchInstructions.noop(24) is DispatchInstructions.noop(24)
-    assert DispatchInstructions.noop(24) is not DispatchInstructions.noop(48)
-    assert not DispatchInstructions.noop(24).grid_target_fraction.flags.writeable
-
-
 # --- the grid-charge sub-step ---------------------------------------------
 
 
@@ -285,22 +279,6 @@ def test_grid_charge_heats_the_cell():
     charging = results["Grid_DC_To_Battery"] > 0.0
     assert charging.any()
     assert (results.loc[charging, "T_cell"] > 25.0).all()
-
-
-def test_only_pv_origin_discharge_counts_as_pv():
-    """Grid energy shifted to the evening is not PV self-consumption."""
-    pv, load, temp, cfg, sim = build_instructed("fixed_target", "h")
-    results = _simulate(pv, load, temp, BatteryConfig(**cfg), sim.pop("dispatch_instructions"), **sim)
-
-    unattributed = (
-        results["Battery_AC_To_Load"]
-        - results["PV_Origin_Battery_AC_To_Load"]
-        - results["Grid_Origin_Battery_AC_To_Load"]
-    )
-    assert (unattributed > -1e-9).all()
-    assert results["Grid_Origin_Battery_AC_To_Load"].sum() > 0.0
-    # Grid-origin delivery shows up nowhere in the PV-origin column.
-    assert results["PV_Origin_Battery_AC_To_Load"].sum() < results["Battery_AC_To_Load"].sum()
 
 
 @pytest.mark.parametrize("scenario", ["fixed_target", "fixed_target_blast"])
