@@ -65,7 +65,11 @@ def test_top_level_tracker_settings_are_validated(settings, error, match):
 @pytest.mark.parametrize(
     "array,error,match",
     [
-        ({"tracking": "singleaxis"}, ValueError, r"'pv_arrays\[0\]\.tracking' must be 'fixed'"),
+        (
+            {"tracking": "singleaxis"},
+            ValueError,
+            r"'pv_arrays\[0\]\.tracking' must be one of: fixed, single_axis, dual_axis",
+        ),
         ({"backtrack": "no"}, TypeError, r"'pv_arrays\[0\]\.backtrack' must be true or false"),
         ({"max_angle": -500}, ValueError, r"'pv_arrays\[0\]\.max_angle' must be between"),
         ({"tlt": 10}, ValueError, r"Unknown key 'pv_arrays\[0\]\.tlt'"),

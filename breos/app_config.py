@@ -78,7 +78,7 @@ from breos.inverter import AcCable, InverterConversion, inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
 from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.mismatch import DEFAULT_BYPASS_DIODE_VOLTAGE_V
-from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
+from breos.pv.model_options import is_valid_albedo, normalise_model_name
 from breos.pv.shading import ShadingTable
 from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, catalogue_snapshot, get_module
@@ -150,6 +150,60 @@ _RATE = number(minimum=-1, min_exclusive=True)
 _EFFICIENCY = number(minimum=0, maximum=1, min_exclusive=True)
 _EFFICIENCY_OR_NONE = number(minimum=0, maximum=1, min_exclusive=True, allow_none=True)
 _TRACKING_MODES = ("fixed", "single_axis", "dual_axis")
+
+
+def _count(value: Any, where: str) -> int:
+    """A whole number of at least 1, such as a module count."""
+    if not _is_int(value) or value < 1:
+        raise ValueError(f"'{where}' must be >= 1")
+    return value
+
+
+def _module_key(value: Any, where: str) -> str:
+    """A key of the PV module catalogue, read when checked, so a module added at run time counts."""
+    if value not in MODULES:
+        raise ValueError(f"Unknown PV module {value!r} for '{where}'. Available: {', '.join(sorted(MODULES))}")
+    return value
+
+
+def _albedo(value: Any, where: str) -> float:
+    """A ground reflectance in [0, 1]."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not is_valid_albedo(value):
+        raise ValueError(f"'{where}' must be a number between 0 and 1")
+    return float(value)
+
+
+def _angle(low: float, high: float) -> Checker:
+    return number(minimum=low, maximum=high, allow_none=True)
+
+
+# The PV keys an array may set as well as the top level, checked alike in
+# both places. None leaves a key unset, except where noted.
+_PV_CHECKS: dict[str, Checker] = {
+    "tilt": _angle(0, 90),
+    "azimuth": _angle(0, 360),
+    # Not optional: the top level always resolves a mode. An array takes optional(...).
+    "tracking": choice(_TRACKING_MODES, case_insensitive=False),
+    "axis_tilt": _angle(0, 90),
+    "axis_azimuth": _angle(0, 360),
+    "max_angle": _angle(0, 90),
+    # A string such as "no" is truthy and would leave backtracking on.
+    "backtrack": optional(boolean),
+    "cross_axis_tilt": _angle(-90, 90),
+    "dual_axis_max_tilt": _angle(0, 90),
+    "temperature_model": choice(TEMPERATURE_MODELS),
+    # gcr feeds the infinite_sheds view factors and the backtracking schedule;
+    # pvlib takes any ratio and quietly computes a different rotation.
+    "gcr": number(minimum=0, maximum=1, min_exclusive=True),
+    "transposition_model": optional(choice(TRANSPOSITION_MODELS)),
+    "albedo": optional(_albedo),
+    "surface_type": optional(choice(SURFACE_TYPES, case_insensitive=False)),
+    "model_perez": optional(choice(PEREZ_MODELS, case_insensitive=False)),
+    # None reads as "none", as the model name does.
+    "bifacial_model": optional(choice(BIFACIAL_MODELS)),
+    "pvrow_height": number(minimum=0, min_exclusive=True, allow_none=True),
+    "pvrow_pitch": number(minimum=0, min_exclusive=True, allow_none=True),
+}
 
 
 @dataclass(frozen=True)
@@ -414,6 +468,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="emissions.country",
     ),
     "pv_module": AppConfigField(
+        check=optional(_module_key),
         default=None,
         cli_flags=("--pv-module",),
         cli_help="PV module catalogue key.",
@@ -476,7 +531,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="load.load_profile_unit",
     ),
     "tilt": AppConfigField(
-        check=number(minimum=0, maximum=90, allow_none=True),
+        check=_PV_CHECKS["tilt"],
         default=None,
         cli_flags=("--tilt",),
         cli_type=float,
@@ -485,7 +540,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.tilt",
     ),
     "azimuth": AppConfigField(
-        check=number(minimum=0, maximum=360, allow_none=True),
+        check=_PV_CHECKS["azimuth"],
         default=None,
         cli_flags=("--azimuth",),
         cli_type=float,
@@ -494,6 +549,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.azimuth",
     ),
     "transposition_model": AppConfigField(
+        check=_PV_CHECKS["transposition_model"],
         default=DEFAULT_TRANSPOSITION_MODEL,
         cli_flags=("--transposition-model", "--sky-model"),
         cli_choices=tuple(TRANSPOSITION_MODELS),
@@ -505,6 +561,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.transposition_model",
     ),
     "albedo": AppConfigField(
+        check=_PV_CHECKS["albedo"],
         default=None,
         cli_flags=("--albedo",),
         cli_type=float,
@@ -516,6 +573,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.albedo",
     ),
     "surface_type": AppConfigField(
+        check=_PV_CHECKS["surface_type"],
         default=None,
         cli_flags=("--surface-type",),
         cli_choices=tuple(SURFACE_TYPES),
@@ -524,6 +582,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.surface_type",
     ),
     "model_perez": AppConfigField(
+        check=_PV_CHECKS["model_perez"],
         default=DEFAULT_PEREZ_MODEL,
         cli_flags=("--perez-model",),
         cli_choices=tuple(PEREZ_MODELS),
@@ -590,7 +649,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.diffuse_iam",
     ),
     "temperature_model": AppConfigField(
-        check=choice(TEMPERATURE_MODELS),
+        check=_PV_CHECKS["temperature_model"],
         default=DEFAULT_TEMPERATURE_MODEL,
         cli_flags=("--temperature-model",),
         cli_help=(
@@ -606,6 +665,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.temperature_model",
     ),
     "bifacial_model": AppConfigField(
+        check=_PV_CHECKS["bifacial_model"],
         default=DEFAULT_BIFACIAL_MODEL,
         cli_flags=("--bifacial-model",),
         cli_choices=tuple(BIFACIAL_MODELS),
@@ -619,6 +679,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.bifacial_model",
     ),
     "pvrow_height": AppConfigField(
+        check=_PV_CHECKS["pvrow_height"],
         default=None,
         cli_flags=("--pvrow-height",),
         cli_type=float,
@@ -630,6 +691,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.pvrow_height",
     ),
     "pvrow_pitch": AppConfigField(
+        check=_PV_CHECKS["pvrow_pitch"],
         default=None,
         cli_flags=("--pvrow-pitch",),
         cli_type=float,
@@ -638,6 +700,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.pvrow_pitch",
     ),
     "gcr": AppConfigField(
+        check=_PV_CHECKS["gcr"],
         default=0.35,
         cli_flags=("--gcr",),
         cli_type=float,
@@ -654,6 +717,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="load.resolution",
     ),
     "projection_years": AppConfigField(
+        check=_count,
         default=20,
         cli_flags=("--projection-years",),
         cli_type=int,
@@ -969,32 +1033,43 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.arrays",
     ),
     "tracking": AppConfigField(
+        check=_PV_CHECKS["tracking"],
         default="fixed",
-        doc="Tracking mode: " + ", ".join(f'`"{mode}"`' for mode in _TRACKING_MODES),
+        doc="Tracking mode",
         summary="pv.tracking",
     ),
-    "axis_tilt": AppConfigField(default=0.0, doc="Single-axis tracker axis tilt (degrees)", summary="pv.axis_tilt"),
+    "axis_tilt": AppConfigField(
+        check=_PV_CHECKS["axis_tilt"],
+        default=0.0,
+        doc="Single-axis tracker axis tilt (degrees)",
+        summary="pv.axis_tilt",
+    ),
     "axis_azimuth": AppConfigField(
+        check=_PV_CHECKS["axis_azimuth"],
         default=None,
         doc="Tracker axis azimuth (degrees). `None` sets it from the latitude",
         summary="pv.axis_azimuth",
     ),
     "max_angle": AppConfigField(
+        check=_PV_CHECKS["max_angle"],
         default=60.0,
         doc="Single-axis tracker maximum rotation angle (degrees)",
         summary="pv.max_angle",
     ),
     "backtrack": AppConfigField(
+        check=_PV_CHECKS["backtrack"],
         default=True,
         doc="Whether single-axis trackers backtrack to avoid row shading",
         summary="pv.backtrack",
     ),
     "cross_axis_tilt": AppConfigField(
+        check=_PV_CHECKS["cross_axis_tilt"],
         default=0.0,
         doc="Cross-axis terrain slope for single-axis tracking (degrees)",
         summary="pv.cross_axis_tilt",
     ),
     "dual_axis_max_tilt": AppConfigField(
+        check=_PV_CHECKS["dual_axis_max_tilt"],
         default=90.0,
         doc="Maximum panel tilt for dual-axis tracking (degrees)",
         summary="pv.dual_axis_max_tilt",
@@ -1476,38 +1551,6 @@ def default_module_key() -> str:
     return next(iter(MODULES))
 
 
-def _validate_sky_settings(
-    transposition_model: Any,
-    albedo: Any,
-    surface_type: Any,
-    model_perez: Any,
-    where: str = "",
-) -> None:
-    """Validate the sky-diffusion settings shared by the top level and arrays.
-
-    ``where`` prefixes the key name in error messages (e.g. ``pv_arrays[0]``);
-    ``None`` values are treated as "not set" and skipped, so per-array overrides
-    only validate the keys they actually provide.
-
-    The rules come from :mod:`breos.pv.model_options`; only the config-key
-    phrasing and the None-means-unset handling are this layer's own.
-    """
-    prefix = f"{where}." if where else ""
-    if transposition_model is not None and not is_known_model(transposition_model, TRANSPOSITION_MODELS):
-        valid = ", ".join(TRANSPOSITION_MODELS)
-        raise ValueError(f"'{prefix}transposition_model' must be one of: {valid}")
-    if albedo is not None and surface_type is not None:
-        raise ValueError(f"Set either '{prefix}albedo' or '{prefix}surface_type', not both.")
-    if albedo is not None and (not isinstance(albedo, (int, float)) or not is_valid_albedo(albedo)):
-        raise ValueError(f"'{prefix}albedo' must be a number between 0 and 1")
-    if surface_type is not None and surface_type not in SURFACE_TYPES:
-        valid = ", ".join(SURFACE_TYPES)
-        raise ValueError(f"'{prefix}surface_type' must be one of: {valid}")
-    if model_perez is not None and model_perez not in PEREZ_MODELS:
-        valid = ", ".join(PEREZ_MODELS)
-        raise ValueError(f"'{prefix}model_perez' must be one of: {valid}")
-
-
 # Tracker geometry, inherited by every tracking array that does not set it.
 _TRACKER_GEOMETRY_KEYS = (
     "axis_tilt",
@@ -1517,13 +1560,6 @@ _TRACKER_GEOMETRY_KEYS = (
     "cross_axis_tilt",
     "dual_axis_max_tilt",
 )
-_TRACKER_ANGLE_RANGES = {
-    "axis_tilt": (0.0, 90.0),
-    "axis_azimuth": (0.0, 360.0),
-    "max_angle": (0.0, 90.0),
-    "cross_axis_tilt": (-90.0, 90.0),
-    "dual_axis_max_tilt": (0.0, 90.0),
-}
 # Per-array settings passed through to the PV model when an array sets them.
 _PV_ARRAY_OPTION_KEYS = (
     "temperature_model",
@@ -1551,9 +1587,32 @@ _PV_ARRAY_KEYS = frozenset(
         "shading",
     )
 )
+
+
+def _check_albedo_or_surface(settings: Mapping[str, Any], where: str) -> None:
+    prefix = f"{where}." if where else ""
+    if settings.get("albedo") is not None and settings.get("surface_type") is not None:
+        raise ValueError(f"Set either '{prefix}albedo' or '{prefix}surface_type', not both.")
+
+
+def _shading_table(value: Any, where: str) -> Any:
+    _validate_shading_table(value, where)
+    return value
+
+
 PV_ARRAY_TABLE = TableSpec(
     "pv_arrays[i]",
-    keys=dict.fromkeys(_PV_ARRAY_KEYS, anything),
+    keys={
+        **dict.fromkeys(_PV_ARRAY_KEYS, anything),
+        **{key: optional(check) for key, check in _PV_CHECKS.items()},
+        # An array that sets these must give a value.
+        "temperature_model": _PV_CHECKS["temperature_model"],
+        "gcr": _PV_CHECKS["gcr"],
+        "modules": _count,
+        "module": optional(_module_key),
+        "shading": _shading_table,
+    },
+    check=_check_albedo_or_surface,
     docs={
         "modules": "Number of PV modules in this array, at least 1",
         "module": "Module catalogue key for this array; inherits `pv_module`",
@@ -1808,43 +1867,6 @@ def _check_electrical_sizing(config: Mapping[str, Any]) -> None:
         raise ValueError("'inverters' set their own efficiency; remove 'inverter_efficiency'")
 
 
-def _validate_tracker_settings(settings: dict[str, Any], where: str = "") -> None:
-    """Validate the tracker keys shared by the top level and arrays.
-
-    ``None`` means "not set" and is skipped, so an array only validates the
-    keys it provides; the rest are inherited from the already-checked top
-    level. ``backtrack`` must be a real bool, because a string such as
-    ``"no"`` is truthy and would leave backtracking on.
-    """
-    prefix = f"{where}." if where else ""
-    tracking = settings.get("tracking")
-    if tracking is not None and tracking not in _TRACKING_MODES:
-        raise ValueError(f"'{prefix}tracking' must be 'fixed', 'single_axis', or 'dual_axis', got {tracking!r}")
-    for key, (low, high) in _TRACKER_ANGLE_RANGES.items():
-        value = settings.get(key)
-        if value is not None and not low <= _finite_real(value, f"{prefix}{key}") <= high:
-            raise ValueError(f"'{prefix}{key}' must be between {low:g} and {high:g}")
-    backtrack = settings.get("backtrack")
-    if backtrack is not None and not isinstance(backtrack, bool):
-        raise TypeError(f"'{prefix}backtrack' must be true or false, got {backtrack!r}")
-
-
-def _validate_gcr(gcr: Any, prefix: str = "") -> None:
-    """Validate a ground coverage ratio, whichever model consumes it.
-
-    ``gcr`` has two consumers and neither is a shading calculation: the
-    ``infinite_sheds`` rear-side view factors, and — on the tracking path —
-    the backtracking rotation schedule that pvlib's ``singleaxis`` derives
-    from it. The second is why this is checked even with no rear-side model
-    active. pvlib does not reject a nonsensical ratio; it quietly computes a
-    different rotation, so a mistyped ``3.5`` returns roughly half the annual
-    energy with no error anywhere. ``prefix`` already carries its trailing
-    dot, matching the other config-key messages.
-    """
-    if not is_valid_gcr(_finite_real(gcr, f"{prefix}gcr")):
-        raise ValueError(f"'{prefix}gcr' must be between 0 (exclusive) and 1 (inclusive)")
-
-
 def _validate_bifacial_settings(
     model: Any,
     module: Any,
@@ -1861,16 +1883,7 @@ def _validate_bifacial_settings(
     validators because tracking can consume it without bifacial modeling.
     """
     prefix = f"{where}." if where else ""
-    normalised = normalise_model_name(model)
-    if not is_known_model(model, BIFACIAL_MODELS):
-        valid = ", ".join(BIFACIAL_MODELS)
-        raise ValueError(f"'{prefix}bifacial_model' must be one of: {valid}")
-
-    for key, value in (("pvrow_height", pvrow_height), ("pvrow_pitch", pvrow_pitch)):
-        if value is not None and _finite_real(value, f"{prefix}{key}") <= 0:
-            raise ValueError(f"'{prefix}{key}' must be > 0 when configured")
-
-    if normalised == "none":
+    if normalise_model_name(model) == "none":
         return
 
     module_key = module or default_module_key()
@@ -1882,9 +1895,6 @@ def _validate_bifacial_settings(
         raise ValueError(f"'{prefix}pvrow_height' is required when bifacial_model='infinite_sheds'")
     if pvrow_pitch is None:
         raise ValueError(f"'{prefix}pvrow_pitch' is required when bifacial_model='infinite_sheds'")
-    # Deliberately last, so an active rear-side model still reports its
-    # missing metadata and geometry before quibbling about the ratio.
-    _validate_gcr(gcr, prefix)
 
 
 def _check_fields(cfg: Mapping[str, Any]) -> None:
@@ -1923,7 +1933,6 @@ def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
     _validate_battery_coupling(cfg)
     _validate_period(cfg)
     _validate_smart_charging(cfg, tariff_spec)
-    _validate_reachable_gcr(cfg, has_arrays)
     _electrical_inputs(cfg)
     if cfg["electrical_fidelity"] == "string" and cfg.get("inverters") is None:
         raise ValueError("electrical_fidelity = 'string' needs 'inverters', 'pv_strings' and 'electrical_environment'")
@@ -2703,30 +2712,6 @@ def resolve_smart_charging_spec(
     )
 
 
-def _validate_reachable_gcr(cfg: dict[str, Any], has_arrays: bool) -> None:
-    """Check every ``gcr`` that can reach the model, once everything else passes.
-
-    Runs last, and deliberately so: an out-of-range ``gcr`` used to be caught
-    only under an active bifacial model, so checking it earlier would change
-    which error an already-broken config reports. Running it here makes the
-    check purely additive — a config failing on some other key keeps failing
-    on that key, and ``gcr`` is only ever the *new* reason a config is
-    rejected.
-
-    Arrays that set no ``gcr`` inherit the top-level value, which is also the
-    function-level default handed to the multi-array entry point, so the
-    top-level value is checked even when every array overrides it. Bifacial
-    arrays have already had their effective ``gcr`` checked in the loop above;
-    re-checking an explicit override here is harmless and covers the
-    non-bifacial tracking path that nothing else reaches.
-    """
-    _validate_gcr(cfg["gcr"])
-    if has_arrays:
-        for index, array in enumerate(cfg["pv_arrays"]):
-            if "gcr" in array:
-                _validate_gcr(array["gcr"], f"pv_arrays[{index}].")
-
-
 def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
     """Validate top-level keys, required inputs, and location structure."""
     unknown = set(cfg) - ALLOWED_CONFIG_KEYS
@@ -2782,40 +2767,17 @@ def _validate_load_profile(cfg: dict[str, Any]) -> None:
 
 def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
     """Validate PV sizing, array geometry, sky models, and inverter inputs."""
-    if not has_arrays and (not _is_int(cfg["n_modules"]) or cfg["n_modules"] < 1):
-        raise ValueError("'n_modules' must be >= 1")
-    _validate_tracker_settings(cfg)
+    if not has_arrays:
+        _count(cfg["n_modules"], "n_modules")
+    _check_albedo_or_surface(cfg, "")
     if has_arrays:
         if not isinstance(cfg["pv_arrays"], list):
             raise TypeError("'pv_arrays' must be a list")
         for i, arr in enumerate(cfg["pv_arrays"]):
-            # Only the key set is checked here; the values are checked below
-            # with the top-level rules they share.
             PV_ARRAY_TABLE.validate(arr, f"pv_arrays[{i}]")
-            _validate_tracker_settings(arr, where=f"pv_arrays[{i}]")
-            modules = arr.get("modules", 0)
-            if not _is_int(modules) or modules < 1:
+            if "modules" not in arr:
                 raise ValueError(f"'pv_arrays[{i}].modules' must be >= 1")
             module = arr.get("module", cfg.get("pv_module"))
-            if module is not None and module not in MODULES:
-                available = ", ".join(sorted(MODULES))
-                raise ValueError(f"Unknown PV module {module!r} in pv_arrays[{i}]. Available: {available}")
-            tilt = arr.get("tilt", cfg.get("tilt"))
-            azimuth = arr.get("azimuth", cfg.get("azimuth"))
-            if tilt is not None and not 0 <= _finite_real(tilt, f"pv_arrays[{i}].tilt") <= 90:
-                raise ValueError(f"'pv_arrays[{i}].tilt' must be between 0 and 90")
-            if azimuth is not None and not 0 <= _finite_real(azimuth, f"pv_arrays[{i}].azimuth") <= 360:
-                raise ValueError(f"'pv_arrays[{i}].azimuth' must be between 0 and 360")
-            _validate_sky_settings(
-                arr.get("transposition_model"),
-                arr.get("albedo"),
-                arr.get("surface_type"),
-                arr.get("model_perez"),
-                where=f"pv_arrays[{i}]",
-            )
-            if "temperature_model" in arr and not is_known_model(arr["temperature_model"], TEMPERATURE_MODELS):
-                valid = ", ".join(TEMPERATURE_MODELS)
-                raise ValueError(f"'pv_arrays[{i}].temperature_model' must be one of: {valid}")
             mounting_keys = [key for key in _PV_ARRAY_MOUNTING_KEYS if key in arr]
             if mounting_keys and cfg.get("electrical_environment") is None:
                 raise ValueError(
@@ -2830,8 +2792,6 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
                 arr.get("pvrow_pitch", cfg["pvrow_pitch"]),
                 where=f"pv_arrays[{i}]",
             )
-            if "shading" in arr:
-                _validate_shading_table(arr["shading"], f"pv_arrays[{i}].shading")
         by_modules = _module_shaded_arrays(cfg)
         for i, arr in enumerate(cfg["pv_arrays"]):
             if "shading" in arr and i in by_modules:
@@ -2845,9 +2805,6 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
                 f"'pv_arrays[{shaded.index(False)}]' has no 'shading' table. Give every array a shading table "
                 "or strings with module_shading, or none; an unshaded array takes an all-zero table"
             )
-    if cfg.get("pv_module") is not None and cfg["pv_module"] not in MODULES:
-        available = ", ".join(sorted(MODULES))
-        raise ValueError(f"Unknown PV module {cfg['pv_module']!r}. Available: {available}")
     if not has_arrays:
         _validate_bifacial_settings(
             cfg["bifacial_model"],
@@ -2886,13 +2843,10 @@ def _validate_shading_table(value: Any, where: str) -> None:
 
 def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
     """Validate simulation horizon, resolution, and solar-model selections."""
-    if not _is_int(cfg["projection_years"]) or cfg["projection_years"] < 1:
-        raise ValueError("'projection_years' must be >= 1")
     cfg["irradiance_resampling"] = validate_irradiance_resampling(cfg["irradiance_resampling"])
     _validate_weather_source(cfg)
     _validate_weather_file(cfg)
     cfg["horizon_profile"] = normalise_horizon_profile(cfg["horizon_profile"])
-    _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
     cfg["bifacial_model"] = normalise_model_name(cfg["bifacial_model"])
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
@@ -3241,18 +3195,6 @@ def validate_temperature_module_metadata(
         validate_temperature_inputs(model, module.Module_Efficiency, module.NOCT)
 
 
-def resolve_tracking(cfg: dict[str, Any]) -> str:
-    """Return the top-level tracker mode.
-
-    The validator skips an unset (None) mode, so ``tracking = None`` is
-    rejected here.
-    """
-    tracking = cfg["tracking"]
-    if tracking not in _TRACKING_MODES:
-        raise ValueError(f"tracking must be 'fixed', 'single_axis', or 'dual_axis', got {tracking!r}")
-    return tracking
-
-
 def _cost_preset_currency(key: str) -> str:
     """The currency of a packaged cost preset; an unknown key raises with the available ones."""
     costs_db = load_config_json("costs.json")
@@ -3454,7 +3396,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         cfg, tilt=tilt, azimuth=azimuth, axis_azimuth=axis_azimuth
     )
     validate_temperature_module_metadata(cfg["temperature_model"], pv_arrays, pv_params)
-    tracking = resolve_tracking(cfg)
+    tracking = cfg["tracking"]
 
     # Materialise the resolved module count (derived from pv_arrays when set)
     # into a fresh dict rather than mutating the merged config in place.

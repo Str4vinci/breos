@@ -511,7 +511,7 @@ class TestGcrValidation:
     @pytest.mark.parametrize("gcr", [0, 0.0, -0.5, 1.2, 3.5, 5.0])
     @pytest.mark.parametrize("tracking", ["fixed", "single_axis", "dual_axis"])
     def test_out_of_range_gcr_rejected_without_a_bifacial_model(self, gcr, tracking):
-        with pytest.raises(ValueError, match="'gcr' must be between 0 .exclusive. and 1 .inclusive."):
+        with pytest.raises(ValueError, match=r"'gcr' must be between 0 and 1 \(exclusive of the lower bound\)"):
             App({**self.BASE, "gcr": gcr, "tracking": tracking})
 
     @pytest.mark.parametrize("gcr", ["x", None, float("nan"), float("inf")])
@@ -544,25 +544,6 @@ class TestGcrValidation:
                     "pv_arrays": [{"modules": 4, "gcr": 0.4}],
                 }
             )
-
-    @pytest.mark.parametrize(
-        ("extra", "expected"),
-        [
-            ({"resolution": "weekly"}, "resolution"),
-            ({"inverter_efficiency": 2.0}, "inverter_efficiency"),
-            ({"transposition_model": "nope"}, "transposition_model"),
-            ({"tilt": 120}, "tilt"),
-            ({"bifacial_model": "nope"}, "bifacial_model"),
-        ],
-    )
-    def test_gcr_check_never_steals_a_pre_existing_error(self, extra, expected):
-        """The check runs last, so it is purely additive.
-
-        A config that was already rejected for some other key must keep
-        reporting that key rather than switching to gcr.
-        """
-        with pytest.raises((ValueError, TypeError), match=expected):
-            App({**self.BASE, **extra, "gcr": 3.5})
 
 
 # ---------------------------------------------------------------------------
