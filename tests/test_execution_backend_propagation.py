@@ -263,7 +263,7 @@ def test_missing_numba_is_reported_before_app_prepares_inputs(monkeypatch):
     from breos.runners import app as app_runner
 
     monkeypatch.setattr(_numba_dispatch, "numba_available", lambda: False)
-    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", _must_not_run("inputs were prepared"))
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", _must_not_run("inputs were prepared"))
 
     with pytest.raises(_numba_dispatch.NumbaUnavailableError):
         app_runner.run_app_simulation(resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}), None)

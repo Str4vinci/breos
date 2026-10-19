@@ -157,16 +157,13 @@ def test_a_value_json_cannot_hold_is_not_cached():
 
 
 def test_inputs_are_prepared_once_per_input_config_inside_the_block_only(monkeypatch):
-    import breos.runners.app as runner
-
     calls = []
-    prepare = runner.prepare_simulation_inputs
 
     def counting(*args):
         calls.append(args[0]["n_modules"])
-        return prepare(*args)
+        return prepare_simulation_inputs(*args)
 
-    monkeypatch.setattr(runner, "prepare_simulation_inputs", counting)
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", counting)
     monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fake_fetch)
     monkeypatch.setattr("breos.app.load_weather", lambda **_kwargs: None)
 
@@ -203,17 +200,7 @@ def test_inputs_are_prepared_once_per_input_config_inside_the_block_only(monkeyp
     assert calls == [8]
 
 
-def test_a_different_preparation_function_is_not_served_from_the_cache():
-    from breos.app_inputs import prepare_simulation_inputs_cached
-
-    app = App(BASE)
-    with reuse_prepared_inputs():
-        first = prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, None, prepare=lambda *_: ["a"])
-        second = prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, None, prepare=lambda *_: ["b"])
-    assert (first, second) == (["a"], ["b"])
-
-
-def test_an_unhashable_dependency_prepares_afresh():
+def test_an_unhashable_dependency_prepares_afresh(monkeypatch):
     from breos.app_inputs import prepare_simulation_inputs_cached
 
     app = App(BASE)
@@ -223,9 +210,10 @@ def test_an_unhashable_dependency_prepares_afresh():
         calls.append(1)
         return "inputs"
 
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", prepare)
     with reuse_prepared_inputs():
         for _ in range(2):
-            assert prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, [], prepare=prepare) == "inputs"
+            assert prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, []) == "inputs"
     assert calls == [1, 1]
 
 
@@ -264,18 +252,15 @@ n_modules = [8, 10]
 def test_a_sweep_writes_the_same_csv_bytes_with_and_without_the_cache(monkeypatch, tmp_path):
     import contextlib
 
-    import breos.runners.app as runner
-
     monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fake_fetch)
     monkeypatch.setattr("breos.app.load_weather", lambda **_kwargs: None)
     calls = []
-    prepare = runner.prepare_simulation_inputs
 
     def counting(*args):
         calls.append(args[0]["n_modules"])
-        return prepare(*args)
+        return prepare_simulation_inputs(*args)
 
-    monkeypatch.setattr(runner, "prepare_simulation_inputs", counting)
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", counting)
     config_path = tmp_path / "sweep.toml"
     config_path.write_text(SWEEP_CONFIG, encoding="utf-8")
 
@@ -356,8 +341,9 @@ def test_the_inverter_curve_row_an_app_resolved_is_part_of_the_cache_key(monkeyp
     def prepare(cfg, resolved, deps):
         return resolved.inverter_conversion.curve_row
 
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", prepare)
     with reuse_prepared_inputs():
-        cached = [prepare_simulation_inputs_cached(r.cfg, r, None, prepare=prepare) for r in (first, second)]
+        cached = [prepare_simulation_inputs_cached(r.cfg, r, None) for r in (first, second)]
     assert cached == [first.inverter_conversion.curve_row, second.inverter_conversion.curve_row]
 
 

@@ -52,7 +52,7 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
         pv_breakdown=_pv_breakdown(one_day_pv),
     )
 
-    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
     monkeypatch.setattr(
         projection_module,
         "build_costs_dict",
