@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import warnings
 from collections.abc import Hashable, Iterable
 from copy import deepcopy
 from datetime import timedelta
@@ -38,6 +39,7 @@ from breos.utils import (
     irradiance_component,
     is_leap_year,
     normalise_frequency,
+    remap_datetime_index_years,
     safe_path_slug,
 )
 
@@ -136,14 +138,14 @@ def _load_weather_metadata_sidecar(filepath: str | os.PathLike[str], weather_sha
     return metadata
 
 
-def warn_if_naive_weather_timestamps(timestamps, metadata: dict[str, Any], label: str) -> None:
+def warn_if_naive_weather_timestamps(timestamps: pd.DatetimeIndex, metadata: dict[str, Any], label: str) -> None:
     """Log a warning when weather timestamps carry no timezone BREOS knows of.
 
     Naive weather timestamps are read as UTC. That is right for files BREOS
     wrote itself, whose metadata records ``timestamp_timezone``, but a file on
     a local clock would shift the sun by its UTC offset.
     """
-    if getattr(timestamps, "tz", None) is None and not metadata.get("timestamp_timezone"):
+    if timestamps.tz is None and not metadata.get("timestamp_timezone"):
         logger.warning(
             "%s has timestamps without a timezone; BREOS reads them as UTC. If they are local clock "
             "times, the sun is shifted by the UTC offset: write them with their offset "
@@ -434,41 +436,78 @@ def read_weather_csv(filepath: str | os.PathLike[str]) -> pd.DataFrame:
     return df
 
 
-def _parse_weather_timestamps(values: Any) -> pd.DatetimeIndex:
+def _parse_weather_timestamps(values: Any, *, allow_mixed_offsets: bool = True) -> pd.DatetimeIndex:
     """Parse the timestamp text of a weather file.
 
     ISO 8601 first, as BREOS writes it. Offsets that change within the file,
-    such as local times across a DST change, are read as UTC instants. Then
-    day-first ``dd/mm/YYYY HH:MM``, then pandas' inference for each element.
-    Values that are not text, such as a leading row-number column, raise
-    ``TypeError``.
+    such as local times across a DST change, are read as UTC instants, or
+    refused when ``allow_mixed_offsets`` is false. Then day-first
+    ``dd/mm/YYYY HH:MM`` with or without seconds, then pandas' inference for
+    each element. Values that are not text, such as a row-number column,
+    raise ``TypeError``.
     """
     if not pd.api.types.is_string_dtype(values) and not pd.api.types.is_object_dtype(values):
         raise TypeError("weather timestamps must be text")
-    for kwargs in ({"format": "ISO8601"}, {"format": "ISO8601", "utc": True}, {"format": "%d/%m/%Y %H:%M"}):
+    with warnings.catch_warnings():
+        # pandas 2 warns, and builds an object index, where pandas 3 raises.
+        warnings.filterwarnings("error", message=".*mixed time zones.*", category=FutureWarning)
         try:
-            return pd.DatetimeIndex(pd.to_datetime(values, **kwargs))
+            return pd.DatetimeIndex(pd.to_datetime(values, format="ISO8601"))
+        except (ValueError, FutureWarning):
+            pass
+    try:
+        instants = pd.DatetimeIndex(pd.to_datetime(values, format="ISO8601", utc=True))
+    except ValueError:
+        pass
+    else:
+        if not allow_mixed_offsets:
+            raise ValueError(
+                "the timestamps' UTC offset changes within the file, as local times across a DST change do; "
+                "write them in UTC or at one fixed offset"
+            )
+        return instants
+    for day_first in ("%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S"):
+        try:
+            return pd.DatetimeIndex(pd.to_datetime(values, format=day_first))
         except ValueError:
             pass
     return pd.DatetimeIndex(pd.to_datetime(values, format="mixed"))
+
+
+def _index_on_timestamps(df: pd.DataFrame, column: Hashable, **parse: Any) -> pd.DataFrame:
+    """``df`` indexed by the timestamps in ``column``.
+
+    A leading row-number column, as ``to_csv`` writes by default, is dropped.
+    A timestamp column without a header leaves the index unnamed.
+    """
+    index = _parse_weather_timestamps(df[column], **parse)
+    unnamed = str(column).startswith("Unnamed: ")
+    index.name = None if unnamed else column
+    drop = [column]
+    first = df.columns[0]
+    if first != column and str(first).startswith("Unnamed: ") and pd.api.types.is_integer_dtype(df[first]):
+        drop.append(first)
+    return df.drop(columns=drop).set_axis(index)
 
 
 def _read_weather_frame(filepath: str | os.PathLike[str]) -> pd.DataFrame:
     """Read a weather CSV into a frame indexed by its timestamps.
 
     The timestamps are the first column, or else the first column named like
-    one (``date``, ``datetime``, ``time``).
+    one (``date``, ``datetime``, ``time``). A file with neither raises
+    ``ValueError``.
     """
-    df = pd.read_csv(filepath, index_col=0)
+    df = pd.read_csv(filepath)
     try:
-        df.index = _parse_weather_timestamps(df.index)
-    except (ValueError, TypeError):
-        df = pd.read_csv(filepath)
+        return _index_on_timestamps(df, df.columns[0])
+    except (ValueError, TypeError, IndexError):
         date_col = _find_date_column(df.columns)
-        if date_col is not None:
-            df[date_col] = _parse_weather_timestamps(df[date_col])
-            df = df.set_index(date_col)
-    return df
+        if date_col is None:
+            raise ValueError(
+                f"Weather file {filepath} has no timestamps: its first column, or a column named "
+                f"{', '.join(_DATE_COLUMNS)}, must hold them"
+            ) from None
+        return _index_on_timestamps(df, date_col)
 
 
 def _local_weather_metadata(
@@ -1393,13 +1432,18 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
     Returns:
         Tuple of (source year -> frame indexed by ``date``, file metadata)
     """
-    df = _read_weather_frame(csv_file_path)
-    if df.index.name != "date":
+    df = pd.read_csv(csv_file_path)
+    if "date" not in df.columns:
         raise ValueError(
             f"Weather file {csv_file_path} has no 'date' column. A multi-year weather file needs one "
             "timestamp column named 'date', as `tools/fetch_weather.py historical` writes; a "
             "single-year TMY cannot be sampled by year."
         )
+    # The years are split on the file's own clock, so its offset must not change.
+    try:
+        df = _index_on_timestamps(df, "date", allow_mixed_offsets=False)
+    except ValueError as exc:
+        raise ValueError(f"Weather file {csv_file_path}: {exc}") from exc
 
     metadata = weather_file_metadata(csv_file_path)
     warn_if_naive_weather_timestamps(df.index, metadata, f"Weather file {csv_file_path}")
@@ -1439,8 +1483,7 @@ def _weather_years(csv_file_path: str, target_year: int) -> Dict[int, pd.DataFra
     by_year, metadata = _complete_weather_years(csv_file_path)
     result: Dict[int, pd.DataFrame] = {}
     for year, year_data in by_year.items():
-        remapped = year_data.copy()
-        remapped.index = remapped.index + pd.DateOffset(years=target_year - year)
+        remapped = remap_datetime_index_years(year_data, target_year - year)
         remapped.attrs[WEATHER_METADATA_KEY] = deepcopy(metadata)
         result[year] = remapped
     return result

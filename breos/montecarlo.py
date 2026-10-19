@@ -191,12 +191,8 @@ def _index_weather(df: pd.DataFrame) -> pd.DataFrame:
     file's own clock, where it was dropped: in UTC, a file written at +01:00
     would still have an hour dated 29 February, and the fill would be skipped.
     """
-    w = fill_leap_day(df.copy())
-    if w.index.tz is None:
-        w.index = w.index.tz_localize("UTC")
-    else:
-        w.index = w.index.tz_convert("UTC")
-    return w
+    w = fill_leap_day(df)
+    return w.tz_localize("UTC") if w.index.tz is None else w.tz_convert("UTC")
 
 
 def _load_weather_years(

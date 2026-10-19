@@ -869,9 +869,10 @@ def _hourly_year_csv(path, stamps, *, leading_row_numbers=False):
     return path
 
 
-def test_read_weather_csv_reads_day_first_timestamps(tmp_path):
+@pytest.mark.parametrize("stamp_format", ["%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S"])
+def test_read_weather_csv_reads_day_first_timestamps(tmp_path, stamp_format):
     index = pd.date_range("2023-01-01", "2023-12-31 23:00", freq="h")
-    path = _hourly_year_csv(tmp_path / "dayfirst.csv", index.strftime("%d/%m/%Y %H:%M"))
+    path = _hourly_year_csv(tmp_path / "dayfirst.csv", index.strftime(stamp_format))
 
     pd.testing.assert_index_equal(read_weather_csv(path).index, index.as_unit("us"), check_names=False)
 
@@ -884,12 +885,29 @@ def test_read_weather_csv_finds_the_date_column_after_row_numbers(tmp_path):
 
     pd.testing.assert_index_equal(weather.index, index.as_unit("us"), check_names=False)
     assert weather.index.name == "date"
+    # The row numbers are not weather.
+    assert list(weather.columns) == ["ghi", "temperature_2m"]
 
 
-def test_preload_weather_by_year_reads_local_times_across_dst_as_instants(tmp_path):
-    local = pd.date_range("2023-01-01", "2023-12-31 23:00", freq="h", tz="Europe/Lisbon")
-    path = _hourly_year_csv(tmp_path / "lisbon.csv", [str(stamp) for stamp in local])
+def test_read_weather_csv_refuses_a_file_without_timestamps(tmp_path):
+    path = tmp_path / "values.csv"
+    pd.DataFrame({"ghi": [0.0, 1.0], "temperature_2m": [10.0, 11.0]}).to_csv(path, index=False)
 
-    year = preload_weather_by_year(str(path), target_year=2023)[2023]
+    with pytest.raises(ValueError, match="has no timestamps"):
+        read_weather_csv(path)
 
-    assert pd.DatetimeIndex(year["date"]).equals(local.tz_convert("UTC"))
+
+def test_read_weather_csv_reads_local_times_across_dst_as_instants(tmp_path):
+    local = pd.date_range("2023-01-01", "2023-12-31 23:00", freq="h", tz="Europe/Berlin")
+    path = _hourly_year_csv(tmp_path / "berlin.csv", [str(stamp) for stamp in local])
+
+    assert read_weather_csv(path).index.equals(local.tz_convert("UTC"))
+
+
+def test_preload_weather_by_year_refuses_local_times_across_dst(tmp_path):
+    # Its years are split on the file's clock, which a changing offset has not got.
+    local = pd.date_range("2022-01-01", "2023-12-31 23:00", freq="h", tz="Europe/Berlin")
+    path = _hourly_year_csv(tmp_path / "berlin.csv", [str(stamp) for stamp in local])
+
+    with pytest.raises(ValueError, match="UTC offset changes within the file"):
+        preload_weather_by_year(str(path), target_year=2025)

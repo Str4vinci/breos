@@ -559,10 +559,15 @@ removed in 0.9.0.
 
 - Weather files are read with one timestamp parser for App and Monte Carlo.
   App (`load_weather`, `read_weather_csv`, `weather_file`) now reads
-  day-first `dd/mm/YYYY HH:MM` timestamps, which raised before, and finds a
-  `date` column that follows a row-number column instead of reading the row
-  numbers as 1970 timestamps. Monte Carlo now reads local timestamps whose
-  UTC offset changes at DST, as UTC instants, which raised before.
+  day-first `dd/mm/YYYY HH:MM` timestamps, with or without seconds, which
+  raised before. It finds a `date` column that follows a row-number column,
+  and drops the row numbers, instead of reading them as 1970 timestamps. A
+  file without timestamps raises `ValueError` instead of loading with a
+  1970 index. Both readers drop a leading row-number column. Monte Carlo
+  still refuses local timestamps whose UTC offset changes at DST, since it
+  splits the years on the file's clock, and now says so instead of passing
+  on the pandas error. On pandas 2, reading such a file in App no longer
+  emits pandas' mixed-time-zone `FutureWarning`.
 - The optimizer's `[financials]` rates are held to the App's bounds when the
   configuration is read. `sell_price_inflation` must lie between -1 and 1
   (exclusive), as App requires; the optimizer accepted 1.5 before. The

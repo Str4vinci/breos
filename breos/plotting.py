@@ -37,7 +37,7 @@ from breos.constants import DEFAULT_EOL_PERCENTAGE
 from breos.economics import _initial_investment, _recorded_currency, find_payback_year_interpolated
 from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import find_irradiance_column, local_datetime_index
-from breos.weather import extract_ambient_temperature, preload_weather_by_year
+from breos.weather import _weather_years, extract_ambient_temperature
 
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -1626,7 +1626,7 @@ def _historical_weather_years(
     if isinstance(historical, Mapping):
         years = dict(historical)
     else:
-        years = preload_weather_by_year(os.fspath(historical))
+        years = _weather_years(os.fspath(historical), target_year=2025)
     if not years:
         raise ValueError("The historical weather has no complete year")
     return years
