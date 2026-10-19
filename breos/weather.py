@@ -641,6 +641,48 @@ def fetch_tmy_weather_data(
     return tmy_data, metadata
 
 
+# Open-Meteo hourly fields of a weather file, as BREOS names them.
+_OPENMETEO_METEO_FIELDS = ("temperature_2m", "wind_speed_10m")
+_OPENMETEO_RADIATION_FIELDS = (
+    "shortwave_radiation",
+    "direct_radiation",
+    "diffuse_radiation",
+    "direct_normal_irradiance",
+)
+FORECAST_ARCHIVE_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
+SATELLITE_ARCHIVE_URL = "https://satellite-api.open-meteo.com/v1/archive"
+HISTORICAL_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+
+
+_OPENMETEO_IMPORT_HINT = (
+    "openmeteo_requests is required to fetch Open-Meteo weather. Install with: pip install 'breos[weather]'"
+)
+
+
+def _openmeteo_hourly(url: str, request: dict[str, Any], names: Sequence[str]) -> pd.DataFrame:
+    """One Open-Meteo request's hourly variables, as ``names`` in request order, indexed by ``date``.
+
+    The client caches responses in ``.cache.sqlite`` in the working directory
+    for 30 days, so a bad response is not served forever, and retries server
+    errors.
+    """
+    if not HAS_OPENMETEO:
+        raise ImportError(_OPENMETEO_IMPORT_HINT)
+    cache_session = requests_cache.CachedSession(".cache", expire_after=timedelta(days=30))
+    retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
+    cache_session.mount("https://", HTTPAdapter(max_retries=retries))
+    cache_session.mount("http://", HTTPAdapter(max_retries=retries))
+    hourly = openmeteo_requests.Client(session=cache_session).weather_api(url, params=request)[0].Hourly()
+    index = pd.date_range(
+        start=pd.to_datetime(hourly.Time(), unit="s"),
+        end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
+        freq=pd.Timedelta(seconds=hourly.Interval()),
+        inclusive="left",
+        name="date",
+    )
+    return pd.DataFrame({name: hourly.Variables(i).ValuesAsNumpy() for i, name in enumerate(names)}, index=index)
+
+
 def fetch_weather_data(
     latitude: float,
     longitude: float,
@@ -691,10 +733,7 @@ def fetch_weather_data(
     """
     freq = normalise_frequency(freq)
     if not HAS_OPENMETEO:
-        raise ImportError(
-            "openmeteo_requests is required for historical weather data. "
-            "Install with: uv add openmeteo-requests requests-cache"
-        )
+        raise ImportError(_OPENMETEO_IMPORT_HINT)
 
     if radiation_time_basis not in {"interval_mean", "instant"}:
         raise ValueError("radiation_time_basis must be 'interval_mean' or 'instant'")
@@ -710,15 +749,6 @@ def fetch_weather_data(
         (f"terrestrial_radiation{radiation_suffix}", "terrestrial_radiation"),
     )
 
-    # Setup the Open-Meteo API client with cache and retry. Cache expires
-    # after 30 days so we don't serve indefinitely-stale entries if a single
-    # bad response was ever written.
-    cache_session = requests_cache.CachedSession(".cache", expire_after=timedelta(days=30))
-    retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
-    cache_session.mount("https://", HTTPAdapter(max_retries=retries))
-    cache_session.mount("http://", HTTPAdapter(max_retries=retries))
-    openmeteo = openmeteo_requests.Client(session=cache_session)
-
     # Preceding-hour means are labelled at the end of their hour, so the
     # hours of [start_date, end_date] carry the labels from start_date 01:00
     # through the midnight after end_date. Fetch one extra day to get that
@@ -728,7 +758,6 @@ def fetch_weather_data(
     last_label = pd.Timestamp(end_date) + pd.Timedelta(days=1)
     request_end_date = last_label.strftime("%Y-%m-%d") if right_labelled else end_date
 
-    url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
         "latitude": latitude,
         "longitude": longitude,
@@ -740,27 +769,9 @@ def fetch_weather_data(
         "tilt": tilt,
         "azimuth": azimuth,
     }
-
-    responses = openmeteo.weather_api(url, params=params)
-    response = responses[0]
-
-    # Process hourly data
-    hourly = response.Hourly()
-    hourly_data = {
-        "date": pd.date_range(
-            start=pd.to_datetime(hourly.Time(), unit="s"),
-            end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
-            freq=pd.Timedelta(seconds=hourly.Interval()),
-            inclusive="left",
-        ),
-        **{
-            output_name: hourly.Variables(index).ValuesAsNumpy()
-            for index, (_provider_name, output_name) in enumerate(hourly_fields)
-        },
-    }
-
-    hourly_dataframe = pd.DataFrame(data=hourly_data)
-    hourly_dataframe.set_index("date", inplace=True)
+    hourly_dataframe = _openmeteo_hourly(
+        HISTORICAL_ARCHIVE_URL, params, [output_name for _provider_name, output_name in hourly_fields]
+    )
     if right_labelled:
         index = hourly_dataframe.index
         hourly_dataframe = hourly_dataframe[(index > first_label) & (index <= last_label)]
@@ -781,31 +792,13 @@ def fetch_weather_data(
         hourly_dataframe = resample_to_15min(hourly_dataframe, method="makima", latitude=latitude, longitude=longitude)
 
     if save_to_file:
-        start_year = start_date[:4]
-        end_year = end_date[:4]
-        if location_name:
-            loc_slug = safe_path_slug(location_name)
-        else:
-            loc_slug = f"lat{latitude:.0f}_lon{longitude:.0f}"
-        filename = os.path.join(output_dir, f"{loc_slug}_historical_{start_year}_{end_year}_openmeteo.csv")
+        loc_slug = _location_slug(latitude, longitude, location_name)
+        filename = os.path.join(output_dir, f"{loc_slug}_historical_{start_date[:4]}_{end_date[:4]}_openmeteo.csv")
         os.makedirs(output_dir, exist_ok=True)
         save_weather_csv(hourly_dataframe, filename)
         logger.info("Saved weather data and provenance sidecar to %s", filename)
 
     return hourly_dataframe
-
-
-# Open-Meteo hourly fields of a weather file, as BREOS names them.
-_OPENMETEO_METEO_FIELDS = ("temperature_2m", "wind_speed_10m")
-_OPENMETEO_RADIATION_FIELDS = (
-    "shortwave_radiation",
-    "direct_radiation",
-    "diffuse_radiation",
-    "direct_normal_irradiance",
-)
-FORECAST_ARCHIVE_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
-SATELLITE_ARCHIVE_URL = "https://satellite-api.open-meteo.com/v1/archive"
-HISTORICAL_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
 
 def _openmeteo_year(url: str, params: dict[str, Any], fields: Sequence[str], year: int) -> pd.DataFrame:
@@ -814,15 +807,6 @@ def _openmeteo_year(url: str, params: dict[str, Any], fields: Sequence[str], yea
     The year's hours carry the labels from 1 January 01:00 to the next
     1 January 00:00, so the request runs one day past the year's end.
     """
-    if not HAS_OPENMETEO:
-        raise ImportError(
-            "openmeteo_requests is required to fetch Open-Meteo weather. Install with: pip install 'breos[weather]'"
-        )
-    cache_session = requests_cache.CachedSession(".cache", expire_after=timedelta(days=30))
-    retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
-    cache_session.mount("https://", HTTPAdapter(max_retries=retries))
-    cache_session.mount("http://", HTTPAdapter(max_retries=retries))
-    client = openmeteo_requests.Client(session=cache_session)
     request = {
         **params,
         "start_date": f"{year}-01-01",
@@ -831,15 +815,7 @@ def _openmeteo_year(url: str, params: dict[str, Any], fields: Sequence[str], yea
         "timezone": "GMT",
         "wind_speed_unit": "ms",
     }
-    hourly = client.weather_api(url, params=request)[0].Hourly()
-    index = pd.date_range(
-        start=pd.to_datetime(hourly.Time(), unit="s"),
-        end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
-        freq=pd.Timedelta(seconds=hourly.Interval()),
-        inclusive="left",
-    )
-    frame = pd.DataFrame({name: hourly.Variables(i).ValuesAsNumpy() for i, name in enumerate(fields)}, index=index)
-    frame.index.name = "date"
+    frame = _openmeteo_hourly(url, request, fields)
     frame = frame[(frame.index > pd.Timestamp(f"{year}-01-01")) & (frame.index <= pd.Timestamp(f"{year + 1}-01-01"))]
     expected = pd.date_range(f"{year}-01-01 01:00", f"{year + 1}-01-01 00:00", freq="h")
     if not frame.index.equals(expected):
