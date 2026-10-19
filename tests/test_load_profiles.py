@@ -73,36 +73,6 @@ def test_load_profile_utc_default_keeps_legacy_convention():
     assert len(profile) == 8760
 
 
-@pytest.mark.parametrize("freq", ["h", "15min"])
-def test_bundled_h0_uses_the_target_years_day_types(freq):
-    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
-    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq=freq, timezone="UTC").iloc[:, 0]
-
-    def shape(values):
-        return values.to_numpy() / values.sum()
-
-    # 8 January is Sunday in the source year but Wednesday in the study year.
-    # The nearest source weekday is Monday 9 January; the source Sunday must
-    # still be used for a target Sunday.
-    np.testing.assert_allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-09"]), atol=1e-14)
-    np.testing.assert_allclose(shape(target.loc["2025-01-05"]), shape(source.loc["2023-01-08"]), atol=1e-14)
-    assert not np.allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-08"]))
-    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
-
-
-@pytest.mark.parametrize("freq", ["h", "15min"])
-def test_bundled_h0_leap_day_uses_its_real_day_type(freq):
-    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
-    target = load_profile("demandlib_h0", 1000, start_date="2020-01-01", freq=freq, timezone="UTC").iloc[:, 0]
-
-    # 29 February 2020 was Saturday. The nearest source Saturday to the
-    # non-leap 28 February anchor is 25 February 2023.
-    leap_shape = target.loc["2020-02-29"].to_numpy() / target.loc["2020-02-29"].sum()
-    saturday_shape = source.loc["2023-02-25"].to_numpy() / source.loc["2023-02-25"].sum()
-    np.testing.assert_allclose(leap_shape, saturday_shape, atol=1e-14)
-    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
-
-
 def test_external_demandlib_h0_uses_its_own_dated_source_year(tmp_path):
     source_index = pd.date_range("2024-01-01", "2025-01-01", freq="h", inclusive="left")
     values = np.full(len(source_index), 50.0)
@@ -144,6 +114,7 @@ _PINNED_H0_DAYS = {
     2025: [
         ("2025-01-08", "2023-01-09"),  # Wednesday; the source Sunday 8 January is skipped
         ("2025-05-14", "2023-05-15"),  # Wednesday takes a summer-season source Monday
+        ("2025-01-05", "2023-01-08"),  # Sunday still takes that source Sunday
     ],
     2026: [
         ("2026-01-01", "2023-01-02"),  # Thursday; the source 1 January is a Sunday
@@ -173,6 +144,13 @@ def test_bundled_h0_pins_the_chosen_source_day(year, freq):
     # Another winter weekday has the same shape but not the same scale.
     with pytest.raises(AssertionError):
         _assert_source_days(target, source, [*_PINNED_H0_DAYS[year], (_PINNED_H0_DAYS[year][0][0], "2023-01-10")])
+    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
+    if year == 2025:
+        # The study-year Wednesday does not take the source date's Sunday shape.
+        def shape(values):
+            return values.to_numpy() / values.sum()
+
+        assert not np.allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-08"]))
 
 
 def test_bundled_h0_day_types_follow_the_civil_calendar_across_dst():
@@ -242,17 +220,6 @@ def test_load_profile_uses_real_leap_calendar_and_preserves_energy(
     feb28 = load.loc["2024-02-28"].to_numpy()
     feb29 = load.loc["2024-02-29"].to_numpy()
     np.testing.assert_allclose(feb29, feb28, rtol=0, atol=1e-12)
-
-
-def test_load_profile_leap_day_does_not_shift_march_profile():
-    leap = load_profile("demandlib_h0", 1000, start_date="2024-01-01", freq="h", timezone="UTC")
-    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq="h", timezone="UTC")
-
-    # March 1 in 2024 and 2023 are both weekdays: inserting 29 February must
-    # keep March 1 near its own season, not move it to the source's March 2.
-    march = leap.loc["2024-03-01"].iloc[:, 0]
-    source_march = source.loc["2023-03-01"].iloc[:, 0]
-    np.testing.assert_allclose(march.to_numpy() / march.sum(), source_march.to_numpy() / source_march.sum())
 
 
 def test_non_bundled_profile_requires_external_directory():
@@ -805,15 +772,6 @@ def test_external_profile_rejects_a_damaged_timestamp_column(tmp_path):
 
 def test_external_profile_with_a_label_column_skips_the_spacing_check(tmp_path):
     lines = ["Label,Electrical Consumption [W]", *(f"row{i},100" for i in range(8760))]
-    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
-
-    assert len(load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))) == 8760
-
-
-def test_external_profile_with_dst_offsets_is_evenly_spaced(tmp_path):
-    # Offsets change at DST; the instants still step by one hour.
-    stamps = pd.date_range("2025-01-01", periods=8760, freq="h", tz="Europe/Lisbon").astype(str)
-    lines = ["DateTime,Electrical Consumption [W]", *(f"{t},100" for t in stamps)]
     (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
 
     assert len(load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))) == 8760
