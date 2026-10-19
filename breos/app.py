@@ -124,13 +124,8 @@ def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mappi
         )
 
 
-# The keys App.revalue may change: the economics section of the resolved
-# configuration, except the horizon, which sets how many years are simulated.
-REVALUATION_KEYS = frozenset(
-    key
-    for key, field in APP_CONFIG_FIELDS.items()
-    if field.summary is not None and field.summary.startswith("economics.") and key != "projection_years"
-)
+# The keys App.revalue may change: the prices (AppConfigField.revalue).
+REVALUATION_KEYS = frozenset(key for key, field in APP_CONFIG_FIELDS.items() if field.revalue)
 
 
 class App:

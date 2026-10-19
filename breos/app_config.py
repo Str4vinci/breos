@@ -228,6 +228,19 @@ class AppConfigField:
     ``check`` checks the value on its own, after the ``normalizer``; it is
     not written back. Rules that span keys stay in the validators. A
     :func:`~breos.config_schema.choice` check also gives ``cli_choices``.
+
+    ``affects_inputs=False`` marks a key that does not reach
+    :func:`breos.app_inputs.prepare_simulation_inputs`, directly or through
+    the resolved location, orientation, tracking, arrays or module: it feeds
+    dispatch, degradation, valuation, emissions or the backend, which run
+    later, so the input cache leaves it out. Each such key is pinned by a
+    test that changes it and compares the prepared inputs. The default is
+    True, so a new key is part of the cache key until shown not to matter.
+
+    ``revalue`` marks a price key that :meth:`breos.App.revalue` may change.
+    ``exclusive_with`` names a key that sets the same thing, so one config
+    layer may set only one of the two; a later layer that sets this key drops
+    the other (:func:`override_config`).
     """
 
     default: Any = _NO_DEFAULT
@@ -240,6 +253,9 @@ class AppConfigField:
     default_doc: str | None = None
     summary: str | None = None
     check: Checker | None = None
+    affects_inputs: bool = True
+    revalue: bool = False
+    exclusive_with: str | None = None
 
     def __post_init__(self) -> None:
         if self.cli_choices is None and isinstance(self.check, Choice):
@@ -325,6 +341,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="load.annual_consumption_kwh",
     ),
     "battery_kwh": AppConfigField(
+        affects_inputs=False,
         check=number(minimum=0),
         default=0.0,
         cli_flags=("--battery-kwh",),
@@ -337,6 +354,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.capacity_kwh",
     ),
     "battery_max_charge_power_w": AppConfigField(
+        affects_inputs=False,
         check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--battery-max-charge-power-w",),
@@ -346,6 +364,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.max_charge_power_w",
     ),
     "battery_max_discharge_power_w": AppConfigField(
+        affects_inputs=False,
         check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--battery-max-discharge-power-w",),
@@ -355,6 +374,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.max_discharge_power_w",
     ),
     "battery_power_limit_c_rate": AppConfigField(
+        affects_inputs=False,
         check=number(minimum=0, min_exclusive=True, allow_none=True),
         default=None,
         cli_flags=("--battery-power-limit-c-rate",),
@@ -384,6 +404,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.coupling",
     ),
     "battery_inverter_ac_rating_kw": AppConfigField(
+        exclusive_with="battery_inverter_kw_per_kwh",
         check=number(minimum=0, min_exclusive=True, allow_none=True),
         default=None,
         cli_flags=("--battery-inverter-ac-rating-kw",),
@@ -396,6 +417,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.inverter_ac_rating_kw",
     ),
     "battery_inverter_kw_per_kwh": AppConfigField(
+        exclusive_with="battery_inverter_ac_rating_kw",
         check=number(minimum=0, min_exclusive=True, allow_none=True),
         default=None,
         cli_flags=("--battery-inverter-kw-per-kwh",),
@@ -421,6 +443,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.inverter_efficiency",
     ),
     "battery_replacement_cost": AppConfigField(
+        revalue=True,
         check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--battery-replacement-cost",),
@@ -434,6 +457,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.battery_replacement_cost",
     ),
     "cost_preset": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         default=None,
         cli_flags=("--cost-preset",),
         cli_help="Cost preset key, for example 'residential-pt'.",
@@ -445,6 +470,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.cost_preset",
     ),
     "currency": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         default=None,
         cli_flags=("--currency",),
         cli_help="ISO 4217 code of the run's money, for example 'USD' (default: the tariff's, else EUR).",
@@ -458,6 +485,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.currency",
     ),
     "emissions_country": AppConfigField(
+        affects_inputs=False,
         default=None,
         cli_flags=("--emissions-country",),
         cli_help="Country code for emissions, for example 'pt'.",
@@ -718,6 +746,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="load.resolution",
     ),
     "projection_years": AppConfigField(
+        affects_inputs=False,
         check=_count,
         default=20,
         cli_flags=("--projection-years",),
@@ -727,6 +756,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.projection_years",
     ),
     "inflation_rate": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         check=_RATE,
         default=DEFAULT_INFLATION_RATE,
         cli_flags=("--inflation-rate",),
@@ -744,6 +775,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     # ADR 0003 E2: separate escalators. None inherits inflation_rate, so a run
     # that sets none of them prices exactly as before.
     "import_price_escalation": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         check=optional(_RATE),
         default=None,
         cli_flags=("--import-price-escalation",),
@@ -753,6 +786,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.import_price_escalation",
     ),
     "om_escalation": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         check=optional(_RATE),
         default=None,
         cli_flags=("--om-escalation",),
@@ -762,6 +797,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.om_escalation",
     ),
     "replacement_cost_learning": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         check=number(minimum=0, maximum=1, max_exclusive=True),
         default=0.0,
         cli_flags=("--replacement-cost-learning",),
@@ -774,6 +811,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.replacement_cost_learning",
     ),
     "sell_price_inflation": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         check=number(minimum=-1, maximum=1, min_exclusive=True, max_exclusive=True),
         default=0.0,
         cli_flags=("--sell-price-inflation",),
@@ -783,6 +822,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.sell_price_inflation",
     ),
     "export_emissions_factor_gco2_kwh": AppConfigField(
+        affects_inputs=False,
         check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--export-emissions-factor-gco2-kwh",),
@@ -795,6 +835,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="emissions.export_factor_gco2_kwh",
     ),
     "discount_rate": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         check=_RATE,
         default=DEFAULT_DISCOUNT_RATE,
         cli_flags=("--discount-rate",),
@@ -804,6 +846,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.discount_rate",
     ),
     "pv_degradation_rate": AppConfigField(
+        affects_inputs=False,
         check=number(minimum=0, maximum=1, max_exclusive=True),
         default=0.005,
         cli_flags=("--pv-degradation-rate",),
@@ -816,6 +859,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.degradation_rate",
     ),
     "calendar_model": AppConfigField(
+        affects_inputs=False,
         default="naumann_lam_field_calibrated",
         cli_flags=("--calendar-model",),
         cli_help="Battery calendar aging model.",
@@ -827,6 +871,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.calendar_model",
     ),
     "degradation_engine": AppConfigField(
+        affects_inputs=False,
         default="native",
         cli_flags=("--degradation-engine",),
         cli_choices=DEGRADATION_ENGINES,
@@ -835,6 +880,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.degradation_engine",
     ),
     "blast_model": AppConfigField(
+        affects_inputs=False,
         default=None,
         cli_flags=("--blast-model",),
         cli_help="Stable BLAST battery-model key; requires --degradation-engine blast.",
@@ -842,6 +888,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.blast_model",
     ),
     "inverter_efficiency": AppConfigField(
+        affects_inputs=False,
         check=_EFFICIENCY,
         default=0.96,
         cli_flags=("--inverter-efficiency",),
@@ -851,6 +898,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="inverter.efficiency",
     ),
     "inverter_loading_ratio": AppConfigField(
+        exclusive_with="inverter_ac_rating_kw",
+        affects_inputs=False,
         default=1.25,
         cli_flags=("--inverter-loading-ratio",),
         cli_type=float,
@@ -862,6 +911,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="inverter.loading_ratio",
     ),
     "inverter_ac_rating_kw": AppConfigField(
+        exclusive_with="inverter_loading_ratio",
+        affects_inputs=False,
         check=number(minimum=0, min_exclusive=True, allow_none=True),
         default=None,
         cli_flags=("--inverter-ac-rating-kw",),
@@ -942,6 +993,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     # The [tariff] table (ADR 0002). Omitted: flat prices from the cost preset.
     "tariff": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         default=None,
         doc=(
             "Time-of-use import and export prices on a bundled or custom schedule, replacing the flat "
@@ -955,6 +1008,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     # The [reference_tariff] table. Omitted: the no-system household pays the
     # system's own prices, the [tariff] or the flat costs.
     "reference_tariff": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         default=None,
         doc=(
             "What the household would pay without the system: an import price, by period or flat, and a fixed "
@@ -966,6 +1021,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.reference_tariff",
     ),
     "terminal_value": AppConfigField(
+        revalue=True,
         default=None,
         doc=(
             "Optional estimate of the final battery pack's residual value from its capacity health; see "
@@ -977,6 +1033,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     # The [smart_charging] table (ADR 0002). Omitted: greedy self-consumption.
     "smart_charging": AppConfigField(
+        affects_inputs=False,
         default=None,
         doc=(
             "Battery dispatch by tariff period: grid charging toward a fixed target or, experimentally, a daily "
@@ -987,6 +1044,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.smart_charging",
     ),
     "weather_file": AppConfigField(
+        exclusive_with="weather_source",
         default=None,
         cli_flags=("--weather-file",),
         cli_type=Path,
@@ -1005,6 +1063,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="simulation.weather_file",
     ),
     "weather_source": AppConfigField(
+        exclusive_with="weather_file",
         default=None,
         cli_flags=("--weather-source",),
         cli_help=(
@@ -1020,6 +1079,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     # Config-file/API-only fields.
     "costs": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         doc="Cost overrides layered over the selected preset and the built-in defaults; see [`[costs]`](#costs)",
         default_doc="*unset*",
         summary="economics.costs",
@@ -1078,16 +1139,19 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     # The BatteryConfig defaults, so the App and the optimizer, which leaves
     # unset battery settings to BatteryConfig, resolve the same window.
     "battery_min_soc": AppConfigField(
+        affects_inputs=False,
         default=DEFAULT_MIN_SOC,
         doc="Battery SOC floor, as a fraction of nominal SOH-derated capacity",
         summary="battery.min_soc",
     ),
     "battery_max_soc": AppConfigField(
+        affects_inputs=False,
         default=DEFAULT_MAX_SOC,
         doc="Battery SOC ceiling, on the same basis as `battery_min_soc`",
         summary="battery.max_soc",
     ),
     "battery_eol_percentage": AppConfigField(
+        affects_inputs=False,
         check=number(minimum=0, maximum=1, min_exclusive=True, max_exclusive=True),
         default=DEFAULT_EOL_PERCENTAGE,
         doc=(
@@ -1097,6 +1161,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.eol_percentage",
     ),
     "battery_enable_replacement": AppConfigField(
+        affects_inputs=False,
         check=boolean,
         default=True,
         doc=(
@@ -1107,6 +1172,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.enable_replacement",
     ),
     "battery_allow_terminal_replacement": AppConfigField(
+        affects_inputs=False,
         check=boolean,
         default=True,
         doc=(
@@ -1119,6 +1185,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.allow_terminal_replacement",
     ),
     "battery_replacement_min_remaining_years": AppConfigField(
+        affects_inputs=False,
         check=number(minimum=0),
         default=0.0,
         doc=(
@@ -1131,6 +1198,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.replacement_min_remaining_years",
     ),
     "battery_skipped_replacement_action": AppConfigField(
+        affects_inputs=False,
         check=choice(SKIPPED_REPLACEMENT_ACTIONS, case_insensitive=False),
         default="keep",
         doc=(
@@ -1144,6 +1212,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.skipped_replacement_action",
     ),
     "battery_rte": AppConfigField(
+        affects_inputs=False,
         check=_EFFICIENCY_OR_NONE,
         default=None,
         doc=(
@@ -1153,6 +1222,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.round_trip_efficiency",
     ),
     "enable_resistance_fade": AppConfigField(
+        affects_inputs=False,
         check=boolean,
         default=False,
         doc=(
@@ -1192,6 +1262,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.indoor_model",
     ),
     "execution_backend": AppConfigField(
+        affects_inputs=False,
         default=DEFAULT_EXECUTION_BACKEND,
         cli_flags=("--execution-backend",),
         cli_choices=EXECUTION_BACKENDS,
@@ -3211,15 +3282,8 @@ def _normalise_config_values(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 # Keys that set the same thing, so one config layer may set only one of them.
-# A later layer (a CLI flag over a file, a sweep value over the base) that
-# sets one drops the other from the layers below: see override_config.
 EXCLUSIVE_ALTERNATIVES: Mapping[str, str] = {
-    "inverter_ac_rating_kw": "inverter_loading_ratio",
-    "inverter_loading_ratio": "inverter_ac_rating_kw",
-    "weather_file": "weather_source",
-    "weather_source": "weather_file",
-    "battery_inverter_ac_rating_kw": "battery_inverter_kw_per_kwh",
-    "battery_inverter_kw_per_kwh": "battery_inverter_ac_rating_kw",
+    key: field.exclusive_with for key, field in APP_CONFIG_FIELDS.items() if field.exclusive_with is not None
 }
 
 

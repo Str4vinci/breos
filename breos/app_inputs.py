@@ -15,7 +15,13 @@ import numpy as np
 import pandas as pd
 from pvlib.location import Location
 
-from breos.app_config import ResolvedAppConfig, SimulationPeriod, default_module_key, resolve_app_config
+from breos.app_config import (
+    APP_CONFIG_FIELDS,
+    ResolvedAppConfig,
+    SimulationPeriod,
+    default_module_key,
+    resolve_app_config,
+)
 from breos.electrical import string_cable_loss, string_limited_dc
 from breos.inverter import AcCable, InverterConversion, InverterUnits, ac_derate
 from breos.pv.horizon import apply_terrain_horizon_profile
@@ -865,58 +871,10 @@ def prepare_planner_forecast(
     )
 
 
-# Config keys that do not reach prepare_simulation_inputs, directly or through
-# the ResolvedAppConfig fields it reads (location, tilt, azimuth, tracking,
-# pv_arrays, pv_params). Each was traced and is pinned by a test that changes
-# it and compares the prepared inputs. They feed dispatch, degradation,
-# valuation, emissions or the backend, all of which run after this stage.
-# A key not listed here is part of the cache key, so a new key is safe until
-# it is shown not to matter.
+# Config keys that do not reach prepare_simulation_inputs; see
+# AppConfigField.affects_inputs. A key not listed here is part of the cache key.
 INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
-    {
-        # Battery sizing and dispatch.
-        "battery_kwh",
-        "battery_min_soc",
-        "battery_max_soc",
-        "battery_max_charge_power_w",
-        "battery_max_discharge_power_w",
-        "battery_power_limit_c_rate",
-        "battery_eol_percentage",
-        "battery_enable_replacement",
-        "battery_allow_terminal_replacement",
-        "battery_replacement_min_remaining_years",
-        "battery_skipped_replacement_action",
-        "battery_rte",
-        "enable_resistance_fade",
-        "inverter_efficiency",
-        "inverter_loading_ratio",
-        "inverter_ac_rating_kw",
-        # Degradation.
-        "calendar_model",
-        "degradation_engine",
-        "blast_model",
-        "pv_degradation_rate",
-        "projection_years",
-        # Prices, valuation and dispatch strategy.
-        "cost_preset",
-        "costs",
-        "currency",
-        "inflation_rate",
-        "sell_price_inflation",
-        "import_price_escalation",
-        "om_escalation",
-        "replacement_cost_learning",
-        "discount_rate",
-        "tariff",
-        # The no-system reference, with its annual network credit, prices
-        # only the household load.
-        "reference_tariff",
-        "smart_charging",
-        # Emissions and execution.
-        "emissions_country",
-        "export_emissions_factor_gco2_kwh",
-        "execution_backend",
-    }
+    key for key, field in APP_CONFIG_FIELDS.items() if not field.affects_inputs
 )
 
 # The block's one cached preparation, by (input key, dependencies, prepare).
