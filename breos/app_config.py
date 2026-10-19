@@ -2734,12 +2734,8 @@ def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
         for field in ("latitude", "longitude", "timezone"):
             if field not in loc:
                 raise ValueError(f"Custom location must include '{field}'")
-        lat = _finite_real(loc["latitude"], "location.latitude")
-        lon = _finite_real(loc["longitude"], "location.longitude")
-        if not -90 <= lat <= 90:
-            raise ValueError("'location.latitude' must be between -90 and 90")
-        if not -180 <= lon <= 180:
-            raise ValueError("'location.longitude' must be between -180 and 180")
+        number(minimum=-90, maximum=90)(loc["latitude"], "location.latitude")
+        number(minimum=-180, maximum=180)(loc["longitude"], "location.longitude")
         if not isinstance(loc["timezone"], str):
             raise TypeError("'location.timezone' must be an IANA timezone string")
         try:
@@ -2853,8 +2849,7 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
         if not isinstance(overrides, dict):
             raise TypeError("'pv_loss_overrides' must be a dict of loss component percentages")
         for name, value in overrides.items():
-            if not 0 <= _finite_real(value, f"pv_loss_overrides[{name!r}]") <= 100:
-                raise ValueError(f"'pv_loss_overrides[{name!r}]' must be a percentage between 0 and 100")
+            number(minimum=0, maximum=100)(value, f"pv_loss_overrides[{name!r}]")
         # Resolve the component names here so a typo cannot survive App
         # construction and fail after a TMY weather request.
         resolve_pvwatts_losses(overrides)
@@ -3042,14 +3037,8 @@ def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _finite_real(value: Any, key: str) -> float:
-    """Return a finite float or raise an actionable public config error."""
-    if isinstance(value, bool) or not isinstance(value, Real):
-        raise TypeError(f"'{key}' must be a finite number")
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError(f"'{key}' must be a finite number")
-    return result
+# A finite number, returned as float.
+_finite_real = number()
 
 
 def resolve_location(cfg: dict[str, Any]) -> tuple[float, float, str, str | None]:
