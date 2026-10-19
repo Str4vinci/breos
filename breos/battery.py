@@ -20,7 +20,6 @@ import rainflow
 
 from breos._controller import ControllerBatteryState, ControllerCarry, DailyDispatchController, _ControllerSession
 from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its names stay importable here
-    _LEDGER_COLUMNS,
     _N_ROWS,
     _ROW,
     _ROW_COLUMNS,
