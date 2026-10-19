@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import breos.battery as battery_module
+from breos._dispatch import lfp_capacity_factor
 from breos.battery import (
     BatteryConfig,
     _datetime_index_ticks,
@@ -17,7 +18,6 @@ from breos.battery import (
     _update_battery_soh_from_cycles,
     align_simulation_inputs,
     apply_indoor_temperature_model,
-    lfp_capacity_factor,
     resistance_to_efficiency,
     simulate_energy_balance,
     simulate_energy_balance_summary,
@@ -153,11 +153,12 @@ class TestBatteryConfig:
             dtype=np.float64,
         )
         series = pd.Series(values, index=index)
-        expected = update_battery_soh_cyclewise(
-            0.93,
-            series,
-            fec_cum=12.5,
-        )
+        with pytest.warns(DeprecationWarning, match="update_battery_soh_cyclewise"):
+            expected = update_battery_soh_cyclewise(
+                0.93,
+                series,
+                fec_cum=12.5,
+            )
         time_ticks, ticks_per_second = _datetime_index_ticks(index)
 
         actual = _update_battery_soh_cyclewise_arrays(

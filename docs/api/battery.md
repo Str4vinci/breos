@@ -65,8 +65,9 @@ calls the two resistance functions once per window. It does not call
 an incremental rainflow counter. `update_battery_soh_cyclewise` is a
 standalone equivalent of that cycle step for one whole SOC series. It closes
 the rainflow residue at the end of the series, so calling it once per day
-does not reproduce a simulation. Use these functions directly only when
-reproducing or critiquing the degradation model.
+does not reproduce a simulation. It is deprecated in 0.8.0 and will be
+removed in 0.9.0. Use these functions directly only when reproducing or
+critiquing the degradation model.
 
 ```{eval-rst}
 .. autosummary::

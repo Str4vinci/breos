@@ -466,6 +466,29 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `resolve_reference_tariff_spec` takes the run's currency instead of the
   system tariff (#376).
 
+### Deprecated
+
+These names still work in 0.8.0 and raise a `DeprecationWarning`. They will be
+removed in 0.9.0.
+
+- `breos.battery.update_battery_soh_cyclewise`. The simulation never calls
+  it: it ages the battery through its own incremental rainflow counter.
+- `breos.battery.lfp_capacity_factor`. Import it from `breos._dispatch`, where
+  the dispatch step uses it, if you need it at all.
+- `breos.utils.format_years_months`, which nothing in BREOS uses.
+- `OptimizationResult.optimal_value` and `objective_value`, which are always
+  NaN for a multi-objective search; read the front in `details["pareto"]`.
+  They are no longer constructor arguments.
+- `optimization.objective_basis`. `"projected"` is the only basis, so remove
+  the key; 0.9.0 refuses it. The example optimizer config no longer sets it.
+
+### Removed
+
+- `breos.economics.YEAR_ROW_MONEY_COLUMNS`, the `calendar_epoch_seconds` alias
+  in the planner forecast module, the `prepare` keyword of
+  `prepare_simulation_inputs_cached`, and the `_LEDGER_COLUMNS` re-export from
+  `breos.battery`. Only the test suite used them.
+
 ### Fixed
 
 - `breos.cec_fit.fit_cec_params` reproduces `pvlib.ivtools.sdm.fit_cec_sam`

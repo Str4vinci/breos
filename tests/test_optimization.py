@@ -84,7 +84,6 @@ def test_projected_zeb_constraint_uses_projected_diagnostic(monkeypatch, tiny_in
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: pd.Series(0.0, index=idx))
     monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", lambda **kwargs: projected)
     config = _config(
-        optimization={"objective_basis": "projected"},
         constraints={**LOOSE, "enforce_zeb": True},
         simulation={"resolution": "h", "years_projection": 2},
         financials={"project_lifespan": 2},
@@ -311,7 +310,7 @@ def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatc
 
     config = _config(
         simulation={"resolution": "h", "years_projection": 2},
-        optimization={"objective_basis": "projected", "early_stop": False},
+        optimization={"early_stop": False},
         constraints=_SMALL_SEARCH,
         battery={"temperature": 20.0},
         financials={"project_lifespan": 2},
@@ -371,7 +370,7 @@ def test_projected_optimization_uses_worker_diagnostics_without_parent_rescoring
     houseload = pd.DataFrame({"Load": [500.0] * len(idx)}, index=idx)
     config = _config(
         simulation={"resolution": "h", "years_projection": 1},
-        optimization={"objective_basis": "projected", "early_stop": False},
+        optimization={"early_stop": False},
         constraints=_SMALL_SEARCH,
         battery={"temperature": 20.0},
         financials={"project_lifespan": 1},
@@ -486,7 +485,6 @@ def test_projected_blast_scores_a_pv_only_candidate(synthetic_weather):
 
     load = load_profile("demandlib_h0", 3500, start_date="2023-01-01", timezone="UTC")
     config = _config(
-        optimization={"objective_basis": "projected"},
         constraints=LOOSE,
         simulation={"resolution": "h", "years_projection": 1},
         battery={"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1"},

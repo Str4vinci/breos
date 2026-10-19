@@ -51,9 +51,7 @@ enable_replacement = true
 replacement_cost = "calculate"
 
 [optimization]
-# "projected" scores candidates over the whole horizon using simulated yearly
-# values. It is the only basis; "steady_state" was removed in 0.7.0.
-objective_basis = "projected"
+# Candidates are scored over the whole horizon from simulated yearly values.
 pop_size = 40
 n_offsprings = 20
 n_gen = 40

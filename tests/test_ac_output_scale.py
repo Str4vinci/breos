@@ -468,7 +468,7 @@ class TestUnlimitedInverterAndOptimizer:
             }
 
         monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", fake_projected)
-        config = _optimizer_config(optimization={"objective_basis": "projected"}, dc_output_scale=0.5)
+        config = _optimizer_config(dc_output_scale=0.5)
         problem = SolarDesignProblem(weather, load, config)
         out = {}
         problem._evaluate(np.array([1.0, 1.0, 35.0, 180.0]), out)

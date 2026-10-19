@@ -6,6 +6,7 @@ This module provides the NSGA-II multi-objective design search
 (:func:`evaluate_projected_design`) behind it.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
@@ -56,10 +57,38 @@ from breos.weather import build_battery_temperature_series, resample_to_15min, w
 class OptimizationResult:
     """Result from an optimization run."""
 
-    optimal_value: float
-    objective_value: float
     iterations: int
     details: Dict[str, Any]
+
+    @property
+    def optimal_value(self) -> float:
+        """Always NaN: a multi-objective search has no single optimum.
+
+        .. deprecated:: 0.8.0
+           Read the front in ``details["pareto"]``; removed in 0.9.0.
+        """
+        warnings.warn(
+            "OptimizationResult.optimal_value is deprecated and will be removed in BREOS 0.9.0; "
+            "read the front in details['pareto']",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return float("nan")
+
+    @property
+    def objective_value(self) -> float:
+        """Always NaN: a multi-objective search has no single objective value.
+
+        .. deprecated:: 0.8.0
+           Read the front in ``details["pareto"]``; removed in 0.9.0.
+        """
+        warnings.warn(
+            "OptimizationResult.objective_value is deprecated and will be removed in BREOS 0.9.0; "
+            "read the front in details['pareto']",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return float("nan")
 
 
 @dataclass
@@ -1510,8 +1539,6 @@ def optimize_system_multi_objective(
     }
     pareto.attrs["currency"] = provenance["currency"]
     return OptimizationResult(
-        optimal_value=float("nan"),
-        objective_value=float("nan"),
         iterations=actual_generations,
         details={
             "pareto": pareto,

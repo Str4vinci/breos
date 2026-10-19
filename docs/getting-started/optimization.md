@@ -140,14 +140,8 @@ Loosen `budget`, `max_area_m2`, `max_modules`, or `max_battery_kwh` in
 
 ## Score designs over their projected lifetime
 
-The optimizer scores each candidate over the whole configured horizon:
-
-```toml
-[optimization]
-objective_basis = "projected"
-```
-
-The objectives are lifetime grid independence and lifetime NPV. BREOS computes
+The optimizer scores each candidate over the whole configured horizon. The
+objectives are lifetime grid independence and lifetime NPV. BREOS computes
 both values from the simulated annual ledgers rather than applying a
 degradation factor after the simulation. ZEB is a diagnostic. To keep ZEB as a
 feasibility constraint, set `enforce_zeb = true` under `[constraints]`.

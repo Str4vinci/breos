@@ -10,6 +10,7 @@ This module handles battery energy storage simulation including:
 
 import dataclasses
 import math
+import warnings
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
@@ -26,7 +27,6 @@ from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its nam
     LEDGER_SCHEMA_VERSION,
     _dispatch_day_python,
     compute_cell_temperature,
-    lfp_capacity_factor,
 )
 from breos.constants import (
     A_Q,
@@ -3089,7 +3089,16 @@ def update_battery_soh_cyclewise(
 
     Returns:
         Tuple of (soh_after, qloss_cycle_fraction, fec_cum)
+
+    .. deprecated:: 0.8.0
+       The simulation ages the battery through its own incremental rainflow
+       counter and never calls this function; it will be removed in 0.9.0.
     """
+    warnings.warn(
+        "breos.battery.update_battery_soh_cyclewise is deprecated and will be removed in BREOS 0.9.0",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if len(soc_series_absolute) < 2:
         return soh_start_fraction, 0.0, fec_cum
 
@@ -3159,3 +3168,18 @@ def update_battery_soh_calendar(
     soh_after = max(0.0, soh_start_fraction - d_soh_fraction)
 
     return soh_after, d_soh_fraction, t_new
+
+
+def __getattr__(name: str) -> Any:
+    # breos.battery.lfp_capacity_factor is deprecated in 0.8.0 and goes in 0.9.0;
+    # the function itself stays in breos._dispatch, where the dispatch step uses it.
+    if name == "lfp_capacity_factor":
+        from breos._dispatch import lfp_capacity_factor
+
+        warnings.warn(
+            "breos.battery.lfp_capacity_factor is deprecated and will be removed in BREOS 0.9.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return lfp_capacity_factor
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

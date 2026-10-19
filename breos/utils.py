@@ -3,6 +3,7 @@ Utility functions for breos library.
 """
 
 import re
+import warnings
 from importlib.metadata import PackageNotFoundError, version
 
 import numpy as np
@@ -282,7 +283,16 @@ def find_irradiance_column(columns, component: str) -> str | None:
 
 
 def format_years_months(years_decimal) -> str:
-    """Format a decimal number of years as ``"4y"`` or ``"4y 2m"``; None is ``"N/A"``."""
+    """Format a decimal number of years as ``"4y"`` or ``"4y 2m"``; None is ``"N/A"``.
+
+    .. deprecated:: 0.8.0
+       Nothing in BREOS uses it; it will be removed in 0.9.0.
+    """
+    warnings.warn(
+        "breos.utils.format_years_months is deprecated and will be removed in BREOS 0.9.0",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if years_decimal is None:
         return "N/A"
     years = int(years_decimal)

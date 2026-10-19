@@ -25,9 +25,10 @@ scores. System kWp, inverter rating, and CAPEX use the selected module's
 key is absent. It optimizes two values: projected lifetime grid independence
 and projected NPV. A design is selected for how it performs across the project
 lifetime, which is the question a sizing study asks.
-`optimization.objective_basis = "projected"` names this basis and is the only
-accepted value. The annual `"steady_state"` basis was removed in 0.7.0, and a
-config that still sets it raises an error.
+This is the only basis, so the config does not name it.
+`optimization.objective_basis` is deprecated in 0.8.0: `"projected"` still
+passes with a warning, and 0.9.0 refuses the key. The annual `"steady_state"`
+basis was removed in 0.7.0, and a config that still sets it raises an error.
 
 Projected mode repeats the configured TMY. Each year applies the configured PV
 degradation factor and carries battery stored energy, PV-origin stored energy,
@@ -81,7 +82,7 @@ call takes them as DataFrames.
 | `financials` | `inflation_rate` (0.02), `sell_price_inflation` (0), `import_price_escalation`, `om_escalation`, `replacement_cost_learning`, `discount_rate` (0.03), `project_lifespan`, `pv_degradation_rate`, and the flat-price fallbacks `electricity_cost` and `electricity_sold_cost` |
 | `constraints` | see below |
 | `mode` | `fixed_azimuth` (none: azimuth is searched, 90–270° in the northern hemisphere, −90–90° in the southern); `layouts` (`["single"]`; add `"east_west"` to search East–West roofs too); `east_west_tilt_deg` (10), the fixed tilt of an East–West design |
-| `optimization` | `objective_basis` (`"projected"`); `early_stop` (off; `true` or a table turns it on, and a table takes `enabled` (`true`), `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
+| `optimization` | `objective_basis` (`"projected"`, deprecated in 0.8.0); `early_stop` (off; `true` or a table turns it on, and a table takes `enabled` (`true`), `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
 | `simulation` | `resolution` (`"h"`, or `"15min"`); `irradiance_resampling` (`"auto"`); `years_projection` (20, or `financials.project_lifespan`) |
 | `inverter` | `efficiency`, used when the top-level `inverter_efficiency` (0.96) is not set |
 | `emissions` | the `EmissionsParams` fields; the search then reports `Projected_CO2_*` for every Pareto row |

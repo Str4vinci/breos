@@ -317,7 +317,7 @@ def test_indoor_temperature_model_output_parity():
 
 def test_derating_floor_is_actually_reached_at_extreme_cold():
     """Confirm the -60 C case is not passing vacuously."""
-    from breos.battery import lfp_capacity_factor
+    from breos._dispatch import lfp_capacity_factor
 
     assert lfp_capacity_factor(-60.0) == 0.5
     python_out, _ = _temperature_variant(np.full(35040, -60.0))

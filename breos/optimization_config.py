@@ -16,6 +16,7 @@ module) are checked and defaulted the way the App does.
 from __future__ import annotations
 
 import math
+import warnings
 from copy import deepcopy
 from dataclasses import fields
 from typing import Any, Mapping
@@ -160,6 +161,12 @@ def _objective_basis(value: Any, where: str) -> str:
         )
     if not (isinstance(value, str) and value.strip().lower() == DEFAULT_OBJECTIVE_BASIS):
         raise ValueError("optimization.objective_basis must be 'projected'")
+    warnings.warn(
+        "optimization.objective_basis is deprecated and will be refused in BREOS 0.9.0: "
+        "'projected' is the only basis, so remove the key",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return DEFAULT_OBJECTIVE_BASIS
 
 

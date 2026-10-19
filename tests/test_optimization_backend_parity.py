@@ -14,7 +14,6 @@ from breos.optimization import SolarDesignProblem, evaluate_projected_design  # 
 
 _CONFIG = {
     "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
-    "optimization": {"objective_basis": "projected"},
     "constraints": {"budget": 100000.0, "max_area_m2": 100.0},
     "simulation": {"resolution": "h", "years_projection": 3},
     "mode": {"fixed_azimuth": 180},
