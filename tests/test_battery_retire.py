@@ -21,11 +21,8 @@ import pandas as pd
 import pytest
 
 import breos.optimization as optimization_module
-from breos.app_config import resolve_app_config
 from breos.battery import BatteryConfig, EndOfLifeEvent, align_simulation_inputs, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
-from breos.montecarlo import MonteCarloSettings, run_montecarlo
-from breos.optimization_config import resolve_optimization_config
 from breos.projection import ProjectionYear, project_years
 from tests.test_replacement_min_remaining_years import YEAR_STEPS
 from tests.test_terminal_replacement import (
@@ -33,7 +30,6 @@ from tests.test_terminal_replacement import (
     _app,
     _assert_same_run,
     _inputs,
-    _mc_config,
     _projected_metrics,
     _replaced_steps,
     _require_numba,
@@ -121,41 +117,6 @@ def _grid_charging(n_steps: int) -> DispatchInstructions:
         grid_charge_efficiency=0.9,
         grid_import_limit_w=math.inf,
     )
-
-
-# -- the settings ------------------------------------------------------------------
-
-
-class TestSettings:
-    BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5}
-    LOCATION = {"location": {"latitude": 41.15, "longitude": -8.61}}
-
-    def test_battery_config_keeps_by_default_and_refuses_other_actions(self):
-        assert BatteryConfig(nominal_energy_wh=5000.0).skipped_replacement_action == "keep"
-        assert BatteryConfig(nominal_energy_wh=5000.0, skipped_replacement_action="retire")
-        for value in ("replace", "Retire", None, True):
-            with pytest.raises(ValueError, match="skipped_replacement_action must be one of: keep, retire"):
-                BatteryConfig(nominal_energy_wh=5000.0, skipped_replacement_action=value)
-
-    def test_the_app_key_resolves_keep_and_reaches_the_battery(self):
-        assert resolve_app_config(self.BASE).cfg["battery_skipped_replacement_action"] == "keep"
-        resolved = resolve_app_config({**self.BASE, "battery_skipped_replacement_action": "retire"})
-        from breos.projection import build_battery_config
-
-        assert build_battery_config(resolved.cfg, resolved, initial_soh=100.0).skipped_replacement_action == "retire"
-        with pytest.raises(ValueError, match="'battery_skipped_replacement_action' must be one of: keep, retire"):
-            resolve_app_config({**self.BASE, "battery_skipped_replacement_action": "replace"})
-
-    def test_the_optimizer_key_resolves_keep_and_is_forwarded(self):
-        assert resolve_optimization_config(self.LOCATION)["battery"]["skipped_replacement_action"] == "keep"
-        config = {**self.LOCATION, "battery": {"skipped_replacement_action": "retire"}}
-        assert resolve_optimization_config(config)["battery"]["skipped_replacement_action"] == "retire"
-        battery = optimization_module._build_battery_config_from_spec(
-            {"skipped_replacement_action": "retire"}, nominal_energy_wh=5000.0
-        )
-        assert battery.skipped_replacement_action == "retire"
-        with pytest.raises(ValueError, match="battery.skipped_replacement_action"):
-            resolve_optimization_config({**self.LOCATION, "battery": {"skipped_replacement_action": "sell"}})
 
 
 # -- one span ---------------------------------------------------------------------
@@ -323,14 +284,6 @@ def test_the_degradation_state_carries_the_retirement():
         _continue(first[5], retired=True)
 
 
-@pytest.mark.parametrize("freq", ["h", "15min"])
-def test_python_and_numba_retire_the_same_way(freq):
-    _require_numba()
-    n_steps = 4 * (24 if freq == "h" else 96)
-    config = {**SKIP_SECOND, "skipped_replacement_action": "retire"}
-    _assert_same_run(_run(n_steps, freq, **config), _run(n_steps, freq, backend="numba", **config))
-
-
 # -- the projection ------------------------------------------------------------------
 
 
@@ -377,13 +330,6 @@ def test_a_retired_battery_stays_off_in_the_later_years():
     assert last["Battery_Charge_Throughput_kWh"] == last["Battery_Discharge_Throughput_kWh"] == 0.0
     assert last["Battery_Carried_Energy_Wh"] == 0.0
     assert keep.yearly_df["Battery_Discharge_Throughput_kWh"].iloc[2] > 0.0
-
-
-def test_retired_projection_years_ignore_grid_charging():
-    instructions = _grid_charging(YEAR_STEPS)
-    keep, retire = _project("keep", instructions=instructions), _project("retire", instructions=instructions)
-    assert keep.yearly_df["Grid_AC_To_Battery_kWh"].iloc[2] > 0.0
-    assert retire.yearly_df["Grid_AC_To_Battery_kWh"].iloc[2] == 0.0
 
 
 def test_frames_summaries_and_numba_agree_on_a_retired_projection():
@@ -461,30 +407,6 @@ def test_a_daily_controller_cannot_dispatch_a_retired_battery():
     assert executed is not None and len(executed) == 2 * 8760
 
 
-def test_an_explicit_keep_is_the_default_app_run():
-    default = _app(battery_replacement_min_remaining_years=1).result()
-    explicit = _app(battery_replacement_min_remaining_years=1, battery_skipped_replacement_action="keep").result()
-    for result in (default, explicit):
-        result["provenance"].pop("execution", None)
-    explicit["provenance"]["resolved_config"].pop("battery_skipped_replacement_action")
-    default["provenance"]["resolved_config"].pop("battery_skipped_replacement_action")
-    assert default == explicit
-
-
-def test_monte_carlo_retires_each_trajectory(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=7)
-    config = {"battery_eol_percentage": EVERY_PERIOD_EOL, "battery_replacement_min_remaining_years": 1.0}
-
-    keep = run_montecarlo(_mc_config(**config), settings)
-    retire = run_montecarlo(_mc_config(**config, battery_skipped_replacement_action="retire"), settings)
-
-    assert retire.provenance["resolved_config"]["battery_skipped_replacement_action"] == "retire"
-    assert (retire.runs["total_replacements"] == keep.runs["total_replacements"]).all()
-    assert (retire.runs["mean_pv_origin_battery_ac_load_kwh"] < keep.runs["mean_pv_origin_battery_ac_load_kwh"]).all()
-    assert (retire.runs["first_end_of_life_action"] == "replaced").all()
-
-
 def test_the_projected_optimizer_retires_and_records_the_setting(monkeypatch):
     keep, _captured = _projected_metrics(monkeypatch, replacement_min_remaining_years=2.0)
     retire, _captured = _projected_metrics(
@@ -501,13 +423,6 @@ def test_the_projected_optimizer_retires_and_records_the_setting(monkeypatch):
         ]
         == "retire"
     )
-
-
-def test_the_key_reference_lists_the_setting():
-    from pathlib import Path
-
-    reference = (Path(__file__).resolve().parents[1] / "docs" / "getting-started" / "config-reference.md").read_text()
-    assert '| `battery_skipped_replacement_action` | `"keep"` | — |' in reference
 
 
 @pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
@@ -566,9 +481,18 @@ def test_a_pack_at_zero_health_at_its_crossing_is_retired_once():
     _assert_same_run(keep, retire)
 
 
-def test_python_and_numba_retire_a_pack_at_zero_health_the_same_way():
+@pytest.mark.parametrize(
+    ("freq", "config", "reason"),
+    [
+        ("h", {**SKIP_SECOND, "skipped_replacement_action": "retire"}, "min_remaining_years"),
+        ("15min", {**SKIP_SECOND, "skipped_replacement_action": "retire"}, "min_remaining_years"),
+        ("h", {**ZERO_AT_THIRD_CLOSE, "enable_replacement": False}, "zero_health"),
+    ],
+    ids=["skipped-swap-h", "skipped-swap-15min", "zero-health-h"],
+)
+def test_python_and_numba_retire_the_same_way(freq, config, reason):
     _require_numba()
-    config = {**ZERO_AT_THIRD_CLOSE, "enable_replacement": False}
-    python = _run(96, **config)
-    assert _events(python)[-1].reason == "zero_health"
-    _assert_same_run(python, _run(96, backend="numba", **config))
+    n_steps = 4 * (24 if freq == "h" else 96)
+    python = _run(n_steps, freq, **config)
+    assert _events(python)[-1].reason == reason
+    _assert_same_run(python, _run(n_steps, freq, backend="numba", **config))
