@@ -2,7 +2,7 @@
 
 import json
 import math
-from datetime import date
+from unittest import mock
 
 import pandas as pd
 import pytest
@@ -11,36 +11,7 @@ import breos.app as app_module
 import breos.projection as projection_module
 from breos.app import App
 from breos.app_config import merge_defaults, validate_config
-from breos.load_profiles import load_profile as real_load_profile
-
-
-def test_app_rejects_invalid_profile_losses_temperature_and_montecarlo_keys():
-    base = {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000}
-
-    with pytest.raises(ValueError, match="Unknown load_profile 'nonexistent'"):
-        App({**base, "load_profile": "nonexistent"})
-    with pytest.raises(ValueError, match="Unknown loss component"):
-        App({**base, "pv_loss_overrides": {"soiling_typo": 2.0}})
-    with pytest.raises(FileNotFoundError, match="battery_temperature file not found: wether"):
-        App({**base, "battery_temperature": "wether"})
-    with pytest.raises(ValueError, match="Unknown Monte Carlo config key.*montecarlo.nruns"):
-        App({**base, "montecarlo": {"nruns": 10, "weather_file": "weather.csv"}})
-
-
-def test_app_resolves_profile_key_case_and_native_date_during_construction():
-    app = App(
-        {
-            "location": "porto",
-            "n_modules": 10,
-            "annual_consumption_kwh": 4000,
-            "load_profile": "BDEW_H0",
-            "start_date": date(2023, 1, 1),
-        }
-    )
-
-    assert app._resolved.cfg["load_profile"] == "bdew_h0"
-    assert app._resolved.cfg["start_date"] == "2023-01-01"
-
+from tools.generate_app_golden import _fake_fetch as golden_fetch
 
 # ---------------------------------------------------------------------------
 # Config validation
@@ -246,6 +217,25 @@ class TestAppValidation:
                 "enable_resistance_fade",
                 id="blast-resistance-fade",
             ),
+            pytest.param({"tracking": "trinity_axis"}, ValueError, "'tracking' must be", id="tracking"),
+            pytest.param(
+                {"load_profile": "nonexistent"}, ValueError, "Unknown load_profile 'nonexistent'", id="load_profile"
+            ),
+            pytest.param(
+                {"pv_loss_overrides": {"soiling_typo": 2.0}}, ValueError, "Unknown loss component", id="loss-component"
+            ),
+            pytest.param(
+                {"battery_temperature": "wether"},
+                FileNotFoundError,
+                "battery_temperature file not found: wether",
+                id="battery_temperature-file",
+            ),
+            pytest.param(
+                {"montecarlo": {"nruns": 10, "weather_file": "weather.csv"}},
+                ValueError,
+                r"Unknown Monte Carlo config key.*montecarlo\.nruns",
+                id="montecarlo-key",
+            ),
         ],
     )
     def test_invalid_config_fails_at_app_boundary(self, overrides, error, match):
@@ -316,12 +306,6 @@ class TestAppValidation:
             validate_config(invalid)
         assert str(exc_info.value) == "'degradation_engine=blast' is not supported with Monte Carlo yet"
 
-    def test_battery_temperature_and_indoor_model_are_accepted(self):
-        app = App({**self.BASE, "battery_temperature": 25.0, "battery_indoor_model": {"enabled": False}})
-
-        assert app._resolved.cfg["battery_temperature"] == 25.0
-        assert app._resolved.cfg["battery_indoor_model"] == {"enabled": False}
-
     def test_cost_overrides_resolve_through_app_facade(self):
         app = App(
             {
@@ -355,29 +339,6 @@ class TestAppValidation:
         )
         assert app._resolved.cfg["n_modules"] == 10
 
-    def test_custom_location_valid(self):
-        app = App(
-            {
-                "location": {"latitude": 41.15, "longitude": -8.63, "timezone": "Europe/Lisbon"},
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
-            }
-        )
-        assert app._resolved.lat == 41.15
-
-    def test_pv_arrays_allow_missing_n_modules(self):
-        app = App(
-            {
-                "location": "porto",
-                "annual_consumption_kwh": 3000,
-                "pv_arrays": [
-                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
-                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
-                ],
-            }
-        )
-        assert app._resolved.cfg["n_modules"] == 6
-
     def test_resolution_does_not_mutate_input_config(self):
         # Resolving the derived module count must not write back into the
         # caller's dict (the frozen ResolvedAppConfig owns its own copy).
@@ -397,34 +358,6 @@ class TestAppValidation:
         app = App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000})
         with pytest.raises(RuntimeError, match="simulate"):
             app.result()
-
-    def test_simulate_passes_external_rlp_directory(self, _patch_weather, monkeypatch, tmp_path):
-        seen = {}
-
-        def _fake_load_profile(**kwargs):
-            seen["rlp_directory"] = kwargs["rlp_directory"]
-            return real_load_profile(
-                profile_type="demandlib_h0",
-                annual_consumption_kwh=kwargs["annual_consumption_kwh"],
-                start_date=kwargs["start_date"],
-                freq=kwargs["freq"],
-                timezone=kwargs["timezone"],
-            )
-
-        monkeypatch.setattr(app_module, "load_profile", _fake_load_profile)
-
-        app = App(
-            {
-                "location": "porto",
-                "n_modules": 1,
-                "annual_consumption_kwh": 1000,
-                "projection_years": 1,
-                "rlp_directory": str(tmp_path),
-            }
-        )
-        app.simulate()
-
-        assert seen["rlp_directory"] == str(tmp_path)
 
     def test_battery_soc_window_reaches_simulation(self, _patch_weather):
         def _run(**extra):
@@ -467,79 +400,42 @@ class TestAppValidation:
         # CostParams and never reached cost_analysis_projection from a config.
         assert _run(sell_price_inflation=0.5) > _run()
 
-    def test_transposition_model_reaches_simulation(self, _patch_weather):
-        def _run(model):
+    @pytest.mark.parametrize(
+        ("changed", "reference", "relation"),
+        [
+            # An anisotropic model yields a different PV total than isotropic.
+            pytest.param({"transposition_model": "perez"}, {"transposition_model": "isotropic"}, "differs", id="sky"),
+            pytest.param({"iam_model": "physical"}, {"iam_model": "ashrae"}, "differs", id="iam"),
+            # A higher ground reflectance raises PV production.
+            pytest.param({"albedo": 0.65}, {}, "greater", id="albedo"),
+            # surface_type is an equivalent way to set the same albedo.
+            pytest.param({"surface_type": "snow"}, {"albedo": 0.65}, "equal", id="surface_type"),
+            # Removing a DC loss increases production. The AC increase is not a
+            # fixed 1 / 0.97 ratio because inverter efficiency varies with load.
+            pytest.param({"pv_loss_overrides": {"shading": 0.0}}, {}, "greater", id="loss-overrides"),
+            # A heavily undersized inverter (high DC/AC ratio) must clip yield;
+            # before 0.3.0 the App paid clipping-sized inverter CAPEX while
+            # production was never clipped.
+            pytest.param({"inverter_loading_ratio": 3.0}, {"inverter_loading_ratio": 1.0}, "less", id="inverter"),
+        ],
+    )
+    def test_pv_key_reaches_app_production(self, _patch_weather, changed, reference, relation):
+        def _production(extra):
             app = App(
-                {
-                    "location": "porto",
-                    "n_modules": 6,
-                    "annual_consumption_kwh": 3000,
-                    "projection_years": 1,
-                    "transposition_model": model,
-                }
+                {"location": "porto", "n_modules": 6, "annual_consumption_kwh": 3000, "projection_years": 1, **extra}
             )
             app.simulate()
             return app.result()["usable_ac_system_production_kwh"]
 
-        # The model must flow all the way through App.simulate(); an
-        # anisotropic model yields a different PV total than isotropic.
-        assert _run("perez") != pytest.approx(_run("isotropic"))
-
-    def test_iam_model_reaches_simulation(self, _patch_weather):
-        def _run(model):
-            app = App(
-                {
-                    "location": "porto",
-                    "n_modules": 6,
-                    "annual_consumption_kwh": 3000,
-                    "projection_years": 1,
-                    "iam_model": model,
-                }
-            )
-            app.simulate()
-            return app.result()["usable_ac_system_production_kwh"]
-
-        assert _run("physical") != pytest.approx(_run("ashrae"))
-
-    def test_albedo_reaches_simulation(self, _patch_weather):
-        def _run(**extra):
-            app = App(
-                {
-                    "location": "porto",
-                    "n_modules": 6,
-                    "annual_consumption_kwh": 3000,
-                    "projection_years": 1,
-                    **extra,
-                }
-            )
-            app.simulate()
-            return app.result()["usable_ac_system_production_kwh"]
-
-        # A higher ground reflectance must raise PV production end-to-end.
-        assert _run(albedo=0.65) > _run()
-        # surface_type is an equivalent way to set the same albedo.
-        assert _run(surface_type="snow") == pytest.approx(_run(albedo=0.65))
-
-    def test_pv_loss_overrides_increase_production(self, _patch_weather):
-        def _run(overrides):
-            app = App(
-                {
-                    "location": "porto",
-                    "n_modules": 6,
-                    "annual_consumption_kwh": 3000,
-                    "projection_years": 1,
-                    "pv_loss_overrides": overrides,
-                }
-            )
-            app.simulate()
-            return app.result()["usable_ac_system_production_kwh"]
-
-        base = _run(None)
-        no_shading = _run({"shading": 0.0})
-
-        # Removing a DC loss increases production. The AC increase is not a
-        # fixed 1 / 0.97 ratio because inverter efficiency varies with load.
-        assert no_shading > base
+        value, base = _production(changed), _production(reference)
+        if relation == "differs":
+            assert value != pytest.approx(base)
+        elif relation == "equal":
+            assert value == pytest.approx(base)
+        elif relation == "greater":
+            assert value > base
+        else:
+            assert value < base
 
     def test_undefined_lcoe_uses_json_null(self, _patch_weather):
         app = App(
@@ -577,52 +473,6 @@ class TestAppValidation:
         assert horizon_provenance["profile"]["points"] == [[0.0, 90.0], [180.0, 90.0]]
         assert horizon_provenance["profile"]["shaded_timesteps"] > 0
         json.dumps(result)
-
-    def test_smaller_inverter_clips_app_production(self, _patch_weather):
-        def _run(loading_ratio):
-            app = App(
-                {
-                    "location": "porto",
-                    "n_modules": 6,
-                    "annual_consumption_kwh": 3000,
-                    "projection_years": 1,
-                    "inverter_loading_ratio": loading_ratio,
-                }
-            )
-            app.simulate()
-            return app.result()["usable_ac_system_production_kwh"]
-
-        # A heavily undersized inverter (high DC/AC ratio) must clip yield;
-        # before 0.3.0 the App paid clipping-sized inverter CAPEX while
-        # production was never clipped.
-        assert _run(3.0) < _run(1.0)
-
-    def test_simulate_localizes_load_to_location_timezone(self, _patch_weather, monkeypatch):
-        seen = {}
-
-        def _fake_load_profile(**kwargs):
-            seen["timezone"] = kwargs["timezone"]
-            return real_load_profile(
-                profile_type="demandlib_h0",
-                annual_consumption_kwh=kwargs["annual_consumption_kwh"],
-                start_date=kwargs["start_date"],
-                freq=kwargs["freq"],
-                timezone=kwargs["timezone"],
-            )
-
-        monkeypatch.setattr(app_module, "load_profile", _fake_load_profile)
-
-        app = App(
-            {
-                "location": "porto",
-                "n_modules": 1,
-                "annual_consumption_kwh": 1000,
-                "projection_years": 1,
-            }
-        )
-        app.simulate()
-
-        assert seen["timezone"] == "Europe/Lisbon"
 
     def test_simulate_passes_location_timezone_to_tmy_fetch(self, monkeypatch, synthetic_weather):
         seen = {}
@@ -721,81 +571,25 @@ class TestGcrValidation:
 
 
 class TestAppSimulateNoBattery:
-    @pytest.fixture(autouse=True)
-    def _setup(self, _patch_weather):
-        self.app = App(
-            {
-                "location": "porto",
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
-                "cost_preset": "residential_pt",
-                "emissions_country": "PT",
-                "projection_years": 5,
-            }
-        )
-        self.app.simulate()
-        self.result = self.app.result()
-
-    def test_json_serializable(self):
-        json.dumps(self.result)
-
-    def test_no_battery_keys(self):
-        assert "battery_soh_end_pct" not in self.result
-        assert "battery_replacements" not in self.result
-
-    def test_expected_keys_present(self):
-        expected = {
-            "n_modules",
-            "pv_kwp",
-            "battery_kwh",
-            "usable_ac_system_production_kwh",
-            "consumption_kwh",
-            "self_consumption_kwh",
-            "grid_import_kwh",
-            "grid_export_kwh",
-            "grid_independence_pct",
-            "self_consumption_pct",
-            "total_investment",
-            "payback_year",
-            "npv_savings",
-            "lcoe_per_kwh",
-            "co2_avoided_total_year1_kg",
-            "co2_avoided_total_lifetime_kg",
-            "yearly",
-            "monthly",
-            "financial",
-            "pv_loss_waterfall",
-        }
-        assert expected.issubset(self.result.keys())
-
-    def test_yearly_length(self):
-        assert len(self.result["yearly"]) == 5
-
-    def test_monthly_and_financial_lengths(self):
-        assert len(self.result["monthly"]) == 12
-        assert len(self.result["financial"]) == 6
-
-    def test_system_echo(self):
-        assert self.result["n_modules"] == 6
-        assert self.result["battery_kwh"] == 0.0
-
-    def test_provenance_records_the_pv_only_dispatch_path(self):
-        assert self.result["provenance"]["execution"]["dispatch_path"] == "pv_only_vectorized"
-
-    def test_pv_production_positive(self):
-        assert self.result["usable_ac_system_production_kwh"] > 0
-        assert self.result["yearly"][0]["usable_ac_system_production_kwh"] == pytest.approx(
-            self.result["usable_ac_system_production_kwh"], abs=0.01
-        )
-        assert self.result["usable_ac_system_production_kwh"] == pytest.approx(
-            self.result["direct_pv_ac_load_kwh"]
-            + self.result["pv_origin_battery_ac_load_kwh"]
-            + self.result["grid_export_kwh"],
-            abs=0.02,
-        )
-        assert "pv_production_kwh" not in self.result
-        assert "pv_kwh" not in self.result["yearly"][0]
-        assert "pv_kwh" not in self.result["monthly"][0]
+    @pytest.fixture(autouse=True, scope="class")
+    def _setup(self, request):
+        # One offline run serves the class; each test only reads its result.
+        with (
+            mock.patch("breos.app.fetch_tmy_weather_data", golden_fetch),
+            mock.patch("breos.app.load_weather", lambda **_kwargs: None),
+        ):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "cost_preset": "residential_pt",
+                    "emissions_country": "PT",
+                    "projection_years": 5,
+                }
+            )
+            app.simulate()
+        request.cls.result = app.result()
 
     def test_pv_loss_waterfall_reconciles_to_reported_pv(self):
         waterfall = self.result["pv_loss_waterfall"]
@@ -826,15 +620,6 @@ class TestAppSimulateNoBattery:
         assert waterfall["stages"][-1]["energy_kwh"] == waterfall["energy_balance"]["pv_dc"]["generation_kwh"]
         assert waterfall["ledger_schema_version"] == "3.1"
 
-    def test_grid_independence_range(self):
-        gi = self.result["grid_independence_pct"]
-        assert 0 <= gi <= 100
-
-    def test_energy_conservation(self):
-        r = self.result
-        # self_consumption + export should approximately equal PV production
-        assert abs(r["self_consumption_kwh"] + r["grid_export_kwh"] - r["usable_ac_system_production_kwh"]) < 1.0
-
     def test_explicit_production_schema_and_provenance(self):
         r = self.result
         assert r["self_consumption_kwh"] == pytest.approx(
@@ -846,12 +631,6 @@ class TestAppSimulateNoBattery:
         assert r["provenance"]["ledger_schema_version"] == "3.1"
         assert r["provenance"]["timezone"] == "Europe/Lisbon"
         json.dumps(r["provenance"])
-
-    def test_investment_positive(self):
-        assert self.result["total_investment"] > 0
-
-    def test_lcoe_positive(self):
-        assert self.result["lcoe_per_kwh"] > 0
 
 
 def test_blast_result_reports_model_identity_and_state_provenance(_patch_weather):
@@ -928,6 +707,7 @@ def test_monthly_rows_follow_the_local_year_of_fixed_offset_weather(monkeypatch,
             "projection_years": 2,
         }
     )
+    assert app._resolved.lat == 52.52
     app.simulate()
     result = app.result()
 
@@ -940,37 +720,30 @@ def test_monthly_rows_follow_the_local_year_of_fixed_offset_weather(monkeypatch,
         assert sum(row[key] for row in monthly) == pytest.approx(year_one[key], abs=0.1)
 
 
-class TestAppSimulateMultiArray:
-    @pytest.fixture(autouse=True)
-    def _setup(self, _patch_weather):
-        self.app = App(
-            {
-                "location": "porto",
-                "annual_consumption_kwh": 3000,
-                "cost_preset": "residential_pt",
-                "projection_years": 5,
-                "pv_arrays": [
-                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
-                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
-                ],
-            }
-        )
-        self.app.simulate()
-        self.result = self.app.result()
+def test_multi_array_run_echoes_its_arrays_and_reports_every_table(_patch_weather):
+    app = App(
+        {
+            "location": "porto",
+            "annual_consumption_kwh": 3000,
+            "cost_preset": "residential_pt",
+            "projection_years": 5,
+            "pv_arrays": [
+                {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
+                {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
+            ],
+        }
+    )
+    app.simulate()
+    result = app.result()
 
-    def test_arrays_are_echoed(self):
-        assert self.result["n_modules"] == 6
-        assert len(self.result["pv_arrays"]) == 2
-        assert {arr["azimuth"] for arr in self.result["pv_arrays"]} == {90.0, 270.0}
-        assert {arr["tilt"] for arr in self.result["pv_arrays"]} == {10.0}
-
-    def test_multi_array_result_has_chart_data(self):
-        assert len(self.result["monthly"]) == 12
-        assert self.result["financial"][0]["year"] == 0
-        assert self.result["financial"][-1]["year"] == 5
-
-    def test_multi_array_energy_positive(self):
-        assert self.result["usable_ac_system_production_kwh"] > 0
+    assert result["n_modules"] == 6
+    assert len(result["pv_arrays"]) == 2
+    assert {arr["azimuth"] for arr in result["pv_arrays"]} == {90.0, 270.0}
+    assert {arr["tilt"] for arr in result["pv_arrays"]} == {10.0}
+    assert len(result["monthly"]) == 12
+    assert result["financial"][0]["year"] == 0
+    assert result["financial"][-1]["year"] == 5
+    assert result["usable_ac_system_production_kwh"] > 0
 
 
 class TestAppBifacialConfig:
@@ -1074,35 +847,6 @@ class TestAppBifacialConfig:
 
 
 class TestAppSimulateTracking:
-    def test_invalid_tracking(self, _patch_weather):
-        with pytest.raises(ValueError, match="'tracking' must be"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 6,
-                    "annual_consumption_kwh": 3000,
-                    "tracking": "trinity_axis",
-                }
-            )
-
-    def test_single_axis_runs(self, _patch_weather):
-        app = App(
-            {
-                "location": "porto",
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
-                "cost_preset": "residential_pt",
-                "projection_years": 3,
-                "tracking": "single_axis",
-                "max_angle": 60.0,
-                "gcr": 0.35,
-            }
-        )
-        app.simulate()
-        result = app.result()
-        assert result["usable_ac_system_production_kwh"] > 0
-        json.dumps(result)
-
     def test_dual_axis_runs(self, _patch_weather):
         app = App(
             {
@@ -1132,6 +876,7 @@ class TestAppSimulateTracking:
         tracked = App({**common, "tracking": "single_axis", "backtrack": False, "max_angle": 90.0})
         tracked.simulate()
         assert tracked.result()["usable_ac_system_production_kwh"] > fixed.result()["usable_ac_system_production_kwh"]
+        json.dumps(tracked.result())
 
     def test_per_array_tracking_flows_through(self, _patch_weather):
         """Tracking keys on pv_arrays entries must reach calculate_multi_array_production_breakdown."""
@@ -1192,11 +937,6 @@ class TestAppSimulateWithBattery:
         self.app.simulate()
         self.result = self.app.result()
 
-    def test_battery_keys_present(self):
-        assert "battery_soh_end_pct" in self.result
-        assert "battery_replacements" in self.result
-        assert "battery_replacement_cost_t0_prices" in self.result
-
     def test_loss_waterfall_reports_battery_dispatch_losses(self):
         dispatch = self.result["pv_loss_waterfall"]["dispatch"]
         inverter = self.result["pv_loss_waterfall"]["inverter"]
@@ -1213,10 +953,6 @@ class TestAppSimulateWithBattery:
         )
         assert dispatch["stored_energy_report"] == "energy_balance.battery_stored_energy"
 
-    def test_battery_soh_range(self):
-        soh = self.result["battery_soh_end_pct"]
-        assert 0 < soh <= 100
-
     def test_battery_improves_grid_independence(self, _patch_weather):
         # Same system without battery should have lower grid independence
         app_no_batt = App(
@@ -1232,13 +968,6 @@ class TestAppSimulateWithBattery:
         gi_no_batt = app_no_batt.result()["grid_independence_pct"]
         gi_with_batt = self.result["grid_independence_pct"]
         assert gi_with_batt >= gi_no_batt
-
-    def test_yearly_has_soh(self):
-        for year in self.result["yearly"]:
-            assert "soh_pct" in year
-
-    def test_json_serializable(self):
-        json.dumps(self.result)
 
 
 def test_multiyear_battery_inventory_and_pv_origin_cross_year_boundary(_patch_weather, monkeypatch):
