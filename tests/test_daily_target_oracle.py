@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from breos._daily_targets import _DayEvaluator, daily_target_instructions, solve_daily_targets, target_grid
+from tests.offline_app import TOU
 from tools.oracles.daily_target_dp import (
     DP_DAYS_SCHEMA,
     DP_ORACLE_SCHEMA,
@@ -21,13 +22,6 @@ from tools.oracles.daily_target_dp import (
 from tools.oracles.replay import DEFAULT_TOLERANCE, prepare_replay, replay_instructions
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 1}
-TOU = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.28, "off_peak": 0.11},
-    "export_prices": {"all": 0.05},
-    "fixed_charge_per_day": 0.25,
-}
 FIXED = {
     "mode": "fixed_target",
     "target_usable_fraction": 0.5,

@@ -12,6 +12,7 @@ from breos._dispatch import _dc_ac, _dc_for_ac, _dispatch_day_python
 from breos.battery import BatteryConfig, _ResultBuffers, _step_energy_cap
 from breos.dispatch_instructions import DispatchInstructions
 from breos.inverter import NO_CONVERSION
+from tests.offline_app import TOU
 from tools.oracles.daily_target_dp import run_daily_target_oracle
 from tools.oracles.lp_bound import (
     LP_BOUND_SCHEMA,
@@ -32,13 +33,6 @@ from tools.oracles.replay import prepare_replay, reference_dispatch, replay_inst
 PVWATTS_CONVERSION = NO_CONVERSION.kernel_arguments(1.0)
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 1}
-TOU = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.28, "off_peak": 0.11},
-    "export_prices": {"all": 0.05},
-    "fixed_charge_per_day": 0.25,
-}
 FIXED = {
     "mode": "fixed_target",
     "target_usable_fraction": 0.5,

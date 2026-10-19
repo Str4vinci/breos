@@ -30,15 +30,9 @@ from breos.app_inputs import remap_tmy_year
 from breos.smart_charging import DEFAULT_PUBLICATION_DELAY_HOURS, SmartChargingSpec
 from breos.weather import IRRADIANCE_RESAMPLING_POLICIES, WEATHER_METADATA_KEY, save_weather_csv
 from tests.conftest import _build_synthetic_weather
+from tests.offline_app import TOU
 from tests.test_weather import _install_fake_openmeteo
 
-TOU = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.28, "off_peak": 0.11},
-    "export_prices": {"all": 0.05},
-    "fixed_charge_per_day": 0.25,
-}
 DAILY = {
     "mode": "daily_persistence",
     "charge_periods": ["off_peak"],

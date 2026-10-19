@@ -14,17 +14,11 @@ from breos.dispatch_instructions import DispatchInstructions
 from breos.inverter import InverterConversion
 from breos.optimization_config import resolve_optimization_config
 from breos.smart_charging import SmartChargingSpec
+from tests.offline_app import TOU
 from tests.test_daily_targets import OFF_PEAK, _pack, _priced_run, _problem
 from tests.test_inverter_curve import CURVE
 
 AC_PACK = {"coupling": "ac", "battery_inverter_efficiency": 0.9, "battery_inverter_ac_capacity_w": 3000.0}
-TOU = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.28, "off_peak": 0.11},
-    "export_prices": {"all": 0.05},
-    "fixed_charge_per_day": 0.25,
-}
 FIXED = {
     "mode": "fixed_target",
     "target_usable_fraction": 0.5,

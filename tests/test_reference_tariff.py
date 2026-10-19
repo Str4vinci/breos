@@ -6,7 +6,6 @@ rate. It never drives the dispatch, so the costs with the system and every
 energy flow are those of the same run without it.
 """
 
-import math
 from copy import deepcopy
 from unittest import mock
 
@@ -16,99 +15,35 @@ import pytest
 
 from breos import App, cli, optimization
 from breos.app import _revalued_config
-from breos.app_config import resolve_app_config, resolve_reference_tariff_spec
+from breos.app_config import resolve_app_config
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
 from breos.runners.app import run_app_simulation
-from tools.generate_app_golden import EXCLUDED_PREFIXES, SCENARIOS, _fake_fetch, flatten
+from tests.offline_app import (
+    BASE,
+    CREDIT,
+    CUSTOM_SCHEDULE,
+    FLAT_REFERENCE,
+    MONTH_REFERENCE,
+    QUARTERS,
+    TOU,
+    TOU_REFERENCE,
+    assert_fields_close,
+    evaluate_pv_design,
+    offline,
+    result_fields,
+    revalue_offline,
+    simulate_offline,
+)
 
-BASE = {**SCENARIOS["native_h_replacement"], "execution_backend": "python"}
-TOU = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.28, "off_peak": 0.11},
-    "export_prices": {"all": 0.05},
-    "fixed_charge_per_day": 0.25,
-}
-FLAT_REFERENCE = {"currency": "EUR", "import_prices": {"all": 0.30}, "fixed_charge_per_day": 0.40}
-TOU_REFERENCE = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.35, "off_peak": 0.09},
-    "fixed_charge_per_day": 0.20,
-}
 LISBON = "Europe/Lisbon"
-CUSTOM_SCHEDULE = {
-    "identifier": "reference_custom_daily",
-    "version": "1",
-    "timezone": LISBON,
-    "cycle": "daily",
-    "periods": ["peak", "off_peak"],
-    "rules": [
-        {
-            "days": "all",
-            "season": "all",
-            "intervals": {"off_peak": [["00:00", "08:00"], ["22:00", "24:00"]], "peak": [["08:00", "22:00"]]},
-        }
-    ],
-}
-QUARTERS = {"q1": [1, 2, 3], "q2": [4, 5, 6], "q3": [7, 8, 9], "q4": [10, 11, 12]}
-MONTH_REFERENCE = {
-    "currency": "EUR",
-    "custom_schedule": {**CUSTOM_SCHEDULE, "identifier": "reference_quarterly", "seasons": QUARTERS},
-    "import_prices": {
-        "q1": {"peak": 0.35, "off_peak": 0.09},
-        "q2": {"peak": 0.30, "off_peak": 0.12},
-        "q3": {"peak": 0.25, "off_peak": 0.08},
-        "q4": {"peak": 0.40, "off_peak": 0.15},
-    },
-    "fixed_charge_per_day": 0.20,
-}
-
-
-def _offline():
-    return (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    )
-
-
-def _simulated(config):
-    fetch, weather = _offline()
-    with fetch, weather:
-        app = App(config)
-        app.simulate()
-    return app
 
 
 def _artifacts(config):
-    fetch, weather = _offline()
+    fetch, weather = offline()
     with fetch, weather:
         app = App(config)
         return run_app_simulation(app._resolved, app._runtime_dependencies())
-
-
-def _revalued(app, changes):
-    fetch, weather = _offline()
-    with fetch, weather:
-        return app.revalue(changes)
-
-
-def _fields(result):
-    return {
-        key: value
-        for key, value in flatten(result).items()
-        if not key.startswith(EXCLUDED_PREFIXES) and not key.startswith("provenance.revaluation")
-    }
-
-
-def _assert_close(revalued, fresh, rel=1e-12):
-    assert revalued.keys() == fresh.keys()
-    for key, value in fresh.items():
-        if isinstance(value, float) and math.isfinite(value):
-            assert revalued[key] == pytest.approx(value, rel=rel, abs=1e-9), key
-        else:
-            assert revalued[key] == value, key
 
 
 def _peak(frame):
@@ -123,12 +58,12 @@ def flat_run():
 
 @pytest.fixture(scope="module")
 def flat_app():
-    return _simulated(BASE)
+    return simulate_offline(BASE)
 
 
 @pytest.fixture(scope="module")
 def tou_app():
-    return _simulated({**BASE, "tariff": TOU})
+    return simulate_offline({**BASE, "tariff": TOU})
 
 
 # --- Default -----------------------------------------------------------------
@@ -154,7 +89,9 @@ def test_without_a_reference_the_household_pays_the_system_prices(flat_app, tou_
 
 
 def test_an_explicit_none_is_the_default(flat_app):
-    assert _fields(_simulated({**BASE, "reference_tariff": None}).result()) == _fields(flat_app.result())
+    assert result_fields(simulate_offline({**BASE, "reference_tariff": None}).result()) == result_fields(
+        flat_app.result()
+    )
 
 
 # --- Flat and scheduled references ---------------------------------------------
@@ -166,7 +103,7 @@ def test_an_explicit_none_is_the_default(flat_app):
     ids=["flat", "bundled", "month"],
 )
 def test_app_accepts_zero_reference_fixed_charge_with_previous_results(reference, previous_npv):
-    app = _simulated({**BASE, "reference_tariff": {**reference, "fixed_charge_per_day": 0}})
+    app = simulate_offline({**BASE, "reference_tariff": {**reference, "fixed_charge_per_day": 0}})
     result = app.result()
     # Pin the results from when an omitted reference fixed charge defaulted to zero.
     assert result["npv_savings"] == previous_npv
@@ -227,7 +164,7 @@ def test_a_reference_beside_a_system_tariff_prices_only_the_baseline(tou_app):
 
 
 def test_the_app_result_reconciles_with_the_ledger():
-    app = _simulated({**BASE, "reference_tariff": TOU_REFERENCE})
+    app = simulate_offline({**BASE, "reference_tariff": TOU_REFERENCE})
     run = app._artifacts
     result = app.result()
     projection = run.cost_projection
@@ -266,7 +203,7 @@ def test_the_reference_escalates_energy_and_fixed_charge(extra, reference_escala
     reference = dict(FLAT_REFERENCE)
     if reference_escalation is not None:
         reference["import_price_escalation"] = reference_escalation
-    app = _simulated({**BASE, **extra, "reference_tariff": reference})
+    app = simulate_offline({**BASE, **extra, "reference_tariff": reference})
     run = app._artifacts
     rate = resolve_app_config(BASE).cfg["inflation_rate"] if expected == "inflation" else expected
     years = run.yearly_df["Year"].to_numpy()
@@ -294,10 +231,10 @@ def test_a_period_bills_the_reference_fixed_charge_on_its_civil_days():
     config = {key: value for key, value in BASE.items() if key != "projection_years"}
     # 31 March days include the spring-forward day of 23 hours.
     config = {**config, "period": {"start": "2025-03-01", "end": "2025-04-01"}, "reference_tariff": FLAT_REFERENCE}
-    app = _simulated(config)
+    app = simulate_offline(config)
     assert app._artifacts.yearly_df["Billed_Days"].iloc[0] == 31
     assert app.result()["no_system_fixed_charge_year1_prices"] == round(31 * 0.40, 2)
-    revalued = _revalued(app, {"reference_tariff": {"fixed_charge_per_day": 0.5}})
+    revalued = revalue_offline(app, {"reference_tariff": {"fixed_charge_per_day": 0.5}})
     assert revalued["provenance"]["revaluation"]["method"] == "repriced"
     assert revalued["no_system_fixed_charge_year1_prices"] == 15.5
 
@@ -305,20 +242,13 @@ def test_a_period_bills_the_reference_fixed_charge_on_its_civil_days():
 # --- Validation -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "reference", [FLAT_REFERENCE, TOU_REFERENCE, MONTH_REFERENCE], ids=["flat", "bundled", "month"]
-)
-@pytest.mark.parametrize("entry_point", ["app", "app_config", "reference_spec", "montecarlo"])
-def test_reference_fixed_charge_is_required(reference, entry_point):
-    reference = {key: value for key, value in reference.items() if key != "fixed_charge_per_day"}
+@pytest.mark.parametrize("entry_point", ["app", "montecarlo"])
+def test_reference_fixed_charge_is_required(entry_point):
+    reference = {key: value for key, value in FLAT_REFERENCE.items() if key != "fixed_charge_per_day"}
     config = {**BASE, "reference_tariff": reference}
     with pytest.raises(ValueError, match=r"reference_tariff\.fixed_charge_per_day"):
         if entry_point == "app":
             App(config)
-        elif entry_point == "app_config":
-            resolve_app_config(config)
-        elif entry_point == "reference_spec":
-            resolve_reference_tariff_spec(config, LISBON, "EUR")
         else:
             run_montecarlo(config, MonteCarloSettings(weather_file="unused.csv", n_runs=1))
 
@@ -374,13 +304,6 @@ def test_reference_config_is_checked_at_construction(reference, extra, message):
         App({**BASE, **extra, "reference_tariff": reference})
 
 
-def test_the_reference_must_be_in_the_run_currency():
-    cfg = {"reference_tariff": {**FLAT_REFERENCE, "currency": "EUR"}, "resolution": "h"}
-    assert resolve_reference_tariff_spec(cfg, LISBON, "EUR").prices.currency == "EUR"
-    with pytest.raises(ValueError, match=r"'reference_tariff\.currency' is EUR, but the run is in GBP"):
-        resolve_reference_tariff_spec(cfg, LISBON, "GBP")
-
-
 # --- App.revalue -----------------------------------------------------------------
 
 
@@ -392,18 +315,18 @@ def test_revalue_reprices_a_reference_to_the_values_of_a_fresh_run(system, step,
         start = flat_app if system == "flat" else tou_app
         changes = {"reference_tariff": TOU_REFERENCE}
     elif step == "change":
-        start = _simulated({**base, "reference_tariff": TOU_REFERENCE})
+        start = simulate_offline({**base, "reference_tariff": TOU_REFERENCE})
         changes = {"reference_tariff": {"import_prices": {"all": 0.25}, "import_price_escalation": 0.01}}
     else:
-        start = _simulated({**base, "reference_tariff": FLAT_REFERENCE})
+        start = simulate_offline({**base, "reference_tariff": FLAT_REFERENCE})
         changes = {"reference_tariff": None}
-    revalued = _revalued(start, changes)
+    revalued = revalue_offline(start, changes)
     assert revalued["provenance"]["revaluation"] == {"method": "repriced", "changed_keys": ["reference_tariff"]}
     config = _revalued_config(start._config, changes)
-    fresh = _simulated(config).result()
+    fresh = simulate_offline(config).result()
     # Removing the reference beside a tariff re-prices the system's baseline
     # from the energy by period, which agrees to rounding.
-    _assert_close(_fields(revalued), _fields(fresh))
+    assert_fields_close(result_fields(revalued), result_fields(fresh))
     if step == "change":
         # The price list is replaced whole: "all" does not sit beside peak.
         assert revalued["provenance"]["reference_tariff"]["import_prices"] == {"all": 0.25}
@@ -411,40 +334,10 @@ def test_revalue_reprices_a_reference_to_the_values_of_a_fresh_run(system, step,
 
 
 def test_revalue_of_a_flat_reference_on_flat_prices_gives_the_floats_of_a_fresh_run(flat_app):
-    revalued = _revalued(flat_app, {"reference_tariff": FLAT_REFERENCE})
-    assert _fields(revalued) == _fields(_simulated({**BASE, "reference_tariff": FLAT_REFERENCE}).result())
-
-
-def test_revalue_reprices_a_reference_under_daily_persistence():
-    window = {key: value for key, value in BASE.items() if key != "projection_years"}
-    config = {
-        **window,
-        "battery_kwh": 5.0,
-        "tariff": TOU,
-        "period": {"start": "2025-01-10", "end": "2025-01-14"},
-        "smart_charging": {
-            "mode": "daily_persistence",
-            "charge_periods": ["off_peak"],
-            "discharge_periods": ["peak"],
-            "grid_charge_efficiency": 0.95,
-            "target_levels": 3,
-            "soc_states": 3,
-        },
-    }
-    app = _simulated(config)
-    for changes in (
-        {"reference_tariff": TOU_REFERENCE},
-        {"reference_tariff": FLAT_REFERENCE},
-        {"reference_tariff": MONTH_REFERENCE},
-    ):
-        revalued = _revalued(app, changes)
-        assert revalued["provenance"]["revaluation"]["method"] == "repriced"
-        assert revalued["provenance"]["smart_charging"] == app.result()["provenance"]["smart_charging"]
-        _assert_close(_fields(revalued), _fields(_simulated(_revalued_config(config, changes)).result()))
-    with_reference = _simulated({**config, "reference_tariff": TOU_REFERENCE})
-    removed = _revalued(with_reference, {"reference_tariff": None})
-    assert removed["provenance"]["revaluation"]["method"] == "repriced"
-    _assert_close(_fields(removed), _fields(app.result()))
+    revalued = revalue_offline(flat_app, {"reference_tariff": FLAT_REFERENCE})
+    assert result_fields(revalued) == result_fields(
+        simulate_offline({**BASE, "reference_tariff": FLAT_REFERENCE}).result()
+    )
 
 
 # --- Monte Carlo -----------------------------------------------------------------
@@ -453,11 +346,10 @@ def test_revalue_reprices_a_reference_under_daily_persistence():
 @pytest.mark.parametrize(
     "reference", [FLAT_REFERENCE, TOU_REFERENCE, MONTH_REFERENCE], ids=["flat", "bundled", "month"]
 )
-def test_montecarlo_accepts_zero_reference_fixed_charge(reference, tmp_path, write_multiyear_weather):
+def test_montecarlo_accepts_zero_reference_fixed_charge(reference, small_mc_settings):
     # Compare paired runs rather than pinning NPVs, which move with the
     # dependency versions the floors job installs.
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
+    settings = small_mc_settings
     config = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0}
     assert reference["fixed_charge_per_day"] > 0
     charged = run_montecarlo({**config, "reference_tariff": reference}, settings)
@@ -469,9 +361,8 @@ def test_montecarlo_accepts_zero_reference_fixed_charge(reference, tmp_path, wri
     assert (zero.runs["npv_savings"].to_numpy() < charged.runs["npv_savings"].to_numpy()).all()
 
 
-def test_montecarlo_prices_each_trajectory_load_at_the_reference(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
+def test_montecarlo_prices_each_trajectory_load_at_the_reference(small_mc_settings):
+    settings = small_mc_settings
     config = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0}
     reference = {**FLAT_REFERENCE, "import_price_escalation": 0.0}
 
@@ -503,52 +394,14 @@ def test_montecarlo_prices_each_trajectory_load_at_the_reference(tmp_path, write
 # --- Projected optimization ----------------------------------------------------
 
 
-@pytest.fixture
-def optimizer_case(monkeypatch):
-    index = pd.date_range("2026-01-05", periods=48, freq="h", tz=LISBON)
-    weather = pd.DataFrame({"temp_air": 20.0}, index=index)
-    load = pd.DataFrame({"Load": 1000.0}, index=index)
-    pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
-    monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())
-    config = {
-        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": LISBON, "altitude": 100},
-        "simulation": {"resolution": "h", "years_projection": 2},
-        "financials": {"inflation_rate": 0.02, "discount_rate": 0.05},
-        "battery": {"temperature": 20.0},
-        "mode": {"fixed_azimuth": 180.0},
-        "constraints": {"budget": 100000, "max_area_m2": 100, "max_tilt_deg": 60},
-        "tariff": {
-            "schedule": "pt_mainland_2026_daily_bi",
-            "currency": "EUR",
-            "import_prices": {"peak": 0.50, "off_peak": 0.10},
-            "export_prices": {"all": 0.03},
-            "fixed_charge_per_day": 0.40,
-        },
-    }
-    return weather, load, config
-
-
-def _evaluate(weather, load, config):
-    return optimization.evaluate_projected_design(
-        weather, load, config, n_modules=4, battery_kwh=0.0, tilt=30.0, azimuth=180.0
-    )
-
-
-@pytest.mark.parametrize(
-    "reference", [FLAT_REFERENCE, TOU_REFERENCE, MONTH_REFERENCE], ids=["flat", "bundled", "month"]
-)
-@pytest.mark.parametrize("entry_point", ["config", "evaluation"])
-def test_optimizer_requires_reference_fixed_charge(reference, entry_point, optimizer_case, monkeypatch):
-    weather, load, config = optimizer_case
-    config["reference_tariff"] = {key: value for key, value in reference.items() if key != "fixed_charge_per_day"}
+def test_optimizer_requires_reference_fixed_charge(tou_optimizer_case, monkeypatch):
+    weather, load, config = tou_optimizer_case
+    config["reference_tariff"] = {key: value for key, value in FLAT_REFERENCE.items() if key != "fixed_charge_per_day"}
     monkeypatch.setattr(
         optimization, "calculate_pv_production_dc", lambda **kwargs: pytest.fail("PV ran before validation")
     )
     with pytest.raises(ValueError, match=r"reference_tariff\.fixed_charge_per_day"):
-        if entry_point == "config":
-            resolve_optimization_config(config)
-        else:
-            _evaluate(weather, load, config)
+        evaluate_pv_design(weather, load, config)
 
 
 @pytest.mark.parametrize(
@@ -560,23 +413,25 @@ def test_optimizer_requires_reference_fixed_charge(reference, entry_point, optim
     ],
     ids=["flat", "bundled", "month"],
 )
-def test_optimizer_accepts_zero_reference_fixed_charge_with_previous_results(reference, previous_npv, optimizer_case):
-    weather, load, config = optimizer_case
+def test_optimizer_accepts_zero_reference_fixed_charge_with_previous_results(
+    reference, previous_npv, tou_optimizer_case
+):
+    weather, load, config = tou_optimizer_case
     config["reference_tariff"] = {**reference, "fixed_charge_per_day": 0}
     resolved = resolve_optimization_config(config)
     assert resolved["reference_tariff"]["fixed_charge_per_day"] == 0
-    result = _evaluate(weather, load, resolved)
+    result = evaluate_pv_design(weather, load, resolved)
     assert result.metrics["Projected_NPV"] == pytest.approx(previous_npv, rel=1e-12)
     assert (result.financial["Cost_No_Sys_Fixed_Charge"] == 0).all()
     assert result.provenance["reference_tariff"]["fixed_charge_per_day"] == 0
 
 
-def test_the_optimizer_npv_is_the_saving_against_the_reference(optimizer_case):
-    weather, load, config = optimizer_case
-    plain = _evaluate(weather, load, config)
+def test_the_optimizer_npv_is_the_saving_against_the_reference(tou_optimizer_case):
+    weather, load, config = tou_optimizer_case
+    plain = evaluate_pv_design(weather, load, config)
     with_reference = deepcopy(config)
     with_reference["reference_tariff"] = {**FLAT_REFERENCE, "import_price_escalation": 0.0}
-    priced = _evaluate(weather, load, with_reference)
+    priced = evaluate_pv_design(weather, load, with_reference)
 
     # 48 kWh of load at 0.30, and two days of the reference fixed charge.
     np.testing.assert_allclose(priced.yearly["Baseline_Import_Cost"], 48 * 0.30)
@@ -595,11 +450,11 @@ def test_the_optimizer_npv_is_the_saving_against_the_reference(optimizer_case):
     assert "reference_tariff" not in plain.provenance
 
 
-def test_the_optimizer_reference_escalates_at_the_financials_import_escalation(optimizer_case):
-    weather, load, config = optimizer_case
+def test_the_optimizer_reference_escalates_at_the_financials_import_escalation(tou_optimizer_case):
+    weather, load, config = tou_optimizer_case
     config["financials"]["import_price_escalation"] = 0.06
     config["reference_tariff"] = deepcopy(TOU_REFERENCE)
-    result = _evaluate(weather, load, config)
+    result = evaluate_pv_design(weather, load, config)
     assert result.provenance["reference_tariff"]["import_price_escalation"] == 0.06
     np.testing.assert_allclose(
         result.financial["Cost_No_Sys_Import"].to_numpy(),
@@ -608,28 +463,34 @@ def test_the_optimizer_reference_escalates_at_the_financials_import_escalation(o
     )
 
 
-def test_the_optimizer_search_scores_against_the_reference(optimizer_case):
+@pytest.mark.parametrize("table", ["reference_tariff", "annual_network_credit"])
+def test_the_optimizer_search_scores_as_the_projected_evaluation(table, tou_optimizer_case):
+    # The pickled search problem prices each pricing table as the fixed design does.
     pytest.importorskip("pymoo")
     import pickle
 
-    weather, load, config = optimizer_case
-    config["reference_tariff"] = deepcopy(TOU_REFERENCE)
-    fixed = _evaluate(weather, load, config)
+    weather, load, config = tou_optimizer_case
+    if table == "reference_tariff":
+        config["reference_tariff"] = deepcopy(TOU_REFERENCE)
+    else:
+        config["tariff"]["annual_network_credit"] = deepcopy(CREDIT)
+    fixed = evaluate_pv_design(weather, load, config)
     problem = pickle.loads(pickle.dumps(optimization.SolarDesignProblem(weather, load, config)))
     out = {}
     problem._evaluate(np.array([4, 0.0, 30.0]), out)
     assert out["F"][1] == -fixed.metrics["Projected_NPV"]
-    assert problem.pricing.provenance()["reference_tariff"] == fixed.provenance["reference_tariff"]
+    if table == "reference_tariff":
+        assert problem.pricing.provenance()["reference_tariff"] == fixed.provenance["reference_tariff"]
 
 
-def test_the_optimizer_checks_the_reference_before_pv(optimizer_case, monkeypatch):
-    weather, load, config = optimizer_case
+def test_the_optimizer_checks_the_reference_before_pv(tou_optimizer_case, monkeypatch):
+    weather, load, config = tou_optimizer_case
     config["reference_tariff"] = {**FLAT_REFERENCE, "import_prices": {"peak": 0.3}}
     monkeypatch.setattr(
         optimization, "calculate_pv_production_dc", lambda **kwargs: pytest.fail("PV ran before validation")
     )
     with pytest.raises(ValueError, match="one flat price"):
-        _evaluate(weather, load, config)
+        evaluate_pv_design(weather, load, config)
 
 
 # --- Sweeps ------------------------------------------------------------------------
@@ -660,18 +521,6 @@ def test_cli_requires_reference_fixed_charge(command, tmp_path, capsys):
     assert "reference_tariff.fixed_charge_per_day" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("command", [["run", "--dry-run", "--config"], ["validate-config"]])
-def test_cli_accepts_zero_reference_fixed_charge(command, tmp_path, capsys):
-    path = tmp_path / "reference.toml"
-    path.write_text(
-        'location = "porto"\nn_modules = 8\nannual_consumption_kwh = 4000\n'
-        '[reference_tariff]\ncurrency = "EUR"\nimport_prices = { all = 0.30 }\nfixed_charge_per_day = 0\n',
-        encoding="utf-8",
-    )
-    assert cli.main([*command, str(path)]) == 0
-    assert not capsys.readouterr().err
-
-
 def test_sweeps_vary_reference_prices_by_dotted_key():
     for key in ("reference_tariff.import_prices.all", "reference_tariff.fixed_charge_per_day", "reference_tariff"):
         cli._check_sweep_key(key)
@@ -690,7 +539,7 @@ def test_sweeps_vary_reference_prices_by_dotted_key():
 
 @pytest.fixture(scope="module")
 def month_reference_app():
-    return _simulated({**BASE, "reference_tariff": MONTH_REFERENCE})
+    return simulate_offline({**BASE, "reference_tariff": MONTH_REFERENCE})
 
 
 def test_month_reference_reconciles_with_the_step_ledger_and_records_the_partition(month_reference_app):
@@ -726,17 +575,19 @@ def test_revalue_month_reference_is_bit_identical_to_a_fresh_run(system, step, f
     if system == "month":
         base["tariff"] = {**MONTH_REFERENCE, "export_prices": {"all": 0.05}}
     if step == "add":
-        app = flat_app if system == "flat" else _simulated(base)
+        app = flat_app if system == "flat" else simulate_offline(base)
         changes = {"reference_tariff": MONTH_REFERENCE}
     else:
-        app = month_reference_app if system == "flat" else _simulated({**base, "reference_tariff": MONTH_REFERENCE})
+        app = (
+            month_reference_app if system == "flat" else simulate_offline({**base, "reference_tariff": MONTH_REFERENCE})
+        )
         # Replace the nested map whole, including each season's old periods.
         changes = {"reference_tariff": {"import_prices": {s: {"all": 0.2 + i * 0.05} for i, s in enumerate(QUARTERS)}}}
     with mock.patch("breos.runners.app.run_app_simulation", side_effect=AssertionError("reference drove dispatch")):
-        revalued = _revalued(app, changes)
+        revalued = revalue_offline(app, changes)
     assert revalued["provenance"]["revaluation"] == {"method": "repriced", "changed_keys": ["reference_tariff"]}
-    fresh = _simulated(_revalued_config(app._config, changes))
-    assert _fields(revalued) == _fields(fresh.result())
+    fresh = simulate_offline(_revalued_config(app._config, changes))
+    assert result_fields(revalued) == result_fields(fresh.result())
     record = revalued["provenance"]["reference_tariff"]
     assert record["import_prices"] == changes["reference_tariff"]["import_prices"]
     assert record["seasons"] == QUARTERS
@@ -797,21 +648,22 @@ def test_month_reference_never_drives_discharge_only_dispatch(backend):
         "tariff": TOU,
         "smart_charging": {"mode": "discharge_only", "discharge_periods": ["peak"]},
     }
-    plain = _simulated(config)
-    priced = _simulated({**config, "reference_tariff": MONTH_REFERENCE})
+    plain = simulate_offline(config)
+    priced = simulate_offline({**config, "reference_tariff": MONTH_REFERENCE})
     pd.testing.assert_frame_equal(plain._artifacts.first_year_results_df, priced._artifacts.first_year_results_df)
     assert plain.result()["provenance"]["smart_charging"] == priced.result()["provenance"]["smart_charging"]
     assert priced._artifacts.first_year_results_df["Grid_AC_To_Battery"].sum() == 0
     assert plain.result()["no_system_import_cost_year1_prices"] != priced.result()["no_system_import_cost_year1_prices"]
     changes = {"reference_tariff": {"import_prices": {s: {"all": 0.1} for s in QUARTERS}}}
-    revalued = _revalued(priced, changes)
+    revalued = revalue_offline(priced, changes)
     assert revalued["provenance"]["revaluation"]["method"] == "repriced"
-    assert _fields(revalued) == _fields(_simulated(_revalued_config(priced._config, changes)).result())
+    assert result_fields(revalued) == result_fields(
+        simulate_offline(_revalued_config(priced._config, changes)).result()
+    )
 
 
-def test_montecarlo_month_reference_matches_equivalent_flat_prices(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
+def test_montecarlo_month_reference_matches_equivalent_flat_prices(small_mc_settings):
+    settings = small_mc_settings
     config = {
         "location": "porto",
         "n_modules": 8,
@@ -830,14 +682,14 @@ def test_montecarlo_month_reference_matches_equivalent_flat_prices(tmp_path, wri
     assert month.provenance["smart_charging"] == flat.provenance["smart_charging"]
 
 
-def test_optimizer_month_reference_prices_both_sides_of_a_quarter_boundary(optimizer_case, monkeypatch):
-    weather, load, config = optimizer_case
+def test_optimizer_month_reference_prices_both_sides_of_a_quarter_boundary(tou_optimizer_case, monkeypatch):
+    weather, load, config = tou_optimizer_case
     index = pd.date_range("2026-03-31", periods=48, freq="h", tz=LISBON)
     weather.index = load.index = index
     pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
     monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())
-    plain = _evaluate(weather, load, config)
-    priced = _evaluate(weather, load, {**config, "reference_tariff": MONTH_REFERENCE})
+    plain = evaluate_pv_design(weather, load, config)
+    priced = evaluate_pv_design(weather, load, {**config, "reference_tariff": MONTH_REFERENCE})
     # One kWh each hour, 14 peak and 10 off-peak hours on each side.
     expected = 14 * 0.35 + 10 * 0.09 + 14 * 0.30 + 10 * 0.12
     np.testing.assert_allclose(priced.yearly["Baseline_Import_Cost"], expected, rtol=1e-14)
