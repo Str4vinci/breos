@@ -15,7 +15,6 @@ from breos.app_inputs import (
     AppRuntimeDependencies,
     arrays_with_module_shading,
     prepare_planner_forecast,
-    prepare_simulation_inputs,
     prepare_simulation_inputs_cached,
     unknown_source_metadata,
 )
@@ -644,7 +643,7 @@ def run_app_simulation(
             stacklevel=3,
         )
 
-    inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=prepare_simulation_inputs)
+    inputs = prepare_simulation_inputs_cached(cfg, resolved, deps)
 
     # A [period] window runs once. Replayed as project years, it would carry
     # degradation over copies of one window as if each were a year.

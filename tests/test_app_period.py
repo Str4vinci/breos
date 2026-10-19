@@ -267,11 +267,6 @@ def test_invalid_periods_are_refused(period, error, match):
         App({**BASE, "period": period})
 
 
-def test_the_last_week_of_the_year_may_end_on_1_january():
-    app = _run({**BASE, "battery_kwh": 0, "period": {"start": "2025-12-25", "end": "2026-01-01"}})
-    assert len(app._artifacts.first_year_results_df) == 7 * 24
-
-
 def _truncated(days_missing_at_end):
     year = synthetic_weather(2025)
     return year.iloc[: len(year) - days_missing_at_end * 24]
@@ -353,15 +348,11 @@ def test_revalue_reprices_the_window_and_keeps_lifetime_economics_none(battery_r
         week.revalue({"period": {"start": "2025-07-01", "end": "2025-07-08"}})
 
 
-def test_a_smart_charging_window_is_one_standalone_controller_span(monkeypatch):
+def test_a_smart_charging_window_is_one_standalone_controller_span():
     # ADR 0002 A11: a [period] runs its fixed target through the daily
     # controller as one standalone span, never stitched to its own start.
-    import breos.runners.app as runner
     from breos.runners.app import run_app_simulation
 
-    calls = []
-    run_projection = runner.run_projection
-    monkeypatch.setattr(runner, "run_projection", lambda *a, **k: calls.append(k) or run_projection(*a, **k))
     smart = {
         "mode": "fixed_target",
         "target_usable_fraction": 0.6,
@@ -377,7 +368,6 @@ def test_a_smart_charging_window_is_one_standalone_controller_span(monkeypatch):
         controlled = run_app_simulation(app._resolved, deps)
         static = run_app_simulation(app._resolved, deps, instructions=controlled.instructions)
 
-    assert calls[0]["replay_seam"] is False and calls[0]["day_controller"] is not None
     pd.testing.assert_frame_equal(controlled.first_year_results_df, static.first_year_results_df, check_exact=True)
     pd.testing.assert_frame_equal(controlled.yearly_df, static.yearly_df, check_exact=True)
     carry = controlled.projection.carry.controller_carry

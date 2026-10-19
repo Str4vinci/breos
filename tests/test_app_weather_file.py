@@ -18,16 +18,6 @@ COMMITTED_TMY = (
 
 
 @pytest.fixture
-def no_fetch(monkeypatch):
-    """Fail if App falls back to a PVGIS fetch; these tests are offline."""
-
-    def _fail(*args, **kwargs):
-        raise AssertionError("App fetched PVGIS weather instead of reading weather_file")
-
-    monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fail)
-
-
-@pytest.fixture
 def inputs(tmp_path, monkeypatch, synthetic_weather, no_fetch):
     """A working directory with a weather CSV under inputs/, named outside the cache convention."""
     directory = tmp_path / "inputs"

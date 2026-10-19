@@ -16,11 +16,8 @@ from breos.economics import (
 )
 
 
-def test_the_defaults_are_three_and_two_percent():
-    assert (DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE) == (0.03, 0.02)
-
-
 def test_every_entry_point_defaults_to_the_one_set():
+    assert (DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE) == (0.03, 0.02)
     params = CostParams()
     assert (params.discount_rate, params.inflation_rate) == (0.03, 0.02)
     from_config = cost_params_from_config({}, {})

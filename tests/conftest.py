@@ -298,3 +298,16 @@ def _patch_weather(monkeypatch, synthetic_weather):
 
     monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fake_fetch)
     monkeypatch.setattr("breos.app.load_weather", lambda **kw: None)  # force fetch path
+
+
+# --- lane A shared fixtures ---
+
+
+@pytest.fixture
+def no_fetch(monkeypatch):
+    """Fail if App falls back to a PVGIS fetch, for tests that serve weather from local files."""
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("App fetched PVGIS weather instead of reading a local weather file")
+
+    monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fail)

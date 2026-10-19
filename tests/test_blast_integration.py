@@ -162,7 +162,7 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
         "total_initial_cost": 12000.0,
         "replacement_cost_each": 5.0 * 500.0,
     }
-    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
     monkeypatch.setattr(projection_module, "build_costs_dict", lambda cfg, resolved: costs)
 
     # Wrap (do not mock) the real degradation call to retain each year's frames.

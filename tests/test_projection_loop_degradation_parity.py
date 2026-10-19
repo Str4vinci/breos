@@ -123,7 +123,7 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
         temperature_series=temperature,
         pv_breakdown=_pv_breakdown(pv),
     )
-    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
     # App and the optimizer both run the shared loop's simulate_energy_balance,
     # so each run gets its own spy.
     with monkeypatch.context() as patch:

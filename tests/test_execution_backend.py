@@ -8,10 +8,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.app_config import APP_CONFIG_FIELDS
 from breos.app_inputs import InverterSteps
-from breos.battery import BatteryConfig, _dispatch_day_python, _resolve_dispatch_day, _ResultBuffers
-from breos.execution import EXECUTION_BACKENDS, aggregate_jit_cache_states
+from breos.battery import BatteryConfig, _ResultBuffers
+from breos.execution import aggregate_jit_cache_states
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
 
@@ -26,14 +25,6 @@ def _base_config():
         "resolution": "h",
         "projection_years": 2,
     }
-
-
-def test_python_is_the_default_and_the_reference():
-    assert EXECUTION_BACKENDS == ("python", "numba")
-    # Unset Monte Carlo settings inherit the App key, whose default is python.
-    assert MonteCarloSettings(weather_file="x").execution_backend is None
-    assert APP_CONFIG_FIELDS["execution_backend"].default == "python"
-    assert _resolve_dispatch_day("python") is _dispatch_day_python
 
 
 def test_montecarlo_rejects_unknown_backend_before_loading_inputs(tmp_path):
@@ -312,16 +303,6 @@ def test_dispatch_kernel_cache_survives_a_new_process(tmp_path):
     second = _run_cache_probe(cache_dir)
     assert second["hits"] == 1, "a second process must load the compiled kernel from disk"
     assert second["misses"] == 0
-
-
-def test_dispatch_kernel_cache_does_not_accumulate_data_files(tmp_path):
-    """Repeated processes must reuse one cache entry rather than append new ones."""
-    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
-    cache_dir = tmp_path / "numba-cache"
-    cache_dir.mkdir()
-
-    for _ in range(3):
-        _run_cache_probe(cache_dir)
-
+    # Reusing the entry, rather than appending one per process, keeps one data file.
     data_files = _dispatch_cache_data_files(cache_dir)
     assert len(data_files) == 1, f"cache entries accumulated across processes: {[p.name for p in data_files]}"

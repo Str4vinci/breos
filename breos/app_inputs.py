@@ -1007,29 +1007,25 @@ def prepare_simulation_inputs_cached(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     deps: AppRuntimeDependencies,
-    *,
-    prepare: Callable[..., PreparedSimulationInputs] = prepare_simulation_inputs,
 ) -> PreparedSimulationInputs:
     """:func:`prepare_simulation_inputs`, reused inside :func:`reuse_prepared_inputs`.
 
     ``resolved`` is derived from ``cfg`` alone, so the resolved config
     without :data:`INPUT_INDEPENDENT_KEYS`, with the runtime dependencies,
     identifies the inputs. Outside the block this prepares afresh, as before.
-    ``prepare`` is the preparation to reuse; the App runner passes its own
-    reference, which tests replace.
     """
     cache = _PREPARED_INPUTS_CACHE.get()
     key = _input_cache_key(cfg, resolved) if cache is not None else None
     if cache is None or key is None:
-        return prepare(cfg, resolved, deps)
-    entry = (key, deps, prepare)
+        return prepare_simulation_inputs(cfg, resolved, deps)
+    entry = (key, deps)
     try:
         hit = entry in cache
     except TypeError:
         # A replaced dependency that cannot be hashed; prepare afresh.
-        return prepare(cfg, resolved, deps)
+        return prepare_simulation_inputs(cfg, resolved, deps)
     if not hit:
         cache.clear()
-        cache[entry] = prepare(cfg, resolved, deps)
+        cache[entry] = prepare_simulation_inputs(cfg, resolved, deps)
     # A copy per run, so nothing a run does to its inputs reaches the next.
     return deepcopy(cache[entry])

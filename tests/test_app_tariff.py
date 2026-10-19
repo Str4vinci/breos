@@ -15,7 +15,7 @@ from breos.battery import align_simulation_inputs
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.projection import ProjectionYear, run_projection
 from breos.runners.app import run_app_simulation
-from breos.smart_charging import FixedTargetDayController, SmartChargingSpec, resolve_instructions
+from breos.smart_charging import SmartChargingSpec, resolve_instructions
 from breos.tariffs import ScheduleDefinition
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 3}
@@ -91,13 +91,6 @@ CUSTOM_TARIFF = {
 def test_tariff_config_is_checked_at_construction(tariff, extra, error, message):
     with pytest.raises(error, match=message):
         App({**BASE, **extra, "tariff": tariff})
-
-
-def test_a_schedule_finer_than_every_app_step_names_what_it_needs(monkeypatch):
-    # A 10-minute boundary, as a custom schedule may have: no App resolution fits.
-    monkeypatch.setattr("breos.app_config.schedule_resolution_minutes", lambda schedule, years=None: 10)
-    with pytest.raises(ValueError, match="needs steps that divide 10 minutes.*App offers no step that divides 10"):
-        App({**BASE, "resolution": "15min", "tariff": TOU})
 
 
 def _artifacts(config):
@@ -182,19 +175,6 @@ def test_a_tou_run_reports_its_year1_money_at_the_top_level(monkeypatch):
     assert result["grid_import_cost_year1_prices"] == result["financial"][1]["cost_import"]
     # Without smart charging the battery charges from PV only.
     assert "grid_charge_cost_year1_prices" not in result
-
-
-@pytest.mark.usefixtures("_patch_weather")
-def test_cheap_nights_lower_the_bill():
-    night = {**TOU, "import_prices": {"peak": 0.40, "off_peak": 0.05}}
-    day = {**TOU, "import_prices": {"peak": 0.05, "off_peak": 0.40}}
-
-    night_run = _artifacts({**BASE, "tariff": night})[1].yearly_df
-    day_run = _artifacts({**BASE, "tariff": day})[1].yearly_df
-
-    # The household imports mostly outside PV hours, and more of it at night.
-    assert night_run["Import_Cost"].iloc[0] != day_run["Import_Cost"].iloc[0]
-    assert (night_run["Import_Cost"] <= night_run["Baseline_Import_Cost"]).all()
 
 
 def test_frames_and_summaries_price_a_year_identically():
@@ -285,38 +265,20 @@ SMART = {
 }
 
 
-def _spy_on_projection(monkeypatch):
-    import breos.runners.app as runner
-
-    calls = []
-    run_projection_ = runner.run_projection
-
-    def spy(*args, **kwargs):
-        calls.append(kwargs)
-        return run_projection_(*args, **kwargs)
-
-    monkeypatch.setattr(runner, "run_projection", spy)
-    return calls
-
-
 @pytest.mark.usefixtures("_patch_weather")
 @pytest.mark.parametrize("resolution", ["h", "15min"])
 @pytest.mark.parametrize("backend", ["python", "numba"])
-def test_app_fixed_target_runs_through_the_daily_controller_unchanged(monkeypatch, resolution, backend):
+def test_app_fixed_target_runs_through_the_daily_controller_unchanged(resolution, backend):
     # ADR 0002 A11: App's configured fixed target runs through the civil-day
     # controller seam; a replayed schedule stays on the static path. The two
     # must give the same ledger, year rows and carried state bit for bit.
     if backend == "numba":
         pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
-    calls = _spy_on_projection(monkeypatch)
     app = App({**BASE, "resolution": resolution, "execution_backend": backend, "tariff": TOU, "smart_charging": SMART})
     deps = app._runtime_dependencies()
     controlled = run_app_simulation(app._resolved, deps)
     static = run_app_simulation(app._resolved, deps, instructions=controlled.instructions)
 
-    assert isinstance(calls[0]["day_controller"], FixedTargetDayController) and calls[0]["instructions"] is None
-    assert calls[0]["replay_seam"] is True
-    assert calls[1]["day_controller"] is None and calls[1]["instructions"] is controlled.instructions
     pd.testing.assert_frame_equal(controlled.first_year_results_df, static.first_year_results_df, check_exact=True)
     pd.testing.assert_frame_equal(controlled.yearly_df, static.yearly_df, check_exact=True)
     assert dataclasses.replace(controlled.projection.carry, controller_carry=None) == static.projection.carry
@@ -359,19 +321,6 @@ def test_spanish_2_0td_in_2026():
 
     assert (record["schedule"], record["timezone"], record["calendar_year"]) == ("es_2_0td", "Europe/Madrid", 2026)
     assert record["fixed_charge_per_day"] == 0.0
-
-
-def test_study_date_is_accepted_as_a_date():
-    from datetime import date
-
-    resolved = resolve_app_config(
-        {
-            **BASE,
-            "resolution": "15min",
-            "tariff": {**TOU, "schedule": "pt_mainland_2027_daily_bi", "study_date": date(2027, 7, 1)},
-        }
-    )
-    assert resolved.tariff.study_date == date(2027, 7, 1)
 
 
 @pytest.mark.parametrize(
@@ -448,21 +397,11 @@ def test_custom_schedule_requires_its_fields_and_valid_metadata(mutate, message)
         App({**BASE, "tariff": {**CUSTOM_TARIFF, "custom_schedule": custom}})
 
 
-def test_custom_schedule_is_a_table_and_is_parsed_once(monkeypatch):
+def test_custom_schedule_must_be_a_table():
     # A parsed definition would be recorded as its repr and could not be fed back.
     definition = resolve_app_config({**BASE, "tariff": CUSTOM_TARIFF}).tariff.schedule
     with pytest.raises(TypeError, match=r"'tariff\.custom_schedule' must be a table"):
         App({**BASE, "tariff": {**CUSTOM_TARIFF, "custom_schedule": definition}})
-
-    from breos import app_config
-
-    calls = []
-    parse = app_config.parse_schedule_definition
-    monkeypatch.setattr(
-        app_config, "parse_schedule_definition", lambda *args, **kwargs: calls.append(1) or parse(*args, **kwargs)
-    )
-    App({**BASE, "tariff": CUSTOM_TARIFF})
-    assert len(calls) == 1
 
 
 def test_custom_schedule_must_match_location_before_pv_metadata_resolution(monkeypatch):

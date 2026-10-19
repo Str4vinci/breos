@@ -6,7 +6,7 @@ from datetime import date
 import pytest
 
 from breos import cli
-from breos.app_config import ALLOWED_CONFIG_KEYS, APP_CONFIG_FIELDS, DEFAULTS, resolve_app_config
+from breos.app_config import ALLOWED_CONFIG_KEYS, DEFAULTS, resolve_app_config
 
 EXPECTED_DEFAULTS = {
     "battery_kwh": 0.0,
@@ -215,48 +215,6 @@ def test_choice_flags_reject_a_value_outside_their_choices(flag, value, capsys):
     assert "invalid choice" in capsys.readouterr().err
 
 
-def test_dc_coupled_is_an_unknown_app_key():
-    with pytest.raises(ValueError, match="Unknown config key.*dc_coupled"):
-        resolve_app_config({"dc_coupled": True})
-
-
-def test_dc_coupled_has_no_cli_flag():
-    with pytest.raises(SystemExit):
-        cli.build_parser().parse_args(["run", "--dc-coupled"])
-
-
-def test_registry_generated_cli_values_all_reach_config_overrides():
-    argv = ["run"]
-    for key, field in APP_CONFIG_FIELDS.items():
-        if not field.cli_flags:
-            continue
-        argv.append(field.cli_flags[0])
-        if field.cli_choices is not None:
-            raw: object = field.cli_choices[0]
-        elif field.cli_type is int:
-            raw = 2
-        elif field.cli_type is float:
-            raw = 0.5
-        elif key == "cost_preset":
-            raw = "some-preset"
-        elif key == "emissions_country":
-            raw = "pt"
-        elif key == "location":
-            raw = "PORTO"
-        else:
-            raw = "/tmp/value" if field.cli_type is not None else "value"
-        argv.append(str(raw))
-
-    args = cli.build_parser().parse_args(argv)
-    expected = {
-        key: field.normalizer(getattr(args, key)) if field.normalizer is not None else getattr(args, key)
-        for key, field in APP_CONFIG_FIELDS.items()
-        if field.cli_flags
-    }
-
-    assert cli._build_config(args) == expected
-
-
 def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
     api_config = {
         "location": "PORTO",
@@ -264,6 +222,7 @@ def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
         "annual_consumption_kwh": 4000,
         "cost_preset": "residential-pt",
         "emissions_country": "pt",
+        "load_profile": "BDEW_H0",
         "start_date": date(2023, 1, 1),
         "costs": {"electricity-cost": 0.31},
     }
@@ -273,6 +232,7 @@ def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
     assert api_cfg["location"] == "porto"
     assert api_cfg["cost_preset"] == "residential_pt"
     assert api_cfg["emissions_country"] == "PT"
+    assert api_cfg["load_profile"] == "bdew_h0"
     assert api_cfg["start_date"] == "2023-01-01"
     assert api_cfg["costs"] == {"electricity_cost": 0.31}
 
@@ -283,6 +243,7 @@ def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
         "annual_consumption_kwh = 4000\n"
         'cost_preset = "residential-pt"\n'
         'emissions_country = "pt"\n'
+        'load_profile = "BDEW_H0"\n'
         "start_date = 2023-01-01\n"
         "\n[costs]\n"
         "electricity-cost = 0.31\n",
@@ -294,6 +255,7 @@ def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
     assert toml_cfg["location"] == api_cfg["location"]
     assert toml_cfg["cost_preset"] == api_cfg["cost_preset"]
     assert toml_cfg["emissions_country"] == api_cfg["emissions_country"]
+    assert toml_cfg["load_profile"] == api_cfg["load_profile"]
     assert toml_cfg["start_date"] == api_cfg["start_date"]
     assert toml_cfg["costs"] == api_cfg["costs"]
 

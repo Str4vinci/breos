@@ -135,6 +135,8 @@ def run_scenario(name: str) -> dict[str, Any]:
         app = App({**SCENARIOS[name], "execution_backend": "python"})
         app.simulate()
         result = app.result()
+    # The whole result, before any field is dropped, must be plain JSON.
+    json.dumps(result)
     return {
         key: value
         for key, value in flatten(result).items()
