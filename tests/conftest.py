@@ -6,13 +6,13 @@ import pytest
 from pvlib.location import Location
 
 from breos import tariffs
-from breos.battery import BatteryConfig, apply_indoor_temperature_model
+from breos.battery import BatteryConfig
 from breos.economics import CostParams
 from breos.emissions import EmissionsParams
 from breos.load_profiles import load_profile
 from breos.pv_modules import get_module
 from breos.solar import calculate_pv_production_dc
-from breos.weather import extract_ambient_temperature
+from breos.weather import apply_indoor_temperature_model, extract_ambient_temperature
 
 
 @pytest.fixture(autouse=True)

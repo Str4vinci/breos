@@ -295,7 +295,7 @@ def test_temperature_range_parity(label, make):
 
 def test_indoor_temperature_model_output_parity():
     """The remapped distribution, end to end, not just a synthetic curve."""
-    from breos.battery import apply_indoor_temperature_model
+    from breos.weather import apply_indoor_temperature_model
 
     pv, _load, _temp, _cfg, _sim = build("baseline")
     idx = pv.index

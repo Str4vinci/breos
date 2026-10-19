@@ -24,6 +24,13 @@ import pvlib
 from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator
 
+from breos.constants import (
+    DEFAULT_INDOOR_CEILING_C,
+    DEFAULT_INDOOR_COUPLING_ALPHA,
+    DEFAULT_INDOOR_FLOOR_C,
+    DEFAULT_INDOOR_MODEL_ENABLED,
+    DEFAULT_INDOOR_SETPOINT_C,
+)
 from breos.utils import (
     _datetime_index_seconds,
     find_irradiance_column,
@@ -1664,6 +1671,36 @@ def _read_temperature_file(path: str) -> pd.Series:
     return pd.Series(df[val_col].to_numpy(), index=pd.DatetimeIndex(stamps), name=val_col)
 
 
+def apply_indoor_temperature_model(
+    outdoor_temperature: pd.Series,
+    setpoint_c: float = DEFAULT_INDOOR_SETPOINT_C,
+    coupling_alpha: float = DEFAULT_INDOOR_COUPLING_ALPHA,
+    floor_c: float = DEFAULT_INDOOR_FLOOR_C,
+    ceiling_c: float = DEFAULT_INDOOR_CEILING_C,
+) -> pd.Series:
+    """
+    Transform outdoor temperature to indoor temperature for battery simulation.
+
+    Residential batteries are installed indoors where building thermal mass
+    buffers outdoor extremes. This stateless preprocessing applies a weighted
+    blend with clamp before temperatures enter the simulation loop.
+
+    T_indoor = clamp(alpha * T_outdoor + (1 - alpha) * T_setpoint, floor, ceiling)
+
+    Args:
+        outdoor_temperature: Outdoor ambient temperature series (°C)
+        setpoint_c: Indoor comfort midpoint (°C)
+        coupling_alpha: How much outdoor temp influences indoor (0=insulated, 1=outdoor)
+        floor_c: Minimum indoor temperature (°C)
+        ceiling_c: Maximum indoor temperature (°C)
+
+    Returns:
+        Indoor temperature series (°C), same index as input
+    """
+    t_indoor = coupling_alpha * outdoor_temperature + (1.0 - coupling_alpha) * setpoint_c
+    return t_indoor.clip(lower=floor_c, upper=ceiling_c)
+
+
 def build_battery_temperature_series(
     temp_config: Any,
     index: pd.DatetimeIndex,
@@ -1732,17 +1769,7 @@ def build_battery_temperature_series(
         )
 
     indoor_model = indoor_model or {}
-    from breos.constants import (
-        DEFAULT_INDOOR_CEILING_C,
-        DEFAULT_INDOOR_COUPLING_ALPHA,
-        DEFAULT_INDOOR_FLOOR_C,
-        DEFAULT_INDOOR_MODEL_ENABLED,
-        DEFAULT_INDOOR_SETPOINT_C,
-    )
-
     if indoor_model.get("enabled", DEFAULT_INDOOR_MODEL_ENABLED):
-        from breos.battery import apply_indoor_temperature_model
-
         result = apply_indoor_temperature_model(
             result,
             setpoint_c=indoor_model.get("setpoint_c", DEFAULT_INDOOR_SETPOINT_C),

@@ -50,7 +50,7 @@ and daily mean absolute SOC.
 .. autosummary::
    :toctree: generated/
 
-   breos.battery.apply_indoor_temperature_model
+   breos.weather.apply_indoor_temperature_model
    breos.battery.compute_cell_temperature
 ```
 

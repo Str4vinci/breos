@@ -36,6 +36,14 @@ def test_lfp_capacity_factor_from_breos_battery_warns_and_is_the_dispatch_functi
         breos.battery.no_such_name  # noqa: B018
 
 
+def test_apply_indoor_temperature_model_from_breos_battery_warns_and_is_the_weather_function():
+    import breos.battery
+    from breos.weather import apply_indoor_temperature_model
+
+    with pytest.warns(DeprecationWarning, match=r"breos\.battery\.apply_indoor_temperature_model .*0\.9\.0"):
+        assert breos.battery.apply_indoor_temperature_model is apply_indoor_temperature_model
+
+
 @pytest.mark.parametrize("name", ["optimal_value", "objective_value"])
 def test_optimization_result_nan_fields_warn(name):
     result = OptimizationResult(iterations=1, details={})

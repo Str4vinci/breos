@@ -529,6 +529,9 @@ removed in 0.9.0.
   it: it ages the battery through its own incremental rainflow counter.
 - `breos.battery.lfp_capacity_factor`. Import it from `breos._dispatch`, where
   the dispatch step uses it, if you need it at all.
+- `breos.battery.apply_indoor_temperature_model`. It moved to
+  `breos.weather`, which builds the battery temperature series; import it
+  from there or from `breos`.
 - `breos.utils.format_years_months`, which nothing in BREOS uses.
 - `OptimizationResult.optimal_value` and `objective_value`, which are always
   NaN for a multi-objective search; read the front in `details["pareto"]`.

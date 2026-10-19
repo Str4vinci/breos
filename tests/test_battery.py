@@ -17,7 +17,6 @@ from breos.battery import (
     _update_battery_soh_cyclewise_arrays,
     _update_battery_soh_from_cycles,
     align_simulation_inputs,
-    apply_indoor_temperature_model,
     resistance_to_efficiency,
     simulate_energy_balance,
     simulate_energy_balance_summary,
@@ -28,6 +27,7 @@ from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
 from breos.degradation.engine import BlastEngine
 from breos.inverter import calculate_dc_ac_power
 from breos.solar import dc_to_ac
+from breos.weather import apply_indoor_temperature_model
 from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 
 BLAST_LFP = {"degradation_engine": "blast", "blast_model": "lfp_gr_250ah_prismatic"}

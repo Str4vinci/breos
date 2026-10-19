@@ -38,7 +38,6 @@ from breos.app import App
 # Battery
 from breos.battery import (
     BatteryConfig,
-    apply_indoor_temperature_model,
     simulate_energy_balance,
 )
 
@@ -126,6 +125,7 @@ from breos.solar import (
 
 # Weather
 from breos.weather import (
+    apply_indoor_temperature_model,
     fetch_forecast_archive,
     fetch_satellite_weather,
     fetch_tmy_weather_data,

@@ -41,10 +41,6 @@ from breos.constants import (
     DEFAULT_CHARGE_EFFICIENCY,
     DEFAULT_DISCHARGE_EFFICIENCY,
     DEFAULT_EOL_PERCENTAGE,
-    DEFAULT_INDOOR_CEILING_C,
-    DEFAULT_INDOOR_COUPLING_ALPHA,
-    DEFAULT_INDOOR_FLOOR_C,
-    DEFAULT_INDOOR_SETPOINT_C,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
     DEFAULT_STANDBY_LOSS_WH,
@@ -2752,36 +2748,6 @@ def simulate_energy_balance_summary(
     return _build_simulation_summary(core, return_degradation_state=return_degradation_state, weights=weights)
 
 
-def apply_indoor_temperature_model(
-    outdoor_temperature: pd.Series,
-    setpoint_c: float = DEFAULT_INDOOR_SETPOINT_C,
-    coupling_alpha: float = DEFAULT_INDOOR_COUPLING_ALPHA,
-    floor_c: float = DEFAULT_INDOOR_FLOOR_C,
-    ceiling_c: float = DEFAULT_INDOOR_CEILING_C,
-) -> pd.Series:
-    """
-    Transform outdoor temperature to indoor temperature for battery simulation.
-
-    Residential batteries are installed indoors where building thermal mass
-    buffers outdoor extremes. This stateless preprocessing applies a weighted
-    blend with clamp before temperatures enter the simulation loop.
-
-    T_indoor = clamp(alpha * T_outdoor + (1 - alpha) * T_setpoint, floor, ceiling)
-
-    Args:
-        outdoor_temperature: Outdoor ambient temperature series (°C)
-        setpoint_c: Indoor comfort midpoint (°C)
-        coupling_alpha: How much outdoor temp influences indoor (0=insulated, 1=outdoor)
-        floor_c: Minimum indoor temperature (°C)
-        ceiling_c: Maximum indoor temperature (°C)
-
-    Returns:
-        Indoor temperature series (°C), same index as input
-    """
-    t_indoor = coupling_alpha * outdoor_temperature + (1.0 - coupling_alpha) * setpoint_c
-    return t_indoor.clip(lower=floor_c, upper=ceiling_c)
-
-
 def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
     """Get degradation model parameters based on model name.
 
@@ -3182,4 +3148,15 @@ def __getattr__(name: str) -> Any:
             stacklevel=2,
         )
         return lfp_capacity_factor
+    # Moved to breos.weather in 0.8.0, its only caller; the old name goes in 0.9.0.
+    if name == "apply_indoor_temperature_model":
+        from breos.weather import apply_indoor_temperature_model
+
+        warnings.warn(
+            "breos.battery.apply_indoor_temperature_model is deprecated and will be removed in BREOS 0.9.0; "
+            "import it from breos.weather",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return apply_indoor_temperature_model
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
