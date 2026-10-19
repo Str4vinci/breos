@@ -138,7 +138,7 @@ def test_optimizer_rejects_the_removed_budget_key():
         SolarDesignProblem(tmy_data, houseload, config)
 
     config["constraints"] = {"budget": 5000.0}
-    assert SolarDesignProblem(tmy_data, houseload, config).budget_limit == 5000.0
+    assert SolarDesignProblem(tmy_data, houseload, config).config["constraints"]["budget"] == 5000.0
 
 
 def test_plot_labels_read_the_frame_currency():

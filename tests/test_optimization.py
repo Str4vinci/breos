@@ -123,8 +123,9 @@ def test_the_search_bounds_and_tilt_floor_are_the_resolved_ones(tiny_inputs):
     _idx, tmy_data, houseload = tiny_inputs
 
     default = SolarDesignProblem(tmy_data, houseload, {"location": LOCATION})
-    assert (default.budget_limit, default.area_limit, default.xl[2]) == (10000.0, 20.0, 10.0)
-    assert (default.max_modules, default.max_battery_kwh, default.xu[2]) == (60, 30.0, 90.0)
+    bounds = default.config["constraints"]
+    assert (bounds["budget"], bounds["max_area_m2"], default.xl[2]) == (10000.0, 20.0, 10.0)
+    assert (bounds["max_modules"], bounds["max_battery_kwh"], default.xu[2]) == (60, 30.0, 90.0)
 
     raised = SolarDesignProblem(tmy_data, houseload, {"location": LOCATION, "constraints": {"min_tilt_deg": 25.0}})
     assert raised.xl[2] == 25.0

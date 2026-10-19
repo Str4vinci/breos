@@ -172,33 +172,6 @@ def _module_area_from_dimensions(dimensions: Optional[Dict[str, Any]]) -> float:
     return area
 
 
-def _resolve_pv_module_and_area(config: Dict[str, Any]) -> Tuple[PVModuleParams, float]:
-    """Resolve electrical module parameters and physical module area from a resolved config.
-
-    ``pv.params`` gives the module inline; otherwise ``pv.module`` names a
-    catalog module, which the resolver defaults as the App does.
-    """
-    pv_cfg = config["pv"]
-    if pv_cfg.get("params"):
-        pv_params = _pv_params_from_config(pv_cfg["params"])
-    else:
-        from breos.pv_modules import get_module
-
-        pv_params = get_module(pv_cfg["module"])
-    return pv_params, _module_area_from_dimensions(_dimensions_from_section(pv_cfg))
-
-
-def _resolve_horizon_and_pv_degradation(config: Dict[str, Any]) -> Tuple[int, float]:
-    """Return the scoring horizon (years) and annual PV degradation rate.
-
-    Projected scoring and the fixed-design evaluator read these from here, so
-    both rest on the same assumptions: ``simulation.years_projection`` and
-    ``pv.degradation_rate``, falling back to ``financials.project_lifespan``
-    and ``financials.pv_degradation_rate``.
-    """
-    return int(config["simulation"]["years_projection"]), float(config["pv"]["degradation_rate"])
-
-
 # Battery-section keys forwarded to BatteryConfig under the same name.
 _BATTERY_SPEC_KEYS = (
     "min_soc",
@@ -755,6 +728,189 @@ def _layout_dc_production(
     return total
 
 
+@dataclass(frozen=True)
+class _DesignStudy:
+    """What every design of one study shares, resolved once: the site, weather, pricing and models.
+
+    :class:`SolarDesignProblem` scores many designs on one study and
+    :func:`evaluate_projected_design` scores one; both score through
+    :meth:`score`. Nothing in it depends on the design, so a search may score
+    its designs in any order, or in worker processes, from the same study.
+    """
+
+    config: Dict[str, Any]
+    location: Any
+    weather: pd.DataFrame
+    # One prepared frame per project year, or None to repeat ``weather``.
+    weather_by_year: Optional[Tuple[pd.DataFrame, ...]]
+    houseload: pd.DataFrame
+    pricing: _OptimizationTariff
+    pv_params: PVModuleParams
+    module_area_m2: float
+    model_options: Mapping[str, Any]
+    years: int
+    pv_degradation_rate: float
+    dc_ac_ratio: float
+    emissions_params: Optional[EmissionsParams]
+    # On the weather grid, which every design's PV output is indexed on.
+    temperature_series: pd.Series
+    execution_backend: str
+
+    @classmethod
+    def resolve(
+        cls,
+        tmy_data: pd.DataFrame,
+        houseload: Union[pd.DataFrame, pd.Series],
+        config: Dict[str, Any],
+        *,
+        battery_kwh: float,
+        battery_key: str = "battery_kwh",
+        execution_backend: str,
+        weather_by_year: Optional[Sequence[pd.DataFrame]] = None,
+    ) -> "_DesignStudy":
+        """Prepare a study from a resolved config.
+
+        ``battery_kwh`` is the largest battery the study installs, which
+        decides whether smart charging may run; ``battery_key`` names it in
+        the error when it is zero.
+        """
+        location = _site_location(config["location"])
+        weather = _prepare_study_weather(tmy_data, config, location)
+        frames = None
+        if weather_by_year is not None:
+            frames = tuple(_prepare_study_weather(frame, config, location) for frame in weather_by_year)
+        grid = frames[0].index if frames else weather.index
+        pricing = _resolve_optimization_tariff(config, grid, battery_kwh, battery_key)
+        years = int(config["simulation"]["years_projection"])
+        if frames is not None and len(frames) != years:
+            raise ValueError(f"weather_by_year has {len(frames)} years, expected {years}")
+        pv_cfg = config["pv"]
+        if pv_cfg.get("params"):
+            pv_params = _pv_params_from_config(pv_cfg["params"])
+        else:
+            from breos.pv_modules import get_module
+
+            pv_params = get_module(pv_cfg["module"])
+        battery = config["battery"]
+        return cls(
+            config=config,
+            location=location,
+            weather=weather,
+            weather_by_year=frames,
+            # Load alignment (timezone- and DST-aware year remapping) happens
+            # inside the energy balance, the code path the App uses, so the
+            # load keeps its own timestamps.
+            houseload=houseload.to_frame(name="Load") if isinstance(houseload, pd.Series) else houseload,
+            pricing=pricing,
+            pv_params=pv_params,
+            module_area_m2=_module_area_from_dimensions(_dimensions_from_section(pv_cfg)),
+            model_options=configured_pv_model_kwargs(config),
+            years=years,
+            pv_degradation_rate=float(pv_cfg["degradation_rate"]),
+            # The inverter each design pays for is the one that clips its
+            # output: nameplate = DC peak / dc_ac_ratio, as App sizes it.
+            dc_ac_ratio=cost_params_from_config(config["costs"], config["financials"]).dc_ac_ratio,
+            emissions_params=EmissionsParams(**config["emissions"]) if config["emissions"] else None,
+            # A weather sequence keeps the representative year's temperatures,
+            # so they are restamped onto the sequence's calendar year rather
+            # than reindexed across years, which found no match and used to
+            # fall back to 25 C.
+            temperature_series=build_battery_temperature_series(
+                battery["temperature"],
+                grid,
+                weather_df=weather,
+                indoor_model=battery["indoor_model"],
+                align_weather_year=frames is not None,
+            ),
+            execution_backend=execution_backend,
+        )
+
+    def dc_power(self, arrays: Sequence[Tuple[int, Any, Any]]) -> Union[pd.Series, list[pd.Series]]:
+        """The DC output of a design's arrays: one series, or one per project year for a weather sequence.
+
+        ``dc_output_scale`` is applied here, before dispatch, so charging,
+        clipping and the part-load ratio all respond to it; that is why it is
+        the correction to reach for when the model under-predicts.
+        """
+        scale = self.config["dc_output_scale"]
+
+        def dc_for(frame: pd.DataFrame) -> pd.Series:
+            series = _layout_dc_production(
+                arrays,
+                weather_data=frame,
+                location=self.location,
+                pv_params=self.pv_params,
+                freq=self.config["simulation"]["resolution"],
+                model_options=self.model_options,
+            )
+            return series if scale == 1.0 else series * scale
+
+        if self.weather_by_year is None:
+            return dc_for(self.weather)
+        # Every year must land on the same intra-year index, because the load
+        # profile and the battery temperature series are aligned to it once.
+        reference = dc_for(self.weather_by_year[0])
+        series = [reference]
+        for frame in self.weather_by_year[1:]:
+            year_dc = dc_for(frame)
+            if len(year_dc) != len(reference):
+                raise ValueError(
+                    "every weather_by_year frame must produce the same number of "
+                    f"timesteps; got {len(year_dc)} against {len(reference)}"
+                )
+            year_dc.index = reference.index
+            series.append(year_dc)
+        return series
+
+    def score(
+        self,
+        arrays: Sequence[Tuple[int, Any, Any]],
+        *,
+        n_modules: int,
+        battery_kwh: float,
+        return_tables: bool = False,
+    ) -> Dict[str, Any]:
+        """The projected metrics of one design: its arrays, module count and battery."""
+        config = self.config
+        return _evaluate_projected_design_metrics(
+            execution_backend=self.execution_backend,
+            base_dc_power=self.dc_power(arrays),
+            houseload=self.houseload,
+            temperature_series=self.temperature_series,
+            pv_params=self.pv_params,
+            batt_spec=config["battery"],
+            costs_cfg=config["costs"],
+            fin_cfg=config["financials"],
+            freq=config["simulation"]["resolution"],
+            years_projection=self.years,
+            degradation_rate=self.pv_degradation_rate,
+            n_modules=n_modules,
+            battery_kwh=battery_kwh,
+            inverter_efficiency=float(config["inverter_efficiency"]),
+            inverter_ac_capacity_w=inverter_ac_capacity_w_for(n_modules * self.pv_params.Mpp, self.dc_ac_ratio),
+            emissions_params=self.emissions_params,
+            return_tables=return_tables,
+            ac_output_scale=config["ac_output_scale"],
+            tariff=self.pricing.tariff,
+            instructions=self.pricing.instructions,
+            reference_tariff=self.pricing.reference_tariff,
+            reference_import_price_escalation=self.pricing.reference_import_price_escalation,
+            currency=self.pricing.currency,
+        )
+
+    def provenance(self, **extra: Any) -> Dict[str, Any]:
+        """The study's provenance record; ``extra`` entries go before the battery replacement treatment."""
+        config = self.config
+        return {
+            **self.pricing.provenance(),
+            "economics": projection_rates_record(_projection_rates(config["financials"])),
+            "simulation": dict(config["simulation"]),
+            "weather": weather_metadata(self.weather),
+            **extra,
+            "battery_replacement_treatment": _battery_replacement_treatment(config["battery"], config["costs"]),
+        }
+
+
 def evaluate_projected_design(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -820,98 +976,15 @@ def evaluate_projected_design(
     # and reports the cheap problem late.
     require_backend(execution_backend)
 
-    config = resolve_optimization_config(config)
-    frames = list(weather_by_year) if weather_by_year is not None else None
-    loc_obj = _site_location(config["location"])
-    freq = str(config["simulation"]["resolution"])
-    tmy_data = _prepare_study_weather(tmy_data, config, loc_obj)
-    if frames is not None:
-        frames = [_prepare_study_weather(frame, config, loc_obj) for frame in frames]
-    tariff_index = frames[0].index if frames else tmy_data.index
-    pricing = _resolve_optimization_tariff(config, tariff_index, float(battery_kwh))
-    financials = config["financials"]
-    emissions_config = config["emissions"]
-    battery = config["battery"]
-    years_projection, degradation_rate = _resolve_horizon_and_pv_degradation(config)
-    pv_params, _module_area = _resolve_pv_module_and_area(config)
-
-    # A DC-side yield correction: the array itself produces this much less,
-    # or more. Unlike ac_output_scale it is applied before dispatch, so
-    # charging, clipping and the part-load ratio all respond to it, which is
-    # why it is the correction to reach for when the model under-predicts.
-    dc_output_scale = config["dc_output_scale"]
-
-    model_options = configured_pv_model_kwargs(config)
-
-    def _dc_for(weather_frame: pd.DataFrame) -> pd.Series:
-        series = _layout_dc_production(
-            arrays,
-            weather_data=weather_frame,
-            location=loc_obj,
-            pv_params=pv_params,
-            freq=freq,
-            model_options=model_options,
-        )
-        return series if dc_output_scale == 1.0 else series * dc_output_scale
-
-    if frames is None:
-        base_dc_power: Union[pd.Series, Sequence[pd.Series]] = _dc_for(tmy_data)
-        dc_index = base_dc_power.index
-    else:
-        if len(frames) != years_projection:
-            raise ValueError(f"weather_by_year has {len(frames)} years, expected {years_projection}")
-        # Every year must land on the same intra-year index, because the load
-        # profile and the battery temperature series are aligned to it once.
-        reference = _dc_for(frames[0])
-        series = [reference]
-        for frame in frames[1:]:
-            year_dc = _dc_for(frame)
-            if len(year_dc) != len(reference):
-                raise ValueError(
-                    "every weather_by_year frame must produce the same number of "
-                    f"timesteps; got {len(year_dc)} against {len(reference)}"
-                )
-            year_dc.index = reference.index
-            series.append(year_dc)
-        base_dc_power = series
-        dc_index = reference.index
-    # A weather sequence keeps the representative year's temperatures, so they
-    # are restamped onto the sequence's calendar year rather than reindexed
-    # across years, which found no match and used to fall back to 25 C.
-    temperature_series = build_battery_temperature_series(
-        battery["temperature"],
-        dc_index,
-        weather_df=tmy_data,
-        indoor_model=battery["indoor_model"],
-        align_weather_year=weather_by_year is not None,
-    )
-    dc_ac_ratio = cost_params_from_config(config["costs"], financials).dc_ac_ratio
-    inverter_ac_capacity_w = inverter_ac_capacity_w_for(int(n_modules) * pv_params.Mpp, dc_ac_ratio)
-    raw_metrics = _evaluate_projected_design_metrics(
-        execution_backend=execution_backend,
-        base_dc_power=base_dc_power,
-        houseload=houseload,
-        temperature_series=temperature_series,
-        pv_params=pv_params,
-        batt_spec=battery,
-        costs_cfg=config["costs"],
-        fin_cfg=financials,
-        freq=freq,
-        years_projection=years_projection,
-        degradation_rate=degradation_rate,
-        n_modules=int(n_modules),
+    study = _DesignStudy.resolve(
+        tmy_data,
+        houseload,
+        resolve_optimization_config(config),
         battery_kwh=float(battery_kwh),
-        inverter_efficiency=float(config["inverter_efficiency"]),
-        inverter_ac_capacity_w=inverter_ac_capacity_w,
-        emissions_params=EmissionsParams(**emissions_config) if emissions_config else None,
-        return_tables=True,
-        ac_output_scale=config["ac_output_scale"],
-        tariff=pricing.tariff,
-        instructions=pricing.instructions,
-        reference_tariff=pricing.reference_tariff,
-        reference_import_price_escalation=pricing.reference_import_price_escalation,
-        currency=pricing.currency,
+        execution_backend=execution_backend,
+        weather_by_year=weather_by_year,
     )
+    raw_metrics = study.score(arrays, n_modules=int(n_modules), battery_kwh=float(battery_kwh), return_tables=True)
     yearly = raw_metrics.pop("_yearly_summary_df")
     financial = raw_metrics.pop("_cost_projection_df")
     metrics = {
@@ -923,14 +996,10 @@ def evaluate_projected_design(
         "Layout": layout,
         **raw_metrics,
     }
-    provenance = {
-        **pricing.provenance(),
-        "economics": projection_rates_record(_projection_rates(financials)),
-        "simulation": dict(config["simulation"]),
-        "weather": weather_metadata(tmy_data),
-        **({"weather_by_year": [weather_metadata(frame) for frame in frames]} if frames is not None else {}),
-        "battery_replacement_treatment": _battery_replacement_treatment(battery, config["costs"]),
-    }
+    frames = study.weather_by_year
+    provenance = study.provenance(
+        **({"weather_by_year": [weather_metadata(frame) for frame in frames]} if frames is not None else {})
+    )
     return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=provenance)
 
 
@@ -1011,57 +1080,29 @@ try:
             # it exactly the place where a silently-inherited backend would be
             # hardest to notice and hardest to attribute afterwards.
             self.execution_backend = validate_execution_backend(execution_backend)
-            self.houseload = houseload
             # Checked and defaulted once, before any model preparation: an
             # unknown key raises, and every default is in the resolved config.
             config = resolve_optimization_config(config)
             self.config = config
-            self.location = config["location"]
-            # config['location'] is a plain dict; the pvlib Location that
-            # calculate_pv_production_dc needs is constructed once here.
-            self.loc_obj = _site_location(self.location)
-            self.tmy_data = _prepare_study_weather(tmy_data, config, self.loc_obj)
-
-            self.constraints = config["constraints"]
-            # One schedule/price resolution per search, shared by every
-            # candidate and project year. Validate before model preparation.
-            self.pricing = _resolve_optimization_tariff(
+            constraints = config["constraints"]
+            # One site, weather, schedule and price resolution per search,
+            # shared by every candidate and project year.
+            self.study = _DesignStudy.resolve(
+                tmy_data,
+                houseload,
                 config,
-                self.tmy_data.index,
-                float(self.constraints["max_battery_kwh"]),
+                battery_kwh=float(constraints["max_battery_kwh"]),
                 battery_key="constraints.max_battery_kwh",
+                execution_backend=self.execution_backend,
             )
+            self.pricing = self.study.pricing
             self.tariff = self.pricing.tariff
-
-            self.budget_limit = self.constraints["budget"]
-            self.area_limit = self.constraints["max_area_m2"]
-            self.max_battery_kwh = self.constraints["max_battery_kwh"]
-            self.max_modules = self.constraints["max_modules"]
-            self.min_tilt_deg = float(self.constraints["min_tilt_deg"])
-            self.max_tilt_deg = _resolve_max_tilt_deg(self.constraints, self.location["latitude"])
-            self.enforce_zeb = bool(self.constraints["enforce_zeb"])
-            self.freq = config["simulation"]["resolution"]
-            # Resolved once: candidate scoring is the hottest loop here.
-            self.model_options = configured_pv_model_kwargs(config)
-            self.opt_cfg = config["optimization"]
-            # Candidates are scored over the project lifetime only; the
-            # resolver refuses the removed annual basis.
-            self.objective_basis = self.opt_cfg["objective_basis"]
-            self.projected_years, self.projected_degradation_rate = _resolve_horizon_and_pv_degradation(config)
-            self.pv_params, self.module_area_m2 = _resolve_pv_module_and_area(config)
-            self.batt_temp_cfg = config["battery"]["temperature"]
-            self.indoor_model = config["battery"]["indoor_model"]
-            self.emissions_params = EmissionsParams(**config["emissions"]) if config["emissions"] else None
-            # Inverter AC rating follows the CAPEX sizing convention
-            # (economics.calculate_costs): nameplate = DC peak / dc_ac_ratio.
-            # The inverter each candidate pays for is also the one that clips
-            # its production — same invariant as the App runner.
-            cost_params = cost_params_from_config(config["costs"], config["financials"])
-            self.dc_ac_ratio = cost_params.dc_ac_ratio
-            self.inverter_efficiency = config["inverter_efficiency"]
+            self.module_area_m2 = self.study.module_area_m2
             self.ac_output_scale = config["ac_output_scale"]
             self.dc_output_scale = config["dc_output_scale"]
-
+            # Candidates are scored over the project lifetime only; the
+            # resolver refuses the removed annual basis.
+            self.objective_basis = config["optimization"]["objective_basis"]
             self.battery_replacement_treatment = _battery_replacement_treatment(config["battery"], config["costs"])
 
             self.fixed_azimuth = config["mode"]["fixed_azimuth"]
@@ -1074,18 +1115,18 @@ try:
             # x[0]: n_modules (1-max_modules)
             # x[1]: battery_kwh (0-max_battery_kwh)
             lower = [1, 0.0]
-            upper = [self.max_modules, self.max_battery_kwh]
+            upper = [constraints["max_modules"], constraints["max_battery_kwh"]]
             self.gene_steps: Tuple[float, ...] = (1.0, 1.0)
             # The genes only the single layout reads: tilt, then azimuth
             # unless it is fixed.
             self.single_orientation_genes: Tuple[int, ...] = ()
             if "single" in self.layouts:
                 # x[2]: surface_tilt (min_tilt_deg-max_tilt_deg)
-                lower.append(self.min_tilt_deg)
-                upper.append(self.max_tilt_deg)
+                lower.append(float(constraints["min_tilt_deg"]))
+                upper.append(_resolve_max_tilt_deg(constraints, config["location"]["latitude"]))
                 if self.fixed_azimuth is None:
                     # x[3]: azimuth; the bounds depend on the hemisphere
-                    if self.location["latitude"] >= 0:
+                    if config["location"]["latitude"] >= 0:
                         lower.append(90.0)  # Search around South (180°)
                         upper.append(270.0)
                     else:
@@ -1107,7 +1148,7 @@ try:
             super().__init__(
                 n_var=len(lower),
                 n_obj=2,
-                n_ieq_constr=3 if self.enforce_zeb else 2,
+                n_ieq_constr=3 if constraints["enforce_zeb"] else 2,
                 xl=xl,
                 xu=xu,
                 elementwise_runner=elementwise_runner or _serial_elementwise_runner,
@@ -1161,114 +1202,37 @@ try:
             return self.layouts[int(round(x[self.layout_gene]))]
 
         def _evaluate(self, x, out, *args, **kwargs):
-            # Extract Genes
             n_modules = int(round(x[0]))
             battery_kwh = int(round(x[1]))
             layout = self.design_layout(x)
-
             if layout == "east_west":
-                tilt = self.east_west_tilt_deg
-                azimuth = None
+                tilt, azimuth = self.east_west_tilt_deg, None
             else:
                 tilt = x[2]
                 azimuth = self.fixed_azimuth if self.fixed_azimuth is not None else x[3]
 
-            pv_params = self.pv_params
-            module_area = self.module_area_m2
-
-            # --- 1. Constraint Check: Area ---
             # Every array's modules: the layouts split one module count.
-            system_area = n_modules * module_area
-
-            # --- 2. Simulation ---
-            # Calculate PV Production (DC), summed over the layout's arrays
-            dc_production = _layout_dc_production(
-                _layout_arrays(layout, n_modules, tilt, azimuth),
-                weather_data=self.tmy_data,
-                location=self.loc_obj,
-                pv_params=pv_params,
-                freq=self.freq,
-                model_options=self.model_options,
-            )
-            # Apply the DC-side correction before scoring. This keeps
-            # clipping, charging and the part-load ratio on the corrected raw
-            # array output.
-            if self.dc_output_scale != 1.0:
-                dc_production = dc_production * self.dc_output_scale
-
-            # Load alignment (timezone- and DST-aware year remapping) happens
-            # inside simulate_energy_balance — the same code path the App
-            # uses. Positionally re-stamping the load onto the PV index here
-            # (as the optimizer did before 0.3.4) discarded the load's real
-            # timestamps and could shift it against PV by the UTC offset.
-            if isinstance(self.houseload, pd.Series):
-                houseload_df = self.houseload.to_frame(name="Load")
-            else:
-                houseload_df = self.houseload
-
-            batt_spec = self.config["battery"]
-
-            # Inverter AC nameplate shared by PV export and battery discharge
-            pv_peak_w = n_modules * pv_params.Mpp
-            inverter_ac_capacity_w = inverter_ac_capacity_w_for(pv_peak_w, self.dc_ac_ratio)
-
-            temperature_series = build_battery_temperature_series(
-                self.batt_temp_cfg,
-                dc_production.index,
-                weather_df=self.tmy_data,
-                indoor_model=self.indoor_model,
-            )
-
-            # --- 3. Objective Calculations ---
-            projected_metrics = _evaluate_projected_design_metrics(
-                execution_backend=self.execution_backend,
-                base_dc_power=dc_production,
-                houseload=houseload_df,
-                temperature_series=temperature_series,
-                pv_params=pv_params,
-                batt_spec=batt_spec,
-                costs_cfg=self.config["costs"],
-                fin_cfg=self.config["financials"],
-                freq=self.freq,
-                years_projection=self.projected_years,
-                degradation_rate=self.projected_degradation_rate,
-                n_modules=n_modules,
-                battery_kwh=float(battery_kwh),
-                inverter_efficiency=self.inverter_efficiency,
-                inverter_ac_capacity_w=inverter_ac_capacity_w,
-                ac_output_scale=self.ac_output_scale,
-                emissions_params=self.emissions_params,
-                tariff=self.tariff,
-                instructions=self.pricing.instructions,
-                reference_tariff=self.pricing.reference_tariff,
-                reference_import_price_escalation=self.pricing.reference_import_price_escalation,
-                currency=self.pricing.currency,
+            projected_metrics = self.study.score(
+                _layout_arrays(layout, n_modules, tilt, azimuth), n_modules=n_modules, battery_kwh=float(battery_kwh)
             )
             out.update(projected_metrics)
             objective_grid_dependence = 1.0 - float(projected_metrics["Projected_Grid_Independence_%"]) / 100.0
             objective_npv = float(projected_metrics["Projected_NPV"])
             objective_zeb = float(projected_metrics["Projected_ZEB_Ratio"])
-            # The budget gates the CAPEX the result reports, so the cost a
-            # feasible design shows is the cost that was checked.
-            objective_capex = float(projected_metrics["Projected_Initial_Cost"])
-
             out["ZEB_Ratio"] = objective_zeb
             out["Objective_Grid_Independence_%"] = float(projected_metrics["Projected_Grid_Independence_%"])
             out["Objective_NPV"] = objective_npv
 
-            # --- 4. Constraints Calculation ---
-            # g1: Price <= Budget (g1 <= 0 means satisfied)
-            g1 = objective_capex - self.budget_limit
-
-            # g2: Area <= Max Area
-            g2 = system_area - self.area_limit
-
-            constraints = [g1, g2]
-            if self.enforce_zeb:
-                constraints.append(1.0 - objective_zeb)
-
             out["F"] = [objective_grid_dependence, -objective_npv]
-            out["G"] = constraints
+            # Each constraint is met at or below zero. The budget gates the
+            # CAPEX the result reports, so the cost a feasible design shows
+            # is the cost that was checked.
+            constraints = self.config["constraints"]
+            out["G"] = [
+                float(projected_metrics["Projected_Initial_Cost"]) - constraints["budget"],
+                n_modules * self.module_area_m2 - constraints["max_area_m2"],
+                *([1.0 - objective_zeb] if constraints["enforce_zeb"] else []),
+            ]
 
 except ImportError as exc:
     _PYMOO_IMPORT_ERROR = exc
@@ -1482,8 +1446,7 @@ def optimize_system_multi_objective(
     # that then has to be torn down.
     require_backend(execution_backend)
 
-    # Invalid tariffs and rates must fail before a worker pool is created.
-    economics = projection_rates_record(_projection_rates(config["financials"]))
+    # Invalid tariffs must fail before a worker pool is created.
     problem = SolarDesignProblem(
         tmy_data,
         houseload,
@@ -1532,17 +1495,12 @@ def optimize_system_multi_objective(
     # pymoo advances the counter after its termination update. Report the last
     # completed generation, matching the research workflow's saved metadata.
     actual_generations = max(0, int(getattr(result.algorithm, "n_gen", n_gen + 1)) - 1)
-    provenance = {
-        **problem.pricing.provenance(),
-        "economics": economics,
-        "simulation": dict(config["simulation"]),
-        "weather": weather_metadata(problem.tmy_data),
-        # The search bounds and run settings the search used, defaults included.
-        "constraints": dict(config["constraints"]),
-        "mode": {**config["mode"], "layouts": list(config["mode"]["layouts"])},
-        "run_settings": settings,
-        "battery_replacement_treatment": dict(problem.battery_replacement_treatment),
-    }
+    # The search bounds and run settings the search used, defaults included.
+    provenance = problem.study.provenance(
+        constraints=dict(config["constraints"]),
+        mode={**config["mode"], "layouts": list(config["mode"]["layouts"])},
+        run_settings=settings,
+    )
     pareto.attrs["currency"] = provenance["currency"]
     evaluated.attrs["currency"] = provenance["currency"]
     return OptimizationResult(

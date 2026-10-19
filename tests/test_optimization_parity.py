@@ -150,7 +150,8 @@ def test_projected_design_forwards_pv_model_options(monkeypatch):
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "Europe/Lisbon"},
         "simulation": {"resolution": "h"},
         "pv": {"degradation_rate": 0.005},
-        "battery": {},
+        # A fixed temperature: the empty weather has no air temperature.
+        "battery": {"temperature": 25.0},
         "transposition_model": "perez",
         "solar_position": "mid-interval",
         "diffuse_iam": "marion",
