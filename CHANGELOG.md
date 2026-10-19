@@ -532,6 +532,11 @@ removed in 0.9.0.
 
 ### Fixed
 
+- The optimizer's `[financials]` rates are held to the App's bounds when the
+  configuration is read. `sell_price_inflation` must lie between -1 and 1
+  (exclusive), as App requires; the optimizer accepted 1.5 before. The
+  other rates were already refused before the search, and are now refused
+  by `resolve_optimization_config` too.
 - `breos.cec_fit.fit_cec_params` reproduces `pvlib.ivtools.sdm.fit_cec_sam`
   (#433). The open-circuit-voltage constraint is evaluated 5 °C above the
   reference, as in SAM's `6par_solve.h`, instead of 2 °C; temperatures are

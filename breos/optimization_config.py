@@ -265,12 +265,13 @@ BATTERY_INVERTER_KEYS = ("inverter_ac_rating_kw", "inverter_kw_per_kwh", "invert
 FINANCIALS_TABLE = TableSpec(
     "financials",
     keys={
-        "inflation_rate": number(),
-        "sell_price_inflation": number(),
-        "import_price_escalation": _optional(number()),
-        "om_escalation": _optional(number()),
-        "replacement_cost_learning": _optional(number()),
-        "discount_rate": number(),
+        # The App's bounds (app_config._validate_economics).
+        "inflation_rate": number(minimum=-1, min_exclusive=True),
+        "sell_price_inflation": number(minimum=-1, maximum=1, min_exclusive=True, max_exclusive=True),
+        "import_price_escalation": _optional(number(minimum=-1, min_exclusive=True)),
+        "om_escalation": _optional(number(minimum=-1, min_exclusive=True)),
+        "replacement_cost_learning": _optional(number(minimum=0, maximum=1, max_exclusive=True)),
+        "discount_rate": number(minimum=-1, min_exclusive=True),
         "project_lifespan": _integer(1),
         "pv_degradation_rate": number(minimum=0, maximum=1, max_exclusive=True),
         # Flat prices, used when [costs] does not set them.
