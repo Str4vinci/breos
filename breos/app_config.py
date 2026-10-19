@@ -1905,23 +1905,34 @@ def _check_fields(cfg: Mapping[str, Any]) -> None:
             field.check(cfg[key], key)
 
 
-def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
+@dataclass(frozen=True)
+class ValidatedSpecs:
+    """What :func:`validate_config` builds while it checks, for the resolver to keep."""
+
+    tariff: TariffSpec | None
+    reference_tariff: ReferenceTariffSpec | None
+    smart_charging: SmartChargingSpec | None
+    currency: str
+
+
+def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
     """Validate user-facing App config before resolving derived values."""
     has_arrays = _validate_structure_and_location(cfg)
     _check_fields(cfg)
     _validate_pv_and_inverter(cfg, has_arrays)
     _validate_time_and_weather(cfg)
     _validate_economics(cfg)
-    tariff_spec = None
-    if cfg["tariff"] is not None:
+    tariff_spec = reference_spec = None
+    if cfg["tariff"] is not None or cfg["reference_tariff"] is not None:
         # Resolve location before PV module metadata or weather work. The
         # schedule's civil-time zone is part of the tariff definition, not a
         # conversion that may be deferred until the simulation is running.
         timezone = resolve_location(cfg)[2]
+    if cfg["tariff"] is not None:
         tariff_spec = resolve_tariff_spec(cfg, timezone)
     currency = run_currency(cfg["currency"], tariff_spec.prices.currency if tariff_spec is not None else None)
     if cfg["reference_tariff"] is not None:
-        resolve_reference_tariff_spec(cfg, resolve_location(cfg)[2], currency)
+        reference_spec = resolve_reference_tariff_spec(cfg, timezone, currency)
     check_cost_currency(
         currency,
         given=cfg.get("costs") or {},
@@ -1933,11 +1944,11 @@ def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
     _validate_battery_and_degradation(cfg)
     _validate_battery_coupling(cfg)
     _validate_period(cfg)
-    _validate_smart_charging(cfg, tariff_spec)
+    smart_charging = resolve_smart_charging_spec(cfg, tariff_spec)
     _electrical_inputs(cfg)
     if cfg["electrical_fidelity"] == "string" and cfg.get("inverters") is None:
         raise ValueError("electrical_fidelity = 'string' needs 'inverters', 'pv_strings' and 'electrical_environment'")
-    return tariff_spec
+    return ValidatedSpecs(tariff_spec, reference_spec, smart_charging, currency)
 
 
 def _tariff_study_date(value: Any, where: str) -> date:
@@ -2552,13 +2563,6 @@ def _checked_smart_charging(
     return table
 
 
-def _validate_smart_charging(cfg: dict[str, Any], tariff_spec: TariffSpec | None = None) -> None:
-    if cfg["smart_charging"] is None:
-        return
-    schedule = tariff_spec.definition.schedule if tariff_spec is not None else None
-    _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"], coupling=cfg["battery_coupling"])
-
-
 def resolve_smart_charging_spec(
     cfg: dict[str, Any], tariff_spec: TariffSpec | None, battery_key: str = "battery_kwh"
 ) -> SmartChargingSpec | None:
@@ -3064,14 +3068,6 @@ def validate_temperature_module_metadata(
         validate_temperature_inputs(model, module.Module_Efficiency, module.NOCT)
 
 
-def _cost_preset_currency(key: str) -> str:
-    """The currency of a packaged cost preset; an unknown key raises with the available ones."""
-    costs_db = load_config_json("costs.json")
-    if key not in costs_db:
-        raise ValueError(f"Unknown cost preset '{key}'. Available: {', '.join(sorted(costs_db))}")
-    return str(costs_db[key]["currency"])
-
-
 def check_cost_currency(
     currency: str,
     *,
@@ -3097,14 +3093,17 @@ def check_cost_currency(
     """
     supplied = set(given)
     if preset:
-        preset_currency = _cost_preset_currency(preset)
+        costs_db = load_config_json("costs.json")
+        if preset not in costs_db:
+            raise ValueError(f"Unknown cost preset '{preset}'. Available: {', '.join(sorted(costs_db))}")
+        preset_currency = str(costs_db[preset]["currency"])
         if preset_currency != currency:
             raise ValueError(
                 f"cost_preset '{preset}' is priced in {preset_currency}, but the run is in {currency}. BREOS does "
                 f"not convert currencies: remove cost_preset and give the costs in {currency} under {where}, or "
                 f"choose a cost preset in {currency}."
             )
-        supplied.update(load_config_json("costs.json")[preset])
+        supplied.update(costs_db[preset])
     if currency == DEFAULT_CURRENCY:
         return
     missing = [
@@ -3252,7 +3251,8 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         # An absolute rating replaces the ratio, so the ratio is reported unset.
         cfg["inverter_loading_ratio"] = None
     _normalise_config_values(cfg)
-    tariff = validate_config(cfg)
+    specs = validate_config(cfg)
+    tariff = specs.tariff
     if cfg.get("pv_arrays"):
         # The result echoes the tables as plain floats, whatever numbers they came as.
         cfg["pv_arrays"] = [
@@ -3315,7 +3315,6 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     else:
         ac_capacity_w = inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"])
 
-    currency = run_currency(cfg["currency"], tariff.prices.currency if tariff is not None else None)
     ac_cable = (
         None if cfg["ac_cable"] is None else _built(AcCable, AC_CABLE_TABLE.validate(cfg["ac_cable"]), "ac_cable")
     )
@@ -3349,12 +3348,12 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         axis_azimuth=axis_azimuth,
         inverter_ac_capacity_w=ac_capacity_w,
         tariff=tariff,
-        smart_charging=resolve_smart_charging_spec(cfg, tariff),
+        smart_charging=specs.smart_charging,
         cost_params=cost_params,
         emissions_params=resolve_emissions(cfg),
         period=resolve_period(cfg, timezone),
-        reference_tariff=resolve_reference_tariff_spec(cfg, timezone, currency),
-        currency=currency,
+        reference_tariff=specs.reference_tariff,
+        currency=specs.currency,
         electrical=electrical,
         ac_cable=ac_cable,
         inverter_conversion=_inverter_conversion(electrical, ac_cable, pv_arrays, pv_params),
