@@ -74,44 +74,41 @@ def _run_evaluate(monkeypatch, config, houseload, tmy_index):
     return captured
 
 
-def test_optimizer_applies_capex_matched_ac_clipping(monkeypatch):
-    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
-    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
-    captured = _run_evaluate(monkeypatch, _problem_config(dc_ac_ratio=1.6), houseload, idx)
-
-    # 2 modules x 550 Wp / 1.6 — the same nameplate the CAPEX pays for
-    assert captured["battery_config"].inverter_ac_capacity_w == pytest.approx(2 * 550 / 1.6)
-
-
-def test_optimizer_prefers_app_top_level_inverter_efficiency(monkeypatch):
-    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
-    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
-    config = _problem_config()
+def _top_level_inverter_efficiency(config):
     config["inverter_efficiency"] = 0.80
     config["inverter"] = {"efficiency": 0.91}
 
-    captured = _run_evaluate(monkeypatch, config, houseload, idx)
 
-    assert captured["battery_config"].inverter_efficiency == pytest.approx(0.80)
+def _battery_power_caps(config):
+    config["battery"].update({"max_charge_power_w": 1750.0, "max_discharge_power_w": 2250.0})
 
 
-def test_optimizer_propagates_battery_power_caps(monkeypatch):
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        # 2 modules x 550 Wp / 1.6: the same nameplate the CAPEX pays for.
+        (None, {"inverter_ac_capacity_w": 2 * 550 / 1.6}),
+        # The App's top-level key wins over the optimizer's inverter table.
+        (_top_level_inverter_efficiency, {"inverter_efficiency": 0.80}),
+        # Frozen convention: charge is DC input-side power; discharge is AC
+        # delivered-to-load power. BatteryConfig enforces both during dispatch.
+        (_battery_power_caps, {"max_charge_power_w": 1750.0, "max_discharge_power_w": 2250.0}),
+        # An unset window takes the App's defaults.
+        (None, {"min_soc": 0.10, "max_soc": 0.90}),
+    ],
+    ids=["capex-matched-ac-clipping", "top-level-inverter-efficiency", "battery-power-caps", "default-soc-window"],
+)
+def test_the_scored_battery_config_takes_the_app_setting(monkeypatch, change, expected):
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
-    config = _problem_config()
-    config["battery"].update(
-        {
-            "max_charge_power_w": 1750.0,
-            "max_discharge_power_w": 2250.0,
-        }
-    )
+    config = _problem_config(dc_ac_ratio=1.6)
+    if change is not None:
+        change(config)
 
-    captured = _run_evaluate(monkeypatch, config, houseload, idx)
+    battery_config = _run_evaluate(monkeypatch, config, houseload, idx)["battery_config"]
 
-    # Frozen convention: charge is DC input-side power; discharge is AC
-    # delivered-to-load power. BatteryConfig enforces both during dispatch.
-    assert captured["battery_config"].max_charge_power_w == pytest.approx(1750.0)
-    assert captured["battery_config"].max_discharge_power_w == pytest.approx(2250.0)
+    for attribute, value in expected.items():
+        assert getattr(battery_config, attribute) == pytest.approx(value), attribute
 
 
 def test_optimizer_passes_load_with_original_timestamps(monkeypatch):
@@ -212,16 +209,6 @@ def test_optimizer_battery_defaults_match_app_defaults():
         "enable_resistance_fade",
     ):
         assert getattr(optimizer, field) == getattr(reference, field), field
-
-
-def test_optimizer_scores_an_unset_battery_window_with_app_defaults(monkeypatch):
-    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
-    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
-
-    captured = _run_evaluate(monkeypatch, _problem_config(), houseload, idx)
-
-    assert captured["battery_config"].min_soc == pytest.approx(0.10)
-    assert captured["battery_config"].max_soc == pytest.approx(0.90)
 
 
 def test_projected_budget_constraint_gates_the_reported_capex(synthetic_weather, sample_load):
