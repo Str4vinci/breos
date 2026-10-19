@@ -465,6 +465,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   same checkers, so the same bad value gets the same message, such as
   `'discount_rate' must be > -1`. Some messages are worded differently from
   0.7; the exception types are unchanged, and every message names its key.
+  A few values that 0.7 let through are now refused: a boolean `albedo`,
+  and a top-level `bifacial_model`, `pvrow_height` or `pvrow_pitch` that
+  every entry of `pv_arrays` overrides. The optimizer's integer settings,
+  such as `pop_size`, now take NumPy integers.
 - The ledger schema is now "3.1" (`ledger_schema_version` in the results,
   the PV loss waterfall and `SimulationSummary`). It adds without changing a
   3.0 field: the `Inverter_Night_Consumption` column; the `near_shading`,
