@@ -8,22 +8,6 @@ import pytest
 
 from breos import App
 from breos.app_config import resolve_app_config
-from breos.pv_modules import MODULES, PVModuleParams
-
-# Trina Solar TSM-450NEG9R.28, datasheet TSM_EN_2024_C, PDF page 2:
-# https://static.trinasolar.com/sites/default/files/Datasheet_Vertex%20S%2B_NEG9R.28_EN_2024_C_web.pdf
-TRINA_450 = PVModuleParams(
-    Mpp=450,
-    Vmp=44.6,
-    Imp=10.09,
-    Voc=52.9,
-    Isc=10.74,
-    T_Pmax_pct=-0.29,
-    T_Voc_pct=-0.24,
-    T_Isc_pct=0.04,
-    N_Cells=144,
-    Max_System_Voltage=1500,
-)
 
 # Fronius Symo GEN24 6.0, technical data, retrieved 2026-10-11:
 # https://www.fronius.com/en-gb/uk/solar-energy/installers-partners/technical-data/all-products/inverters/fronius-symo-gen24/fronius-symo-gen24-6-0
@@ -58,12 +42,6 @@ HUAWEI_4KTL = {
 
 # The Isc comparison basis was not transcribed; 1 states a direct comparison for these tests.
 PORTO = {"min_design_temp_c": -5, "max_ambient_temp_c": 40}
-
-
-@pytest.fixture
-def trina(monkeypatch):
-    monkeypatch.setitem(MODULES, "Trina_TSM_450NEG9R28", TRINA_450)
-    return "Trina_TSM_450NEG9R28"
 
 
 @pytest.fixture

@@ -11,7 +11,7 @@ from breos.app_config import resolve_app_config
 from breos.electrical import PVString, _curves_power, _CurveSource
 from breos.pv.mismatch import ShadedStringCurve
 from breos.pv.shading import ModuleShading
-from breos.pv_modules import MODULES, PVModuleParams, get_module
+from breos.pv_modules import MODULES, get_module
 from breos.solar import IrradianceParts
 
 STEPS = 3
@@ -249,17 +249,6 @@ def test_a_substring_matches_pvlibs_partial_shading_example():
 UNSHADED_GRID = {"azimuth_deg": [0, 90, 180, 270], "elevation_deg": [0, 30, 40]}
 CHIMNEY = [[0.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]]
 CLEAR = [[0.0] * 4] * 3
-
-
-@pytest.fixture
-def trina():
-    # Trina Solar TSM-450NEG9R.28, datasheet TSM_EN_2024_C, PDF page 2.
-    MODULES["Trina_TSM_450NEG9R28"] = PVModuleParams(
-        Mpp=450, Vmp=44.6, Imp=10.09, Voc=52.9, Isc=10.74,
-        T_Pmax_pct=-0.29, T_Voc_pct=-0.24, T_Isc_pct=0.04, N_Cells=144, Max_System_Voltage=1500,
-    )  # fmt: skip
-    yield "Trina_TSM_450NEG9R28"
-    del MODULES["Trina_TSM_450NEG9R28"]
 
 
 def _module_shaded_config(trina: str, first_module: list[list[float]]) -> dict:

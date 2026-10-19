@@ -179,15 +179,8 @@ def test_numba_matches_python_with_the_curve_cable_and_derating():
 
 
 @pytest.fixture
-def curved_inverter_config():
-    from breos.pv_modules import MODULES, PVModuleParams
-
-    # Trina Solar TSM-450NEG9R.28, datasheet TSM_EN_2024_C, PDF page 2.
-    MODULES["Trina_TSM_450NEG9R28"] = PVModuleParams(
-        Mpp=450, Vmp=44.6, Imp=10.09, Voc=52.9, Isc=10.74,
-        T_Pmax_pct=-0.29, T_Voc_pct=-0.24, T_Isc_pct=0.04, N_Cells=144, Max_System_Voltage=1500,
-    )  # fmt: skip
-    yield {
+def curved_inverter_config(trina):
+    return {
         "location": "porto",
         "annual_consumption_kwh": 4000,
         "pv_arrays": [{"modules": 14, "module": "Trina_TSM_450NEG9R28", "tilt": 30, "azimuth": 180}],
@@ -213,7 +206,6 @@ def curved_inverter_config():
         "electrical_environment": {"min_design_temp_c": -5, "max_ambient_temp_c": 40},
         "ac_cable": {"length_m": 25, "cross_section_mm2": 4, "phases": 1, "voltage_v": 230},
     }
-    del MODULES["Trina_TSM_450NEG9R28"]
 
 
 def test_app_runs_the_curve_cable_and_derating_and_reports_them(curved_inverter_config, _patch_weather):
