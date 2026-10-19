@@ -118,36 +118,29 @@ def test_an_unknown_top_level_key_raises(key, message):
         resolve_optimization_config({**MINIMAL, key: {}})
 
 
-@pytest.mark.parametrize(("key", "value"), [("battery_type", "lfp"), ("dc_coupled", True)])
-def test_removed_battery_keys_are_unknown(key, value):
-    # Each could hold only one value, and BatteryConfig no longer has either.
-    with pytest.raises(ValueError, match=f"Unknown key 'battery.{key}'"):
-        resolve_optimization_config({**MINIMAL, "battery": {key: value}})
-
-
-def test_keys_nothing_read_are_refused():
-    for config in (
-        {**MINIMAL, "simulation": {"weather_file": "weather/porto.csv"}},
-        {**MINIMAL, "name": "study"},
-    ):
-        with pytest.raises(ValueError, match="Unknown"):
-            resolve_optimization_config(config)
+_PARAMS = {"Mpp": 400, "Vmp": 40, "Imp": 10, "Voc": 48, "Isc": 11}
 
 
 @pytest.mark.parametrize(
-    ("section", "value", "key"),
+    ("change", "match"),
     [
-        ("optimization", {"algorithm": "nsga2"}, "optimization.algorithm"),
-        ("pv", {"params": {"Mpp": 400, "Vmp": 40, "Imp": 10, "Voc": 48, "Isc": 11, "T_Pmax": -0.3}}, "T_Pmax"),
-        ("pv", {"params": {"Mpp": 400, "Vmp": 40, "Imp": 10, "Voc": 48, "Isc": 11, "T_Voc": -0.3}}, "T_Voc"),
-        ("pv", {"params": {"Mpp": 400, "Vmp": 40, "Imp": 10, "Voc": 48, "Isc": 11, "T_Isc": 0.05}}, "T_Isc"),
+        # Each could hold only one value, and BatteryConfig no longer has either.
+        ({"battery": {"battery_type": "lfp"}}, "Unknown key 'battery.battery_type'"),
+        ({"battery": {"dc_coupled": True}}, "Unknown key 'battery.dc_coupled'"),
+        # The single-value algorithm key and the short temperature-coefficient
+        # aliases were removed in 0.7.0.
+        ({"optimization": {"algorithm": "nsga2"}}, r"Unknown key '[a-z.]*optimization.algorithm'"),
+        ({"pv": {"params": {**_PARAMS, "T_Pmax": -0.3}}}, r"Unknown key '[a-z.]*T_Pmax'"),
+        ({"pv": {"params": {**_PARAMS, "T_Voc": -0.3}}}, r"Unknown key '[a-z.]*T_Voc'"),
+        ({"pv": {"params": {**_PARAMS, "T_Isc": 0.05}}}, r"Unknown key '[a-z.]*T_Isc'"),
+        # Keys nothing reads.
+        ({"simulation": {"weather_file": "weather/porto.csv"}}, "Unknown"),
+        ({"name": "study"}, "Unknown"),
     ],
 )
-def test_keys_removed_in_0_7_0_are_unknown(section, value, key):
-    # The single-value algorithm key and the short temperature-coefficient
-    # aliases were removed; they raise like any other unknown key.
-    with pytest.raises(ValueError, match=rf"Unknown key '[a-z.]*{key}'"):
-        resolve_optimization_config({**MINIMAL, section: value})
+def test_removed_and_unread_keys_raise_like_any_unknown_key(change, match):
+    with pytest.raises(ValueError, match=match):
+        resolve_optimization_config({**MINIMAL, **change})
 
 
 def test_removed_keys_name_their_replacement():
