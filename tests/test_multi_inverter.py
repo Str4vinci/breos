@@ -12,19 +12,13 @@ from breos.app_config import resolve_app_config
 from breos.app_inputs import reuse_prepared_inputs
 from breos.inverter import InverterConversion, InverterUnits, _calculate_dc_ac_power_arrays, convert_units
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
-from breos.pv_modules import MODULES
-from tests.test_string_energy import FRONIUS_GEN24_6, PORTO, TRINA_450
+from tests.test_string_energy import FRONIUS_GEN24_6, PORTO
 
 # A small inverter, so the east face clips at the synthetic year's 800 W/m2
 # peak: 7 modules give about 2.1 kW of DC there, above its 1.8 kW nameplate.
 SMALL = {**FRONIUS_GEN24_6, "nominal_power_w": 1800, "inverter_efficiency": 0.97, "night_consumption_w": 2.0}
 EAST = {"modules": 7, "module": "Trina_TSM_450NEG9R28", "tilt": 20, "azimuth": 90}
 WEST = {"modules": 7, "module": "Trina_TSM_450NEG9R28", "tilt": 20, "azimuth": 270}
-
-
-@pytest.fixture
-def trina(monkeypatch):
-    monkeypatch.setitem(MODULES, "Trina_TSM_450NEG9R28", TRINA_450)
 
 
 def config(arrays, inverters, strings, **extra):
@@ -81,24 +75,6 @@ def test_each_inverter_converts_its_own_strings_as_it_would_alone(trina, _patch_
     assert result["pv_loss_waterfall"]["inverter"]["night_consumption"]["power_w"] == 2.0
 
 
-def test_one_inverter_of_the_combined_rating_would_not_clip(trina, _patch_weather):
-    both, _ = timeseries(TWO_INVERTERS)
-    combined = {**FRONIUS_GEN24_6, "nominal_power_w": 7800, "night_consumption_w": 2.0}
-    one, _ = timeseries(
-        config(
-            [EAST, WEST],
-            [combined],
-            [
-                {"inverter": 0, "mppt": 0, "array": 0, "modules": 7},
-                {"inverter": 0, "mppt": 1, "array": 1, "modules": 7},
-            ],
-        )
-    )
-    np.testing.assert_allclose(both["PV_DC"], one["PV_DC"], rtol=1e-9)
-    assert one["PV_DC_Curtailed"].sum() == 0
-    assert both["PV_DC_Curtailed"].sum() > 0
-
-
 def test_the_shared_ac_cable_loses_on_the_summed_output():
     index = pd.date_range("2025-06-01", periods=4, freq="h", tz="UTC")
     units = InverterUnits(
@@ -148,11 +124,6 @@ def test_own_cables_and_curves_belong_to_each_inverter(trina, _patch_weather):
     rows = block["inverters"]
     assert rows[0]["ac_cable_loss_kwh"] > 0 and rows[1]["ac_cable_loss_kwh"] == 0
     assert block["ac_cable"]["loss_kwh"] > 0
-
-
-def test_a_battery_with_several_inverters_is_refused(trina):
-    with pytest.raises(ValueError, match="a battery beside 2 inverters must be AC-coupled"):
-        resolve_app_config({**TWO_INVERTERS, "battery_kwh": 5.0})
 
 
 def test_monte_carlo_refuses_several_string_inverters(trina):

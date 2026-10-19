@@ -1,6 +1,5 @@
 """The AC-coupled dispatch step (ADR 0004 C3-C8): reference cases AC1-AC7 and invariants P1-P6."""
 
-import importlib.util
 import math
 import pickle
 import sys
@@ -12,17 +11,11 @@ import pytest
 
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
+from tests.backend_parity import BACKENDS
 from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity"))
 from harness import AC_SCENARIOS, RESOLUTIONS, build, build_ac  # noqa: E402
-
-_BACKENDS = [
-    "python",
-    pytest.param(
-        "numba", marks=pytest.mark.skipif(not importlib.util.find_spec("numba"), reason="numba not installed")
-    ),
-]
 
 # The reference cases' pack (ADR 0004, "Reference cases").
 REFERENCE = dict(
@@ -118,7 +111,7 @@ def _check(frame, expected, step=0):
 # --- reference cases ---------------------------------------------------------
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_ac1_pv_through_the_battery_and_back(backend):
     frame = _run([3000, 0], [1000, 1500], 0.0, backend=backend)
     _check(
@@ -217,7 +210,7 @@ def test_ac4_saturated_pv_inverter_and_grid_charge():
     _check(dc, {"PV_DC_To_Battery": 2500.0 - 2000.0 / ETA, "Grid_AC_To_Battery": 0.0, "Import_From_Grid": 0.0})
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_ac5_battery_inverter_rating_limits_discharge(backend):
     frame = _run([0], [3000], 5000.0, battery_inverter_ac_capacity_w=2000.0, backend=backend)
     dc = 2000.0 / ETA
@@ -234,7 +227,7 @@ def test_ac5_battery_inverter_rating_limits_discharge(backend):
     _check(_run([0], [3000], 5000.0, coupling="dc", inverter_ac_capacity_w=2000.0, backend=backend), expected)
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_ac6_light_load_follows_the_part_load_curve(backend):
     frame = _run([0], [300], 5000.0, battery_inverter_ac_capacity_w=3000.0, backend=backend)
     dc = _pvwatts_input(300.0, 3000.0, ETA)
@@ -280,7 +273,7 @@ def _ac7_expected(rating):
     }
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize(
     ("rating", "table"),
     [
@@ -312,7 +305,7 @@ def test_ac7_pv_and_grid_charge_in_one_step(backend, rating, table):
         assert frame["Battery_Energy"].iloc[0] == pytest.approx(3824.0)
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_ac7_at_15_minutes_takes_the_rating_per_step(backend):
     instructions = _charge_target(1, discharge=True, reserve=0.4)
     hourly = _run(
@@ -344,7 +337,7 @@ def test_ac7_at_15_minutes_takes_the_rating_per_step(backend):
 # --- the battery's own limits (flat inverters, so every value is by hand) --------
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_the_charge_input_limit_binds_pv_charging(backend):
     frame = _run([3000], [0], 2000.0, max_charge_power_w=1000.0, backend=backend)
     _check(
@@ -358,7 +351,7 @@ def test_the_charge_input_limit_binds_pv_charging(backend):
     )
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_the_charge_input_limit_is_shared_by_pv_and_grid(backend):
     # PV's 460 W of surplus AC comes first; the grid gets what is left of 1 kW DC.
     instructions = _charge_target(1, discharge=False, reserve=0.0, target=0.9)
@@ -376,7 +369,7 @@ def test_the_charge_input_limit_is_shared_by_pv_and_grid(backend):
     )
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_the_discharge_limit_binds_battery_ac(backend):
     frame = _run([0], [3000], 5000.0, max_discharge_power_w=800.0, backend=backend)
     _check(
@@ -389,7 +382,7 @@ def test_the_discharge_limit_binds_battery_ac(backend):
     )
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_the_c_rate_limits_stored_energy_both_ways(backend):
     # 0.1 C on 10 kWh: at most 1000 Wh stored or released in the hour.
     charging = _run([5000], [0], 2000.0, power_limit_c_rate=0.1, backend=backend)
@@ -404,7 +397,7 @@ def test_the_c_rate_limits_stored_energy_both_ways(backend):
     )
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_a_binding_discharge_floor_lands_exactly(backend):
     # A14: reserve and target share a fraction whose floor the unheld
     # arithmetic misses by a few ULPs, so only hold_target lands on it.
@@ -415,12 +408,13 @@ def test_a_binding_discharge_floor_lands_exactly(backend):
     _check(frame, {"Battery_Discharge_DC": 5100.0 - 1234.56789})
 
 
-def test_a_dc_coupled_run_refuses_a_missing_efficiency_even_without_dispatch():
+def test_a_dc_coupled_run_refuses_a_missing_efficiency_with_or_without_dispatch():
     instructions = _charge_target(24, discharge=False, reserve=0.0)
     pv, load, temp, _cfg, _sim = build("baseline", "h")
     pv, load, temp = pv.iloc[:24], load.iloc[:24], temp.iloc[:24]
     kwargs = dict(pv_dc=pv, houseload=load, freq="h", temperature_series=temp, dispatch_instructions=instructions)
     for battery, extra in (
+        (BatteryConfig(nominal_energy_wh=10000.0), {"initial_energy_wh": 5000.0}),
         (BatteryConfig(nominal_energy_wh=0.0), {}),
         (BatteryConfig(nominal_energy_wh=10000.0), {"battery_retired": True, "initial_energy_wh": 0.0}),
     ):
@@ -493,7 +487,7 @@ PV_SIDE = ("PV_DC", "PV_DC_Curtailed", "PV_DC_To_Inverter", "PV_Direct_Inverter_
 
 
 @pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("freq", RESOLUTIONS)
 @pytest.mark.parametrize("scenario", AC_SCENARIOS)
 def test_p1_p6_the_pv_side_is_the_pv_only_run_and_every_identity_holds(scenario, freq, backend):
@@ -521,24 +515,14 @@ CONVERSION = {
 }
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-@pytest.mark.parametrize("freq", RESOLUTIONS)
-def test_p1_holds_with_the_whole_pv_conversion(freq, backend):
-    # M2: the efficiency curve, the AC cable, ac_output_scale and night draw
-    # all come from the PV-only conversion.
-    frame, config, inputs = _year("ac_baseline", freq, backend, inverter_conversion=CONVERSION, ac_output_scale=0.97)
-    pv_only = _pv_only(inputs, freq, backend)
-    for column in (*PV_SIDE, "Inverter_Night_Consumption"):
-        np.testing.assert_array_equal(frame[column].to_numpy(), pv_only[column].to_numpy(), err_msg=column)
-    assert frame["Inverter_Night_Consumption"].sum() > 0.0
-    assert_energy_conservation(frame, config)
-
-
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("freq", RESOLUTIONS)
 def test_p1_holds_with_a_per_step_curve_row_and_derating(freq, backend):
+    # M2: the efficiency curve and its per-step row, the AC cable, the
+    # derating, ac_output_scale and night draw all come from the PV-only
+    # conversion.
     pv, load, temp, cfg, _sim = build_ac("ac_baseline", freq)
-    cfg = {**cfg, "inverter_conversion": CONVERSION}
+    cfg = {**cfg, "inverter_conversion": CONVERSION, "ac_output_scale": 0.97}
     rows = pd.Series(np.linspace(0.0, 1.0, len(pv)), index=pv.index)
     derate = pd.Series(np.where(np.arange(len(pv)) % 7 == 0, 0.8, 1.0), index=pv.index)
     common = dict(
@@ -550,19 +534,22 @@ def test_p1_holds_with_a_per_step_curve_row_and_derating(freq, backend):
         inverter_ac_derate=derate,
         inverter_curve_row=rows,
     )
-    frame = simulate_energy_balance(battery_config=BatteryConfig(**cfg), **common)[0]
+    config = BatteryConfig(**cfg)
+    frame = simulate_energy_balance(battery_config=config, **common)[0]
     pv_cfg = {
         k: v for k, v in cfg.items() if k not in ("battery_inverter_ac_capacity_w", "battery_inverter_efficiency")
     }
     pv_only = simulate_energy_balance(
         battery_config=BatteryConfig(**{**pv_cfg, "nominal_energy_wh": 0.0, "coupling": "dc"}), **common
     )[0]
-    for column in PV_SIDE:
+    for column in (*PV_SIDE, "Inverter_Night_Consumption"):
         np.testing.assert_array_equal(frame[column].to_numpy(), pv_only[column].to_numpy(), err_msg=column)
     assert frame["PV_DC_Curtailed"].sum() > 0.0
+    assert frame["Inverter_Night_Consumption"].sum() > 0.0
+    assert_energy_conservation(frame, config)
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("freq", RESOLUTIONS)
 def test_p3_a_battery_that_cannot_move_gives_the_pv_only_flows(freq, backend):
     frame, _config, inputs = _year("ac_baseline", freq, backend, battery_inverter_ac_capacity_w=0.0)
@@ -572,7 +559,7 @@ def test_p3_a_battery_that_cannot_move_gives_the_pv_only_flows(freq, backend):
     assert (frame["PV_AC_To_Battery"] == 0.0).all() and (frame["Battery_AC_To_Load"] == 0.0).all()
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_p3_a_full_battery_held_by_its_instructions_gives_the_pv_only_flows(backend):
     pv, load, _temp, cfg, _sim = build("baseline", "h")
     cfg = {
@@ -611,7 +598,7 @@ def test_p3_a_full_battery_held_by_its_instructions_gives_the_pv_only_flows(back
     assert (frame["PV_AC_To_Battery"] == 0.0).all()
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_p4_a_retired_pack_steps_are_the_pv_only_run(backend):
     frame, _config, inputs = _year(
         "ac_replacement", "h", backend, enable_replacement=False, skipped_replacement_action="retire"
@@ -638,11 +625,6 @@ def test_grid_charge_efficiency_none_has_its_own_hash():
     assert none == make(None)
     assert none.instruction_hash() not in {make(value).instruction_hash() for value in (1.0, 0.95, 1e-300)}
     assert pickle.loads(pickle.dumps(none)) == none
-
-
-def test_a_dc_coupled_battery_refuses_instructions_without_a_grid_charge_efficiency():
-    with pytest.raises(ValueError, match="DC-coupled battery needs a grid_charge_efficiency"):
-        _run([0], [500], 2000.0, coupling="dc", instructions=_charge_target(1, discharge=False, reserve=0.0))
 
 
 def test_an_ac_coupled_battery_refuses_a_grid_charge_efficiency_it_would_ignore():

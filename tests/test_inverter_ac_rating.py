@@ -17,6 +17,9 @@ def test_the_rating_sets_the_resolved_capacity():
     assert resolved.inverter_ac_capacity_w == 3200.0
     # The ratio no longer sizes anything, so it is reported unset.
     assert resolved.cfg["inverter_loading_ratio"] is None
+    # The cost parameters carry the ratio the rating implies.
+    peak_w = resolved.cfg["n_modules"] * resolved.avg_module_power_w
+    assert resolved.cost_params.dc_ac_ratio == peak_w / 3200.0
 
 
 def test_without_the_rating_the_ratio_sizes_the_inverter():
@@ -60,12 +63,6 @@ def test_the_run_clips_and_reports_at_the_rating():
     assert low_result["total_investment"] < high_result["total_investment"]
     assert low_result["usable_ac_system_production_kwh"] < high_result["usable_ac_system_production_kwh"]
     assert low_result["provenance"]["resolved_config"]["inverter_ac_rating_kw"] == 1.5
-
-
-def test_the_cost_parameters_carry_the_ratio_the_rating_implies():
-    resolved = resolve_app_config({**BASE, "inverter_ac_rating_kw": 3.2})
-    peak_w = resolved.cfg["n_modules"] * resolved.avg_module_power_w
-    assert resolved.cost_params.dc_ac_ratio == peak_w / 3200.0
 
 
 def test_a_later_layer_replaces_the_other_sizing_key():

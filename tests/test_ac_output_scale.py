@@ -51,6 +51,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity")
 
 from harness import FREQ, build  # noqa: E402
 
+from tests.backend_parity import assert_frames_bit_equal  # noqa: E402
+
 AC_RATING = 3520.0
 EFFICIENCY = 0.96
 # A measured-bias AC-side factor, a deeper trim, plus a no-op.
@@ -169,14 +171,7 @@ class TestCompiledBackendParity:
         pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
         python_out = _simulate(scenario, "python", scale)
         numba_out = _simulate(scenario, "numba", scale)
-        for column in python_out[0].columns:
-            if column == "Datetime":
-                continue
-            left = python_out[0][column].to_numpy()
-            right = numba_out[0][column].to_numpy()
-            assert np.array_equal(left, right), (
-                f"{scenario} at scale {scale}: column {column} differs at {int(np.flatnonzero(left != right)[0])}"
-            )
+        assert_frames_bit_equal(python_out[0], numba_out[0], f"{scenario} at scale {scale}: ")
         assert python_out[1] == numba_out[1]
         assert python_out[3] == numba_out[3]
 
@@ -224,9 +219,7 @@ def test_scaled_inverter_ceiling_binds_and_is_backend_identical():
 
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     numba_out = _scaled_battery_ceiling_run("numba")
-    for column in python_out[0].columns:
-        if column != "Datetime":
-            assert np.array_equal(python_out[0][column].to_numpy(), numba_out[0][column].to_numpy()), column
+    assert_frames_bit_equal(python_out[0], numba_out[0])
     assert python_out[1] == numba_out[1]
 
 
@@ -428,9 +421,7 @@ class TestUnlimitedInverterAndOptimizer:
         assert np.array_equal(python_result[0]["PV_Production"].to_numpy(), expected)
         assert np.array_equal(python_result[0]["PV_AC_Export"].to_numpy(), expected)
         assert python_result[1] == expected.sum()
-        for column in python_result[0].columns:
-            if column != "Datetime":
-                assert np.array_equal(python_result[0][column].to_numpy(), numba_result[0][column].to_numpy()), column
+        assert_frames_bit_equal(python_result[0], numba_result[0])
         assert python_result[1] == numba_result[1]
 
     def test_optimizer_problem_carries_the_configured_scale(self):
