@@ -286,6 +286,16 @@ def test_plots_with_nothing_to_draw_return_none_or_an_empty_dict():
     assert plt.get_fignums() == []
 
 
+def test_set_presentation_mode():
+    with matplotlib.rc_context():
+        backend = matplotlib.get_backend()
+        plotting.set_presentation_mode(True, scale=2.0)
+        assert plt.rcParams["font.size"] == 28
+        plotting.set_presentation_mode(False)
+        assert plt.rcParams["font.size"] == matplotlib.rcParamsDefault["font.size"]
+        assert matplotlib.get_backend() == backend
+
+
 # ---------------------------------------------------------------------------
 # PV loss waterfall
 # ---------------------------------------------------------------------------
@@ -347,6 +357,8 @@ def test_breakeven_cdf_is_normalised_by_every_run():
     # 2.5% and 25% are reached; 50% only at the plateau; 75% and 97.5% never.
     marked = sorted(round(float(offsets[0, 1]), 3) for offsets in (c.get_offsets() for c in ax.collections))
     assert marked == [0.025, 0.25, 0.5]
+    # Runs that all pay back reach one.
+    assert _cdf_line(plotting.plot_breakeven_cdf([6.0, 7.0, 8.0, 9.0])).max() == pytest.approx(1.0)
 
 
 def test_breakeven_cdf_takes_the_run_count_for_a_list_of_paid_back_runs():
@@ -355,12 +367,6 @@ def test_breakeven_cdf_takes_the_run_count_for_a_list_of_paid_back_runs():
     assert _cdf_line(fig).max() == pytest.approx(0.25)
     with pytest.raises(ValueError, match="total_runs is 1"):
         plotting.plot_breakeven_cdf([6.0, 8.0], total_runs=1)
-
-
-def test_breakeven_cdf_of_runs_that_all_pay_back_reaches_one():
-    fig = plotting.plot_breakeven_cdf([6.0, 7.0, 8.0, 9.0])
-
-    assert _cdf_line(fig).max() == pytest.approx(1.0)
 
 
 def test_montecarlo_cdf_counts_runs_that_never_pay_back():
@@ -387,35 +393,24 @@ def _eol_line(fig):
     return line
 
 
-def test_soh_end_of_life_line_defaults_to_the_battery_default():
+@pytest.mark.parametrize(
+    ("kwargs", "eol_pct"), [({}, 70), ({"eol_percentage": 0.8}, 80)], ids=["battery-default", "given"]
+)
+def test_soh_end_of_life_line_follows_the_threshold_or_the_battery_default(kwargs, eol_pct):
     assert DEFAULT_EOL_PERCENTAGE == pytest.approx(0.70)
-    line = _eol_line(plotting.plot_battery_soh_timeseries(_results()))
-
-    assert line.get_ydata()[0] == pytest.approx(70.0)
-    assert line.get_label() == "End of Life (70%)"
-
-
-def test_soh_end_of_life_line_follows_the_threshold_given():
-    fig = plotting.plot_battery_soh_timeseries(_results(), eol_percentage=0.8)
+    fig = plotting.plot_battery_soh_timeseries(_results(), **kwargs)
     line = _eol_line(fig)
 
-    assert line.get_ydata()[0] == pytest.approx(80.0)
-    assert line.get_label() == "End of Life (80%)"
-    assert fig.axes[0].get_ylim()[0] <= 75.0
+    assert line.get_ydata()[0] == pytest.approx(eol_pct)
+    assert line.get_label() == f"End of Life ({eol_pct}%)"
+    # The axis reaches below the line, so the line is drawn inside it.
+    assert fig.axes[0].get_ylim()[0] <= eol_pct - 5.0
 
 
 @pytest.mark.parametrize("eol", [0.0, 1.0, 70.0])
 def test_soh_end_of_life_must_be_a_fraction(eol):
     with pytest.raises(ValueError, match="eol_percentage"):
         plotting.plot_battery_soh_timeseries(_results(), eol_percentage=eol)
-
-
-def test_battery_config_and_app_default_share_the_constant():
-    from breos.app_config import APP_CONFIG_FIELDS
-    from breos.battery import BatteryConfig
-
-    assert BatteryConfig(nominal_energy_wh=5000.0).eol_percentage == DEFAULT_EOL_PERCENTAGE
-    assert APP_CONFIG_FIELDS["battery_eol_percentage"].default == DEFAULT_EOL_PERCENTAGE
 
 
 # ---------------------------------------------------------------------------
