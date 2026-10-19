@@ -54,6 +54,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   several inverters. The electrical check now warns when an inverter's DC/AC ratio
   lies outside 0.8 to 1.6. Runs with one inverter are unchanged, apart from
   that warning.
+- The experimental `daily_persistence` planner can plan on a day-ahead
+  weather forecast ([#430](https://github.com/Str4vinci/breos/issues/430),
+  ADR 0002 A20). `smart_charging.forecast = "weather"` reads
+  `forecast_weather_files`, one forecast weather file per lead day, runs each
+  through the run's PV model, and plans each step on the youngest forecast
+  published before the decision (`forecast_publication_delay_hours`, default
+  6, plus the 4 h the 15-minute resampling reaches); a step beyond the last
+  lead keeps persistence, and load and temperature stay persistence.
+  `forecast = "perfect"` plans on the run's own future as a
+  perfect-information reference. `breos.fetch_forecast_archive` writes the
+  lead files of one year from the Open-Meteo Previous Runs archive and
+  `breos.fetch_satellite_weather` the actual weather (SARAH3 irradiance, ERA5
+  temperature and wind). `provenance.smart_charging.planner_forecast` records
+  the forecast. The default, `forecast = "persistence"`, gives the same
+  results as before.
 - `weather_file` names the App's weather file directly
   ([#394](https://github.com/Str4vinci/breos/issues/394)). The App reads that
   CSV (or `.csv.gz`), whatever its name and for any location, instead of
@@ -453,6 +468,36 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- `breos.cec_fit.fit_cec_params` reproduces `pvlib.ivtools.sdm.fit_cec_sam`
+  (#433). The open-circuit-voltage constraint is evaluated 5 °C above the
+  reference, as in SAM's `6par_solve.h`, instead of 2 °C; temperatures are
+  translated with SAM's `1/k = 11600 K/eV`, in the modeled `gamma_pmp` too,
+  which now does its own translation instead of going through
+  `calcparams_cec`. Together these removed the constant ~0.03 % offset in
+  maximum power. The inner solve works in `ln I_o` and the shunt conductance,
+  so the parameter scales are comparable and the branch followed in `Adjust`
+  can pass the infinite shunt resistance near `Adjust = 0`; it accepts a
+  solve only if the five reference residuals are within 1e-8 of Isc, and
+  exponents are capped against overflow. The `Adjust` search reaches ±100
+  instead of ±60, halves its step near a failed solve, down to 0.25, and
+  moves in the direction given by the gamma mismatch at `Adjust = 0`. A fit
+  must pass SAM's parameter ranges and I–V checks (power at Vmp within
+  1.5 %, current at Voc below 1.5 % of Imp, no positive slope); the comment
+  that attributed the old ranges to Dobos Table 5 is corrected. The ranges
+  are stricter than before (`a_ref` 0.01–15 instead of 0.05–50, `I_o_ref`
+  1e-16–1e-7 instead of 1e-20–1e-5, `R_s` 0.001–75 instead of 1e-4–100,
+  `R_sh_ref` ≤ 100001 instead of 1e7), so a candidate accepted before can be
+  rejected and trigger another fitting attempt. The search continues through
+  samples outside the ranges and, if no sample matches the datasheet gamma,
+  returns the closest one that passes the checks, with a warning, as
+  before. The initial
+  guesses count at most one cell per 0.6 V of Voc, because the CEC cell count
+  of shingled modules includes parallel strips, and the empirical guess uses
+  SAM's coefficients and clamps. On 1000 random CEC modules: no failures
+  (previously 4), maximum power within 1e-5 % of `fit_cec_sam` wherever SAM
+  keeps the datasheet Isc (previously 0.03 % typical and 2.4 % worst), and
+  5.7 times faster. **Fitted parameters change for every module**, by about
+  0.03 % in power for most of them.
 - Monte Carlo and optimizer workers no longer oversubscribe the CPU at
   15-minute resolution (#382). Each worker process limits its BLAS and
   OpenMP pools to one thread; the parent process keeps its own. On a
@@ -499,6 +544,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - A new example, `configs/examples/balcony-microinverter.toml`, runs a
   two-module balcony system on one microinverter with an input for each,
   with string-level energy and the PVWatts mismatch loss set to 0.
+### Acknowledgments
+- Thanks to @tomdacu for reporting and fixing the CEC fit's departures from
+  `fit_cec_sam` (#433, #434).
 
 ## [0.7.0] - 2026-10-02
 

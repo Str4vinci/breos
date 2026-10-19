@@ -76,6 +76,8 @@ filename such as `pvgis-sarah3`.
 
    breos.weather.fetch_tmy_weather_data
    breos.weather.fetch_weather_data
+   breos.weather.fetch_forecast_archive
+   breos.weather.fetch_satellite_weather
 ```
 
 ## Resampling

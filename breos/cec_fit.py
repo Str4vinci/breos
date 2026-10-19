@@ -29,22 +29,32 @@ maximum power — tracks temperature away from 25 °C; it has no effect on the S
 I–V curve. This lets the problem be solved as a one-dimensional search on
 ``Adjust`` (matching the datasheet ``gamma_pmp``) wrapping a five-parameter De
 Soto solve in which ``alpha_sc`` and ``beta_voc`` carry the ``Adjust`` scaling.
-The modeled ``gamma_pmp`` is evaluated against the same ``calcparams_cec`` /
-``max_power_point`` path used at runtime, so the fit is self-consistent with the
-simulator.
+
+The constants are SAM's (``ssc/shared/6par_solve.h`` and ``6par_gamma.h``), so
+the fit reproduces ``fit_cec_sam``: the open-circuit-voltage coefficient is
+imposed 5 °C above the reference, temperatures are translated with SAM's
+``1/k = 11600 K/eV`` (also in the modeled ``gamma_pmp``), and the accepted
+solution must pass SAM's sanity checks on the parameters and on the I–V curve.
+
+The inner solve works in ``(I_L, ln I_o, R_s, 1/R_sh, a)``. The logarithm puts
+``I_o`` (~1e-10 A) on the scale of the other unknowns, and the shunt
+conductance lets the solution branch followed in ``Adjust`` pass through the
+infinite shunt resistance that many modules reach near ``Adjust = 0`` (the De
+Soto limit), where ``R_sh`` diverges and changes sign. Only the matched
+solution has to be physical.
 """
 
 import warnings
 from typing import Tuple
 
 import numpy as np
-from pvlib.pvsystem import calcparams_cec, max_power_point
-from scipy import constants
+from pvlib.pvsystem import i_from_v, max_power_point
 from scipy.optimize import brentq, root
 
-# Boltzmann constant in eV/K, taken from the same source pvlib uses, so the
-# I_o(T) scaling in the open-circuit-voltage constraint matches calcparams_cec.
-_BOLTZMANN_EV_K = constants.value("Boltzmann constant in eV/K")
+# SAM's inverse Boltzmann constant in K/eV (6par_solve.h, 6par_gamma.h). It is
+# used in the open-circuit-voltage constraint and in the modeled gamma, so the
+# fit reproduces SAM rather than pvlib's CODATA value.
+_INV_K = 11600.0
 
 # Silicon band-gap reference value and its temperature dependence (Dobos Eqs. 6
 # and 7); these are pvlib's calcparams_cec defaults (EgRef, dEgdT).
@@ -52,167 +62,210 @@ _EG_REF = 1.121
 _DEGDT = -0.0002677
 
 # Temperature offset used for the open-circuit-voltage temperature-coefficient
-# constraint (Dobos Eq. 22). SAM's 6parsolve and pvlib's own ``fit_desoto``
-# both evaluate this constraint 2 °C above the reference temperature.
-_DELTA_T_VOC = 2.0
+# constraint (Dobos Eq. 22). SAM's 6parsolve evaluates it 5 °C above the
+# reference temperature (``const Real dT = 5`` in 6par_solve.h).
+_DELTA_T_VOC = 5.0
 
 # Maximum-power temperature-coefficient grid (Dobos Eq. 10/25): power is
 # evaluated from -10 °C to 50 °C and adjacent normalised slopes are averaged.
 # For this uniform grid that average telescopes to the secant slope between the
-# endpoints, so only the three points needed for it are evaluated.
+# endpoints, so only the three points needed for it are evaluated. This window
+# reproduces the shipped SAM binary (PySAM 7.1.1) exactly.
 _GAMMA_T_LOW = -10.0
 _GAMMA_T_HIGH = 50.0
 
-# Sanity ranges for the fitted coefficients, used to reject a converged-but-
-# unphysical solution before falling back to heuristics. The lower bounds and
-# positivity follow Dobos Table 5 and are what discriminate against spurious
-# roots (e.g. negative shunt resistance). The upper bounds are widened well
-# beyond the 2012-era Table 5 limits so that modern high-current / high-power
-# modules (210 mm cells with Isc ~18-20 A exceed the original 15 A I_L cap) are
-# not rejected.
+# Accepted ranges of the fitted coefficients: SAM's sanity check
+# (``module6par::sanity`` in 6par_solve.h). The photocurrent cap is raised from
+# SAM's 20 A so that modern high-current modules (210 mm cells, Isc ~18-20 A)
+# are not rejected.
 _PARAM_BOUNDS = {
-    "a_ref": (0.05, 50.0),
-    "I_L_ref": (0.1, 100.0),
-    "I_o_ref": (1e-20, 1e-5),
-    "R_s": (1e-4, 100.0),
-    "R_sh_ref": (1.0, 1e7),
+    "a_ref": (0.01, 15.0),
+    "I_L_ref": (0.01, 100.0),
+    "I_o_ref": (1e-16, 1e-7),
+    "R_s": (0.001, 75.0),
+    "R_sh_ref": (1.0, 100001.0),
     "Adjust": (-100.0, 100.0),
 }
 
 _IRRAD_REF = 1000.0
 _TEMP_REF = 25.0
+_T_REF_K = _TEMP_REF + 273.15
 
-
-# Per-technology empirical-guess coefficients (Dobos Tables 3 and 4): the
-# slope/intercept of ``a`` versus the cell count, and the C_s / C_sh factors
-# that scale series and shunt resistance. ``polySi`` maps to the multi-Si row.
+# SAM's technology-specific initial guess (Dobos Tables 3 and 4, and the
+# ``guess()`` of 6par_solve.h): the slope/intercept of ``a`` versus the cell
+# count, and the C_s / C_sh factors that scale series and shunt resistance.
+# ``polySi`` maps to the multi-Si row.
 _EMPIRICAL_GUESS = {
     "monosi": ((0.027, -0.0172), 0.32, 4.92),
-    "multisi": ((0.026, 0.0212), 0.34, 5.36),
-    "polysi": ((0.026, 0.0212), 0.34, 5.36),
-    "amorphous": ((0.029, 0.5264), 0.59, 0.92),
-    "cdte": ((0.012, 1.356), 0.46, 1.11),
-    "cigs": ((0.018, 0.327), 0.55, 1.22),
+    "multisi": ((0.0263, 0.0212), 0.34, 5.36),
+    "polysi": ((0.0263, 0.0212), 0.34, 5.36),
+    "amorphous": ((0.029, 0.5264), 0.59, 0.922),
+    "cdte": ((0.012, 1.3565), 0.46, 1.11),
+    "cigs": ((0.018, 0.3277), 0.55, 1.22),
     "cis": ((0.021, 0.0897), 0.61, 1.07),
 }
+
+# Lowest open-circuit voltage (V) of a series cell assumed by the initial
+# guesses. The CEC cell count of shingled and some thin-film modules (e.g.
+# Seraphim SEG, Solaria PowerXT, Honda Soltec: 0.11-0.21 V per cell) includes
+# parallel strips, which puts an ``a`` proportional to it too far from the
+# solution for the solver to converge. The count enters only the guesses.
+_CELL_VOC = 0.6
 
 # Tolerance (%/°C) on the modeled-vs-datasheet gamma for a fit to count as a
 # clean gamma match rather than a best-effort fallback.
 _GAMMA_TOL = 1e-3
 
+# Largest residual of the five reference equations, relative to Isc, for a
+# solve to be accepted; the solver's success flag alone is not trusted.
+_RESIDUAL_TOL = 1e-8
+
+# Exponents are capped here so that trial points of the solver overflow to a
+# large finite residual instead of inf/nan.
+_EXP_MAX = 700.0
+
+# Adjust continuation: initial step, the smallest step after halving near a
+# failed or invalid solve, and the search limit (SAM's sanity range).
+_ADJUST_STEP = 4.0
+_ADJUST_MIN_STEP = 0.25
+_ADJUST_LIMIT = 100.0
+
+# SAM's I–V shape checks (``module6par::sanity``): power at Vmp within 1.5 % of
+# the datasheet, current at Voc below 1.5 % of Imp, and a slope that is never
+# positive between 1.5 % and 98 % of Voc, sampled at 100 points.
+_SANITY_PMP_TOL = 0.015
+_SANITY_IOC_TOL = 0.015
+_SANITY_SLOPE_POINTS = 100
+
+
+def _exp(x):
+    """``exp`` with the exponent capped at :data:`_EXP_MAX`."""
+    return np.exp(np.minimum(x, _EXP_MAX))
+
+
+def _expm1(x):
+    """``expm1`` with the exponent capped at :data:`_EXP_MAX`."""
+    return np.expm1(np.minimum(x, _EXP_MAX))
+
+
+def _to_unknowns(i_l, i_o, r_s, r_sh, a):
+    """Solver unknowns ``[I_L, ln I_o, R_s, 1/R_sh, a]`` of physical parameters."""
+    return np.array([i_l, np.log(i_o), r_s, 1.0 / r_sh, a])
+
+
+def _from_unknowns(x):
+    """Physical ``(I_L, I_o, R_s, R_sh, a)`` of solver unknowns (``R_sh`` is inf for a zero conductance)."""
+    i_l, ln_i_o, r_s, g_sh, a = (float(v) for v in x)
+    r_sh = 1.0 / g_sh if g_sh != 0.0 else np.inf
+    return (i_l, float(_exp(ln_i_o)), r_s, r_sh, a)
+
+
+def _cells_for_guess(v_oc, cells_in_series):
+    """Series cells of the initial guesses: at most :data:`_CELL_VOC` per volt of ``Voc``."""
+    return min(cells_in_series, v_oc / _CELL_VOC)
+
 
 def _initial_guess(v_mp, i_mp, v_oc, i_sc, cells_in_series):
-    """De Soto five-parameter initial guess (Duffie & Beckman, as in pvlib)."""
-    t_ref_k = _TEMP_REF + 273.15
-    a0 = 1.5 * _BOLTZMANN_EV_K * t_ref_k * cells_in_series
-    i_l0 = i_sc
+    """De Soto five-parameter initial guess (Duffie & Beckman, as in pvlib), as solver unknowns."""
+    a0 = 1.5 * _T_REF_K / _INV_K * _cells_for_guess(v_oc, cells_in_series)
     i_o0 = i_sc * np.exp(-v_oc / a0)
-    r_s0 = (a0 * np.log1p((i_l0 - i_mp) / i_o0) - v_mp) / i_mp
-    r_sh0 = 100.0
-    return np.array([i_l0, i_o0, r_s0, r_sh0, a0])
+    r_s0 = (a0 * np.log1p((i_sc - i_mp) / i_o0) - v_mp) / i_mp
+    return _to_unknowns(i_sc, i_o0, r_s0, 100.0, a0)
 
 
 def _empirical_guess(celltype, v_mp, i_mp, v_oc, i_sc, cells_in_series):
-    """Technology-aware five-parameter guess (Dobos §4.3, Tables 3 and 4)."""
+    """SAM's technology-aware guess (Dobos §4.3, Tables 3 and 4; 6par_solve.h ``guess()``), as solver unknowns."""
     (slope, intercept), c_s, c_sh = _EMPIRICAL_GUESS.get(str(celltype).lower(), _EMPIRICAL_GUESS["monosi"])
-    a0 = slope * cells_in_series + intercept
-    i_l0 = i_sc
-    i_o0 = i_sc * np.exp(-v_oc / a0)
-    r_s0 = c_s * (v_oc - v_mp) / i_mp
+    a0 = min(max(slope * _cells_for_guess(v_oc, cells_in_series) + intercept, 0.1), 10.0)
+    i_o0 = min(max(i_sc * np.exp(-v_oc / a0), 1e-15), 1e-9)
+    r_s0 = min(max(c_s * (v_oc - v_mp) / i_mp, 0.02), 60.0)
     r_sh0 = c_sh * v_oc / (i_sc - i_mp)
-    return np.array([i_l0, i_o0, r_s0, r_sh0, a0])
+    return _to_unknowns(i_sc, i_o0, r_s0, r_sh0, a0)
 
 
-def _reference_equations(params, v_mp, i_mp, v_oc, i_sc, alpha_eff, beta_eff):
+def _translate(x, adjust, alpha_sc, dt):
+    """``(I_L, I_o, a)`` ``dt`` kelvin above the reference at full irradiance (Dobos Eqs. 5-9, SAM's 1/k)."""
+    i_l, ln_i_o, _r_s, _g_sh, a = x
+    t_k = _T_REF_K + dt
+    eg = _EG_REF * (1.0 + _DEGDT * dt)
+    i_o = _exp(ln_i_o + 3.0 * np.log(t_k / _T_REF_K) + _INV_K * (_EG_REF / _T_REF_K - eg / t_k))
+    return i_l + alpha_sc * (1.0 - adjust / 100.0) * dt, i_o, a * t_k / _T_REF_K
+
+
+def _reference_equations(x, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, adjust):
     """Residuals of the five reference-condition constraints (Dobos 2012).
 
-    ``params`` is ``[I_L, I_o, R_s, R_sh, a]`` at the reference conditions.
-    ``alpha_eff`` and ``beta_eff`` are the short-circuit-current and
-    open-circuit-voltage temperature coefficients already scaled by ``Adjust``
-    (Eqs. 8 and 9). The constraints are the short-circuit point (Eq. 11), the
-    open-circuit point (Eq. 12), the maximum-power point (Eq. 13), a zero
-    power-slope there (Eq. 19), and the open-circuit-voltage temperature
-    coefficient evaluated ``_DELTA_T_VOC`` above the reference (Eq. 22).
+    ``x`` holds the solver unknowns ``[I_L, ln I_o, R_s, 1/R_sh, a]`` at the
+    reference conditions. ``alpha_sc`` and ``beta_voc`` are the unscaled
+    datasheet coefficients; ``Adjust`` scales them as in Eqs. 8 and 9. The
+    constraints are the short-circuit point (Eq. 11), the open-circuit point
+    (Eq. 12), the maximum-power point (Eq. 13), a zero power-slope there
+    (Eq. 19), and the open-circuit-voltage temperature coefficient evaluated
+    ``_DELTA_T_VOC`` above the reference (Eq. 22).
     """
-    i_l, i_o, r_s, r_sh, a = params
-    t_ref_k = _TEMP_REF + 273.15
+    i_l, ln_i_o, r_s, g_sh, a = x
+    i_o = _exp(ln_i_o)
 
     y = np.empty(5)
     # Short-circuit point: V = 0, I = Isc (Eq. 11).
-    y[0] = i_sc - i_l + i_o * np.expm1(i_sc * r_s / a) + i_sc * r_s / r_sh
+    y[0] = i_sc - i_l + i_o * _expm1(i_sc * r_s / a) + i_sc * r_s * g_sh
     # Open-circuit point: V = Voc, I = 0 (Eq. 12).
-    y[1] = -i_l + i_o * np.expm1(v_oc / a) + v_oc / r_sh
+    y[1] = -i_l + i_o * _expm1(v_oc / a) + v_oc * g_sh
     # Maximum-power point: V = Vmp, I = Imp (Eq. 13).
-    y[2] = i_mp - i_l + i_o * np.expm1((v_mp + i_mp * r_s) / a) + (v_mp + i_mp * r_s) / r_sh
+    y[2] = i_mp - i_l + i_o * _expm1((v_mp + i_mp * r_s) / a) + (v_mp + i_mp * r_s) * g_sh
     # Zero power-slope at the maximum-power point (Eq. 19).
-    exp_mp = np.exp((v_mp + i_mp * r_s) / a)
-    y[3] = i_mp - v_mp * ((i_o / a) * exp_mp + 1.0 / r_sh) / (1.0 + (i_o * r_s / a) * exp_mp + r_s / r_sh)
+    exp_mp = _exp((v_mp + i_mp * r_s) / a)
+    y[3] = i_mp - v_mp * ((i_o / a) * exp_mp + g_sh) / (1.0 + (i_o * r_s / a) * exp_mp + r_s * g_sh)
     # Open-circuit-voltage temperature coefficient at T' = Tref + dT (Eq. 22).
     dt = _DELTA_T_VOC
-    t2_k = t_ref_k + dt
-    a2 = a * t2_k / t_ref_k
-    v_oc2 = v_oc + beta_eff * dt
-    i_l2 = i_l + alpha_eff * dt
-    eg2 = _EG_REF * (1.0 + _DEGDT * dt)
-    i_o2 = i_o * (t2_k / t_ref_k) ** 3 * np.exp((1.0 / _BOLTZMANN_EV_K) * (_EG_REF / t_ref_k - eg2 / t2_k))
-    y[4] = -i_l2 + i_o2 * np.expm1(v_oc2 / a2) + v_oc2 / r_sh
+    i_l2, i_o2, a2 = _translate(x, adjust, alpha_sc, dt)
+    v_oc2 = v_oc + beta_voc * (1.0 + adjust / 100.0) * dt
+    y[4] = -i_l2 + i_o2 * _expm1(v_oc2 / a2) + v_oc2 * g_sh
     return y
 
 
 def _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, x0):
-    """Solve the five reference parameters for a fixed ``Adjust``.
+    """Solve the five reference unknowns for a fixed ``Adjust``.
 
-    ``alpha_sc`` and ``beta_voc`` are the *unscaled* datasheet coefficients;
-    the ``Adjust`` scaling (Eqs. 8 and 9) is applied here.
+    Returns ``(x, ok)`` with ``x = [I_L, ln I_o, R_s, 1/R_sh, a]``. ``ok``
+    requires the solver to report success, finite unknowns and residuals of the
+    five equations within :data:`_RESIDUAL_TOL` of ``Isc``; the result may still
+    be unphysical (a negative shunt conductance on the way to the solution).
     """
-    alpha_eff = alpha_sc * (1.0 - adjust / 100.0)
-    beta_eff = beta_voc * (1.0 + adjust / 100.0)
+    args = (v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, adjust)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        sol = root(
-            _reference_equations,
-            x0,
-            args=(v_mp, i_mp, v_oc, i_sc, alpha_eff, beta_eff),
-            method="lm",
-        )
-    return sol.x, sol.success
+        sol = root(_reference_equations, x0, args=args, method="lm")
+        ok = bool(sol.success) and bool(np.all(np.isfinite(sol.x)))
+        if ok:
+            ok = bool(np.max(np.abs(_reference_equations(sol.x, *args))) <= _RESIDUAL_TOL * i_sc)
+    return sol.x, ok
 
 
-def _modeled_pmp(temp, alpha_sc, a_ref, i_l_ref, i_o_ref, r_sh_ref, r_s, adjust):
-    """Maximum power at 1000 W/m² and ``temp`` via the runtime model path.
-
-    Uses the same ``calcparams_cec`` / ``max_power_point`` path the simulator
-    uses (Newton), falling back to the more robust Brent solver and finally to
-    NaN if a (typically unphysical, mid-iteration) parameter set will not
-    converge — so an exploratory evaluation never raises.
-    """
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        params = calcparams_cec(_IRRAD_REF, temp, alpha_sc, a_ref, i_l_ref, i_o_ref, r_sh_ref, r_s, adjust)
-        for method in ("newton", "brentq"):
-            try:
-                return float(max_power_point(*params, method=method)["p_mp"])
-            except (RuntimeError, ValueError):
-                continue
-    return float("nan")
-
-
-def _modeled_gamma(five, adjust, alpha_sc):
+def _modeled_gamma(x, adjust, alpha_sc):
     """Modeled maximum-power temperature coefficient in %/°C (Dobos Eq. 10).
 
     The paper averages adjacent normalised power slopes over -10 → 50 °C; for a
     uniform grid that equals the secant slope between the endpoints, normalised
-    by the modeled power at the reference temperature.
+    by the modeled power at the reference temperature. The temperature
+    translation is done here with SAM's constants rather than through
+    ``calcparams_cec``, whose Boltzmann constant differs. Returns NaN if the
+    maximum-power point cannot be solved.
     """
-    i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref = five
-    p_low = _modeled_pmp(_GAMMA_T_LOW, alpha_sc, a_ref, i_l_ref, i_o_ref, r_sh_ref, r_s, adjust)
-    p_high = _modeled_pmp(_GAMMA_T_HIGH, alpha_sc, a_ref, i_l_ref, i_o_ref, r_sh_ref, r_s, adjust)
-    p_ref = _modeled_pmp(_TEMP_REF, alpha_sc, a_ref, i_l_ref, i_o_ref, r_sh_ref, r_s, adjust)
-    return 100.0 * (p_high - p_low) / (p_ref * (_GAMMA_T_HIGH - _GAMMA_T_LOW))
+    dt = np.array([_GAMMA_T_LOW, _TEMP_REF, _GAMMA_T_HIGH]) - _TEMP_REF
+    i_l, i_o, a = _translate(x, adjust, alpha_sc, dt)
+    r_sh = 1.0 / x[3] if x[3] != 0.0 else np.inf
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        try:
+            p_low, p_ref, p_high = max_power_point(i_l, i_o, x[2], r_sh, a, method="newton")["p_mp"]
+        except (RuntimeError, ValueError):
+            return float("nan")
+    return float(100.0 * (p_high - p_low) / (p_ref * (_GAMMA_T_HIGH - _GAMMA_T_LOW)))
 
 
 def _is_physical(five, adjust):
-    """True if the six parameters fall within the Dobos Table 5 sanity ranges."""
+    """True if the six parameters fall within SAM's sanity ranges (:data:`_PARAM_BOUNDS`)."""
     i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref = five
     values = {
         "a_ref": a_ref,
@@ -225,7 +278,17 @@ def _is_physical(five, adjust):
     return all(np.isfinite(v) and lo <= v <= hi for (lo, hi), v in ((_PARAM_BOUNDS[k], values[k]) for k in values))
 
 
-_ADJUST_SCAN = np.arange(0.0, 60.0001, 4.0)
+def _passes_iv_checks(five, v_mp, i_mp, v_oc):
+    """SAM's I–V shape checks on the reference curve (``module6par::sanity`` in 6par_solve.h)."""
+    i_l, i_o, r_s, r_sh, a = five
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        if abs(v_mp * i_from_v(v_mp, i_l, i_o, r_s, r_sh, a) / (v_mp * i_mp) - 1.0) > _SANITY_PMP_TOL:
+            return False
+        if abs(i_from_v(v_oc, i_l, i_o, r_s, r_sh, a)) > _SANITY_IOC_TOL * i_mp:
+            return False
+        v = np.linspace(0.015 * v_oc, 0.98 * v_oc, _SANITY_SLOPE_POINTS + 1)
+        return bool(np.all(np.diff(i_from_v(v, i_l, i_o, r_s, r_sh, a)) <= 0.0))
 
 
 def _solve_adjust(v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0):
@@ -233,56 +296,74 @@ def _solve_adjust(v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0):
 
     ``gamma`` decreases monotonically with ``Adjust`` along a fixed solution
     branch (a larger ``Adjust`` suppresses the photocurrent's rise with
-    temperature, so power falls faster). The branch is followed by warm-starting
-    each five-parameter solve from the previous solution (continuation), which
-    keeps the inner solver from hopping to a different root as ``Adjust`` moves
-    and makes gamma a smooth, monotone function to bracket and refine.
+    temperature, so power falls faster), so the sign of the mismatch at
+    ``Adjust = 0`` gives the direction of the search. ``Adjust`` is stepped in
+    that direction, each five-parameter solve warm-started from the previous
+    one (continuation) so the inner solver stays on one branch. A step whose
+    solve fails or whose gamma cannot be evaluated is halved, down to
+    :data:`_ADJUST_MIN_STEP`, before the search gives up; it also ends at
+    :data:`_ADJUST_LIMIT`. A bracketed match is refined with ``brentq``.
 
-    Returns ``(adjust, five_params)`` for the matched solution, or ``None`` if no
-    physical branch reaches the target gamma.
+    The search continues through samples outside SAM's parameter ranges or
+    I–V checks; at the end the samples are checked from the closest to the
+    target gamma outwards, so only samples that pass are returned.
+
+    Returns ``(adjust, x, residual)`` for the matched solution if it passes the
+    checks, otherwise for the passing sample closest to the target gamma, with
+    ``residual`` the absolute gamma mismatch in %/°C; ``None`` if no sample
+    passes.
     """
+    args = (v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc)
+    samples = []
 
-    def march(direction):
-        """Walk Adjust outward from 0, returning physical (adjust, residual, five) samples."""
-        samples = []
-        guess = np.array(x0, dtype=float)
-        for step in _ADJUST_SCAN:
-            adjust = direction * step
-            five, ok = _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, guess)
-            if not ok or not _is_physical(five, adjust):
-                break
-            gamma = _modeled_gamma(five, adjust, alpha_sc)
-            if not np.isfinite(gamma):
-                break
-            guess = five  # continuation: stay on this branch
-            samples.append((adjust, gamma - gamma_pmp, five))
-        return samples
-
-    # Sample both directions from 0; the +0 sample is shared, so drop the
-    # duplicate from the negative march.
-    samples = march(+1.0) + march(-1.0)[1:]
-    if not samples:
+    def closest_passing():
+        for adjust, x, residual in sorted(samples, key=lambda sample: sample[2]):
+            five = _from_unknowns(x)
+            if _is_physical(five, adjust) and _passes_iv_checks(five, v_mp, i_mp, v_oc):
+                return adjust, x, residual
         return None
-    samples.sort(key=lambda s: s[0])
 
-    for (a_lo, r_lo, five_lo), (a_hi, r_hi, _five_hi) in zip(samples, samples[1:], strict=False):
-        if r_lo == 0.0:
-            return a_lo, five_lo
-        if r_lo * r_hi < 0.0:
-            # Refine within the bracket, warm-starting from the low end each call.
-            def residual(adjust, _g=np.array(five_lo, dtype=float)):
-                five, _ok = _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, _g)
-                _g[:] = five
-                return _modeled_gamma(five, adjust, alpha_sc) - gamma_pmp
+    x, ok = _solve_five_params(0.0, *args, np.asarray(x0, dtype=float))
+    residual = _modeled_gamma(x, 0.0, alpha_sc) - gamma_pmp if ok else float("nan")
+    if not np.isfinite(residual):
+        return None
+    samples.append((0.0, x, abs(residual)))
+    direction = 1.0 if residual > 0.0 else -1.0
+    adjust, step = 0.0, _ADJUST_STEP
+    while abs(residual) > _GAMMA_TOL * 1e-3:
+        if abs(adjust) >= _ADJUST_LIMIT:
+            break
+        trial = direction * min(abs(adjust) + step, _ADJUST_LIMIT)
+        x_trial, ok = _solve_five_params(trial, *args, x)
+        trial_residual = _modeled_gamma(x_trial, trial, alpha_sc) - gamma_pmp if ok else float("nan")
+        if not np.isfinite(trial_residual):
+            step /= 2.0
+            if step < _ADJUST_MIN_STEP:
+                break
+            continue
+        samples.append((trial, x_trial, abs(trial_residual)))
+        if residual * trial_residual <= 0.0:
+            # Refine within the bracket, warm-starting each solve from the last.
+            branch = x.copy()
 
-            adjust = brentq(residual, a_lo, a_hi, xtol=1e-10, rtol=1e-12)
-            five, _ = _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, np.array(five_lo))
-            return adjust, five
+            def bracket_residual(value):
+                solved, solved_ok = _solve_five_params(value, *args, branch)
+                if not solved_ok:
+                    raise ValueError("inner solve failed inside the Adjust bracket")
+                branch[:] = solved
+                return _modeled_gamma(solved, value, alpha_sc) - gamma_pmp
 
-    # No sign change on this branch: return the closest physical sample so the
-    # caller can still surface a usable (if gamma-imperfect) result.
-    best = min(samples, key=lambda s: abs(s[1]))
-    return best[0], best[2]
+            try:
+                matched = brentq(bracket_residual, adjust, trial, xtol=1e-10, rtol=1e-12)
+            except (ValueError, RuntimeError):
+                return closest_passing()
+            x_matched, ok = _solve_five_params(matched, *args, branch)
+            if ok:
+                samples.append((matched, x_matched, abs(_modeled_gamma(x_matched, matched, alpha_sc) - gamma_pmp)))
+            return closest_passing()
+        adjust, x, residual = trial, x_trial, trial_residual
+        step = _ADJUST_STEP
+    return closest_passing()
 
 
 def fit_cec_params(
@@ -300,8 +381,8 @@ def fit_cec_params(
 
     Replacement for :func:`pvlib.ivtools.sdm.fit_cec_sam` at its default 25 °C
     reference temperature that needs no ``nrel-pysam``. Implements the
-    coefficient calculator of Dobos 2012 (DOI:10.1115/1.4005759) with ``scipy``
-    and ``pvlib`` only.
+    coefficient calculator of Dobos 2012 (DOI:10.1115/1.4005759) with SAM's
+    constants, using ``scipy`` and ``pvlib`` only.
 
     Args:
         celltype: Cell technology label. It selects the technology-specific
@@ -323,29 +404,27 @@ def fit_cec_params(
     Raises:
         RuntimeError: if no physical parameter set can be found.
     """
-    guesses = (
-        _initial_guess(Vmp, Imp, Voc, Isc, cells_in_series),
-        _empirical_guess(celltype, Vmp, Imp, Voc, Isc, cells_in_series),
-    )
-
     # Try the reported short-circuit current first and, if no branch matches the
-    # datasheet gamma, raise Isc by 1% per iteration (Dobos §5 heuristic, up to
-    # five iterations) to move a poorly conditioned module onto a well-shaped
-    # I-V curve. The first guess (De Soto) reproduces SAM on well-formed
-    # datasheets; the empirical guess (Dobos §4.3) is a robustness fallback. The
-    # best-but-imperfect candidate is retained so a usable result is returned
-    # even if no branch lands exactly on the target gamma.
+    # datasheet gamma, raise Isc by 1% per iteration (SAM's heuristic in
+    # 6par_solve.h, up to five iterations) to move a poorly conditioned module
+    # onto a well-shaped I-V curve. The first guess (De Soto) reproduces SAM on
+    # well-formed datasheets; the empirical guess (Dobos §4.3) is a robustness
+    # fallback. A candidate must pass SAM's parameter ranges and I–V checks; the
+    # best-but-imperfect one is retained so a usable result is returned even if
+    # no branch lands exactly on the target gamma.
     fallback = None
     for bump in range(6):
         i_sc = Isc * (1.01**bump)
+        guesses = (
+            _initial_guess(Vmp, Imp, Voc, i_sc, cells_in_series),
+            _empirical_guess(celltype, Vmp, Imp, Voc, i_sc, cells_in_series),
+        )
         for x0 in guesses:
             result = _solve_adjust(Vmp, Imp, Voc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0)
             if result is None:
                 continue
-            adjust, five = result
-            if not _is_physical(five, adjust):
-                continue
-            residual = abs(_modeled_gamma(five, adjust, alpha_sc) - gamma_pmp)
+            adjust, x, residual = result
+            five = _from_unknowns(x)
             if residual <= _GAMMA_TOL:
                 i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref = five
                 return (i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref, adjust)

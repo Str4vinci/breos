@@ -162,7 +162,7 @@ def test_an_explicit_none_is_the_default(flat_app):
 
 @pytest.mark.parametrize(
     ("reference", "previous_npv"),
-    [(FLAT_REFERENCE, -9725.03), (TOU_REFERENCE, -9945.27), (MONTH_REFERENCE, -10042.23)],
+    [(FLAT_REFERENCE, -9725.05), (TOU_REFERENCE, -9945.3), (MONTH_REFERENCE, -10042.26)],
     ids=["flat", "bundled", "month"],
 )
 def test_app_accepts_zero_reference_fixed_charge_with_previous_results(reference, previous_npv):
