@@ -178,32 +178,23 @@ def test_a_module_count_sweep_rebuilds_the_pv_layer_from_the_cached_weather(weat
 
 
 @pytest.mark.parametrize(
-    ("change", "field"),
+    ("settings_change", "config_change", "fields"),
     [
-        ({"weather_start_year": 2022}, "weather_start_year"),
-        ({"weather_end_year": 2021}, "weather_end_year"),
-        ({"target_year": 2024}, "target_year"),
+        ({"weather_start_year": 2022}, {}, "weather_start_year"),
+        ({"weather_end_year": 2021}, {}, "weather_end_year"),
+        ({"target_year": 2024}, {}, "target_year"),
+        ({}, {"resolution": "15min"}, "resolution"),
+        ({}, {"location": "lisbon"}, "latitude, longitude"),
+        ({}, {"solar_position": "mid-interval"}, "solar_position"),
+        ({}, {"irradiance_resampling": "clear_sky"}, "irradiance_resampling"),
     ],
 )
-def test_a_cache_for_other_weather_settings_is_refused(weather, change, field):
+def test_a_cache_for_other_weather_settings_a_site_or_a_resolution_is_refused(
+    weather, settings_change, config_change, fields
+):
     cache = build_year_cache(BASE, _settings(weather))
-    with pytest.raises(ValueError, match=f"year_cache was built for other weather inputs \\({field} differ"):
-        run_montecarlo(BASE, _settings(weather, **change), year_cache=cache)
-
-
-@pytest.mark.parametrize(
-    ("change", "fields"),
-    [
-        ({"resolution": "15min"}, "resolution"),
-        ({"location": "lisbon"}, "latitude, longitude"),
-        ({"solar_position": "mid-interval"}, "solar_position"),
-        ({"irradiance_resampling": "clear_sky"}, "irradiance_resampling"),
-    ],
-)
-def test_a_cache_for_another_site_or_resolution_is_refused(weather, change, fields):
-    cache = build_year_cache(BASE, _settings(weather))
-    with pytest.raises(ValueError, match=f"\\({fields} differ"):
-        run_montecarlo({**BASE, **change}, _settings(weather), year_cache=cache)
+    with pytest.raises(ValueError, match=f"year_cache was built for other weather inputs \\({fields} differ"):
+        run_montecarlo({**BASE, **config_change}, _settings(weather, **settings_change), year_cache=cache)
 
 
 def test_a_cache_is_refused_for_another_weather_file_or_once_its_file_changes(tmp_path, write_multiyear_weather):

@@ -240,8 +240,10 @@ def test_montecarlo_records_the_app_policy(tmp_path):
     from breos.weather import save_weather_csv
     from tools.generate_app_golden import synthetic_weather
 
+    # A right-labelled source: each hour is stamped at its end.
     source = synthetic_weather()
-    source.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
+    source.index = source.index + pd.Timedelta(hours=1)
+    source.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"}
     source.index.name = "date"
     path = tmp_path / "weather.csv"
     save_weather_csv(source, path)
@@ -252,11 +254,17 @@ def test_montecarlo_records_the_app_policy(tmp_path):
             "annual_consumption_kwh": 4000,
             "resolution": "15min",
             "irradiance_resampling": "clear_sky_energy_conserving",
+            "solar_position": "weather",
         },
         MonteCarloSettings(weather_file=str(path), n_runs=1, years_per_run=1, target_year=2025, seed=0),
     )
     provenance = result.provenance
     metadata = provenance["runtime_weather"]["metadata"]
+    # The runtime weather is relabelled to the left edge, and the sun is
+    # placed mid-interval on the 15-minute steps it was resampled to.
+    assert metadata["timestamp_label_basis"] == "left"
+    assert metadata["source_timestamp_label_basis"] == "right"
+    assert provenance["runtime_weather"]["solar_position_offset_minutes"] == 7.5
     assert provenance["resolved_config"]["irradiance_resampling"] == "clear_sky_energy_conserving"
     assert metadata["irradiance_resampling"] == "clear_sky_energy_conserving"
     assert metadata["irradiance_resampling_resolved"] == "clear_sky_energy_conserving"
