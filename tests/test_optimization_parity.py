@@ -369,10 +369,11 @@ def test_optimizer_site_uses_the_same_altitude_as_app():
     pvlib_location = pytest.importorskip("pvlib.location")
     from breos.optimization import _site_location
 
-    looked_up = _site_location({"latitude": 41.15, "longitude": -8.61, "timezone": "Europe/Lisbon"})
+    site = {"latitude": 41.15, "longitude": -8.61, "timezone": "Europe/Lisbon", "altitude": None, "name": ""}
+    looked_up = _site_location(site)
     app_site = pvlib_location.Location(41.15, -8.61, tz="Europe/Lisbon")
     assert looked_up.altitude == app_site.altitude
     assert looked_up.altitude > 0.0  # Porto is not at sea level
 
-    explicit = _site_location({"latitude": 41.15, "longitude": -8.61, "altitude": 0})
+    explicit = _site_location({**site, "altitude": 0})
     assert explicit.altitude == 0.0

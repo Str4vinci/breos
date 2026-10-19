@@ -34,7 +34,7 @@ from breos.execution import (
 )
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.optimization_config import (
-    DEFAULT_TIMEZONE,
+    EARLY_STOP_DEFAULTS,
     LAYOUTS,
     adjusted_max_tilt_deg,
     resolve_optimization_config,
@@ -197,65 +197,6 @@ def _resolve_horizon_and_pv_degradation(config: Dict[str, Any]) -> Tuple[int, fl
     and ``financials.pv_degradation_rate``.
     """
     return int(config["simulation"]["years_projection"]), float(config["pv"]["degradation_rate"])
-
-
-def _resolve_degradation_engine_spec(batt_spec: Dict[str, Any]) -> Tuple[str, Optional[str]]:
-    """Validate ``battery.degradation_engine`` and ``battery.blast_model`` once.
-
-    The same rules as the App's config validation, applied when the problem is
-    built, so an invalid BLAST setting fails on either objective basis before
-    any candidate is scored.
-    """
-    engine = str(batt_spec.get("degradation_engine", "native")).strip().lower()
-    blast_model = batt_spec.get("blast_model")
-    if engine not in ("native", "blast"):
-        raise ValueError("battery.degradation_engine must be one of: native, blast")
-    if engine == "blast":
-        from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
-
-        if blast_model not in ENABLED_BLAST_MODEL_KEYS:
-            available = ", ".join(ENABLED_BLAST_MODEL_KEYS)
-            raise ValueError(f"Unknown battery.blast_model {blast_model!r}. Available: {available}")
-    elif blast_model is not None:
-        raise ValueError("battery.blast_model requires battery.degradation_engine = 'blast'")
-    return engine, blast_model
-
-
-def _validated_dc_output_scale(config: Dict[str, Any]) -> float:
-    """Read and check the DC-side yield correction from a study config.
-
-    A DC-side factor is applied to the raw array output before dispatch, so
-    clipping, charging and the part-load ratio all respond to it. That makes
-    it the correct knob for a model that under-predicts measured yield, and
-    it is deliberately not bounded above.
-    """
-    scale = float(config["dc_output_scale"])
-    if not np.isfinite(scale) or scale <= 0.0:
-        raise ValueError("dc_output_scale must be finite and greater than 0")
-    return scale
-
-
-def _validated_ac_output_scale(config: Dict[str, Any]) -> float:
-    """Read and check the AC-side derate from a study config.
-
-    The factor derates AC delivery from inside dispatch, so discharge
-    decisions respond to it. Unlike the DC-side factor it lands after the
-    inverter nameplate limit, so it is bounded to ``(0, 1]``: above 1 the
-    inverter would deliver more than its nameplate and more AC than the DC
-    entering it, and the reported inverter loss would pin at zero. Correct an
-    under-predicting model with ``dc_output_scale`` instead.
-
-    Rejecting here means an out-of-range study config fails before any
-    evaluation starts, rather than being clamped inside the inverter helpers.
-    """
-    scale = float(config["ac_output_scale"])
-    if not np.isfinite(scale) or not 0.0 < scale <= 1.0:
-        raise ValueError(
-            "ac_output_scale must be finite, greater than 0 and at most 1; it is applied after "
-            "the inverter nameplate limit. Use dc_output_scale to correct an under-predicting "
-            "model on the DC side"
-        )
-    return scale
 
 
 # Battery-section keys forwarded to BatteryConfig under the same name.
@@ -521,7 +462,8 @@ def _evaluate_projected_design_metrics(
         battery_inverter_ac_capacity_w=battery_inverter_w,
     )
     has_battery = battery_kwh > 0.0
-    degradation_engine, blast_model = _resolve_degradation_engine_spec(batt_spec)
+    # Checked by resolve_optimization_config.
+    degradation_engine, blast_model = batt_spec.get("degradation_engine", "native"), batt_spec.get("blast_model")
     if not has_battery:
         # Without a battery there is nothing to age, and BLAST needs a pack.
         degradation_engine, blast_model = "native", None
@@ -718,7 +660,7 @@ def _resolve_optimization_tariff(
 
 
 def _site_location(location: dict[str, Any]) -> Any:
-    """Build the pvlib site the optimizer simulates, the way App does.
+    """Build the pvlib site the optimizer simulates from a resolved [location], the way App does.
 
     Without an ``altitude`` key pvlib looks the elevation up from the
     coordinates, exactly as App's ``Location(lat, lon, tz=...)`` does. The
@@ -729,7 +671,6 @@ def _site_location(location: dict[str, Any]) -> Any:
     """
     from pvlib.location import Location
 
-    location = {"timezone": DEFAULT_TIMEZONE, "altitude": None, "name": "", **location}
     altitude = location["altitude"]
     return Location(
         float(location["latitude"]),
@@ -898,7 +839,7 @@ def evaluate_projected_design(
     # or more. Unlike ac_output_scale it is applied before dispatch, so
     # charging, clipping and the part-load ratio all respond to it, which is
     # why it is the correction to reach for when the model under-predicts.
-    dc_output_scale = _validated_dc_output_scale(config)
+    dc_output_scale = config["dc_output_scale"]
 
     model_options = configured_pv_model_kwargs(config)
 
@@ -964,7 +905,7 @@ def evaluate_projected_design(
         inverter_ac_capacity_w=inverter_ac_capacity_w,
         emissions_params=EmissionsParams(**emissions_config) if emissions_config else None,
         return_tables=True,
-        ac_output_scale=_validated_ac_output_scale(config),
+        ac_output_scale=config["ac_output_scale"],
         tariff=pricing.tariff,
         instructions=pricing.instructions,
         reference_tariff=pricing.reference_tariff,
@@ -1107,9 +1048,6 @@ try:
             # resolver refuses the removed annual basis.
             self.objective_basis = self.opt_cfg["objective_basis"]
             self.projected_years, self.projected_degradation_rate = _resolve_horizon_and_pv_degradation(config)
-            # Validated here so a bad engine setting fails before the first
-            # candidate rather than inside a worker.
-            _resolve_degradation_engine_spec(config["battery"])
             self.pv_params, self.module_area_m2 = _resolve_pv_module_and_area(config)
             self.batt_temp_cfg = config["battery"]["temperature"]
             self.indoor_model = config["battery"]["indoor_model"]
@@ -1121,8 +1059,8 @@ try:
             cost_params = cost_params_from_config(config["costs"], config["financials"])
             self.dc_ac_ratio = cost_params.dc_ac_ratio
             self.inverter_efficiency = config["inverter_efficiency"]
-            self.ac_output_scale = _validated_ac_output_scale(config)
-            self.dc_output_scale = _validated_dc_output_scale(config)
+            self.ac_output_scale = config["ac_output_scale"]
+            self.dc_output_scale = config["dc_output_scale"]
 
             self.battery_replacement_treatment = _battery_replacement_treatment(config["battery"], config["costs"])
 
@@ -1337,14 +1275,11 @@ except ImportError as exc:
 
 
 def _build_multi_objective_termination(n_gen: int, early_stop: Any):
-    """Build the configured pymoo generation cap and objective-space stop."""
+    """Build the configured pymoo generation cap and objective-space stop from a resolved early_stop."""
     if early_stop in (None, False):
         return ("n_gen", n_gen), None
-    if early_stop is True:
-        early_stop = {}
-    if not isinstance(early_stop, dict):
-        raise ValueError("optimization.early_stop must be a boolean or a mapping")
-    if early_stop.get("enabled", True) is False:
+    settings = {**EARLY_STOP_DEFAULTS, "min_gen": min(20, n_gen), **({} if early_stop is True else early_stop)}
+    if not settings["enabled"]:
         return ("n_gen", n_gen), None
 
     from pymoo.termination.collection import TerminationCollection
@@ -1352,13 +1287,9 @@ def _build_multi_objective_termination(n_gen: int, early_stop: Any):
     from pymoo.termination.max_gen import MaximumGenerationTermination
     from pymoo.termination.robust import RobustTermination
 
-    ftol = float(early_stop.get("ftol", 0.0025))
-    if ftol <= 0.0:
-        raise ValueError("optimization.early_stop.ftol must be greater than zero")
-    period = max(1, int(early_stop.get("period", 10)))
-    n_skip = max(0, int(early_stop.get("n_skip", 0)))
-    min_gen = max(1, int(early_stop.get("min_gen", min(20, n_gen))))
-    only_feasible = bool(early_stop.get("only_feasible", True))
+    ftol = float(settings["ftol"])
+    period, n_skip, min_gen = settings["period"], settings["n_skip"], settings["min_gen"]
+    only_feasible = settings["only_feasible"]
     objective_stop = RobustTermination(
         MultiObjectiveSpaceTermination(tol=ftol, only_feas=only_feasible, n_skip=n_skip),
         period=period,

@@ -113,14 +113,18 @@ def number(
     return check
 
 
-def integer(*, minimum: int | None = None) -> Checker:
+def integer(*, minimum: int | None = None, whole_floats: bool = False) -> Checker:
     """An integer, optionally at least ``minimum``; returned as ``int``.
 
-    A bool is refused, and so is a float even when it is integral (``2.0``).
+    A bool is refused, and so is a float, even an integral one (``2.0``),
+    unless ``whole_floats``.
     """
 
     def check(value: Any, where: str) -> int:
-        if isinstance(value, bool) or not isinstance(value, Integral):
+        if whole_floats and isinstance(value, float):
+            if not (math.isfinite(value) and value.is_integer()):
+                raise ValueError(f"'{where}' must be a whole number")
+        elif isinstance(value, bool) or not isinstance(value, Integral):
             raise TypeError(f"'{where}' must be an integer")
         result = int(value)
         if minimum is not None and result < minimum:

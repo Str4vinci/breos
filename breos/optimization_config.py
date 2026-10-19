@@ -40,6 +40,7 @@ from breos.config_schema import (
     anything,
     boolean,
     choice,
+    integer,
     list_of,
     number,
     table,
@@ -92,17 +93,7 @@ _REMOVED_KEYS = {
 
 def _integer(minimum: int) -> Any:
     """A whole number, returned as ``int``; ``20.0`` is accepted, ``20.5`` is not."""
-
-    def check(value: Any, where: str) -> int:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError(f"'{where}' must be a whole number")
-        if isinstance(value, float) and not (math.isfinite(value) and value.is_integer()):
-            raise ValueError(f"'{where}' must be a whole number")
-        if value < minimum:
-            raise ValueError(f"'{where}' must be >= {minimum}")
-        return int(value)
-
-    return check
+    return integer(minimum=minimum, whole_floats=True)
 
 
 def _app_check(key: str) -> Any:
@@ -135,7 +126,11 @@ def _scale(value: Any) -> float:
 
 
 def _dc_output_scale(value: Any, where: str) -> float:
-    """A DC-side yield correction, applied before dispatch; not bounded above."""
+    """A DC-side yield correction, applied before dispatch; not bounded above.
+
+    Clipping, charging and the part-load ratio all respond to it, which makes
+    it the knob for a model that under-predicts measured yield.
+    """
     scale = _scale(value)
     if not math.isfinite(scale) or scale <= 0.0:
         raise ValueError("dc_output_scale must be finite and greater than 0")
@@ -143,7 +138,11 @@ def _dc_output_scale(value: Any, where: str) -> float:
 
 
 def _ac_output_scale(value: Any, where: str) -> float:
-    """An AC-side derate, applied after the inverter nameplate limit, so at most 1."""
+    """An AC-side derate, applied after the inverter nameplate limit, so at most 1.
+
+    Above 1 the inverter would deliver more than its nameplate and more AC
+    than the DC entering it, and the reported inverter loss would pin at 0.
+    """
     scale = _scale(value)
     if not math.isfinite(scale) or not 0.0 < scale <= 1.0:
         raise ValueError(
@@ -326,6 +325,15 @@ MODE_TABLE = TableSpec(
         "east_west_tilt_deg": number(minimum=0, maximum=90),
     },
 )
+# The early stop's settings when [optimization.early_stop] leaves them out;
+# min_gen defaults to the smaller of 20 and the generation cap.
+EARLY_STOP_DEFAULTS: Mapping[str, Any] = {
+    "enabled": True,
+    "ftol": 0.0025,
+    "period": 10,
+    "n_skip": 0,
+    "only_feasible": True,
+}
 EARLY_STOP_TABLE = TableSpec(
     "optimization.early_stop",
     keys={
@@ -391,12 +399,22 @@ OPTIMIZATION_SCALARS: Mapping[str, Any] = {
 }
 
 
-def _first_set(where: tuple[tuple[str, Any], ...], default: Any) -> Any:
-    """The first spelling of a setting that is set, in the documented order, else ``default``."""
-    for _name, value in where:
-        if value is not None:
-            return value
-    return default
+def _first_set(*values: Any, default: Any) -> Any:
+    """The first of a setting's spellings that is set, in the documented order, else ``default``."""
+    return next((value for value in values if value is not None), default)
+
+
+def _check_blast_model(battery: Mapping[str, Any]) -> None:
+    """The App's BLAST rules: a known model with the blast engine, and none without it."""
+    blast_model = battery["blast_model"]
+    if battery["degradation_engine"] == "blast":
+        from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
+
+        if blast_model not in ENABLED_BLAST_MODEL_KEYS:
+            available = ", ".join(ENABLED_BLAST_MODEL_KEYS)
+            raise ValueError(f"Unknown battery.blast_model {blast_model!r}. Available: {available}")
+    elif blast_model is not None:
+        raise ValueError("battery.blast_model requires battery.degradation_engine = 'blast'")
 
 
 def _currency(resolved: Mapping[str, Any]) -> str:
@@ -557,28 +575,20 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
     simulation.setdefault("resolution", DEFAULT_RESOLUTION)
     simulation.setdefault("irradiance_resampling", DEFAULTS["irradiance_resampling"])
+    # simulation.years_projection, else financials.project_lifespan.
     simulation["years_projection"] = _first_set(
-        (
-            ("simulation.years_projection", simulation.get("years_projection")),
-            ("financials.project_lifespan", financials.get("project_lifespan")),
-        ),
-        DEFAULTS["projection_years"],
+        simulation.get("years_projection"), financials.get("project_lifespan"), default=DEFAULTS["projection_years"]
     )
+    # pv.degradation_rate, else financials.pv_degradation_rate.
     pv["degradation_rate"] = _first_set(
-        (
-            ("pv.degradation_rate", pv.get("degradation_rate")),
-            ("financials.pv_degradation_rate", financials.get("pv_degradation_rate")),
-        ),
-        DEFAULTS["pv_degradation_rate"],
+        pv.get("degradation_rate"), financials.get("pv_degradation_rate"), default=DEFAULTS["pv_degradation_rate"]
     )
+    # inverter_efficiency, else inverter.efficiency.
     resolved["inverter_efficiency"] = _first_set(
-        (
-            ("inverter_efficiency", resolved.get("inverter_efficiency")),
-            ("inverter.efficiency", inverter.get("efficiency")),
-        ),
-        DEFAULTS["inverter_efficiency"],
+        resolved.get("inverter_efficiency"), inverter.get("efficiency"), default=DEFAULTS["inverter_efficiency"]
     )
-    module = _first_set((("pv.module", pv.get("module")), ("pv_module", resolved.pop("pv_module", None))), None)
+    # pv.module, else pv_module.
+    module = _first_set(pv.get("module"), resolved.pop("pv_module", None), default=None)
     if "params" not in pv:
         pv["module"] = module or default_module_key()
     elif module is not None:
@@ -592,6 +602,7 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     battery.setdefault("indoor_model", None)
     battery.setdefault("degradation_engine", "native")
     battery.setdefault("blast_model", None)
+    _check_blast_model(battery)
     battery.setdefault("replacement_cost", None)
     battery.setdefault("enable_replacement", True)
     battery.setdefault("allow_terminal_replacement", True)
