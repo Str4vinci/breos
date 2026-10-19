@@ -74,7 +74,8 @@ load = load_profile(
 
 For 15-minute runs, hourly weather is prepared with the same resampling
 helper as App and Monte Carlo. Set `simulation.irradiance_resampling` to
-`"auto"` (default), `"clear_sky"` or `"clear_sky_energy_conserving"`; see
+`"auto"` (default), `"clear_sky"`, `"clear_sky_energy_conserving"` or
+`"quadrature"`; see
 [the irradiance policy](configuration.md#hourly-weather-at-15-minute-resolution).
 Weather already at 15 minutes is used directly. A frame read with
 `pd.read_csv` carries none of the metadata sidecar, so `"auto"` treats it as

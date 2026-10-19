@@ -495,11 +495,16 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default="auto",
         cli_flags=("--irradiance-resampling",),
         cli_choices=IRRADIANCE_RESAMPLING_POLICIES,
-        cli_help="Hourly irradiance to 15 minutes: auto conserves interval means; clear_sky reconstructs instant samples.",
+        cli_help=(
+            "Hourly irradiance to 15 minutes: auto conserves interval means; clear_sky reconstructs instant samples; "
+            "quadrature derives GHI from one-minute DNI and DHI."
+        ),
         doc=(
             'Hourly-to-15-minute irradiance policy: `"auto"` conserves declared interval means and uses '
             '`"clear_sky"` otherwise. `"clear_sky_energy_conserving"` requires interval-mean weather metadata. '
-            "Each component is conserved independently; no GHI/DNI/DHI closure is enforced"
+            "Each component is conserved independently; no GHI/DNI/DHI closure is enforced. "
+            '`"quadrature"` derives GHI from DNI and DHI in every one-minute sample and averages the samples '
+            "into quarter-hours, conserving interval-mean DNI and DHI"
         ),
         summary="simulation.irradiance_resampling",
     ),

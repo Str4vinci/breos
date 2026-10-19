@@ -634,7 +634,8 @@ by feature:
   `settings` and `runtime_weather.metadata` record `irradiance_resampling`
   (requested) and `irradiance_resampling_resolved`, with per-component
   fallback and zero-support counts and the observational
-  `irradiance_closure` residuals. `irradiance_resampling` is in
+  `irradiance_closure` residuals, and under `"quadrature"` the
+  `irradiance_quadrature` record. `irradiance_resampling` is in
   `resolved_config` and in the optimizer's `simulation` config, and
   optimizer provenance carries `simulation`, `weather` and, for a real
   weather sequence, `weather_by_year`. See

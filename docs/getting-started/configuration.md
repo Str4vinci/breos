@@ -58,6 +58,22 @@ optimization reads the same values from `simulation.irradiance_resampling`:
   to reproduce that hour's mean, independently for GHI, DNI and DHI. It
   raises for instantaneous or undeclared input. Positive source hours with
   no reconstructed support receive a flat fill, recorded in provenance.
+- `"quadrature"` samples DNI and DHI every minute and derives GHI in each
+  sample as GHI = DNI·max(cos(apparent zenith), 0) + DHI. Each quarter-hour
+  is the mean of the 15 one-minute samples centred on its representative
+  time. Closure is exact in every sample, so a quarter-hour's GHI is its DHI
+  plus the step mean of DNI·cos(zenith); it is not the step's mean DNI times
+  the cosine of one zenith, whether taken at one time or averaged over the
+  step, because DNI and the zenith both vary inside the step. An interval-mean source hour spreads DNI and DHI over its 60
+  minutes in proportion to their clear-sky values, which conserves both
+  hourly means; the shape inside the hour is the clear-sky shape, and steps
+  may jump at hour boundaries. Instant samples interpolate each component's
+  clear-sky ratio at every minute as `"clear_sky"` does, without
+  conservation. GHI is derived, so its hourly mean is the input's only as
+  far as the input itself closes; `irradiance_quadrature` records the
+  difference. It needs coordinates and all three components, and refuses
+  missing or non-finite irradiance instead of filling it. The minute
+  solar positions make it slower: about 1.6 s a weather year against 0.2 s.
 
 PVGIS TMY is instantaneous with a provider offset, so `"auto"` resolves to
 `"clear_sky"`. Open-Meteo interval means and EPW use hourly conservation.
@@ -65,14 +81,23 @@ Without coordinates, direct interpolation replaces clear-sky reconstruction;
 the policy still controls hourly conservation. Already-quarter-hour weather
 is unchanged.
 
-No GHI/DNI/DHI closure is enforced, and DHI is never clipped to GHI.
-Weather metadata and result provenance record requested and resolved policy,
+Apart from the per-sample closure of `"quadrature"`, no GHI/DNI/DHI closure is
+enforced, and DHI is never clipped to GHI. Weather metadata and result provenance record requested and resolved policy,
 interpolation method, the daylight quarter-hours filled by the dawn/dusk
 fallback and the zero-support hour counts, per component. With coordinates and all three components, `irradiance_closure`
 records before/after conservation diagnostics over daylight quarter-hours:
 the GHI-weighted mean absolute residual in W/m² and the absolute residual
 energy divided by GHI energy. Solar position uses apparent zenith at the
-same representative times as reconstruction.
+same representative times as reconstruction. Under `"quadrature"` there is
+no separate conservation step, so `before` and `after` agree. Their residual
+is not zero: it compares the step means with the zenith at the
+representative time, while the step's beam is the mean of DNI·cos(zenith)
+over its samples. `irradiance_quadrature` records the sampling, the
+conserved and derived components, and `ghi_reconciliation`: the derived GHI
+against the input GHI at the source steps (the hour's mean for interval
+means, the quarter-hour centred on the sample for instant samples), as the
+change in GHI energy and the absolute residual energy, both divided by input
+GHI energy. Both are `null` when the input GHI energy is zero.
 
 ## Battery capacity and the SOC window
 
