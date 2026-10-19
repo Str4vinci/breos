@@ -47,13 +47,6 @@ def test_tracking_path_checks_the_weather_grid(synthetic_weather, porto_location
         )
 
 
-def test_regular_weather_is_unchanged(synthetic_weather, porto_location, pv_params):
-    dc = _dc(synthetic_weather, porto_location, pv_params)
-
-    assert dc.index.equals(synthetic_weather.index)
-    assert np.isfinite(dc.to_numpy()).all()
-
-
 @pytest.mark.parametrize(
     ("column", "match"),
     [("temp_air", "no air temperature column"), ("wind_speed", "no wind speed column")],

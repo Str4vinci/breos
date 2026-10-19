@@ -552,7 +552,9 @@ class TestTracking:
         dual = self._dual(synthetic_weather, porto_location, pv_params)
         for dc in (fixed, single, dual):
             assert isinstance(dc, pd.Series)
-            assert len(dc) == len(synthetic_weather)
+            # Regular weather passes the grid guard unchanged (#172).
+            assert dc.index.equals(synthetic_weather.index)
+            assert np.isfinite(dc.to_numpy()).all()
             assert (dc >= -0.01).all()
         assert dual.sum() >= single.sum() > fixed.sum()
 
