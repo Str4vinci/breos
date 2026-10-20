@@ -1,14 +1,12 @@
 """AC-coupled batteries through the App (ADR 0004 C2, C8, C9, C14)."""
 
-from unittest import mock
-
 import pytest
 
 from breos import App
 from breos.app_config import build_costs_dict, resolve_app_config
 from breos.economics import default_amount_cost_keys, replacement_event_cost
 from breos.projection import build_battery_config
-from tools.generate_app_golden import _fake_fetch
+from tests.offline_app import offline_weather
 
 BASE = {
     "location": "porto",
@@ -33,10 +31,7 @@ def _resolve(**overrides):
 
 
 def _result(config):
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         app = App({**BASE, **config})
         app.simulate()
         return app.result()
@@ -234,10 +229,7 @@ def test_a_non_eur_ac_run_refuses_a_eur_default_pv_inverter_price():
 
 
 def test_revalue_changes_the_replacement_price_and_refuses_it_across_currencies():
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         app = App({**BASE, "battery_kwh": 5, "battery_eol_percentage": 0.97, "battery_replacement_cost": 4321.0})
         app.simulate()
         result = app.result()

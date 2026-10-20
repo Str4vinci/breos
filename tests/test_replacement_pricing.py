@@ -1,7 +1,6 @@
 """The economics prices battery replacements; the physics only reports them (ADR 0003 E4, #183)."""
 
 from dataclasses import fields
-from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -21,7 +20,8 @@ from breos.economics import (
     replacement_event_cost,
     replacement_total_t0,
 )
-from tools.generate_app_golden import SCENARIOS, _fake_fetch
+from tests.offline_app import offline_weather
+from tools.generate_app_golden import SCENARIOS
 
 
 def test_battery_config_has_no_price():
@@ -135,10 +135,7 @@ def test_the_physics_reports_the_swapped_capacity():
 def priced_runs():
     config = SCENARIOS["native_h_replacement"]
     runs = {}
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         for storage_cost in (500.0, 250.0):
             app = App({**config, "costs": {**config.get("costs", {}), "storage_cost_per_kwh": storage_cost}})
             app.simulate()

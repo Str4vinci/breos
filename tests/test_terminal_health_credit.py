@@ -15,8 +15,9 @@ from breos.economics import terminal_health_credit
 from breos.montecarlo import MonteCarloSettings, _simulate_trajectory, _Study, _summarize, run_montecarlo
 from breos.optimization import evaluate_projected_design
 from breos.projection import ProjectionYear, run_projection, value_projection
+from tests.offline_app import offline_weather
 from tests.test_terminal_replacement import BLAST, EVERY_PERIOD_EOL, PRICING, _design_inputs, _inputs
-from tools.generate_app_golden import SCENARIOS, _fake_fetch
+from tools.generate_app_golden import SCENARIOS
 
 BASE = {**SCENARIOS["native_h_battery"], "execution_backend": "python", **PRICING}
 ENABLED = {"basis": "battery_health_fraction"}
@@ -89,10 +90,7 @@ def _app(**overrides):
     config = {**BASE, **overrides}
     if "period" in config:
         config.pop("projection_years")
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", return_value=None),
-    ):
+    with offline_weather():
         app = App(config)
         app.simulate()
     return app

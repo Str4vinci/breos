@@ -9,7 +9,6 @@ unless it truly leaves the inputs unchanged.
 import csv
 import pickle
 from dataclasses import replace
-from unittest import mock
 
 import pandas as pd
 import pytest
@@ -25,6 +24,7 @@ from breos.app_inputs import (
 from breos.economics import default_amount_cost_keys
 from breos.pv import model_options
 from breos.pv_modules import MODULES
+from tests.offline_app import offline_weather
 from tools.generate_app_golden import _fake_fetch
 
 BASE = {
@@ -113,10 +113,7 @@ def _prepared(config):
     # Each run computes the sun afresh: the pickles below compare bytes, and
     # pandas fills private caches on the objects a computation touches.
     model_options._SOLAR_POSITIONS.clear()
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         app = App(config)
         return prepare_simulation_inputs(app._resolved.cfg, app._resolved, app._runtime_dependencies())
 

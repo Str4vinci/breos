@@ -5,6 +5,7 @@ they need no network and their numbers match the golden scenarios.
 """
 
 import math
+from contextlib import contextmanager
 from unittest import mock
 
 import pytest
@@ -110,3 +111,11 @@ def evaluate_pv_design(weather, load, config):
     return optimization.evaluate_projected_design(
         weather, load, config, n_modules=4, battery_kwh=0.0, tilt=30.0, azimuth=180.0
     )
+
+
+@contextmanager
+def offline_weather():
+    """The weather fetch and file load patched to the golden synthetic weather for the block."""
+    fetch, weather = offline()
+    with fetch, weather:
+        yield

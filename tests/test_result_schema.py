@@ -1,7 +1,5 @@
 """Currency-neutral result names and the result format number (ADR 0003 E8, E9)."""
 
-from unittest import mock
-
 import pandas as pd
 import pytest
 
@@ -9,17 +7,15 @@ from breos.cli import _load_options
 from breos.optimization import SolarDesignProblem
 from breos.plotting import _currency, plot_breakeven_comparison
 from breos.result_schema import RESULT_SCHEMA_VERSION
-from tools.generate_app_golden import SCENARIOS, _fake_fetch
+from tests.offline_app import offline_weather
+from tools.generate_app_golden import SCENARIOS
 
 
 @pytest.fixture(scope="module")
 def replacement_app():
     from breos import App
 
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         app = App({**SCENARIOS["native_h_replacement"], "execution_backend": "python"})
         app.simulate()
         return app

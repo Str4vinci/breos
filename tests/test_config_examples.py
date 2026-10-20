@@ -16,6 +16,7 @@ import pytest
 
 from breos.app_config import DEFAULTS
 from breos.montecarlo import MonteCarloSettings
+from tests.offline_app import offline_weather
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "configs" / "examples"
 _ANNOTATED = re.compile(r"^#?\s*([a-z_]+)\s*=\s*[^#]+#\s*\[([^\]]+)\]")
@@ -62,18 +63,13 @@ def test_example_comments_state_the_real_defaults(name, defaults, minimum):
 
 
 def test_the_balcony_example_runs_each_module_on_its_own_input():
-    from unittest import mock
 
     from breos import App
-    from tools.generate_app_golden import _fake_fetch
 
     config = tomllib.loads((EXAMPLES / "balcony-microinverter.toml").read_text(encoding="utf-8"))
 
     def run(config):
-        with (
-            mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-            mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-        ):
+        with offline_weather():
             app = App(config)
             app.simulate()
         return app

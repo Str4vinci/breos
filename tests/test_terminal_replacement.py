@@ -12,7 +12,6 @@ its swap is skipped. All three default to true, which changes nothing.
 from __future__ import annotations
 
 from dataclasses import replace
-from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -33,9 +32,9 @@ from breos.optimization import _evaluate_projected_design_metrics, evaluate_proj
 from breos.projection import ProjectionYear, project_years, value_projection
 from breos.pv_modules import get_module
 from breos.smart_charging import FixedTargetDayController
+from tests.offline_app import offline_weather
 from tests.test_controller_seam import _battery, _core, _Recording, _scenario
 from tests.test_daily_persistence import _small_grid
-from tools.generate_app_golden import _fake_fetch
 
 # A threshold this close to full health is crossed when any period closes,
 # including the first period of a fresh pack, so every close replaces.
@@ -425,10 +424,7 @@ def _app(**overrides) -> App:
     if "period" in config:
         # A [period] window runs once and takes no projection_years.
         del config["projection_years"]
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         app = App(config)
         app.simulate()
     return app

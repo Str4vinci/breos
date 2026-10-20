@@ -1,7 +1,5 @@
 """Separate escalators for import, O&M and replacement learning (ADR 0003 E1, E2)."""
 
-from unittest import mock
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -9,7 +7,8 @@ import pytest
 from breos import App, optimization
 from breos.economics import cost_analysis_projection, projection_rates_record
 from breos.optimization_config import resolve_optimization_config
-from tools.generate_app_golden import SCENARIOS, _fake_fetch
+from tests.offline_app import offline_weather
+from tools.generate_app_golden import SCENARIOS
 
 COSTS = {
     "total_initial_cost": 6000.0,
@@ -114,10 +113,7 @@ def app_replacement_runs():
         "replacement_cost_learning": {"replacement_cost_learning": 0.2},
     }
     runs = {}
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         for name, change in changes.items():
             app = App({**config, **change})
             app.simulate()

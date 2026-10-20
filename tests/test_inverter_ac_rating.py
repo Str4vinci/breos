@@ -1,13 +1,12 @@
 """An absolute inverter AC rating, resolved once and read by every consumer (#181)."""
 
-from unittest import mock
-
 import pytest
 
 from breos import App
 from breos.app_config import build_costs_dict, override_config, resolve_app_config
 from breos.cli import _apply_sweep_values, _build_config, build_parser
-from tools.generate_app_golden import SCENARIOS, _fake_fetch
+from tests.offline_app import offline_weather
+from tools.generate_app_golden import SCENARIOS
 
 BASE = {**SCENARIOS["native_h_battery"], "execution_backend": "python"}
 
@@ -48,10 +47,7 @@ def test_capex_prices_the_rating_that_clips(config):
 
 
 def test_the_run_clips_and_reports_at_the_rating():
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         low = App({**BASE, "inverter_ac_rating_kw": 1.5})
         low.simulate()
         high = App({**BASE, "inverter_ac_rating_kw": 6.0})

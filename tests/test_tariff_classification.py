@@ -9,7 +9,6 @@ A classification is kept, so App.revalue at new prices does not classify again.
 """
 
 from datetime import date
-from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -30,7 +29,8 @@ from breos.tariffs import (
     get_schedule_definition,
     schedule_resolution_minutes,
 )
-from tools.generate_app_golden import SCENARIOS, _fake_fetch
+from tests.offline_app import offline_weather
+from tools.generate_app_golden import SCENARIOS
 
 
 def _reference_classify(index, schedule, *, timezone):
@@ -276,10 +276,7 @@ def test_revalue_at_new_prices_does_not_classify_again(classified):
     }
     reference = {"schedule": schedule, "currency": "EUR", "import_prices": {"all": 0.20}, "fixed_charge_per_day": 0.30}
     config = {**SCENARIOS["native_h_replacement"], "execution_backend": "python", "tariff": tou}
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         app = App({**config, "reference_tariff": reference})
         app.simulate()
         # The reference is on the tariff's schedule and index: one classification serves both.
