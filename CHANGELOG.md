@@ -476,6 +476,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and a top-level `bifacial_model`, `pvrow_height` or `pvrow_pitch` that
   every entry of `pv_arrays` overrides. The optimizer's integer settings,
   such as `pop_size`, now take NumPy integers.
+- `MonteCarloSettings` checks its values when it is made, instead of when
+  `run_montecarlo` starts. `build_year_cache` used to skip these checks, so
+  it took settings no study can run: `n_runs`, `years_per_run` or `n_procs`
+  below 1, a negative or non-finite `load_uncertainty`,
+  `model_uncertainty_pct` or `min_load_scale`, a non-finite
+  `max_load_scale` or one below `min_load_scale`, an unknown
+  `load_distribution` or `execution_backend`, and a `weather_start_year`
+  after `weather_end_year`. Such settings now raise the same `ValueError`
+  when made.
 - The optimizer builds the battery temperature series once per search
   instead of once per candidate, with the same values. A battery
   temperature it cannot build, such as a missing file, is now reported when

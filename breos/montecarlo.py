@@ -134,6 +134,46 @@ class MonteCarloSettings:
     # persistent yield factor, and the yield exceedance values include it.
     model_uncertainty_pct: float | None = None
 
+    def __post_init__(self) -> None:
+        # Checked when the settings are made, so build_year_cache refuses
+        # what run_montecarlo refuses.
+        if self.n_runs < 1:
+            raise ValueError("n_runs must be at least 1")
+        if self.years_per_run is not None and self.years_per_run < 1:
+            raise ValueError("years_per_run must be at least 1")
+        if not (math.isfinite(self.load_uncertainty) and self.load_uncertainty >= 0.0):
+            raise ValueError("load_uncertainty must be a finite, non-negative number")
+        if self.model_uncertainty_pct is not None and not (
+            math.isfinite(self.model_uncertainty_pct) and self.model_uncertainty_pct >= 0.0
+        ):
+            raise ValueError("model_uncertainty_pct must be a finite, non-negative number or None")
+        # The load scale multiplies demand, so a negative bound would make demand negative.
+        if not (math.isfinite(self.min_load_scale) and self.min_load_scale >= 0.0):
+            raise ValueError(f"min_load_scale must be a finite, non-negative number, got {self.min_load_scale}")
+        # None is the way to leave demand unbounded above. An infinite bound would
+        # say the same thing, but it cannot be written to strict JSON provenance.
+        if self.max_load_scale is not None and not math.isfinite(self.max_load_scale):
+            raise ValueError(
+                "max_load_scale must be a finite number, or None to leave the load scale unbounded, "
+                f"got {self.max_load_scale}"
+            )
+        if self.max_load_scale is not None and not self.max_load_scale >= self.min_load_scale:
+            raise ValueError(
+                f"max_load_scale must be at least min_load_scale ({self.min_load_scale}), got {self.max_load_scale}"
+            )
+        if self.load_distribution not in {"normal", "uniform"}:
+            raise ValueError("load_distribution must be 'normal' or 'uniform'")
+        if self.n_procs < 1:
+            raise ValueError("n_procs must be at least 1")
+        if self.execution_backend is not None:
+            validate_execution_backend(self.execution_backend)
+        if (
+            self.weather_start_year is not None
+            and self.weather_end_year is not None
+            and self.weather_start_year > self.weather_end_year
+        ):
+            raise ValueError("weather_start_year must not be later than weather_end_year")
+
 
 @dataclass
 class MonteCarloResult:
@@ -969,41 +1009,6 @@ def run_montecarlo(
     _reject_several_string_inverters(resolved)
     if settings.execution_backend is None:
         settings = replace(settings, execution_backend=cfg["execution_backend"])
-    if settings.n_runs < 1:
-        raise ValueError("n_runs must be at least 1")
-    if settings.years_per_run is not None and settings.years_per_run < 1:
-        raise ValueError("years_per_run must be at least 1")
-    if not (math.isfinite(settings.load_uncertainty) and settings.load_uncertainty >= 0.0):
-        raise ValueError("load_uncertainty must be a finite, non-negative number")
-    if settings.model_uncertainty_pct is not None and not (
-        math.isfinite(settings.model_uncertainty_pct) and settings.model_uncertainty_pct >= 0.0
-    ):
-        raise ValueError("model_uncertainty_pct must be a finite, non-negative number or None")
-    # The load scale multiplies demand, so a negative bound would make demand negative.
-    if not (math.isfinite(settings.min_load_scale) and settings.min_load_scale >= 0.0):
-        raise ValueError(f"min_load_scale must be a finite, non-negative number, got {settings.min_load_scale}")
-    # None is the way to leave demand unbounded above. An infinite bound would
-    # say the same thing, but it cannot be written to strict JSON provenance.
-    if settings.max_load_scale is not None and not math.isfinite(settings.max_load_scale):
-        raise ValueError(
-            "max_load_scale must be a finite number, or None to leave the load scale unbounded, "
-            f"got {settings.max_load_scale}"
-        )
-    if settings.max_load_scale is not None and not settings.max_load_scale >= settings.min_load_scale:
-        raise ValueError(
-            f"max_load_scale must be at least min_load_scale ({settings.min_load_scale}), got {settings.max_load_scale}"
-        )
-    if settings.load_distribution not in {"normal", "uniform"}:
-        raise ValueError("load_distribution must be 'normal' or 'uniform'")
-    if settings.n_procs < 1:
-        raise ValueError("n_procs must be at least 1")
-    validate_execution_backend(settings.execution_backend)
-    if (
-        settings.weather_start_year is not None
-        and settings.weather_end_year is not None
-        and settings.weather_start_year > settings.weather_end_year
-    ):
-        raise ValueError("weather_start_year must not be later than weather_end_year")
     if cfg["degradation_engine"] == "blast":
         raise ValueError("degradation_engine='blast' is not supported with Monte Carlo yet")
     _reject_period(cfg)

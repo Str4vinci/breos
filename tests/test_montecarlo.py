@@ -503,25 +503,20 @@ def test_summarize_keeps_payback_entry_when_no_run_pays_back():
         ({"min_load_scale": -0.5}, "min_load_scale must be a finite, non-negative number"),
         ({"min_load_scale": float("nan")}, "min_load_scale must be a finite, non-negative number"),
         ({"load_uncertainty": float("nan")}, "load_uncertainty must be a finite, non-negative number"),
+        ({"load_uncertainty": -0.1}, "load_uncertainty must be a finite, non-negative number"),
+        ({"model_uncertainty_pct": -1.0}, "model_uncertainty_pct must be a finite, non-negative number or None"),
+        ({"n_runs": 0}, "n_runs must be at least 1"),
+        ({"years_per_run": 0}, "years_per_run must be at least 1"),
+        ({"load_distribution": "lognormal"}, "load_distribution must be 'normal' or 'uniform'"),
+        ({"n_procs": 0}, "n_procs must be at least 1"),
+        ({"n_procs": -1}, "n_procs must be at least 1"),
+        ({"weather_start_year": 2023, "weather_end_year": 2022}, "weather_start_year must not be later"),
     ],
 )
-def test_run_montecarlo_rejects_load_scale_bounds_that_allow_negative_demand(
-    tmp_path, bounds, message, write_multiyear_weather
-):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=0, **bounds)
-
+def test_montecarlo_settings_refuse_values_no_study_can_run(bounds, message):
+    # Refused when the settings are made, so build_year_cache refuses them too.
     with pytest.raises(ValueError, match=message):
-        run_montecarlo(_base_config(), settings)
-
-
-@pytest.mark.parametrize("n_procs", [0, -1])
-def test_run_montecarlo_needs_at_least_one_worker(tmp_path, n_procs, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=0, n_procs=n_procs)
-
-    with pytest.raises(ValueError, match="n_procs must be at least 1"):
-        run_montecarlo(_base_config(), settings)
+        MonteCarloSettings(weather_file="unused.csv", **bounds)
 
 
 def test_montecarlo_cli_labels_conditional_payback_statistics(monkeypatch, tmp_path, capsys):

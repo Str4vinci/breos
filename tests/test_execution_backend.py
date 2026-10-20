@@ -28,9 +28,8 @@ def _base_config():
 
 
 def test_montecarlo_rejects_unknown_backend_before_loading_inputs(tmp_path):
-    settings = MonteCarloSettings(weather_file=str(tmp_path / "missing.csv"), n_runs=1, execution_backend="cuda")
     with pytest.raises(ValueError, match="execution_backend must be one of"):
-        run_montecarlo(_base_config(), settings)
+        MonteCarloSettings(weather_file=str(tmp_path / "missing.csv"), n_runs=1, execution_backend="cuda")
 
 
 def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch, write_multiyear_weather):
