@@ -1074,6 +1074,13 @@ def _initial_investment(cost_projection: pd.DataFrame) -> Optional[float]:
     return float(investment)
 
 
+def _from_year_zero(years: np.ndarray, values: np.ndarray, year_zero: float) -> Tuple[np.ndarray, np.ndarray]:
+    """``years`` and ``values`` with a year-0 point holding ``year_zero`` when they start after year 0."""
+    if len(years) and years[0] > 0.0:
+        return np.concatenate(([0.0], years)), np.concatenate(([float(year_zero)], values))
+    return years, values
+
+
 def _payback_points(
     cost_projection: pd.DataFrame, initial_investment: Optional[float]
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
@@ -1098,9 +1105,8 @@ def _payback_points(
     savings = cost_projection["Savings_Cumulative_NPV"].to_numpy(dtype=float)
     if initial_investment is None:
         initial_investment = _initial_investment(cost_projection)
-    if initial_investment is not None and years[0] > 0.0:
-        years = np.concatenate(([0.0], years))
-        savings = np.concatenate(([-float(initial_investment)], savings))
+    if initial_investment is not None:
+        years, savings = _from_year_zero(years, savings, -float(initial_investment))
     if not (np.isfinite(years).all() and np.isfinite(savings).all()):
         raise ValueError(
             "Payback needs finite years, Savings_Cumulative_NPV and initial investment; "

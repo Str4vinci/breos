@@ -34,7 +34,7 @@ import pandas as pd
 from scipy.stats import t as student_t
 
 from breos.constants import DEFAULT_EOL_PERCENTAGE
-from breos.economics import _initial_investment, _recorded_currency, find_payback_year_interpolated
+from breos.economics import _from_year_zero, _initial_investment, _recorded_currency, find_payback_year_interpolated
 from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import find_irradiance_column, local_datetime_index
 from breos.weather import _weather_years, extract_ambient_temperature
@@ -802,18 +802,14 @@ def plot_breakeven(
     if "Cost_No_Sys_Cumulative_NPV" in cost_projection.columns:
         no_sys = cost_projection["Cost_No_Sys_Cumulative_NPV"]
         with_sys = cost_projection["Cost_System_Cumulative_NPV"]
-        annual_column = "Cost_System_Annual_NPV"
         label_suffix = " (NPV)"
     else:
         no_sys = cost_projection["Cost_No_Sys_Cumulative"]
         with_sys = cost_projection["Cost_System_Cumulative"]
-        annual_column = "Cost_System_Annual"
         label_suffix = ""
 
     # The year-0 investment anchors the break-even curve, as in the library.
-    initial_investment = cost_projection.attrs.get("total_investment")
-    if initial_investment is None and annual_column in cost_projection.columns:
-        initial_investment = float(with_sys.iloc[0] - cost_projection[annual_column].iloc[0])
+    initial_investment = _initial_investment(cost_projection)
 
     # Break-even with month precision, by the same interpolation Monte Carlo
     # and the optimizer report.
@@ -838,9 +834,8 @@ def plot_breakeven(
         # Interpolate the cost at break-even, from the year-0 investment when
         # the break-even falls inside the first year.
         curve_years, curve_cost = years.to_numpy(dtype=float), with_sys.to_numpy(dtype=float)
-        if initial_investment is not None and curve_years[0] > 0.0:
-            curve_years = np.concatenate(([0.0], curve_years))
-            curve_cost = np.concatenate(([float(initial_investment)], curve_cost))
+        if initial_investment is not None:
+            curve_years, curve_cost = _from_year_zero(curve_years, curve_cost, initial_investment)
         be_cost = np.interp(be_year_interpolated, curve_years, curve_cost)
         ax1.axvline(x=be_year_interpolated, color="blue", linestyle="--", alpha=0.7, linewidth=1.5)
         ax1.scatter([be_year_interpolated], [be_cost], s=120, c="blue", zorder=5, edgecolors="white", linewidth=2)
@@ -1928,10 +1923,9 @@ def plot_breakeven_comparison(
         no_sys = df["Cost_No_Sys_Cumulative_NPV"].to_numpy(dtype=float)
         with_sys = df["Cost_System_Cumulative_NPV"].to_numpy(dtype=float)
         investment = _initial_investment(df)
-        if investment is not None and len(years) and years[0] > 0.0:
-            years = np.concatenate(([0.0], years))
-            no_sys = np.concatenate(([0.0], no_sys))
-            with_sys = np.concatenate(([investment], with_sys))
+        if investment is not None:
+            _, no_sys = _from_year_zero(years, no_sys, 0.0)
+            years, with_sys = _from_year_zero(years, with_sys, investment)
         curves.append((years, no_sys, with_sys))
 
     # One no-system baseline per group of scenarios that share it.
