@@ -104,6 +104,13 @@ class SimulationArtifacts:
 CO2_COLUMNS = ("CO2_Avoided_SelfConsumed_kg", "CO2_Avoided_Export_kg", "CO2_Avoided_Total_kg")
 
 
+def first_year_co2(projection: pd.DataFrame) -> dict[str, float] | None:
+    """A projection's first-row avoided CO2 by pathway (kg), or None when it has no CO2 columns."""
+    if not all(column in projection.columns for column in CO2_COLUMNS):
+        return None
+    return {column: float(projection[column].iloc[0]) for column in CO2_COLUMNS}
+
+
 def _economics_fields(value: ProjectionValue, period: SimulationPeriod | None) -> dict[str, Any]:
     """The artifact fields a priced projection fills.
 
@@ -122,12 +129,6 @@ def _economics_fields(value: ProjectionValue, period: SimulationPeriod | None) -
             "period_co2": None,
             "terminal_health": value.terminal_health,
         }
-    projection = value.cost_projection
-    co2 = (
-        {column: float(projection[column].iloc[0]) for column in CO2_COLUMNS}
-        if all(column in projection.columns for column in CO2_COLUMNS)
-        else None
-    )
     return {
         "yearly_df": value.yearly_df,
         "cost_projection": None,
@@ -135,7 +136,7 @@ def _economics_fields(value: ProjectionValue, period: SimulationPeriod | None) -
         "payback_year": None,
         "lcoe": None,
         "total_replacement_cost": None,
-        "period_co2": co2,
+        "period_co2": first_year_co2(value.cost_projection),
         "terminal_health": None,
     }
 

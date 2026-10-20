@@ -17,7 +17,7 @@ from breos.electrical import electrical_result
 from breos.execution import config_has_battery
 from breos.projection import build_battery_config
 from breos.result_schema import RESULT_SCHEMA_VERSION
-from breos.runners.app import CO2_COLUMNS, SimulationArtifacts
+from breos.runners.app import SimulationArtifacts, first_year_co2
 from breos.smart_charging import PLANNER_MODES
 from breos.utils import get_hours_per_step, local_datetime_index, package_version
 
@@ -509,7 +509,8 @@ def build_result(
         # every runner (#183); a [period] window keeps its one row's.
         projection = artifacts.cost_projection
         if projection is not None:
-            co2 = {column: float(projection[column].iloc[0]) for column in CO2_COLUMNS}
+            co2 = first_year_co2(projection)
+            assert co2 is not None
             lifetime: dict[str, float | None] = {
                 "self": round(float(projection.attrs["lifetime_co2_avoided_self_consumed_kg"]), 2),
                 "export": round(float(projection.attrs["lifetime_co2_avoided_export_kg"]), 2),
