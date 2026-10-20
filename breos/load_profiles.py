@@ -245,6 +245,11 @@ def validate_profile_options(profile_type: Any, column: Any = None, unit: Any = 
         raise ValueError("load_profile_column must be a non-empty column name.")
 
 
+def _new_year_midnight(timestamp: pd.Timestamp) -> bool:
+    """Whether ``timestamp`` is 1 January at 00:00, where a profile's first row must fall."""
+    return (timestamp.month, timestamp.day) == (1, 1) and timestamp == timestamp.normalize()
+
+
 def load_profile(
     profile_type: str,
     annual_consumption_kwh: float,
@@ -313,7 +318,7 @@ def load_profile(
     """
     freq = normalise_frequency(freq)
     start_ts = pd.Timestamp(start_date)
-    if (start_ts.month, start_ts.day) != (1, 1) or start_ts != start_ts.normalize():
+    if not _new_year_midnight(start_ts):
         raise ValueError(
             f"start_date must be 1 January at midnight, got {start_date!r}. The profile's first row is "
             "1 January, so a later start would move every season; use "
@@ -348,11 +353,7 @@ def load_profile(
     new_index = pd.date_range(start=start_ts, end=end_ts, freq=native_freq, inclusive="left")
 
     if source.key == "demandlib_h0":
-        if (
-            source_start is None
-            or (source_start.month, source_start.day) != (1, 1)
-            or source_start != source_start.normalize()
-        ):
+        if source_start is None or not _new_year_midnight(source_start):
             raise ValueError(
                 f"The demandlib H0 file {source.label} needs a dated first row at 1 January 00:00 "
                 "to align its day types"
@@ -360,7 +361,7 @@ def load_profile(
     elif day_type is not None and source_start is not None:
         # A dated E-REDES file's year comes from its timestamps, never its
         # filename. Its rows must start at the first interval of the year.
-        if (source_start.month, source_start.day) != (1, 1) or source_start != source_start.normalize():
+        if not _new_year_midnight(source_start):
             raise ValueError(
                 f"The {spec.name} file {source.label} starts at {source_start.strftime('%Y-%m-%d %H:%M')}; "
                 "a dated E-REDES file needs its first row at 1 January 00:00, the start of the first "
@@ -696,7 +697,7 @@ def _validate_profile_rows(
     naive_timestamps: bool = False,
 ) -> pd.Timestamp | None:
     """Refuse non-numeric, non-finite, negative, or irregularly stamped rows."""
-    values = pd.to_numeric(df["Electrical Consumption [W]"], errors="coerce").to_numpy(dtype=float)
+    values = pd.to_numeric(df[LOAD_COLUMN], errors="coerce").to_numpy(dtype=float)
     bad = ~np.isfinite(values)
     if bad.any():
         raise ValueError(
