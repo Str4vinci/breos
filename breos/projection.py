@@ -293,7 +293,7 @@ def build_year_row(
     """
 
     def kwh(column: str) -> float:
-        return _kwh(sums_w[column], hours_per_step)
+        return _step_total(sums_w[column], hours_per_step)
 
     direct_pv_ac_kwh = kwh("PV_AC_To_Load")
     pv_origin_battery_ac_kwh = kwh("PV_Origin_Battery_AC_To_Load")
@@ -388,8 +388,8 @@ _PRICED_FLOWS: dict[str, tuple[str, str]] = {
 _PRICED_FLOW_COLUMNS = tuple(dict.fromkeys(column for column, _kind in _PRICED_FLOWS.values()))
 
 
-def _kwh(sum_w: float, hours_per_step: float) -> float:
-    """Energy (kWh), or money at a price per kWh, from a sum of step powers (W) or price-weighted powers."""
+def _step_total(sum_w: float, hours_per_step: float) -> float:
+    """A year's total from a sum over its steps: kWh from powers (W), money from price-weighted powers."""
     return float(sum_w * hours_per_step / 1000)
 
 
@@ -508,14 +508,16 @@ def _tariff_money(
     The fixed charge is billed on ``billed_days`` when given (a [period]
     window's civil days), otherwise on the simulated duration.
     """
-    money = {name: _kwh(weighted_w[name], hours_per_step) for name in _PRICED_FLOWS}
+    money = {name: _step_total(weighted_w[name], hours_per_step) for name in _PRICED_FLOWS}
     money["Fixed_Charge"] = _fixed_charge(tariff, billed_days, n_steps * hours_per_step)
     if tariff.prices.annual_network_credit is not None:
         for name, columns in (
             (_NETWORK_IMPORT, SYSTEM_NETWORK_CREDIT_COLUMNS),
             (_BASELINE_NETWORK_IMPORT, BASELINE_NETWORK_CREDIT_COLUMNS),
         ):
-            money.update(_network_credit_money(tariff, _kwh(weighted_w[name], hours_per_step), billed_days, columns))
+            money.update(
+                _network_credit_money(tariff, _step_total(weighted_w[name], hours_per_step), billed_days, columns)
+            )
     return money
 
 
@@ -540,14 +542,14 @@ def _reference_money(
     the system tariff gave the no-system household.
     """
     money = {
-        "Baseline_Import_Cost": _kwh(weighted_w["Baseline_Import_Cost"], hours_per_step),
+        "Baseline_Import_Cost": _step_total(weighted_w["Baseline_Import_Cost"], hours_per_step),
         "Baseline_Fixed_Charge": _fixed_charge(reference, billed_days, n_steps * hours_per_step),
     }
     if reference.prices.annual_network_credit is not None:
         money.update(
             _network_credit_money(
                 reference,
-                _kwh(weighted_w[_BASELINE_NETWORK_IMPORT], hours_per_step),
+                _step_total(weighted_w[_BASELINE_NETWORK_IMPORT], hours_per_step),
                 billed_days,
                 BASELINE_NETWORK_CREDIT_COLUMNS,
             )
@@ -572,10 +574,10 @@ def price_reference_year_rows(
     weights = _reference_weights(reference)
     weighted = weighted_column_sums({"Houseload": np.asarray(houseload_w)}, weights)
     repriced = yearly_df.drop(columns=[column for column in BASELINE_NETWORK_CREDIT_COLUMNS if column in yearly_df])
-    repriced["Baseline_Import_Cost"] = _kwh(weighted["Baseline_Import_Cost"], hours_per_step)
+    repriced["Baseline_Import_Cost"] = _step_total(weighted["Baseline_Import_Cost"], hours_per_step)
     repriced["Baseline_Fixed_Charge"] = [_billed_fixed_charge(reference, row) for _, row in repriced.iterrows()]
     if reference.prices.annual_network_credit is not None:
-        network = _kwh(weighted[_BASELINE_NETWORK_IMPORT], hours_per_step)
+        network = _step_total(weighted[_BASELINE_NETWORK_IMPORT], hours_per_step)
         credits = [
             _network_credit_money(reference, network, _billed_days(row), BASELINE_NETWORK_CREDIT_COLUMNS)
             for _, row in repriced.iterrows()
@@ -891,7 +893,6 @@ class _YearOutcome:
 
 
 def _run_summary_year(
-    year: ProjectionYear,
     aligned: AlignedSimulationInputs,
     common: Mapping[str, Any],
     carry: CarryState,
@@ -1156,7 +1157,7 @@ def project_years(
             for priced in (tariff, reference_tariff):
                 if priced is not None:
                     _check_tariff_calendar(priced, year.aligned.index)
-            outcome = _run_summary_year(year, year.aligned, common, carry, has_battery=has_battery, weights=weights)
+            outcome = _run_summary_year(year.aligned, common, carry, has_battery=has_battery, weights=weights)
         else:
             if year.pv_dc is None or year.houseload is None:
                 raise ValueError("a projection year needs aligned inputs, or pv_dc and houseload")
@@ -1236,7 +1237,7 @@ def project_years(
             )
         )
         if record_period_energy:
-            period_rows.append({name: _kwh(outcome.weighted_w[name], hours_per_step) for name in period_weights})
+            period_rows.append({name: _step_total(outcome.weighted_w[name], hours_per_step) for name in period_weights})
 
     if not rows:
         raise RuntimeError("projection_years must be at least 1")

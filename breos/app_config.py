@@ -1486,9 +1486,11 @@ def _path(value: Any, where: str) -> str:
     return os.fspath(value) if isinstance(value, os.PathLike) else text(value, where)
 
 
-# The [montecarlo] table: the MonteCarloSettings fields. The checks that span
-# settings or need the App config (max_load_scale >= min_load_scale, the
-# weather years) stay in run_montecarlo, which Python callers reach directly.
+# The [montecarlo] table: the MonteCarloSettings fields, checked for type
+# and range before the settings are made. MonteCarloSettings makes the
+# range checks again for Python callers, with those that span settings
+# (max_load_scale >= min_load_scale, the weather years); run_montecarlo
+# checks what needs the App config.
 MONTECARLO_TABLE = TableSpec(
     "montecarlo",
     keys={
