@@ -877,6 +877,156 @@ def first_end_of_life_metrics(events: Sequence[Mapping[str, Any]]) -> dict[str, 
     }
 
 
+@dataclass(frozen=True)
+class _YearOutcome:
+    """One simulated project year: the sums its row is built from and the state it leaves."""
+
+    carry: CarryState
+    # Each results column's sum over the year's steps (W), and the tariff's
+    # price-weighted sums.
+    sums_w: Mapping[str, float]
+    weighted_w: Mapping[str, float]
+    n_replacements: int
+    replaced_wh: float
+    replacement_steps: Sequence[int]
+    n_steps: int
+    # The year's own FEC over every pack it ran.
+    annual_fec: float
+    span_events: Sequence[EndOfLifeEvent]
+    # T_cell summed through the step that retires the pack; None if none does.
+    retiring_t_cell_sum: float | None
+    # Per-step years only: the year's frame, the set a year planner returned
+    # and the instructions a daily controller executed.
+    results_df: pd.DataFrame | None = None
+    planned: DispatchInstructions | None = None
+    executed: DispatchInstructions | None = None
+
+
+def _run_summary_year(
+    year: ProjectionYear,
+    aligned: AlignedSimulationInputs,
+    common: Mapping[str, Any],
+    carry: CarryState,
+    *,
+    has_battery: bool,
+    weights: Mapping[str, tuple[str, np.ndarray]] | None,
+) -> _YearOutcome:
+    """Run one year from aligned inputs, as a summary without per-step frames."""
+    summary = simulate_energy_balance_summary(aligned=aligned, weights=weights, **common)
+    batt_cfg: BatteryConfig = common["battery_config"]
+    return _YearOutcome(
+        carry=carry.after_summary(summary, has_battery=has_battery, resistance_fade=batt_cfg.enable_resistance_fade),
+        sums_w=summary.column_sums,
+        weighted_w=summary.weighted_sums,
+        n_replacements=summary.n_replacements,
+        replaced_wh=summary.replaced_capacity_wh,
+        replacement_steps=summary.replacement_steps,
+        n_steps=summary.n_steps,
+        annual_fec=summary.fec_all_packs if has_battery and summary.has_degradation_rows else 0.0,
+        span_events=summary.end_of_life_events,
+        retiring_t_cell_sum=summary.in_service_t_cell_sum,
+    )
+
+
+def _run_frame_year(
+    year: ProjectionYear,
+    year_idx: int,
+    common: Mapping[str, Any],
+    carry: CarryState,
+    *,
+    has_battery: bool,
+    weights: Mapping[str, tuple[str, np.ndarray]] | None,
+    planner: YearPlanner | None,
+    day_controller: DailyDispatchController | None,
+    tariff: ResolvedTariff | None,
+    replay_seam: bool,
+) -> _YearOutcome:
+    """Run one year with per-step frames: greedy or on static instructions, from a year planner, or day by day."""
+    assert year.pv_dc is not None and year.houseload is not None
+    step_inputs: dict[str, Any] = {
+        "pv_dc": year.pv_dc,
+        "houseload": year.houseload,
+        "temperature_series": year.temperature_series if has_battery else None,
+        "inverter_ac_derate": year.inverter_ac_derate,
+        "inverter_curve_row": year.inverter_curve_row,
+        "inverter_units": year.inverter_units,
+    }
+    planned: list[DispatchInstructions] = []
+    executed = None
+    if planner is None and day_controller is None:
+        results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
+            "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
+            simulate_energy_balance(**step_inputs, **common),
+        )
+        carry = carry.after_frames(results_df, degradation_df, state, has_battery=has_battery)
+    else:
+        core_kwargs = {key: value for key, value in common.items() if key != "return_degradation_state"}
+        if planner is not None:
+            batt_cfg: BatteryConfig = common["battery_config"]
+
+            def plan_year(state: ControllerBatteryState) -> DispatchInstructions:
+                chosen = planner(YearStart(year_idx, year, batt_cfg, state))
+                planned.append(chosen)
+                return chosen
+
+            run_kwargs: dict[str, Any] = {"instruction_planner": plan_year}
+        else:
+            run_kwargs = {
+                "day_controller": day_controller,
+                "controller_tariff": tariff,
+                "controller_carry": carry.controller_carry,
+                "projection_year": year_idx,
+                "replay_seam": replay_seam,
+            }
+        detailed = _simulate_detailed_run(**step_inputs, **run_kwargs, **core_kwargs)
+        results_df, n_rep, degradation_df = detailed.results_df, detailed.n_replacements, detailed.degradation_df
+        carry = carry.after_frames(results_df, degradation_df, detailed.degradation_state, has_battery=has_battery)
+        if day_controller is not None:
+            carry = replace(carry, controller_carry=detailed.controller_carry)
+            executed = detailed.controller_instructions
+    span_events = [
+        EndOfLifeEvent.from_record(record) for record in degradation_df.attrs.get(END_OF_LIFE_EVENTS_ATTR, ())
+    ]
+    # Reduced as the summary reduces it, so both paths report one float.
+    last_served = retiring_step(span_events)
+    return _YearOutcome(
+        carry=carry,
+        sums_w={column: float(results_df[column].sum()) for column in _ROW_SUM_COLUMNS},
+        weighted_w=weighted_column_sums(
+            {column: results_df[column].to_numpy() for column, _ in (weights or {}).values()}, weights
+        ),
+        n_replacements=n_rep,
+        replaced_wh=frame_replaced_capacity_wh(results_df),
+        replacement_steps=np.flatnonzero(results_df["Battery_Replaced"].to_numpy()).tolist(),
+        n_steps=len(results_df),
+        # Each project year is its own simulation span, so the span's
+        # all-pack total is exactly this year's FEC.
+        annual_fec=(
+            float(degradation_df["Cumulative_FEC_All_Packs"].iloc[-1])
+            if has_battery and not degradation_df.empty
+            else 0.0
+        ),
+        span_events=span_events,
+        retiring_t_cell_sum=(
+            float(np.sum(results_df["T_cell"].to_numpy()[: last_served + 1])) if last_served is not None else None
+        ),
+        results_df=results_df,
+        planned=planned[0] if planned else None,
+        executed=executed,
+    )
+
+
+def _step_flows(results_df: pd.DataFrame, previous: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """A year's per-step priced flows; a flow equal to the year before's is that array, kept once."""
+    flows: dict[str, np.ndarray] = {}
+    for column in _PRICED_FLOW_COLUMNS:
+        # A copy, so the year's frame is not kept alive by a view.
+        values = results_df[column].to_numpy(dtype=float, copy=True)
+        same = previous.get(column)
+        flows[column] = same if same is not None and np.array_equal(same, values) else values
+    return flows
+
+
 def project_years(
     years: int,
     year_inputs: Callable[[int], ProjectionYear],
@@ -1018,18 +1168,7 @@ def project_years(
             for priced in (tariff, reference_tariff):
                 if priced is not None:
                     _check_tariff_calendar(priced, year.aligned.index)
-            summary = simulate_energy_balance_summary(aligned=year.aligned, weights=weights, **common)
-            weighted_w: Mapping[str, float] = summary.weighted_sums
-            carry = carry.after_summary(
-                summary, has_battery=has_battery, resistance_fade=batt_cfg.enable_resistance_fade
-            )
-            sums_w: Mapping[str, float] = summary.column_sums
-            n_rep, replaced_wh = summary.n_replacements, summary.replaced_capacity_wh
-            replacement_steps: Sequence[int] = summary.replacement_steps
-            n_steps = summary.n_steps
-            annual_fec = summary.fec_all_packs if has_battery and summary.has_degradation_rows else 0.0
-            span_events: Sequence[EndOfLifeEvent] = summary.end_of_life_events
-            retiring_t_cell_sum = summary.in_service_t_cell_sum
+            outcome = _run_summary_year(year, year.aligned, common, carry, has_battery=has_battery, weights=weights)
         else:
             if year.pv_dc is None or year.houseload is None:
                 raise ValueError("a projection year needs aligned inputs, or pv_dc and houseload")
@@ -1039,121 +1178,28 @@ def project_years(
             for priced in (tariff, reference_tariff):
                 if priced is not None:
                     _check_tariff_calendar(priced, pd.date_range(year.pv_dc.index[0], year.pv_dc.index[-1], freq=freq))
-            if planner is not None:
-                core_kwargs = {
-                    key: value
-                    for key, value in common.items()
-                    if key not in ("return_degradation_state", "dispatch_instructions")
-                }
-                planned: list[DispatchInstructions] = []
-
-                def plan_year(
-                    state: ControllerBatteryState,
-                    planner: YearPlanner = planner,
-                    year_idx: int = year_idx,
-                    year: ProjectionYear = year,
-                    batt_cfg: BatteryConfig = batt_cfg,
-                    planned: list[DispatchInstructions] = planned,
-                ) -> DispatchInstructions:
-                    chosen = planner(YearStart(year_idx, year, batt_cfg, state))
-                    planned.append(chosen)
-                    return chosen
-
-                detailed = _simulate_detailed_run(
-                    pv_dc=year.pv_dc,
-                    houseload=year.houseload,
-                    temperature_series=year.temperature_series if has_battery else None,
-                    inverter_ac_derate=year.inverter_ac_derate,
-                    inverter_curve_row=year.inverter_curve_row,
-                    inverter_units=year.inverter_units,
-                    instruction_planner=plan_year,
-                    **core_kwargs,
-                )
-                results_df, n_rep, degradation_df = (
-                    detailed.results_df,
-                    detailed.n_replacements,
-                    detailed.degradation_df,
-                )
-                carry = carry.after_frames(
-                    results_df, degradation_df, detailed.degradation_state, has_battery=has_battery
-                )
-                dispatched.extend(planned)
-            elif day_controller is None:
-                results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
-                    "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
-                    simulate_energy_balance(
-                        pv_dc=year.pv_dc,
-                        houseload=year.houseload,
-                        temperature_series=year.temperature_series if has_battery else None,
-                        inverter_ac_derate=year.inverter_ac_derate,
-                        inverter_curve_row=year.inverter_curve_row,
-                        inverter_units=year.inverter_units,
-                        **common,
-                    ),
-                )
-                carry = carry.after_frames(results_df, degradation_df, state, has_battery=has_battery)
-            else:
-                assert tariff is not None
-                core_kwargs = {key: value for key, value in common.items() if key != "return_degradation_state"}
-                detailed = _simulate_detailed_run(
-                    pv_dc=year.pv_dc,
-                    houseload=year.houseload,
-                    temperature_series=year.temperature_series,
-                    inverter_ac_derate=year.inverter_ac_derate,
-                    inverter_curve_row=year.inverter_curve_row,
-                    inverter_units=year.inverter_units,
-                    day_controller=day_controller,
-                    controller_tariff=tariff,
-                    controller_carry=carry.controller_carry,
-                    projection_year=year_idx,
-                    replay_seam=replay_seam,
-                    **core_kwargs,
-                )
-                results_df, n_rep, degradation_df = (
-                    detailed.results_df,
-                    detailed.n_replacements,
-                    detailed.degradation_df,
-                )
-                carry = replace(
-                    carry.after_frames(results_df, degradation_df, detailed.degradation_state, has_battery=has_battery),
-                    controller_carry=detailed.controller_carry,
-                )
-                if detailed.controller_instructions is not None:
-                    executed.append(detailed.controller_instructions)
-            sums_w = {column: float(results_df[column].sum()) for column in _ROW_SUM_COLUMNS}
-            replaced_wh = frame_replaced_capacity_wh(results_df)
-            replacement_steps = np.flatnonzero(results_df["Battery_Replaced"].to_numpy()).tolist()
-            n_steps = len(results_df)
-            span_events = [
-                EndOfLifeEvent.from_record(record) for record in degradation_df.attrs.get(END_OF_LIFE_EVENTS_ATTR, ())
-            ]
-            # Reduced as the summary reduces it, so both paths report one float.
-            last_served = retiring_step(span_events)
-            retiring_t_cell_sum = (
-                float(np.sum(results_df["T_cell"].to_numpy()[: last_served + 1])) if last_served is not None else None
-            )
-            # Each project year is its own simulation span, so the span's
-            # all-pack total is exactly this year's FEC.
-            annual_fec = (
-                float(degradation_df["Cumulative_FEC_All_Packs"].iloc[-1])
-                if has_battery and not degradation_df.empty
-                else 0.0
+            outcome = _run_frame_year(
+                year,
+                year_idx,
+                common,
+                carry,
+                has_battery=has_battery,
+                weights=weights,
+                planner=planner,
+                day_controller=day_controller,
+                tariff=tariff,
+                replay_seam=replay_seam,
             )
             if first_year_results_df is None:
-                first_year_results_df = results_df
-            weighted_w = weighted_column_sums(
-                {column: results_df[column].to_numpy() for column, _ in (weights or {}).values()}, weights
-            )
+                first_year_results_df = outcome.results_df
             if record_priced_flows:
-                previous = priced_flows[-1] if priced_flows else {}
-                flows: dict[str, np.ndarray] = {}
-                for column in _PRICED_FLOW_COLUMNS:
-                    # A copy, so the year's frame is not kept alive by a view.
-                    values = results_df[column].to_numpy(dtype=float, copy=True)
-                    same = previous.get(column)
-                    flows[column] = same if same is not None and np.array_equal(same, values) else values
-                priced_flows.append(flows)
-
+                assert outcome.results_df is not None
+                priced_flows.append(_step_flows(outcome.results_df, priced_flows[-1] if priced_flows else {}))
+        carry = outcome.carry
+        if outcome.planned is not None:
+            dispatched.append(outcome.planned)
+        if outcome.executed is not None:
+            executed.append(outcome.executed)
         if static is not None:
             dispatched.append(static)
 
@@ -1162,42 +1208,50 @@ def project_years(
             if state_name is not None:
                 jit_cache_states.append(state_name)
 
-        total_replacements += n_rep
-        end_of_life_events.extend(end_of_life_record(event, year_idx, n_steps) for event in span_events)
+        total_replacements += outcome.n_replacements
+        span_events = outcome.span_events
+        end_of_life_events.extend(end_of_life_record(event, year_idx, outcome.n_steps) for event in span_events)
         # The battery serves through the step that retires it, and not at all
         # in a year that starts retired.
         retiring = retiring_step(span_events)
         if started_retired:
             in_service_steps, in_service_t_cell_sum = 0, None
         elif retiring is None:
-            in_service_steps, in_service_t_cell_sum = n_steps, sums_w["T_cell"]
+            in_service_steps, in_service_t_cell_sum = outcome.n_steps, outcome.sums_w["T_cell"]
         else:
-            in_service_steps, in_service_t_cell_sum = retiring + 1, retiring_t_cell_sum
+            in_service_steps, in_service_t_cell_sum = retiring + 1, outcome.retiring_t_cell_sum
         if retiring is not None:
             carry = replace(carry, battery_retired=True)
         rows.append(
             build_year_row(
                 year_idx,
-                sums_w,
+                outcome.sums_w,
                 hours_per_step,
                 carry,
                 has_battery=has_battery,
-                n_replacements=n_rep,
-                replaced_capacity_wh=replaced_wh,
-                replacement_steps=replacement_steps,
-                n_steps=n_steps,
+                n_replacements=outcome.n_replacements,
+                replaced_capacity_wh=outcome.replaced_wh,
+                replacement_steps=outcome.replacement_steps,
+                n_steps=outcome.n_steps,
                 pv_degradation_factor=year.pv_degradation_factor,
-                annual_fec=annual_fec,
+                annual_fec=outcome.annual_fec,
                 in_service_steps=in_service_steps,
                 in_service_t_cell_sum=in_service_t_cell_sum,
                 extra=year.extra,
                 money=_year_money(
-                    tariff, reference_tariff, weighted_w, hours_per_step, n_steps, year.extra.get("Billed_Days")
+                    tariff,
+                    reference_tariff,
+                    outcome.weighted_w,
+                    hours_per_step,
+                    outcome.n_steps,
+                    year.extra.get("Billed_Days"),
                 ),
             )
         )
         if record_period_energy:
-            period_rows.append({name: float(weighted_w[name] * hours_per_step / 1000) for name in period_weights})
+            period_rows.append(
+                {name: float(outcome.weighted_w[name] * hours_per_step / 1000) for name in period_weights}
+            )
 
     if not rows:
         raise RuntimeError("projection_years must be at least 1")
