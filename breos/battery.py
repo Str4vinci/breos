@@ -1746,9 +1746,8 @@ class SimulationSummary:
     """Annual totals and carry state, without a per-timestep frame.
 
     ``column_sums`` holds the plain sum of every column the detailed results
-    frame exposes, under the same names and in the same units, so a caller
-    that used to write ``results_df[col].sum()`` reads ``column_sums[col]``
-    and gets the identical value. Unit scaling stays with the caller, because
+    frame exposes, under the same names and in the same units:
+    ``column_sums[col]`` is the value ``results_df[col].sum()`` gives. Unit scaling stays with the caller, because
     the order of a scaling expression is itself observable in floating point.
 
     The remaining fields are the state a multi-year caller has to carry, plus

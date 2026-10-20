@@ -1360,8 +1360,7 @@ def _extract_met_data(weather_df: pd.DataFrame):
     """Extract air temperature and wind speed from a weather DataFrame.
 
     Both drive the cell temperature, so a missing column or a value that is
-    not finite raises instead of defaulting (it used to become 25 °C and
-    1 m/s). To run with fixed values, add them as columns, for example
+    not finite raises instead of defaulting. To run with fixed values, add them as columns, for example
     ``weather["temp_air"] = 25.0`` and ``weather["wind_speed"] = 1.0``.
     """
     met = []
