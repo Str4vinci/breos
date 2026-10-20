@@ -379,6 +379,11 @@ def replacement_booking_time(
     return np.where(np.asarray(has_replacement, dtype=bool), booked, np.nan)
 
 
+def _discount_factor(discount_rate: float, years: Any) -> Any:
+    """``1 / (1 + r) ** t`` for a number, an array or a Series of times ``years`` (years from t = 0)."""
+    return 1 / ((1 + discount_rate) ** years)
+
+
 def _booking_exponents(replacement_time: np.ndarray, relative_years) -> np.ndarray:
     """Fill the NaN of non-replacement years so the power is finite.
 
@@ -421,7 +426,7 @@ def _discount_annual_with_replacement(
     back.
     """
     exponents = np.asarray(replacement_exponents, dtype=float)
-    replacement_discount = 1.0 / ((1.0 + discount_rate) ** exponents)
+    replacement_discount = _discount_factor(discount_rate, exponents)
     outlay = pd.Series(np.asarray(replacement, dtype=float), index=annual.index)
     return (annual - outlay) * discount_factors + outlay * replacement_discount
 
@@ -429,7 +434,7 @@ def _discount_annual_with_replacement(
 def _replacement_npv(replacement: pd.Series, replacement_exponents: np.ndarray, discount_rate: float) -> float:
     """The replacement outlays discounted from their swap instants, as the system NPV counts them."""
     outlay = np.asarray(replacement, dtype=float)
-    discount = 1.0 / ((1.0 + discount_rate) ** np.asarray(replacement_exponents, dtype=float))
+    discount = _discount_factor(discount_rate, np.asarray(replacement_exponents, dtype=float))
     return float(np.sum(outlay * discount))
 
 
@@ -854,7 +859,7 @@ def discount_cashflows(
     """
     proj = flows.copy()
     years = proj["Year"]
-    discount_factors = 1 / ((1 + discount_rate) ** years)
+    discount_factors = _discount_factor(discount_rate, years)
     replacement_exponents = _booking_exponents(
         proj["Replacement_Time_Years"].to_numpy(dtype=float), years.to_numpy(dtype=float)
     )
@@ -1241,7 +1246,7 @@ def calculate_lcoe_from_projection(
         if "Year" in cost_projection.columns
         else pd.Series(range(1, len(cost_projection) + 1), index=cost_projection.index)
     )
-    discount_factors = 1 / ((1 + discount_rate) ** years)
+    discount_factors = _discount_factor(discount_rate, years)
 
     production = pd.to_numeric(cost_projection["PV_Production_kWh"], errors="coerce").fillna(0.0)
     operation = (
@@ -1259,7 +1264,7 @@ def calculate_lcoe_from_projection(
     # carries it, matching how the NPV above books the same outlay.
     if "Replacement_Time_Years" in cost_projection.columns:
         replacement_time = pd.to_numeric(cost_projection["Replacement_Time_Years"], errors="coerce")
-        replacement_discount_factors = 1 / ((1 + discount_rate) ** replacement_time.fillna(years))
+        replacement_discount_factors = _discount_factor(discount_rate, replacement_time.fillna(years))
     else:
         replacement_discount_factors = discount_factors
 
