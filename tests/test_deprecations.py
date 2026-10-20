@@ -16,6 +16,17 @@ def test_format_years_months_warns_and_still_formats():
         assert format_years_months(4.25) == "4y 3m"
 
 
+def test_calculate_pv_production_breakdown_warns_and_matches_the_per_array_breakdown(synthetic_weather, porto_location):
+    from breos.solar import calculate_array_breakdowns, calculate_pv_production_breakdown
+
+    weather = synthetic_weather.iloc[: 24 * 7]
+    with pytest.warns(DeprecationWarning, match=r"calculate_pv_production_breakdown .*0\.9\.0"):
+        old = calculate_pv_production_breakdown(weather, porto_location, 30, 180, 4)
+    (new,) = calculate_array_breakdowns(weather, porto_location, [{"modules": 4, "tilt": 30, "azimuth": 180}])
+    pd.testing.assert_series_equal(old.dc_after_losses, new.dc_after_losses)
+    pd.testing.assert_series_equal(old.poa_global_dc, new.poa_global_dc)
+
+
 def test_update_battery_soh_cyclewise_warns_and_still_ages():
     from breos.battery import update_battery_soh_cyclewise
 

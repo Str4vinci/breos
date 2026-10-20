@@ -11,8 +11,8 @@ import pytest
 import breos.app_inputs as app_inputs
 from breos import App, solar
 from breos.solar import (
+    calculate_array_breakdowns,
     calculate_multi_array_production,
-    calculate_pv_production_breakdown,
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
 )
@@ -35,9 +35,16 @@ def fixed_kwargs(synthetic_weather, porto_location, pv_params):
     )
 
 
+def _breakdown(fixed_kwargs, **years):
+    """The array of ``fixed_kwargs`` with its loss stages."""
+    kwargs = {k: v for k, v in fixed_kwargs.items() if k not in ("tilt", "surface_azimuth", "n_modules", "pv_params")}
+    array = {"modules": 2, "module": "Suntech_STP550S_STC", "tilt": 35, "azimuth": 180}
+    return calculate_array_breakdowns(**kwargs, arrays=[array], **years)[0]
+
+
 def test_installation_year_has_no_age_loss(fixed_kwargs):
-    new = calculate_pv_production_breakdown(**fixed_kwargs, current_year=START, start_year=START)
-    no_age = calculate_pv_production_breakdown(**fixed_kwargs)
+    new = _breakdown(fixed_kwargs, current_year=START, start_year=START)
+    no_age = _breakdown(fixed_kwargs)
 
     assert new.age_degradation_pct == 0.0
     assert new.age_degradation_loss.abs().max() == 0.0
@@ -47,7 +54,7 @@ def test_installation_year_has_no_age_loss(fixed_kwargs):
 
 @pytest.mark.parametrize("age", [1, 4, 19])
 def test_age_n_is_n_full_years_of_compound_degradation(fixed_kwargs, age):
-    breakdown = calculate_pv_production_breakdown(**fixed_kwargs, current_year=START + age, start_year=START)
+    breakdown = _breakdown(fixed_kwargs, current_year=START + age, start_year=START)
     factor = (1 - RATE) ** age
 
     assert breakdown.age_degradation_pct == pytest.approx(100 * (1 - factor), rel=1e-12)

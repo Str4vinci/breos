@@ -987,7 +987,17 @@ def calculate_pv_production_breakdown(
     parameters. ``shading`` is the array's near-shading table, a
     :class:`breos.pv.shading.ShadingTable` or its mapping; it reduces the
     front plane-of-array irradiance before the incidence-angle modifier.
+
+    .. deprecated:: 0.8.0
+       Use :func:`calculate_array_breakdowns` with one array; this function
+       will be removed in 0.9.0.
     """
+    warnings.warn(
+        "breos.solar.calculate_pv_production_breakdown is deprecated and will be removed in BREOS 0.9.0; "
+        "use calculate_array_breakdowns with one array",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return _one_array_breakdown(
         weather_data,
         location,

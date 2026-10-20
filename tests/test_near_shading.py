@@ -15,8 +15,8 @@ from breos.pv_modules import get_module
 from breos.solar import (
     _compute_irradiance_and_cell_temp_detail,
     _prepare_solarpos_and_weather,
+    calculate_array_breakdowns,
     calculate_multi_array_production,
-    calculate_pv_production_breakdown,
 )
 
 PORTO = Location(41.15, -8.63, tz="Europe/Lisbon")
@@ -86,9 +86,15 @@ def _detail(weather, shading=None, transposition_model="isotropic"):
     return detail, solarpos, aligned
 
 
+def _breakdown(weather, shading=None, freq="h", **options):
+    """Ten default modules at 30° facing south, with ``shading`` as their near-shading table."""
+    array = {"modules": 10, "tilt": 30, "azimuth": 180, **({} if shading is None else {"shading": shading})}
+    return calculate_array_breakdowns(weather, PORTO, [array], freq=freq, **options)[0]
+
+
 def test_an_all_zero_table_changes_nothing(synthetic_weather):
-    plain = calculate_pv_production_breakdown(synthetic_weather, PORTO, 30, 180, 10)
-    shaded = calculate_pv_production_breakdown(synthetic_weather, PORTO, 30, 180, 10, shading=UNSHADED)
+    plain = _breakdown(synthetic_weather)
+    shaded = _breakdown(synthetic_weather, UNSHADED)
     np.testing.assert_allclose(shaded.dc_after_losses, plain.dc_after_losses, rtol=1e-12)
     np.testing.assert_allclose(shaded.poa_shaded_dc, plain.poa_global_dc, rtol=1e-12)
     np.testing.assert_allclose(shaded.poa_global_dc, plain.poa_global_dc, rtol=1e-12)
@@ -145,8 +151,8 @@ def test_the_circumsolar_diffuse_is_shaded_with_the_beam(synthetic_weather, mode
 
 def test_a_fully_shaded_array_keeps_its_unshaded_reference(synthetic_weather):
     dark = {**UNSHADED, "beam_shaded_fraction": [[1.0]], "sky_view_factor": 0.0}
-    plain = calculate_pv_production_breakdown(synthetic_weather, PORTO, 30, 180, 10, albedo=0.0)
-    shaded = calculate_pv_production_breakdown(synthetic_weather, PORTO, 30, 180, 10, albedo=0.0, shading=dark)
+    plain = _breakdown(synthetic_weather, albedo=0.0)
+    shaded = _breakdown(synthetic_weather, dark, albedo=0.0)
     assert shaded.dc_after_losses.abs().max() == pytest.approx(0.0, abs=1e-6)
     assert shaded.poa_shaded_dc.abs().max() == pytest.approx(0.0, abs=1e-6)
     # The stages before near shading still show what the shading removed;
@@ -156,8 +162,8 @@ def test_a_fully_shaded_array_keeps_its_unshaded_reference(synthetic_weather):
 
 
 def test_partial_shading_leaves_the_unshaded_stages_close(synthetic_weather):
-    plain = calculate_pv_production_breakdown(synthetic_weather, PORTO, 30, 180, 10)
-    shaded = calculate_pv_production_breakdown(synthetic_weather, PORTO, 30, 180, 10, shading=EAST_WALL)
+    plain = _breakdown(synthetic_weather)
+    shaded = _breakdown(synthetic_weather, EAST_WALL)
     # Only the cell temperature differs: the shaded cells run cooler.
     assert shaded.poa_global_dc.sum() == pytest.approx(plain.poa_global_dc.sum(), rel=5e-3)
     assert shaded.poa_shaded_dc.sum() < shaded.poa_global_dc.sum()
@@ -182,10 +188,8 @@ def test_a_tracker_and_a_15_minute_run_take_the_table(synthetic_weather, synthet
     plain = calculate_multi_array_production(synthetic_weather, PORTO, [tracker])
     shaded = calculate_multi_array_production(synthetic_weather, PORTO, [{**tracker, "shading": EAST_WALL}])
     assert shaded.sum() < plain.sum()
-    hourly = calculate_pv_production_breakdown(synthetic_weather, PORTO, 30, 180, 10, shading=EAST_WALL)
-    quarter = calculate_pv_production_breakdown(
-        synthetic_weather_15min, PORTO, 30, 180, 10, freq="15min", shading=EAST_WALL
-    )
+    hourly = _breakdown(synthetic_weather, EAST_WALL)
+    quarter = _breakdown(synthetic_weather_15min, EAST_WALL, freq="15min")
     loss = {name: 1 - b.poa_shaded_dc.sum() / b.poa_global_dc.sum() for name, b in (("h", hourly), ("15min", quarter))}
     assert 0 < loss["15min"] and loss["15min"] == pytest.approx(loss["h"], abs=0.02)
 

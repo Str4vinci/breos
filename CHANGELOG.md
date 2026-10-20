@@ -540,6 +540,10 @@ removed in 0.9.0.
   `breos.weather`, which builds the battery temperature series; import it
   from there or from `breos`.
 - `breos.utils.format_years_months`, which nothing in BREOS uses.
+- `breos.solar.calculate_pv_production_breakdown`. Call
+  `calculate_array_breakdowns` with one array: it returns the same loss
+  stages, also for a tracker, and takes near shading as the array's
+  `shading`.
 - `OptimizationResult.optimal_value` and `objective_value`, which are always
   NaN for a multi-objective search; read the front in `details["pareto"]`.
   They are no longer constructor arguments.

@@ -18,8 +18,8 @@ from breos.solar import (
     PEREZ_MODELS,
     TRANSPOSITION_MODELS,
     PVModuleParams,
+    calculate_array_breakdowns,
     calculate_multi_array_production,
-    calculate_pv_production_breakdown,
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
     dc_to_ac,
@@ -300,8 +300,11 @@ class TestPVProduction:
         )
 
         front_only = calculate_pv_production_dc(**kwargs)
-        bifacial_breakdown = calculate_pv_production_breakdown(
-            **kwargs,
+        (bifacial_breakdown,) = calculate_array_breakdowns(
+            kwargs["weather_data"],
+            porto_location,
+            [{"modules": 1, "module": "Generic_600W_Bifacial", "tilt": 35, "azimuth": 180}],
+            albedo=0.25,
             bifacial_model="infinite_sheds",
             gcr=0.35,
             pvrow_height=1.5,
@@ -473,7 +476,11 @@ class TestPVProduction:
             pv_params=pv_params,
             freq="h",
         )
-        breakdown = calculate_pv_production_breakdown(**kwargs)
+        (breakdown,) = calculate_array_breakdowns(
+            synthetic_weather,
+            porto_location,
+            [{"modules": 1, "module": "Suntech_STP550S_STC", "tilt": 35, "azimuth": 180}],
+        )
         dc = calculate_pv_production_dc(**kwargs)
 
         pd.testing.assert_series_equal(breakdown.dc_after_losses, dc)
