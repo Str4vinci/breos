@@ -762,6 +762,58 @@ def _resolve_carried_energy(
     return energy_wh, pv_origin_wh, grid_origin_wh
 
 
+@dataclass(frozen=True)
+class _StartState:
+    """The aging state a span starts from."""
+
+    fec: float
+    calendar_seconds: float
+    cumulative_cycle_deg: float
+    cumulative_cal_deg: float
+    soh_fraction: float
+    resistance_growth: float
+
+
+def _resolve_start_state(
+    engine_key: str,
+    battery_config: BatteryConfig,
+    initial_degradation_state: Optional[Dict[str, Any]],
+    *,
+    initial_fec: float,
+    initial_calendar_seconds: float,
+    initial_cumulative_cycle_deg: float,
+    initial_cumulative_cal_deg: float,
+    initial_resistance_growth: Optional[float],
+) -> _StartState:
+    """The span's starting aging state: a native snapshot's values, else the arguments and the battery's own.
+
+    The arguments are the multi-year continuation seam (the App's year loop);
+    a native snapshot takes precedence over them. ``initial_resistance_growth``
+    None is the battery's configured starting resistance. BLAST restores its
+    own state from the snapshot (:func:`_build_degradation_lifecycle`).
+    """
+    native = engine_key == "native" and initial_degradation_state is not None
+    payload: Mapping[str, Any] = initial_degradation_state if native and initial_degradation_state else {}
+
+    def carried(key: str, default: Any) -> Any:
+        return float(payload.get(key, default)) if native else default
+
+    if "resistance_growth" in payload:
+        resistance_growth = float(payload["resistance_growth"])
+    elif initial_resistance_growth is None:
+        resistance_growth = battery_config.initial_resistance_growth
+    else:
+        resistance_growth = initial_resistance_growth
+    return _StartState(
+        fec=carried("fec_cum", initial_fec),
+        calendar_seconds=carried("cumulative_calendar_seconds", initial_calendar_seconds),
+        cumulative_cycle_deg=carried("cumulative_cycle_degradation", initial_cumulative_cycle_deg),
+        cumulative_cal_deg=carried("cumulative_calendar_degradation", initial_cumulative_cal_deg),
+        soh_fraction=carried("soh_fraction", battery_config.initial_soh / 100.0),
+        resistance_growth=resistance_growth,
+    )
+
+
 def _build_degradation_lifecycle(
     engine_key: str,
     battery_config: BatteryConfig,
@@ -786,8 +838,8 @@ def _build_degradation_lifecycle(
         lifecycle: DegradationLifecycle = NativeDegradationAdapter(
             model_key=battery_config.calendar_model,
             initial_soh_fraction=battery_soh_decimal,
-            initial_fec=float(state_payload.get("fec_cum", initial_fec)),
-            initial_calendar_seconds=float(state_payload.get("cumulative_calendar_seconds", initial_calendar_seconds)),
+            initial_fec=float(initial_fec),
+            initial_calendar_seconds=float(initial_calendar_seconds),
             **_native_degradation_kwargs(battery_config.calendar_model),
             cycle_step=_update_battery_soh_from_cycles,
             calendar_step=update_battery_soh_calendar,
@@ -2050,20 +2102,18 @@ def _simulate_core(
     )
 
     state_payload = initial_degradation_state or {}
-    if degradation_engine_key == "native" and initial_degradation_state is not None:
-        initial_fec = float(state_payload.get("fec_cum", initial_fec))
-        initial_calendar_seconds = float(state_payload.get("cumulative_calendar_seconds", initial_calendar_seconds))
-        initial_cumulative_cycle_deg = float(
-            state_payload.get("cumulative_cycle_degradation", initial_cumulative_cycle_deg)
-        )
-        initial_cumulative_cal_deg = float(
-            state_payload.get("cumulative_calendar_degradation", initial_cumulative_cal_deg)
-        )
-
-    # Initialize state
-    battery_soh_decimal = battery_config.initial_soh / 100.0
-    if degradation_engine_key == "native" and initial_degradation_state is not None:
-        battery_soh_decimal = float(state_payload.get("soh_fraction", battery_soh_decimal))
+    start = _resolve_start_state(
+        degradation_engine_key,
+        battery_config,
+        initial_degradation_state,
+        initial_fec=initial_fec,
+        initial_calendar_seconds=initial_calendar_seconds,
+        initial_cumulative_cycle_deg=initial_cumulative_cycle_deg,
+        initial_cumulative_cal_deg=initial_cumulative_cal_deg,
+        initial_resistance_growth=initial_resistance_growth,
+    )
+    battery_soh_decimal = start.soh_fraction
+    resistance_growth = start.resistance_growth
     Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _resolve_carried_energy(
         initial_energy_wh,
         initial_pv_origin_energy_wh,
@@ -2075,15 +2125,6 @@ def _simulate_core(
     # Degradation windows are positional (fixed steps_per_day), not
     # calendar-based: DST days shift the windows by design, and a trailing
     # partial window is processed at the end. Dispatch shares this convention.
-    # The function argument is the multi-year continuation seam (used by the
-    # App's year loop). A native state snapshot takes precedence; otherwise
-    # None means to use the battery's configured starting resistance.
-    if degradation_engine_key == "native" and "resistance_growth" in state_payload:
-        resistance_growth = float(state_payload["resistance_growth"])
-    else:
-        resistance_growth = (
-            battery_config.initial_resistance_growth if initial_resistance_growth is None else initial_resistance_growth
-        )
     # Charge/discharge efficiencies, derated by resistance growth when the
     # fade model is enabled; updated after each daily degradation step.
     eff_charge = battery_config.charge_efficiency
@@ -2138,8 +2179,8 @@ def _simulate_core(
         has_battery=has_battery,
         blast_model=blast_model,
         initial_degradation_state=initial_degradation_state,
-        initial_fec=initial_fec,
-        initial_calendar_seconds=initial_calendar_seconds,
+        initial_fec=start.fec,
+        initial_calendar_seconds=start.calendar_seconds,
         default_day_start_soc=degradation_day_start_soc,
         default_day_start_t_cell=degradation_day_start_t_cell,
     )
@@ -2183,16 +2224,16 @@ def _simulate_core(
     aging = _AgingState(
         soh_fraction=battery_soh_decimal,
         soh_percent=Battery_SOH,
-        fec_cum=initial_fec,
+        fec_cum=start.fec,
         # Lifetime FEC starts this span at zero whatever the installed pack
         # already carries, so the end-of-span value is the FEC the span itself
         # accumulated across every pack it used.
         fec_lifetime=0.0,
-        cumulative_cal_seconds=initial_calendar_seconds,
+        cumulative_cal_seconds=start.calendar_seconds,
         # Coerced so a NumPy scalar argument, such as float32, is summed in
         # float64 like the carried state always was.
-        cumulative_cycle_deg=float(initial_cumulative_cycle_deg),
-        cumulative_cal_deg=float(initial_cumulative_cal_deg),
+        cumulative_cycle_deg=float(start.cumulative_cycle_deg),
+        cumulative_cal_deg=float(start.cumulative_cal_deg),
         resistance_growth=resistance_growth,
         eff_charge=eff_charge,
         eff_discharge=eff_discharge,
@@ -2218,6 +2259,20 @@ def _simulate_core(
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
     ac_coupled = has_battery and battery_config.coupling == "ac"
+
+    def battery_state() -> ControllerBatteryState:
+        # The state the next step dispatches from, as a planner or a daily
+        # controller decides on it.
+        return ControllerBatteryState(
+            energy_wh=Battery_Energy_Wh,
+            pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
+            grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
+            soh_fraction=battery_soh_decimal,
+            resistance_growth=aging.resistance_growth,
+            charge_efficiency=eff_charge,
+            discharge_efficiency=eff_discharge,
+        )
+
     if instruction_planner is not None:
         if dispatch_instructions is not None or day_controller is not None:
             raise ValueError("pass one of dispatch_instructions, an instruction planner or a daily controller")
@@ -2225,17 +2280,7 @@ def _simulate_core(
             raise ValueError("an instruction planner needs a battery; a PV-only run has nothing to dispatch")
         # Planned from the state the first step dispatches from, the one a
         # daily controller's first decision would see.
-        dispatch_instructions = instruction_planner(
-            ControllerBatteryState(
-                energy_wh=Battery_Energy_Wh,
-                pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
-                grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
-                soh_fraction=battery_soh_decimal,
-                resistance_growth=aging.resistance_growth,
-                charge_efficiency=eff_charge,
-                discharge_efficiency=eff_discharge,
-            )
-        )
+        dispatch_instructions = instruction_planner(battery_state())
         if not isinstance(dispatch_instructions, DispatchInstructions):
             raise TypeError("an instruction planner must return DispatchInstructions")
     if dispatch_instructions is not None and len(dispatch_instructions) != n_steps:
@@ -2357,18 +2402,7 @@ def _simulate_core(
                 if session.decides_at(segment_start):
                     # A day starting where the previous window closed sees the
                     # state after that close's aging and any replacement.
-                    session.decide(
-                        segment_start,
-                        ControllerBatteryState(
-                            energy_wh=Battery_Energy_Wh,
-                            pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
-                            grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
-                            soh_fraction=battery_soh_decimal,
-                            resistance_growth=aging.resistance_growth,
-                            charge_efficiency=eff_charge,
-                            discharge_efficiency=eff_discharge,
-                        ),
-                    )
+                    session.decide(segment_start, battery_state())
                 segment_end = session.prepare_segment(segment_start, window_end)
             if aging.retired:
                 # A retired pack neither charges nor discharges, whatever the
