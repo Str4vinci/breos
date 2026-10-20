@@ -485,6 +485,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `plot_breakeven_distribution` with no paid-back run return their empty
   result silently. `plot_montecarlo_simulation(verbose=True)` still prints
   where it saved the plots.
+- `plot_monthly_comparison` labels its bars "PV Production" and "Load", as
+  `yearly_graphs` and `plot_monthly_balance` do, instead of "PV Generation"
+  and "Load Demand".
 - `MonteCarloSettings` checks its values when it is made, instead of when
   `run_montecarlo` starts. `build_year_cache` used to skip these checks, so
   it took settings no study can run: `n_runs`, `years_per_run` or `n_procs`

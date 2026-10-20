@@ -72,6 +72,16 @@ def _finish(
     return fig
 
 
+# The four energy-flow columns of the yearly and monthly plots, in their
+# drawing order, with their legend labels.
+_ENERGY_LABELS = {
+    "PV_Production": "PV Production",
+    "Houseload": "Load",
+    "Import_From_Grid": "Grid Import",
+    "PV_AC_Export": "Grid Export",
+}
+
+
 def _scenario_suffix(scenario_name: str) -> str:
     """The file-name suffix of a scenario: ``_<name>``, or nothing without one."""
     return f"_{scenario_name}" if scenario_name else ""
@@ -471,8 +481,7 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: Optional[str] = N
     """
     df = _local_time_indexed(results_df)
 
-    columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
-    columns = [c for c in columns if c in df.columns]
+    columns = [c for c in _ENERGY_LABELS if c in df.columns]
 
     yearly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("YE").sum()
 
@@ -482,13 +491,7 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: Optional[str] = N
 
     ax.set_xticklabels([d.strftime("%Y") for d in yearly.index], rotation=0)
     ax.set_ylabel("Energy (kWh)")
-    labels = {
-        "PV_Production": "PV Production",
-        "Houseload": "Load",
-        "Import_From_Grid": "Grid Import",
-        "PV_AC_Export": "Grid Export",
-    }
-    ax.legend([labels[column] for column in columns])
+    ax.legend([_ENERGY_LABELS[column] for column in columns])
     ax.grid(True, alpha=0.3, axis="y")
 
     fig.tight_layout()
@@ -998,8 +1001,7 @@ def plot_monthly_comparison(
     df = _local_time_indexed(results_df)
 
     # Monthly aggregation
-    columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
-    columns = [c for c in columns if c in df.columns]
+    columns = [c for c in _ENERGY_LABELS if c in df.columns]
 
     monthly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("ME").sum()
     monthly["Month"] = monthly.index.strftime("%b")
@@ -1015,19 +1017,12 @@ def plot_monthly_comparison(
         "Import_From_Grid": "#FF6347",
         "PV_AC_Export": "#32CD32",
     }
-    labels = {
-        "PV_Production": "PV Generation",
-        "Houseload": "Load Demand",
-        "Import_From_Grid": "Grid Import",
-        "PV_AC_Export": "Grid Export",
-    }
-
     for i, col in enumerate(columns):
         ax.bar(
             x + i * width,
             monthly[col],
             width,
-            label=labels.get(col, col),
+            label=_ENERGY_LABELS[col],
             color=colors.get(col, "gray"),
             alpha=0.85,
             edgecolor="black",
@@ -1074,7 +1069,7 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: Optional[s
     """
     df = _local_time_indexed(results_df)
 
-    energy_columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
+    energy_columns = list(_ENERGY_LABELS)
     missing = [column for column in energy_columns if column not in df.columns]
     if missing:
         raise ValueError(f"Missing energy-balance column(s): {', '.join(missing)}")
@@ -1097,12 +1092,26 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: Optional[s
     width = 0.35
 
     # Positives
-    ax.bar(months - width / 2, monthly_avg["PV_Production"], width, label="PV Production", color="gold", alpha=0.9)
-    ax.bar(months + width / 2, monthly_avg["PV_AC_Export"], width, label="Grid Export", color="green", alpha=0.9)
+    labels = _ENERGY_LABELS
+    ax.bar(
+        months - width / 2, monthly_avg["PV_Production"], width, label=labels["PV_Production"], color="gold", alpha=0.9
+    )
+    ax.bar(
+        months + width / 2, monthly_avg["PV_AC_Export"], width, label=labels["PV_AC_Export"], color="green", alpha=0.9
+    )
 
     # Negatives (Load and Import)
-    ax.bar(months - width / 2, -monthly_avg["Houseload"], width, label="Load", color="steelblue", alpha=0.9)
-    ax.bar(months + width / 2, -monthly_avg["Import_From_Grid"], width, label="Grid Import", color="red", alpha=0.9)
+    ax.bar(
+        months - width / 2, -monthly_avg["Houseload"], width, label=labels["Houseload"], color="steelblue", alpha=0.9
+    )
+    ax.bar(
+        months + width / 2,
+        -monthly_avg["Import_From_Grid"],
+        width,
+        label=labels["Import_From_Grid"],
+        color="red",
+        alpha=0.9,
+    )
 
     ax.axhline(0, color="black", linewidth=0.8)
 
