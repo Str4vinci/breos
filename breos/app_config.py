@@ -79,7 +79,7 @@ from breos.inverter import AcCable, InverterConversion, inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
 from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.mismatch import DEFAULT_BYPASS_DIODE_VOLTAGE_V
-from breos.pv.model_options import is_valid_albedo, normalise_model_name
+from breos.pv.model_options import PER_ARRAY_MODEL_OPTION_KEYS, is_valid_albedo, normalise_model_name
 from breos.pv.shading import ShadingTable
 from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, catalogue_snapshot, get_module
@@ -1634,18 +1634,6 @@ _TRACKER_GEOMETRY_KEYS = (
     "cross_axis_tilt",
     "dual_axis_max_tilt",
 )
-# Per-array settings passed through to the PV model when an array sets them.
-_PV_ARRAY_OPTION_KEYS = (
-    "temperature_model",
-    "gcr",
-    "transposition_model",
-    "albedo",
-    "surface_type",
-    "model_perez",
-    "bifacial_model",
-    "pvrow_height",
-    "pvrow_pitch",
-)
 # Per-array overrides of electrical_environment for the string check.
 _PV_ARRAY_MOUNTING_KEYS = tuple(f.name for f in fields(ArrayMounting))
 _PV_ARRAY_KEYS = frozenset(
@@ -1656,7 +1644,7 @@ _PV_ARRAY_KEYS = frozenset(
         "azimuth",
         "tracking",
         *_TRACKER_GEOMETRY_KEYS,
-        *_PV_ARRAY_OPTION_KEYS,
+        *PER_ARRAY_MODEL_OPTION_KEYS,
         *_PV_ARRAY_MOUNTING_KEYS,
         "shading",
     )
@@ -1693,7 +1681,7 @@ PV_ARRAY_TABLE = TableSpec(
         # Every other key is its top-level namesake, for this array only.
         **{
             key: f"`{key}` for this array; inherits the top-level value"
-            for key in ("tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *_PV_ARRAY_OPTION_KEYS)
+            for key in ("tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *PER_ARRAY_MODEL_OPTION_KEYS)
         },
         "mounting": "String-check mounting for this array; inherits `electrical_environment.mounting`",
         "hot_cell_temp_c": "Hottest cell temperature (°C) for this array's strings, instead of any mounting rise",
@@ -3070,7 +3058,7 @@ def normalise_pv_arrays(
             for key in _TRACKER_GEOMETRY_KEYS:
                 value = arr.get(key)
                 entry[key] = tracker_defaults[key] if value is None else value
-        for key in (*_PV_ARRAY_OPTION_KEYS, *_PV_ARRAY_MOUNTING_KEYS):
+        for key in (*PER_ARRAY_MODEL_OPTION_KEYS, *_PV_ARRAY_MOUNTING_KEYS):
             if key in arr:
                 entry[key] = arr[key]
         if "shading" in arr:

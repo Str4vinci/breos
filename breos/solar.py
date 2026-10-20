@@ -29,6 +29,7 @@ from breos.pv.model_options import (
     DEFAULT_SOLAR_POSITION,
     DEFAULT_TEMPERATURE_MODEL,
     DEFAULT_TRANSPOSITION_MODEL,
+    PER_ARRAY_MODEL_OPTION_KEYS,
     PV_MODEL_CONFIG_KEYS,
     PVModelOptions,
     resolve_pv_model_options,
@@ -90,29 +91,6 @@ DEFAULT_PVWATTS_LOSSES: Dict[str, float] = {
 # ``**kwargs`` would silently swallow a misspelled option — but they hand the
 # block to the engine with ``_model_option_kwargs`` instead of re-listing it.
 # On a tracker ``gcr`` is also the row spacing the backtracking uses.
-
-# Model options a single array in ``calculate_multi_array_production``
-# may override. ``iam_model``, ``diffuse_iam`` and ``solar_position`` are
-# deliberately absent: they are function-level for every array. That asymmetry
-# is intentional and documented on the public function. Sky and ground
-# geometry differ between arrays on one building, and so does the thermal
-# model: it encodes the mounting, and a rack and a flush roof on one site run
-# about 10 °C apart. The solar-position convention and the angle-of-incidence
-# model describe the simulation, not the array.
-_PER_ARRAY_MODEL_OPTION_KEYS = (
-    "temperature_model",
-    "transposition_model",
-    "albedo",
-    "surface_type",
-    "model_perez",
-    "bifacial_model",
-    "gcr",
-    "pvrow_height",
-    "pvrow_pitch",
-)
-_FUNCTION_LEVEL_MODEL_OPTION_KEYS = tuple(
-    key for key in PV_MODEL_CONFIG_KEYS if key not in _PER_ARRAY_MODEL_OPTION_KEYS
-)
 
 
 def _model_option_kwargs(caller_locals: Dict[str, Any]) -> Dict[str, Any]:
@@ -1477,10 +1455,10 @@ def _configured_array(index: int, arr: Mapping[str, Any], location: Location, de
     """The model of one ``arrays`` entry, as :func:`calculate_multi_array_production` reads it.
 
     ``defaults`` is the function-level model-option block without
-    ``solar_position``; an entry may override the ``_PER_ARRAY_MODEL_OPTION_KEYS``.
+    ``solar_position``; an entry may override the ``PER_ARRAY_MODEL_OPTION_KEYS``.
     """
     options = {
-        key: arr.get(key, defaults[key]) if key in _PER_ARRAY_MODEL_OPTION_KEYS else defaults[key] for key in defaults
+        key: arr.get(key, defaults[key]) if key in PER_ARRAY_MODEL_OPTION_KEYS else defaults[key] for key in defaults
     }
     pv_params = get_module(arr.get("module", _DEFAULT_MODULE))
     tracking = arr.get("tracking", "fixed")

@@ -10,7 +10,13 @@ import pytest
 
 from breos import solar
 from breos.pv.iam import calculate_front_effective_irradiance
-from breos.pv.model_options import PV_MODEL_CONFIG_KEYS, PV_MODEL_DEFAULTS, PVModelOptions, resolve_pv_model_options
+from breos.pv.model_options import (
+    PER_ARRAY_MODEL_OPTION_KEYS,
+    PV_MODEL_CONFIG_KEYS,
+    PV_MODEL_DEFAULTS,
+    PVModelOptions,
+    resolve_pv_model_options,
+)
 from breos.pv.temperature import DEFAULT_MODULE_EFFICIENCY, calculate_cell_temperature
 
 # Every public entry point that accepts the shared PV model-option block.
@@ -200,14 +206,12 @@ def test_model_option_keys_partition_into_per_array_and_function_level():
 
     ``iam_model``/``diffuse_iam``/``solar_position`` are function-level for
     every array while the sky and ground geometry and the thermal model are
-    per-array overridable. A new option must land in one of the two tuples, and the
-    function-level set is pinned exactly.
+    per-array overridable. The function-level set is pinned exactly.
     """
-    per_array = set(solar._PER_ARRAY_MODEL_OPTION_KEYS)
-    function_level = set(solar._FUNCTION_LEVEL_MODEL_OPTION_KEYS)
+    per_array = set(PER_ARRAY_MODEL_OPTION_KEYS)
 
-    assert per_array | function_level == set(PV_MODEL_CONFIG_KEYS)
-    assert function_level == {"solar_position", "iam_model", "diffuse_iam"}
+    assert per_array < set(PV_MODEL_CONFIG_KEYS)
+    assert set(PV_MODEL_CONFIG_KEYS) - per_array == {"solar_position", "iam_model", "diffuse_iam"}
 
 
 def test_no_public_entry_point_accepts_var_keywords():

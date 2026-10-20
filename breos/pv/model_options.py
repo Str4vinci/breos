@@ -155,6 +155,28 @@ PV_MODEL_DEFAULTS: Mapping[str, Any] = MappingProxyType(
 )
 PV_MODEL_CONFIG_KEYS = tuple(PV_MODEL_DEFAULTS)
 
+# The model options one entry of App's ``pv_arrays``, or of the ``arrays`` of
+# ``breos.solar.calculate_multi_array_production``, may override.
+# ``iam_model``, ``diffuse_iam`` and ``solar_position`` are deliberately
+# absent: they are function-level for every array. That asymmetry is
+# intentional and documented on the public function. Sky and ground
+# geometry differ between arrays on one building, and so does the thermal
+# model: it encodes the mounting, and a rack and a flush roof on one site run
+# about 10 °C apart. The solar-position convention and the angle-of-incidence
+# model describe the simulation, not the array. App echoes a ``pv_arrays``
+# entry's options in this order.
+PER_ARRAY_MODEL_OPTION_KEYS = (
+    "temperature_model",
+    "gcr",
+    "transposition_model",
+    "albedo",
+    "surface_type",
+    "model_perez",
+    "bifacial_model",
+    "pvrow_height",
+    "pvrow_pitch",
+)
+
 
 # --------------------------------------------------------------------------
 # Shared predicates
