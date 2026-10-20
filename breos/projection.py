@@ -585,7 +585,9 @@ def price_reference_year_rows(
     return repriced
 
 
-def _billed_days(row: pd.Series) -> float | None:
+def _billed_days(row: Mapping[str, Any] | pd.Series) -> float | None:
+    # A [period] window's civil days; None, or NaN in a row of another span,
+    # bills the simulated duration.
     billed_days = row.get("Billed_Days")
     return None if billed_days is None or pd.isna(billed_days) else float(billed_days)
 
@@ -1229,7 +1231,7 @@ def project_years(
                     outcome.weighted_w,
                     hours_per_step,
                     outcome.n_steps,
-                    year.extra.get("Billed_Days"),
+                    _billed_days(year.extra),
                 ),
             )
         )

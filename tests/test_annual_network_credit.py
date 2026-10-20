@@ -117,6 +117,16 @@ def test_system_and_no_system_credits_differ_on_the_same_day():
     assert year["Baseline_Network_Credit"] == pytest.approx(0.4015890, abs=5e-8)
 
 
+def test_a_nan_billed_days_bills_the_simulated_duration_as_revaluation_does():
+    # A year-row frame holds NaN Billed_Days for a span that is not a window,
+    # and re-pricing bills such a row on its simulated hours; so does the run.
+    index = pd.date_range("2026-03-10", periods=48, freq="h", tz=BERLIN)
+    unset = _pv_equals_load(index, tariff=_flat_tariff(index)).iloc[0]
+    nan = _pv_equals_load(index, tariff=_flat_tariff(index), extra={"Billed_Days": np.nan}).iloc[0]
+    assert nan["Fixed_Charge"] == unset["Fixed_Charge"] == pytest.approx(2 * 0.4405, rel=1e-15)
+    assert nan["Network_Credit"] == unset["Network_Credit"]
+
+
 def test_a_leap_year_gets_the_annual_amount_and_a_window_its_share_of_the_year():
     index = pd.date_range("2028-01-01", periods=8784, freq="h", tz=BERLIN)
     whole = _pv_equals_load(index, tariff=_flat_tariff(index)).iloc[0]
