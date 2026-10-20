@@ -1929,7 +1929,6 @@ def _check_electrical_sizing(config: Mapping[str, Any]) -> None:
 def _validate_bifacial_settings(
     model: Any,
     module: Any,
-    gcr: Any,
     pvrow_height: Any,
     pvrow_pitch: Any,
     where: str = "",
@@ -1938,8 +1937,8 @@ def _validate_bifacial_settings(
 
     Shares its predicates with :mod:`breos.pv.model_options` but reports them
     against config keys. ``pvrow_*`` geometry is required only for an active
-    rear-side model; ``gcr`` is also checked independently after the existing
-    validators because tracking can consume it without bifacial modeling.
+    rear-side model. ``gcr`` is range-checked with the other PV settings,
+    because tracking reads it without bifacial modeling.
     """
     prefix = f"{where}." if where else ""
     if normalise_model_name(model) == "none":
@@ -1997,7 +1996,7 @@ def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
         given=cfg.get("costs") or {},
         preset=cfg.get("cost_preset"),
         tariff=tariff_spec is not None,
-        battery=cfg["battery_kwh"] * 1000 > 1,
+        battery=config_has_battery(cfg),
         coupling=cfg["battery_coupling"],
     )
     _validate_battery_and_degradation(cfg)
@@ -2726,7 +2725,6 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
             _validate_bifacial_settings(
                 arr.get("bifacial_model", cfg["bifacial_model"]),
                 module or default_module_key(),
-                arr.get("gcr", cfg["gcr"]),
                 arr.get("pvrow_height", cfg["pvrow_height"]),
                 arr.get("pvrow_pitch", cfg["pvrow_pitch"]),
                 where=f"pv_arrays[{i}]",
@@ -2748,7 +2746,6 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
         _validate_bifacial_settings(
             cfg["bifacial_model"],
             cfg.get("pv_module") or default_module_key(),
-            cfg["gcr"],
             cfg["pvrow_height"],
             cfg["pvrow_pitch"],
         )
@@ -3036,9 +3033,7 @@ def normalise_pv_arrays(
     default_module = cfg["pv_module"] or default_module_key()
 
     # Tracker settings are inherited from the top level like module, tilt and
-    # azimuth. The PV model has its own fallbacks for an array without them,
-    # and those used to win: a top-level single-axis tracker ran fixed-tilt
-    # once pv_arrays was set.
+    # azimuth, before the PV model's own fallbacks for an array without them.
     tracker_defaults = {key: cfg[key] for key in ("tracking", *_TRACKER_GEOMETRY_KEYS)}
     tracker_defaults["axis_azimuth"] = axis_azimuth
 
