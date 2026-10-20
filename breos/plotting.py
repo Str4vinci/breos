@@ -72,6 +72,11 @@ def _finish(
     return fig
 
 
+def _scenario_suffix(scenario_name: str) -> str:
+    """The file-name suffix of a scenario: ``_<name>``, or nothing without one."""
+    return f"_{scenario_name}" if scenario_name else ""
+
+
 def _currency(frame: pd.DataFrame) -> str:
     """The currency a frame's money is in, for labels: the recorded one, else the default."""
     return _recorded_currency(frame) or DEFAULT_CURRENCY
@@ -557,6 +562,16 @@ def weekly_graphs(
     return _finish(fig, results_directory, f"week_{week_number}_profile.png")
 
 
+def _line_figure(x: Any, y: Any, style: str, ylabel: str, results_directory: Optional[str], filename: str) -> Figure:
+    """One line over time on a 10 x 6 figure, as the degradation plots draw each series."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(x, y, style, linewidth=2)
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    return _finish(fig, results_directory, filename)
+
+
 def _degradation_x(degradation_df: pd.DataFrame) -> pd.Index:
     """The x values of a daily degradation frame: its ``Datetime`` on the local clock, else its index."""
     if "Datetime" in degradation_df.columns:
@@ -589,12 +604,9 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: Optional[
     x = _degradation_x(degradation_df)
 
     # 1. SOH over time
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-    ax1.plot(x, degradation_df["SOH"], "b-", linewidth=2)
-    ax1.set_ylabel("SOH (%)")
-    ax1.grid(True, alpha=0.3)
-    fig.tight_layout()
-    figures["battery_degradation_soh"] = _finish(fig, results_directory, "battery_degradation_soh.png")
+    figures["battery_degradation_soh"] = _line_figure(
+        x, degradation_df["SOH"], "b-", "SOH (%)", results_directory, "battery_degradation_soh.png"
+    )
 
     # 2. Degradation components for the active battery inventory.
     def _plot_degradation_components(cycle_data, calendar_data, filename, ylabel):
@@ -626,12 +638,14 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: Optional[
 
     # 3. FEC
     if "Cumulative_FEC" in degradation_df.columns:
-        fig, ax3 = plt.subplots(figsize=(10, 6))
-        ax3.plot(x, degradation_df["Cumulative_FEC"], "g-", linewidth=2)
-        ax3.set_ylabel("Full Equivalent Cycles")
-        ax3.grid(True, alpha=0.3)
-        fig.tight_layout()
-        figures["battery_degradation_fec"] = _finish(fig, results_directory, "battery_degradation_fec.png")
+        figures["battery_degradation_fec"] = _line_figure(
+            x,
+            degradation_df["Cumulative_FEC"],
+            "g-",
+            "Full Equivalent Cycles",
+            results_directory,
+            "battery_degradation_fec.png",
+        )
 
     # 4. Resistance growth and RTE (if available)
     if "Resistance_Growth" in degradation_df.columns:
@@ -662,21 +676,25 @@ def plot_resistance_and_efficiency(
     x = _degradation_x(degradation_df)
 
     # Resistance growth plot
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(x, degradation_df["Resistance_Growth"] * 100, "r-", linewidth=2)
-    ax.set_ylabel("Resistance Growth (%)")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    figures["battery_resistance_growth"] = _finish(fig, results_directory, "battery_resistance_growth.png")
+    figures["battery_resistance_growth"] = _line_figure(
+        x,
+        degradation_df["Resistance_Growth"] * 100,
+        "r-",
+        "Resistance Growth (%)",
+        results_directory,
+        "battery_resistance_growth.png",
+    )
 
     # Effective RTE plot
     if "Effective_RTE" in degradation_df.columns:
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(x, degradation_df["Effective_RTE"] * 100, "m-", linewidth=2)
-        ax.set_ylabel("Round-Trip Efficiency (%)")
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-        figures["battery_effective_rte"] = _finish(fig, results_directory, "battery_effective_rte.png")
+        figures["battery_effective_rte"] = _line_figure(
+            x,
+            degradation_df["Effective_RTE"] * 100,
+            "m-",
+            "Round-Trip Efficiency (%)",
+            results_directory,
+            "battery_effective_rte.png",
+        )
     return figures
 
 
@@ -793,7 +811,7 @@ def plot_breakeven(
     Returns:
         The figures, keyed ``breakeven_cumulative`` and ``breakeven_annual``.
     """
-    suffix = f"_{scenario_name}" if scenario_name else ""
+    suffix = _scenario_suffix(scenario_name)
 
     years = cost_projection["Year"]
 
@@ -921,7 +939,7 @@ def plot_battery_soh_timeseries(
     if not 0.0 < eol_percentage < 1.0:
         raise ValueError(f"eol_percentage is a fraction between 0 and 1, not {eol_percentage!r}")
     eol_pct = 100.0 * eol_percentage
-    suffix = f"_{scenario_name}" if scenario_name else ""
+    suffix = _scenario_suffix(scenario_name)
 
     df = _local_time_indexed(results_df)
 
@@ -975,7 +993,7 @@ def plot_monthly_comparison(
     Returns:
         The matplotlib ``Figure``.
     """
-    suffix = f"_{scenario_name}" if scenario_name else ""
+    suffix = _scenario_suffix(scenario_name)
 
     df = _local_time_indexed(results_df)
 
@@ -1236,7 +1254,7 @@ def plot_montecarlo_simulation(
             "(an npv_savings column and a run or payback_year column)"
         )
 
-    suffix = f"_{scenario_name}" if scenario_name else ""
+    suffix = _scenario_suffix(scenario_name)
     plots_folder = None if results_directory is None else os.path.join(results_directory, "plots")
     if plots_folder is not None:
         os.makedirs(plots_folder, exist_ok=True)
@@ -2609,7 +2627,7 @@ def plot_co2_savings(
     if "CO2_Avoided_Total_kg" not in cost_projection.columns:
         return {}
 
-    suffix = f"_{scenario_name}" if scenario_name else ""
+    suffix = _scenario_suffix(scenario_name)
 
     years = cost_projection["Year"]
     co2_total = cost_projection["CO2_Avoided_Total_kg"]
