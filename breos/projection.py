@@ -881,10 +881,10 @@ class _YearOutcome:
     span_events: Sequence[EndOfLifeEvent]
     # T_cell summed through the step that retires the pack; None if none does.
     retiring_t_cell_sum: float | None
-    # Per-step years only: the year's frame, the set a year planner returned
+    # Per-step years only: the year's frame, the sets a year planner returned
     # and the instructions a daily controller executed.
     results_df: pd.DataFrame | None = None
-    planned: DispatchInstructions | None = None
+    planned: tuple[DispatchInstructions, ...] = ()
     executed: DispatchInstructions | None = None
 
 
@@ -997,7 +997,7 @@ def _run_frame_year(
             float(np.sum(results_df["T_cell"].to_numpy()[: last_served + 1])) if last_served is not None else None
         ),
         results_df=results_df,
-        planned=planned[0] if planned else None,
+        planned=tuple(planned),
         executed=executed,
     )
 
@@ -1182,8 +1182,7 @@ def project_years(
                 assert outcome.results_df is not None
                 priced_flows.append(_step_flows(outcome.results_df, priced_flows[-1] if priced_flows else {}))
         carry = outcome.carry
-        if outcome.planned is not None:
-            dispatched.append(outcome.planned)
+        dispatched.extend(outcome.planned)
         if outcome.executed is not None:
             executed.append(outcome.executed)
         if static is not None:
