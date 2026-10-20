@@ -466,3 +466,23 @@ class TestReplacementBookingInProjection:
         expected = (12000.0 + operation + outlay / (1 + self.DISCOUNT) ** booked_at) / production
 
         assert lcoe == pytest.approx(expected)
+
+
+def test_lcoe_discounts_a_float32_swap_instant_in_its_own_dtype():
+    # The swap instant stays float32 in the power, as the time a caller gave.
+    projection = pd.DataFrame(
+        {
+            "Year": [1, 2, 3],
+            "PV_Production_kWh": [100.0] * 3,
+            "Cost_Operation": [1.0] * 3,
+            "Cost_Replacement": [0.0, 100.0, 0.0],
+            "Replacement_Time_Years": np.array([np.nan, 1.3, np.nan], dtype=np.float32),
+        }
+    )
+    lcoe = calculate_lcoe_from_projection(projection, total_investment=100.0, discount_rate=0.05)
+    discount = 1 / (1.05 ** pd.Series([1, 2, 3]))
+    swap = 1 / (1.05 ** pd.Series(np.array([1.0, 1.3, 3.0], dtype=np.float32)))
+    expected = (100.0 + float((discount * 1.0 + pd.Series([0.0, 100.0, 0.0]) * swap).sum())) / float(
+        (pd.Series([100.0] * 3) * discount).sum()
+    )
+    assert lcoe == expected
