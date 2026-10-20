@@ -563,6 +563,10 @@ removed in 0.9.0.
   function now runs one internal PV model; `calculate_pv_production_dc_tracking`
   and `calculate_multi_array_production` give the same production, and the App
   result's `pv_loss_waterfall` gives the loss stages.
+- The undocumented `breos.pv.model_options` checkers `resolve_transposition_model`,
+  `resolve_perez_model`, `resolve_iam_model`, `resolve_diffuse_iam_method`,
+  `resolve_temperature_model` and `resolve_bifacial_model`.
+  `resolve_pv_model_options` checks the same names with the same messages.
 
 ### Fixed
 

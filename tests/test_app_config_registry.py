@@ -7,7 +7,7 @@ import pytest
 
 from breos import cli
 from breos.app_config import ALLOWED_CONFIG_KEYS, DEFAULTS, resolve_app_config
-from breos.pv.model_options import resolve_diffuse_iam_method
+from breos.pv.model_options import resolve_pv_model_options
 
 EXPECTED_DEFAULTS = {
     "battery_kwh": 0.0,
@@ -277,7 +277,7 @@ def test_diffuse_iam_none_reads_as_beam_only():
     cfg = resolve_app_config(
         {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "diffuse_iam": None}
     ).cfg
-    assert resolve_diffuse_iam_method(cfg["diffuse_iam"]) == "none"
+    assert resolve_pv_model_options(diffuse_iam=cfg["diffuse_iam"]).diffuse_iam == "none"
 
 
 def test_empty_normalized_cli_values_do_not_overwrite_config_file(tmp_path):

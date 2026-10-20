@@ -178,7 +178,7 @@ def normalise_model_name(value) -> str:
     Model names are matched case- and whitespace-insensitively, so config
     files and keyword arguments accept ``"Perez"`` and ``" perez "`` alike.
     Non-strings are stringified rather than rejected, which is what makes
-    ``resolve_*`` report an unknown-name error (listing the valid names) for
+    ``_resolve_choice`` report an unknown-name error (listing the valid names) for
     e.g. an integer instead of a bare ``TypeError``.
     """
     return str(value).strip().lower()
@@ -241,20 +241,20 @@ class PVModelOptions:
     pvrow_pitch: float | None
 
 
-def resolve_transposition_model(model: str) -> str:
-    """Normalise and validate a sky-diffusion transposition model name."""
-    if not is_known_model(model, TRANSPOSITION_MODELS):
-        valid = ", ".join(TRANSPOSITION_MODELS)
-        raise ValueError(f"Unknown transposition model {model!r}. Valid models: {valid}")
-    return normalise_model_name(model)
+def _resolve_choice(value: Any, valid: tuple[str, ...], label: str) -> str:
+    """Normalise ``value`` and check it is one of ``valid``; ``label`` names it in the error.
+
+    The error lists the valid names: "Unknown IAM model 'x'. Valid models: ...".
+    """
+    if not is_known_model(value, valid):
+        kind = label.rsplit(" ", 1)[-1]
+        raise ValueError(f"Unknown {label} {value!r}. Valid {kind}s: {', '.join(valid)}")
+    return normalise_model_name(value)
 
 
 def resolve_solar_position_method(method: str) -> str:
     """Normalise and validate a solar-position evaluation method name."""
-    if not is_known_model(method, SOLAR_POSITION_METHODS):
-        valid = ", ".join(SOLAR_POSITION_METHODS)
-        raise ValueError(f"Unknown solar position method {method!r}. Valid methods: {valid}")
-    return normalise_model_name(method)
+    return _resolve_choice(method, SOLAR_POSITION_METHODS, "solar position method")
 
 
 def solar_position_time_offset(method: str, weather: pd.DataFrame, freq: str) -> pd.Timedelta:
@@ -329,38 +329,6 @@ def solar_position_at_labels(
     return solarpos, method
 
 
-def resolve_iam_model(model: str) -> str:
-    """Normalise and validate a beam incidence-angle modifier model."""
-    if not is_known_model(model, IAM_MODELS):
-        valid = ", ".join(IAM_MODELS)
-        raise ValueError(f"Unknown IAM model {model!r}. Valid models: {valid}")
-    return normalise_model_name(model)
-
-
-def resolve_diffuse_iam_method(method: str) -> str:
-    """Normalise and validate a diffuse-IAM method name."""
-    if not is_known_model(method, DIFFUSE_IAM_METHODS):
-        valid = ", ".join(DIFFUSE_IAM_METHODS)
-        raise ValueError(f"Unknown diffuse IAM method {method!r}. Valid methods: {valid}")
-    return normalise_model_name(method)
-
-
-def resolve_temperature_model(model: str) -> str:
-    """Normalise and validate a cell-temperature model / mounting preset."""
-    if not is_known_model(model, TEMPERATURE_MODELS):
-        valid = ", ".join(TEMPERATURE_MODELS)
-        raise ValueError(f"Unknown temperature model {model!r}. Valid models: {valid}")
-    return normalise_model_name(model)
-
-
-def resolve_bifacial_model(model: str) -> str:
-    """Normalise and validate a rear-irradiance model name."""
-    if not is_known_model(model, BIFACIAL_MODELS):
-        valid = ", ".join(BIFACIAL_MODELS)
-        raise ValueError(f"Unknown bifacial model {model!r}. Valid models: {valid}")
-    return normalise_model_name(model)
-
-
 def validate_bifacial_inputs(
     model: str,
     bifaciality: float | None,
@@ -378,7 +346,7 @@ def validate_bifacial_inputs(
     characterised for rear-side gain, which is a configuration error rather
     than a reason to silently fall back to front-only production.
     """
-    model = resolve_bifacial_model(model)
+    model = _resolve_choice(model, BIFACIAL_MODELS, "bifacial model")
     if model == "none":
         return model
     if bifaciality is None:
@@ -403,14 +371,6 @@ def validate_bifacial_inputs(
     if checked["pvrow_pitch"] <= 0.0:
         raise ValueError("pvrow_pitch must be > 0 for bifacial modeling")
     return model
-
-
-def resolve_perez_model(model_perez: str) -> str:
-    """Validate the Perez coefficient set name."""
-    if not is_known_model(model_perez, PEREZ_MODELS):
-        valid = ", ".join(PEREZ_MODELS)
-        raise ValueError(f"Unknown Perez coefficient model {model_perez!r}. Valid models: {valid}")
-    return normalise_model_name(model_perez)
 
 
 def resolve_ground_reflectance(albedo, surface_type):
@@ -455,12 +415,12 @@ def resolve_pv_model_options(
     Raises ``ValueError`` (or ``TypeError`` for non-numeric bifacial geometry)
     naming the offending option and its valid values.
     """
-    transposition_model = resolve_transposition_model(transposition_model)
+    transposition_model = _resolve_choice(transposition_model, TRANSPOSITION_MODELS, "transposition model")
     albedo, surface_type = resolve_ground_reflectance(albedo, surface_type)
-    model_perez = resolve_perez_model(model_perez)
-    iam_model = resolve_iam_model(iam_model)
-    diffuse_iam = resolve_diffuse_iam_method(diffuse_iam)
-    temperature_model = resolve_temperature_model(temperature_model)
+    model_perez = _resolve_choice(model_perez, PEREZ_MODELS, "Perez coefficient model")
+    iam_model = _resolve_choice(iam_model, IAM_MODELS, "IAM model")
+    diffuse_iam = _resolve_choice(diffuse_iam, DIFFUSE_IAM_METHODS, "diffuse IAM method")
+    temperature_model = _resolve_choice(temperature_model, TEMPERATURE_MODELS, "temperature model")
     bifacial_model = validate_bifacial_inputs(
         bifacial_model,
         bifaciality,

@@ -116,7 +116,7 @@ def calculate_cell_temperature(
 
     ``temperature_model`` must already be one of ``TEMPERATURE_MODELS``; an
     unrecognised name raises ``KeyError`` here rather than being validated,
-    because :func:`breos.pv.model_options.resolve_temperature_model` owns that
+    because :func:`breos.pv.model_options.resolve_pv_model_options` owns that
     check. PVsyst's heat balance uses a sourced ``module_efficiency`` when the
     module carries one and :data:`DEFAULT_MODULE_EFFICIENCY` otherwise, so every
     module is modelled with a realistic conversion efficiency rather than
