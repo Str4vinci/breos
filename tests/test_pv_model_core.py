@@ -26,6 +26,7 @@ MODEL_OPTION_ENTRY_POINTS = (
     solar.calculate_pv_production_dc_tracking,
     solar.calculate_pv_production_ac,
     solar.calculate_multi_array_production,
+    solar.calculate_array_breakdowns,
 )
 
 

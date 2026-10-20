@@ -149,6 +149,7 @@ check.status, [finding.code for finding in check.findings]
    breos.solar.calculate_pv_production_breakdown
    breos.solar.calculate_pv_production_ac
    breos.solar.calculate_multi_array_production
+   breos.solar.calculate_array_breakdowns
    breos.solar.dc_to_ac
 ```
 

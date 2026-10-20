@@ -1495,6 +1495,70 @@ def _configured_array(index: int, arr: Mapping[str, Any], location: Location, de
     )
 
 
+def _breakdowns_on_one_grid(
+    weather_data: pd.DataFrame,
+    location: Location,
+    freq: str,
+    solar_position: str,
+    models: List[_PVArray],
+    **aging: Any,
+) -> list[PVProductionBreakdown]:
+    """Each array's breakdown, in order, with the sun computed once for all of them."""
+    grid = _prepare_solarpos_and_weather(weather_data, location, freq, solar_position)
+    return [_array_breakdown(grid, model, **aging) for model in models]
+
+
+def calculate_array_breakdowns(
+    weather_data: pd.DataFrame,
+    location: Location,
+    arrays: List[Dict[str, Any]],
+    freq: str = "h",
+    degradation_rate: float = 0.0,
+    current_year: Optional[int] = None,
+    start_year: Optional[int] = None,
+    loss_overrides: Optional[Dict[str, float]] = None,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
+    albedo: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    model_perez: str = DEFAULT_PEREZ_MODEL,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
+    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
+    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
+) -> list[PVProductionBreakdown]:
+    """Calculate one DC production breakdown per PV array, in the order given.
+
+    Takes the parameters of :func:`calculate_multi_array_production` and
+    returns each array's production with its loss stages instead of their sum.
+    Each breakdown carries its module operating point, so the list is what
+    :func:`breos.electrical.string_limited_dc` and
+    :func:`breos.electrical.string_cable_loss` take. Every array must have at
+    least one module, so the result lines up with ``arrays``. The sun's
+    position is computed once for all arrays.
+    """
+    options = _model_option_kwargs(locals())
+    solar_position = options.pop("solar_position")
+    for i, arr in enumerate(arrays):
+        if arr.get("modules", 0) < 1:
+            raise ValueError(f"Array {i + 1}: modules must be at least 1, got {arr.get('modules', 0)}")
+    models = [_configured_array(i, arr, location, options) for i, arr in enumerate(arrays)]
+    return _breakdowns_on_one_grid(
+        weather_data,
+        location,
+        freq,
+        solar_position,
+        models,
+        degradation_rate=degradation_rate,
+        current_year=current_year,
+        start_year=start_year,
+        loss_overrides=loss_overrides,
+    )
+
+
 def calculate_multi_array_production(
     weather_data: pd.DataFrame,
     location: Location,
@@ -1537,8 +1601,10 @@ def calculate_multi_array_production(
             ``dual_axis_max_tilt``. Any array may also set
             ``transposition_model``, ``albedo``/``surface_type``,
             ``model_perez`` or ``temperature_model`` to override the
-            function-level defaults, and ``shading``, a near-shading table
-            (see :func:`calculate_pv_production_breakdown`).
+            function-level defaults, and ``shading``, the array's near-shading
+            table, a :class:`breos.pv.shading.ShadingTable` or its mapping; it
+            reduces the front plane-of-array irradiance before the
+            incidence-angle modifier.
         freq: Time frequency ('h' or '15min')
         degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
         current_year: Calendar year being simulated. Module age is counted at
@@ -1589,16 +1655,15 @@ def calculate_multi_array_production(
         solar_position_time_offset(solar_position, weather_data, freq)
         resolve_pvwatts_losses(loss_overrides)
         return pd.Series(0.0, index=times, name="dc_power_W")
-    grid = _prepare_solarpos_and_weather(weather_data, location, freq, solar_position)
-    breakdowns = [
-        _array_breakdown(
-            grid,
-            model,
-            degradation_rate=degradation_rate,
-            current_year=current_year,
-            start_year=start_year,
-            loss_overrides=loss_overrides,
-        )
-        for model in models
-    ]
+    breakdowns = _breakdowns_on_one_grid(
+        weather_data,
+        location,
+        freq,
+        solar_position,
+        models,
+        degradation_rate=degradation_rate,
+        current_year=current_year,
+        start_year=start_year,
+        loss_overrides=loss_overrides,
+    )
     return _sum_pv_breakdowns(breakdowns).dc_after_losses

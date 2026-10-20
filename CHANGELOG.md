@@ -313,6 +313,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   this costs is the new `mppt_limits` stage of the PV loss waterfall, and a
   design inside every limit gives the aggregate result. It refuses to run, rather
   than fall back, without one inverter, the limits it needs, or a sound wiring.
+  `breos.solar.calculate_array_breakdowns` returns the per-array breakdowns
+  these functions take, each with its module operating point, for fixed and
+  tracking arrays alike.
 - Each `pv_arrays` entry may set its own `temperature_model`, since a rack and
   a flush roof on one site run about 10 °C apart, and its own `mounting`,
   `hot_cell_temp_c` and `cold_operating_cell_temp_c` for the string check
@@ -561,8 +564,8 @@ removed in 0.9.0.
 - The undocumented `breos.solar.calculate_pv_production_tracking_breakdown`
   and `calculate_multi_array_production_breakdown`. Every PV production
   function now runs one internal PV model; `calculate_pv_production_dc_tracking`
-  and `calculate_multi_array_production` give the same production, and the App
-  result's `pv_loss_waterfall` gives the loss stages.
+  and `calculate_multi_array_production` give the same production, and
+  `calculate_array_breakdowns` gives each array's loss stages.
 - The undocumented `breos.pv.model_options` checkers `resolve_transposition_model`,
   `resolve_perez_model`, `resolve_iam_model`, `resolve_diffuse_iam_method`,
   `resolve_temperature_model` and `resolve_bifacial_model`.
