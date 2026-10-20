@@ -68,6 +68,19 @@ if TYPE_CHECKING:
     from breos.tariffs import ResolvedTariff
 
 
+def _finite(name: str, value: Any) -> float:
+    """``value`` as a float, refusing a bool, a non-number and a non-finite number by ``name``."""
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a finite number, not a bool")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be a finite number")
+    return result
+
+
 @dataclass
 class BatteryConfig:
     """
@@ -225,17 +238,6 @@ class BatteryConfig:
     battery_inverter_efficiency: Optional[float] = None
 
     def __post_init__(self):
-        def finite(name: str, value: float) -> float:
-            if isinstance(value, (bool, np.bool_)):
-                raise ValueError(f"{name} must be a finite number, not a bool")
-            try:
-                result = float(value)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"{name} must be a finite number") from exc
-            if not math.isfinite(result):
-                raise ValueError(f"{name} must be a finite number")
-            return result
-
         # Checked rather than coerced: a string such as "false" is truthy.
         if not isinstance(self.allow_terminal_replacement, (bool, np.bool_)):
             raise ValueError("allow_terminal_replacement must be a bool")
@@ -247,7 +249,7 @@ class BatteryConfig:
         if self.replacement_years_after_span < 0:
             raise ValueError("replacement_years_after_span must be a non-negative integer")
         self.replacement_years_after_span = int(self.replacement_years_after_span)
-        self.replacement_min_remaining_years = finite(
+        self.replacement_min_remaining_years = _finite(
             "replacement_min_remaining_years", self.replacement_min_remaining_years
         )
         if self.replacement_min_remaining_years < 0.0:
@@ -255,17 +257,17 @@ class BatteryConfig:
         if self.skipped_replacement_action not in SKIPPED_REPLACEMENT_ACTIONS:
             raise ValueError(f"skipped_replacement_action must be one of: {', '.join(SKIPPED_REPLACEMENT_ACTIONS)}")
 
-        self.nominal_energy_wh = finite("nominal_energy_wh", self.nominal_energy_wh)
-        self.initial_soh = finite("initial_soh", self.initial_soh)
-        self.eol_percentage = finite("eol_percentage", self.eol_percentage)
-        self.min_soc = finite("min_soc", self.min_soc)
-        self.max_soc = finite("max_soc", self.max_soc)
-        self.charge_efficiency = finite("charge_efficiency", self.charge_efficiency)
-        self.discharge_efficiency = finite("discharge_efficiency", self.discharge_efficiency)
-        self.inverter_efficiency = finite("inverter_efficiency", self.inverter_efficiency)
-        self.standby_loss_wh = finite("standby_loss_wh", self.standby_loss_wh)
-        self.initial_resistance_growth = finite("initial_resistance_growth", self.initial_resistance_growth)
-        self.thermal_resistance_k_per_w = finite("thermal_resistance_k_per_w", self.thermal_resistance_k_per_w)
+        self.nominal_energy_wh = _finite("nominal_energy_wh", self.nominal_energy_wh)
+        self.initial_soh = _finite("initial_soh", self.initial_soh)
+        self.eol_percentage = _finite("eol_percentage", self.eol_percentage)
+        self.min_soc = _finite("min_soc", self.min_soc)
+        self.max_soc = _finite("max_soc", self.max_soc)
+        self.charge_efficiency = _finite("charge_efficiency", self.charge_efficiency)
+        self.discharge_efficiency = _finite("discharge_efficiency", self.discharge_efficiency)
+        self.inverter_efficiency = _finite("inverter_efficiency", self.inverter_efficiency)
+        self.standby_loss_wh = _finite("standby_loss_wh", self.standby_loss_wh)
+        self.initial_resistance_growth = _finite("initial_resistance_growth", self.initial_resistance_growth)
+        self.thermal_resistance_k_per_w = _finite("thermal_resistance_k_per_w", self.thermal_resistance_k_per_w)
 
         if self.nominal_energy_wh < 0.0:
             raise ValueError("nominal_energy_wh must be non-negative")
@@ -292,7 +294,7 @@ class BatteryConfig:
         else:
             if self.battery_inverter_efficiency is None:
                 raise ValueError("an AC-coupled battery needs battery_inverter_efficiency; it has no default")
-            self.battery_inverter_efficiency = finite("battery_inverter_efficiency", self.battery_inverter_efficiency)
+            self.battery_inverter_efficiency = _finite("battery_inverter_efficiency", self.battery_inverter_efficiency)
             if not 0.0 < self.battery_inverter_efficiency <= 1.0:
                 raise ValueError("battery_inverter_efficiency must be greater than 0 and at most 1")
 
@@ -319,13 +321,13 @@ class BatteryConfig:
                     "power_limit_c_rate limits both directions from capacity; do not also set "
                     "max_charge_power_w or max_discharge_power_w"
                 )
-            rate = finite("power_limit_c_rate", self.power_limit_c_rate)
+            rate = _finite("power_limit_c_rate", self.power_limit_c_rate)
             if rate <= 0.0:
                 raise ValueError("power_limit_c_rate must be greater than 0")
             self.power_limit_c_rate = rate
         if self.inverter_conversion is not None:
             self.inverter_conversion = as_inverter_conversion(self.inverter_conversion)
-        self.ac_output_scale = finite("ac_output_scale", self.ac_output_scale)
+        self.ac_output_scale = _finite("ac_output_scale", self.ac_output_scale)
         if not 0.0 < self.ac_output_scale <= 1.0:
             raise ValueError(
                 "ac_output_scale must be greater than 0 and at most 1; it is applied after the "
@@ -706,14 +708,7 @@ def _carried_origin(value: Optional[float], name: str, limit_wh: float, limit_na
     """
     if value is None:
         return 0.0
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"{name} must be a finite number, not a bool")
-    try:
-        origin_wh = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a finite number") from exc
-    if not math.isfinite(origin_wh):
-        raise ValueError(f"{name} must be a finite number")
+    origin_wh = _finite(name, value)
     slack = 4.0 * math.ulp(max(abs(limit_wh), abs(origin_wh)))
     if not 0.0 <= origin_wh <= limit_wh + slack:
         raise ValueError(f"{name} must be between 0 and {limit_name}")
@@ -737,14 +732,7 @@ def _resolve_carried_energy(
     if initial_energy_wh is None:
         energy_wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
     else:
-        if isinstance(initial_energy_wh, (bool, np.bool_)):
-            raise ValueError("initial_energy_wh must be a finite number, not a bool")
-        try:
-            energy_wh = float(initial_energy_wh)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("initial_energy_wh must be a finite number") from exc
-        if not math.isfinite(energy_wh):
-            raise ValueError("initial_energy_wh must be a finite number")
+        energy_wh = _finite("initial_energy_wh", initial_energy_wh)
         if not 0.0 <= energy_wh <= battery_config.nominal_energy_wh:
             raise ValueError(
                 f"initial_energy_wh must be between 0 and nominal_energy_wh ({battery_config.nominal_energy_wh:g} Wh)"
