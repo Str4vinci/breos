@@ -243,10 +243,16 @@ def test_a_repeated_sun_position_is_computed_once_and_returned_as_a_copy(monkeyp
     assert len(calls) == 1
     assert (second["azimuth"] >= 0.0).all()
 
-    # Another offset, site or calendar is computed afresh.
+    # The same instants on another clock are the same sun, at their labels.
+    lisbon = times.tz_convert("Europe/Lisbon")
+    local, _ = solar_position_at_labels(Location(41.15, -8.61), lisbon, weather, "h", "interval-start")
+    assert len(calls) == 1
+    assert local.index.equals(lisbon) and str(local.index.tz) == "Europe/Lisbon"
+    np.testing.assert_array_equal(local.to_numpy(), second.to_numpy())
+
+    # Another offset or site is computed afresh.
     mid, _ = solar_position_at_labels(Location(41.15, -8.61), times, weather, "h", "mid-interval")
     solar_position_at_labels(Location(41.15, -8.62), times, weather, "h", "interval-start")
-    solar_position_at_labels(Location(41.15, -8.61), times.tz_convert("Europe/Lisbon"), weather, "h", "interval-start")
-    assert len(calls) == 4
+    assert len(calls) == 3
     assert mid.index.equals(times)
     assert not np.array_equal(mid["azimuth"], second["azimuth"])

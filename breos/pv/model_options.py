@@ -296,10 +296,10 @@ def solar_position_time_offset(method: str, weather: pd.DataFrame, freq: str) ->
 
 # The sun positions computed last, by everything they depend on. The sun is
 # most of a PV run's time, and the optimizer, the terrain horizon and sweeps
-# ask for the same grid again and again. Enough entries for a design study's
-# weather sequence, one per project year.
+# ask for the same grid again and again. At most about 20 MB: 45 hourly
+# years or 11 quarter-hourly ones, the oldest dropped first.
 _SOLAR_POSITIONS: OrderedDict[tuple, pd.DataFrame] = OrderedDict()
-_SOLAR_POSITIONS_SIZE = 32
+_SOLAR_POSITIONS_MAX_ROWS = 400_000
 _PVLIB_SOLAR_POSITION = Location.get_solarposition
 
 
@@ -308,6 +308,7 @@ def _solar_position_key(location: Any, times: pd.DatetimeIndex, offset: pd.Timed
 
     Only a plain pvlib ``Location`` with pvlib's own method is kept: a
     subclass or a replaced method may compute something else for the site.
+    pvlib reads the instants in UTC, so the time zone is not part of the key.
     """
     if (
         type(location) is not Location
@@ -320,8 +321,7 @@ def _solar_position_key(location: Any, times: pd.DatetimeIndex, offset: pd.Timed
         location.longitude,
         location.altitude,
         offset.value,
-        str(times.dtype),
-        times.asi8.tobytes(),  # type: ignore[attr-defined]  # pandas-stubs omits asi8
+        times.as_unit("ns").asi8.tobytes(),  # type: ignore[attr-defined]  # pandas-stubs omits asi8
     )
 
 
@@ -342,9 +342,9 @@ def solar_position_at_labels(
         solarpos = _SOLAR_POSITIONS[key]
     else:
         solarpos = location.get_solarposition(times=times + offset)
-        if key is not None:
+        if key is not None and len(times) <= _SOLAR_POSITIONS_MAX_ROWS:
             _SOLAR_POSITIONS[key] = solarpos
-            if len(_SOLAR_POSITIONS) > _SOLAR_POSITIONS_SIZE:
+            while sum(len(frame) for frame in _SOLAR_POSITIONS.values()) > _SOLAR_POSITIONS_MAX_ROWS:
                 _SOLAR_POSITIONS.popitem(last=False)
     solarpos = solarpos.copy()
     solarpos.index = times

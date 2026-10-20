@@ -23,6 +23,7 @@ from breos.app_inputs import (
     reuse_prepared_inputs,
 )
 from breos.economics import default_amount_cost_keys
+from breos.pv import model_options
 from breos.pv_modules import MODULES
 from tools.generate_app_golden import _fake_fetch
 
@@ -109,6 +110,9 @@ CHANGES = {
 
 
 def _prepared(config):
+    # Each run computes the sun afresh: the pickles below compare bytes, and
+    # pandas fills private caches on the objects a computation touches.
+    model_options._SOLAR_POSITIONS.clear()
     with (
         mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
         mock.patch("breos.app.load_weather", lambda **_kwargs: None),
