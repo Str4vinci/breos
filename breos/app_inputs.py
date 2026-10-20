@@ -30,11 +30,11 @@ from breos.pv.shading import ModuleMeanShading
 from breos.pv_modules import catalogue_snapshot, get_module
 from breos.solar import (
     PVProductionBreakdown,
+    _array_breakdown,
+    _configured_array,
+    _prepare_solarpos_and_weather,
+    _PVArray,
     _sum_pv_breakdowns,
-    calculate_array_breakdowns,
-    calculate_multi_array_production_breakdown,
-    calculate_pv_production_breakdown,
-    calculate_pv_production_tracking_breakdown,
 )
 from breos.utils import _has_fixed_utc_offset, get_hours_per_step, remap_datetime_index_years
 from breos.weather import (
@@ -473,44 +473,55 @@ def build_pv_production_breakdown(
 ) -> PVProductionBreakdown:
     """Build undegraded system-level PV production and loss-stage details."""
     location = Location(resolved.lat, resolved.lon, tz=resolved.timezone)
-    freq = cfg["resolution"]
-    loss_overrides = cfg["pv_loss_overrides"]
-    model_kwargs = configured_pv_model_kwargs(cfg)
+    options = configured_pv_model_kwargs(cfg)
+    grid = _prepare_solarpos_and_weather(weather, location, cfg["resolution"], options.pop("solar_position"))
+    if resolved.pv_arrays:
+        models = [
+            _configured_array(i, arr, location, options) for i, arr in enumerate(arrays_with_module_shading(resolved))
+        ]
+    else:
+        models = [
+            _PVArray(
+                cfg["n_modules"],
+                resolved.pv_params,
+                options,
+                tracking=resolved.tracking,
+                tilt=resolved.tilt,
+                azimuth=resolved.azimuth,
+                axis_tilt=cfg["axis_tilt"],
+                axis_azimuth=resolved.axis_azimuth,
+                max_angle=cfg["max_angle"],
+                backtrack=cfg["backtrack"],
+                cross_axis_tilt=cfg["cross_axis_tilt"],
+                dual_axis_max_tilt=cfg["dual_axis_max_tilt"],
+            )
+        ]
+    arrays = [_array_breakdown(grid, model, loss_overrides=cfg["pv_loss_overrides"]) for model in models]
+    total = _sum_pv_breakdowns(arrays) if len(arrays) > 1 else arrays[0]
 
     electrical = resolved.electrical
     string_level = electrical is not None and electrical.fidelity == "string"
     cabled = electrical is not None and any(string.has_cable for string in electrical.strings)
-    if string_level or cabled:
+    if string_level:
         assert electrical is not None
-        if resolved.pv_arrays:
-            arrays = calculate_array_breakdowns(
-                weather_data=weather,
-                location=location,
-                arrays=arrays_with_module_shading(resolved),
-                freq=freq,
-                loss_overrides=loss_overrides,
-                **model_kwargs,
-            )
-        else:
-            arrays = [_single_array_breakdown(cfg, resolved, weather, location, model_kwargs)]
-        total = _sum_pv_breakdowns(arrays) if len(arrays) > 1 else arrays[0]
-        if string_level:
-            energy = string_limited_dc(electrical, arrays)
-            parallel, shading = energy.parallel_mismatch, energy.shading
-            return replace(
-                total,
-                dc_after_losses=energy.dc,
-                mppt_limit_loss=energy.limit_loss,
-                dc_wiring_loss=energy.wiring_loss if cabled else None,
-                module_operating=None,
-                shading_mismatch_loss=None if shading is None else shading.total,
-                string_shading_mismatch=None if shading is None else shading.strings,
-                parallel_mismatch_loss=None if parallel is None else parallel.total,
-                input_parallel_mismatch=None if parallel is None else parallel.inputs,
-                dc_voltage=energy.voltage,
-                inverter_dc=energy.inverter_dc if len(energy.inverter_dc) > 1 else None,
-                inverter_dc_voltage=energy.inverter_voltage if len(energy.inverter_voltage) > 1 else None,
-            )
+        energy = string_limited_dc(electrical, arrays)
+        parallel, shading = energy.parallel_mismatch, energy.shading
+        return replace(
+            total,
+            dc_after_losses=energy.dc,
+            mppt_limit_loss=energy.limit_loss,
+            dc_wiring_loss=energy.wiring_loss if cabled else None,
+            module_operating=None,
+            shading_mismatch_loss=None if shading is None else shading.total,
+            string_shading_mismatch=None if shading is None else shading.strings,
+            parallel_mismatch_loss=None if parallel is None else parallel.total,
+            input_parallel_mismatch=None if parallel is None else parallel.inputs,
+            dc_voltage=energy.voltage,
+            inverter_dc=energy.inverter_dc if len(energy.inverter_dc) > 1 else None,
+            inverter_dc_voltage=energy.inverter_voltage if len(energy.inverter_voltage) > 1 else None,
+        )
+    if cabled:
+        assert electrical is not None
         wiring_loss = string_cable_loss(electrical, arrays)
         return replace(
             total,
@@ -518,60 +529,7 @@ def build_pv_production_breakdown(
             dc_wiring_loss=wiring_loss,
             module_operating=None,
         )
-
-    if resolved.pv_arrays:
-        return calculate_multi_array_production_breakdown(
-            weather_data=weather,
-            location=location,
-            arrays=resolved.pv_arrays,
-            freq=freq,
-            loss_overrides=loss_overrides,
-            **model_kwargs,
-        )
-    return _single_array_breakdown(cfg, resolved, weather, location, model_kwargs)
-
-
-def _single_array_breakdown(
-    cfg: dict[str, Any],
-    resolved: ResolvedAppConfig,
-    weather: pd.DataFrame,
-    location: Location,
-    model_kwargs: dict[str, Any],
-) -> PVProductionBreakdown:
-    """The breakdown of a system configured without ``pv_arrays``."""
-    freq = cfg["resolution"]
-    loss_overrides = cfg["pv_loss_overrides"]
-
-    if resolved.tracking == "fixed":
-        breakdown = calculate_pv_production_breakdown(
-            weather_data=weather,
-            location=location,
-            tilt=resolved.tilt,
-            surface_azimuth=resolved.azimuth,
-            n_modules=cfg["n_modules"],
-            pv_params=resolved.pv_params,
-            freq=freq,
-            loss_overrides=loss_overrides,
-            **model_kwargs,
-        )
-    else:
-        breakdown = calculate_pv_production_tracking_breakdown(
-            weather_data=weather,
-            location=location,
-            n_modules=cfg["n_modules"],
-            tracking=resolved.tracking,
-            axis_tilt=cfg["axis_tilt"],
-            axis_azimuth=resolved.axis_azimuth,
-            max_angle=cfg["max_angle"],
-            backtrack=cfg["backtrack"],
-            cross_axis_tilt=cfg["cross_axis_tilt"],
-            dual_axis_max_tilt=cfg["dual_axis_max_tilt"],
-            pv_params=resolved.pv_params,
-            freq=freq,
-            loss_overrides=loss_overrides,
-            **model_kwargs,
-        )
-    return breakdown
+    return total
 
 
 def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies, timezone: str) -> pd.DataFrame:

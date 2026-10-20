@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping
 
 import numpy as np
@@ -131,23 +132,26 @@ TEMPERATURE_MODELS = (
 )
 DEFAULT_TEMPERATURE_MODEL = "faiman"
 
-# The configuration keys accepted by every fixed-array PV production entry
-# point. Keep this list with the resolvers that define the options. Callers
+# The model options every PV production entry point accepts, with their
+# defaults. Keep them with the resolvers that define the options. Callers
 # must not maintain their own subsets.
-PV_MODEL_CONFIG_KEYS = (
-    "transposition_model",
-    "albedo",
-    "surface_type",
-    "model_perez",
-    "solar_position",
-    "iam_model",
-    "diffuse_iam",
-    "temperature_model",
-    "bifacial_model",
-    "gcr",
-    "pvrow_height",
-    "pvrow_pitch",
+PV_MODEL_DEFAULTS: Mapping[str, Any] = MappingProxyType(
+    {
+        "transposition_model": DEFAULT_TRANSPOSITION_MODEL,
+        "albedo": None,
+        "surface_type": None,
+        "model_perez": DEFAULT_PEREZ_MODEL,
+        "solar_position": DEFAULT_SOLAR_POSITION,
+        "iam_model": DEFAULT_IAM_MODEL,
+        "diffuse_iam": DEFAULT_DIFFUSE_IAM,
+        "temperature_model": DEFAULT_TEMPERATURE_MODEL,
+        "bifacial_model": DEFAULT_BIFACIAL_MODEL,
+        "gcr": 0.35,
+        "pvrow_height": None,
+        "pvrow_pitch": None,
+    }
 )
+PV_MODEL_CONFIG_KEYS = tuple(PV_MODEL_DEFAULTS)
 
 
 # --------------------------------------------------------------------------
@@ -437,9 +441,9 @@ def resolve_pv_model_options(
 
 
 def configured_pv_model_kwargs(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the PV model kwargs present in a resolved application config.
+    """Return the whole PV model-option block of a resolved application config.
 
-    Missing keys stay missing so the public PV function owns its defaults.
-    This function is the single config-to-call mapping used by App and optimization.
+    A key the config does not set takes its ``PV_MODEL_DEFAULTS`` value. This
+    function is the single config-to-call mapping used by App and optimization.
     """
-    return {key: config[key] for key in PV_MODEL_CONFIG_KEYS if key in config}
+    return {key: config.get(key, default) for key, default in PV_MODEL_DEFAULTS.items()}

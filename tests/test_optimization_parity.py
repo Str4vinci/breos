@@ -173,12 +173,11 @@ def test_projected_design_forwards_pv_model_options(monkeypatch):
     assert seen["diffuse_iam"] == "marion"
 
 
-def test_config_model_options_omits_absent_keys():
-    """Absent keys stay absent so the PV model's own defaults still apply."""
-    from breos.pv.model_options import configured_pv_model_kwargs
+def test_config_model_options_fill_absent_keys_with_the_defaults():
+    from breos.pv.model_options import PV_MODEL_DEFAULTS, configured_pv_model_kwargs
 
-    assert configured_pv_model_kwargs({}) == {}
-    assert configured_pv_model_kwargs({"albedo": 0.25}) == {"albedo": 0.25}
+    assert configured_pv_model_kwargs({}) == dict(PV_MODEL_DEFAULTS)
+    assert configured_pv_model_kwargs({"albedo": 0.25}) == {**PV_MODEL_DEFAULTS, "albedo": 0.25}
 
 
 def test_optimizer_battery_defaults_match_app_defaults():

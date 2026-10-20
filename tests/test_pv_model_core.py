@@ -10,17 +10,15 @@ import pytest
 
 from breos import solar
 from breos.pv.iam import calculate_front_effective_irradiance
-from breos.pv.model_options import PV_MODEL_CONFIG_KEYS, PVModelOptions, resolve_pv_model_options
+from breos.pv.model_options import PV_MODEL_CONFIG_KEYS, PV_MODEL_DEFAULTS, PVModelOptions, resolve_pv_model_options
 from breos.pv.temperature import DEFAULT_MODULE_EFFICIENCY, calculate_cell_temperature
 
 # Every public entry point that accepts the shared PV model-option block.
 MODEL_OPTION_ENTRY_POINTS = (
     solar.calculate_pv_production_breakdown,
     solar.calculate_pv_production_dc,
-    solar.calculate_pv_production_tracking_breakdown,
     solar.calculate_pv_production_dc_tracking,
     solar.calculate_pv_production_ac,
-    solar.calculate_multi_array_production_breakdown,
     solar.calculate_multi_array_production,
 )
 
@@ -202,6 +200,10 @@ def test_every_entry_point_declares_the_whole_model_option_block(function):
 
     positional_only = [key for key in PV_MODEL_CONFIG_KEYS if parameters[key].kind is inspect.Parameter.POSITIONAL_ONLY]
     assert not positional_only, f"{function.__name__} made model options positional-only: {positional_only}"
+
+    # The App and the optimizer fill unset options from PV_MODEL_DEFAULTS.
+    defaults = {key: parameters[key].default for key in PV_MODEL_CONFIG_KEYS}
+    assert defaults == dict(PV_MODEL_DEFAULTS), f"{function.__name__} defaults differ from PV_MODEL_DEFAULTS"
 
 
 def test_model_option_keys_partition_into_per_array_and_function_level():

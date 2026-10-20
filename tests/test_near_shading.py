@@ -15,6 +15,7 @@ from breos.pv_modules import get_module
 from breos.solar import (
     _compute_irradiance_and_cell_temp_detail,
     _prepare_solarpos_and_weather,
+    calculate_multi_array_production,
     calculate_pv_production_breakdown,
 )
 
@@ -177,11 +178,10 @@ def test_the_rear_side_is_not_shaded(synthetic_weather):
 
 
 def test_a_tracker_and_a_15_minute_run_take_the_table(synthetic_weather, synthetic_weather_15min):
-    from breos.solar import calculate_pv_production_tracking_breakdown
-
-    plain = calculate_pv_production_tracking_breakdown(synthetic_weather, PORTO, 10)
-    shaded = calculate_pv_production_tracking_breakdown(synthetic_weather, PORTO, 10, shading=EAST_WALL)
-    assert shaded.dc_after_losses.sum() < plain.dc_after_losses.sum()
+    tracker = {"modules": 10, "tracking": "single_axis"}
+    plain = calculate_multi_array_production(synthetic_weather, PORTO, [tracker])
+    shaded = calculate_multi_array_production(synthetic_weather, PORTO, [{**tracker, "shading": EAST_WALL}])
+    assert shaded.sum() < plain.sum()
     hourly = calculate_pv_production_breakdown(synthetic_weather, PORTO, 30, 180, 10, shading=EAST_WALL)
     quarter = calculate_pv_production_breakdown(
         synthetic_weather_15min, PORTO, 30, 180, 10, freq="15min", shading=EAST_WALL

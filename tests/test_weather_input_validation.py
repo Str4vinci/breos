@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.solar import calculate_pv_production_dc, calculate_pv_production_tracking_breakdown
+from breos.solar import calculate_pv_production_dc, calculate_pv_production_dc_tracking
 from breos.weather import _complete_weather_years, build_battery_temperature_series
 
 
@@ -38,7 +38,7 @@ def test_weather_at_another_resolution_raises(synthetic_weather_15min, porto_loc
 
 def test_tracking_path_checks_the_weather_grid(synthetic_weather, porto_location, pv_params):
     with pytest.raises(ValueError, match="must step evenly"):
-        calculate_pv_production_tracking_breakdown(
+        calculate_pv_production_dc_tracking(
             weather_data=synthetic_weather.drop(synthetic_weather.index[100]),
             location=porto_location,
             n_modules=1,

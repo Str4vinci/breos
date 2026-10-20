@@ -860,7 +860,7 @@ class TestAppSimulateTracking:
         json.dumps(tracked.result())
 
     def test_per_array_tracking_flows_through(self, _patch_weather):
-        """Tracking keys on pv_arrays entries must reach calculate_multi_array_production_breakdown."""
+        """Tracking keys on pv_arrays entries must reach the PV model."""
         fixed_app = App(
             {
                 "location": "porto",
