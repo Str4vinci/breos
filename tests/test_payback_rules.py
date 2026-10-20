@@ -238,3 +238,23 @@ def test_montecarlo_payback_plots_use_the_interpolated_year(tmp_path, monkeypatc
 @pytest.mark.parametrize(("years", "text"), [(None, "N/A"), (4.0, "4y"), (4.25, "4y 3m")])
 def test_format_years_months(years, text):
     assert format_years_months(years) == text
+
+
+def test_breakeven_plot_reads_the_investment_as_the_library_does(tmp_path):
+    # NPV cumulative costs with only nominal annual costs: the investment is
+    # recovered from the nominal pair, as find_payback_year_interpolated does.
+    frame = pd.DataFrame(
+        {
+            "Year": [1, 2],
+            "Cost_No_Sys_Cumulative_NPV": [100.0, 200.0],
+            "Cost_System_Cumulative_NPV": [40.0, 40.0],
+            "Savings_Cumulative_NPV": [60.0, 160.0],
+            "Cost_System_Cumulative": [40.0, 40.0],
+            "Cost_System_Annual": [0.0, 0.0],
+        }
+    )
+    assert find_payback_year_interpolated(frame) == pytest.approx(0.4)
+
+    figures = plotting.plot_breakeven(frame, str(tmp_path))
+
+    assert _breakeven_label(figures) == ["Break-even\n0 years 4 months"]

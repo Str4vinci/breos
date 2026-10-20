@@ -598,6 +598,11 @@ removed in 0.9.0.
 
 ### Fixed
 
+- `plot_breakeven` finds the year-0 investment as
+  `find_payback_year_interpolated` does. A projection without
+  `attrs["total_investment"]` that has NPV cumulative costs but only nominal
+  annual costs was plotted with no investment, so its break-even point could
+  differ from the one the library reports for the same projection.
 - Weather files are read with one timestamp parser for App and Monte Carlo.
   App (`load_weather`, `read_weather_csv`, `weather_file`) now reads
   day-first `dd/mm/YYYY HH:MM` timestamps, with or without seconds, which
