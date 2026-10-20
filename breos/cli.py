@@ -28,6 +28,7 @@ from breos.app_config import (
 )
 from breos.app_inputs import _input_cache_key, reuse_prepared_inputs
 from breos.config_schema import MappingOf
+from breos.constants import _ROUND_TRIP_EFFICIENCY
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.execution import EXECUTION_BACKENDS
 from breos.io import nonfinite_to_none
@@ -82,24 +83,8 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
             continue
         overrides[key] = value
 
-    return _deep_merge(override_config(config, overrides), overrides)
-
-
-def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    """Return ``base`` with ``overrides`` applied, merging nested tables key by key.
-
-    An override table replaces only the keys it sets, so a flag that sets one
-    ``[tariff]`` key keeps the rest of the file's table. Neither input is
-    changed.
-    """
-    merged = dict(base)
-    for key, value in overrides.items():
-        current = merged.get(key)
-        if isinstance(current, dict) and isinstance(value, dict):
-            merged[key] = _deep_merge(current, value)
-        else:
-            merged[key] = value
-    return merged
+    # Every flag sets one top-level scalar, which replaces the file's value.
+    return {**override_config(config, overrides), **overrides}
 
 
 def _json_text(data: Any, what: str, **kwargs: Any) -> str:
@@ -197,7 +182,7 @@ def _config_summary(resolved: ResolvedAppConfig) -> dict[str, Any]:
     summary["inverter"]["ac_rating_kw"] = (resolved.inverter_ac_capacity_w or 0.0) / 1000
     summary["load"].update(load_profile_file=profile_file, load_profile_file_error=profile_file_error)
     summary["battery"].update(
-        round_trip_efficiency=cfg["battery_rte"] if cfg["battery_rte"] is not None else 0.95,
+        round_trip_efficiency=cfg["battery_rte"] if cfg["battery_rte"] is not None else _ROUND_TRIP_EFFICIENCY,
         model_profile=(
             get_battery_model_profile(cfg["blast_model"]).as_dict() if cfg["blast_model"] is not None else None
         ),
