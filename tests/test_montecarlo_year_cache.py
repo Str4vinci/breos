@@ -25,6 +25,7 @@ from breos.montecarlo import (
     build_year_cache,
     run_montecarlo,
 )
+from breos.pv import model_options
 from breos.weather import _weather_file_sha256 as _file_sha256
 from tests.test_input_cache import CHANGES as INPUT_INDEPENDENT_CHANGES
 
@@ -276,6 +277,9 @@ def test_every_year_cache_independent_key_is_a_registry_key_with_a_pinning_chang
 
 def _year_layers(config, settings):
     """The PV layer and weather record a fresh study builds, pickled."""
+    # Each build computes the sun afresh: the pickles compare bytes, and
+    # pandas fills private caches on the objects a computation touches.
+    model_options._SOLAR_POSITIONS.clear()
     resolved = resolve_app_config(config)
     runtime_weather = {}
     dc_by_year, temp_by_year, _derate = montecarlo_module._precompute_year_caches(
