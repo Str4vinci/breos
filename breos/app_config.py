@@ -1996,7 +1996,9 @@ def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
         given=cfg.get("costs") or {},
         preset=cfg.get("cost_preset"),
         tariff=tariff_spec is not None,
-        battery=config_has_battery(cfg),
+        # Not config_has_battery: the SOC limits it reads are checked only
+        # below, and a bad one must fail there, by its key.
+        battery=cfg["battery_kwh"] * 1000 > 1,
         coupling=cfg["battery_coupling"],
     )
     _validate_battery_and_degradation(cfg)

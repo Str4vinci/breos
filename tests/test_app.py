@@ -273,6 +273,10 @@ class TestAppValidation:
                 ValueError,
                 "'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1",
             ),
+            # With a battery, a bad SOC limit is refused by its key, before
+            # any check reads the limits.
+            ({"battery_kwh": 5.0, "battery_min_soc": "0.1"}, TypeError, "'battery_min_soc' must be a finite number"),
+            ({"battery_kwh": 5.0, "battery_max_soc": None}, TypeError, "'battery_max_soc' must be a finite number"),
         ],
     )
     def test_validation_subsystems_preserve_public_error_contract(self, overrides, error_type, message):
