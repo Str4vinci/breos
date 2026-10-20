@@ -226,3 +226,34 @@ def test_no_public_entry_point_accepts_var_keywords():
     for function in MODEL_OPTION_ENTRY_POINTS:
         kinds = [p.kind for p in inspect.signature(function).parameters.values()]
         assert inspect.Parameter.VAR_KEYWORD not in kinds, f"{function.__name__} accepts **kwargs"
+
+
+def test_a_repeated_sun_position_is_computed_once_and_returned_as_a_copy(monkeypatch):
+    from pvlib.location import Location
+
+    from breos.pv.model_options import solar_position_at_labels
+
+    calls = []
+    real = pvlib.solarposition.get_solarposition
+
+    def counting(times, *args, **kwargs):
+        calls.append(times)
+        return real(times, *args, **kwargs)
+
+    monkeypatch.setattr(pvlib.solarposition, "get_solarposition", counting)
+    times = pd.date_range("2031-06-01", periods=48, freq="h", tz="UTC")
+    weather = pd.DataFrame(index=times)
+
+    first, _ = solar_position_at_labels(Location(41.15, -8.61), times, weather, "h", "interval-start")
+    first.loc[:, "azimuth"] = -1.0
+    second, _ = solar_position_at_labels(Location(41.15, -8.61), times, weather, "h", "interval-start")
+    assert len(calls) == 1
+    assert (second["azimuth"] >= 0.0).all()
+
+    # Another offset, site or calendar is computed afresh.
+    mid, _ = solar_position_at_labels(Location(41.15, -8.61), times, weather, "h", "mid-interval")
+    solar_position_at_labels(Location(41.15, -8.62), times, weather, "h", "interval-start")
+    solar_position_at_labels(Location(41.15, -8.61), times.tz_convert("Europe/Lisbon"), weather, "h", "interval-start")
+    assert len(calls) == 4
+    assert mid.index.equals(times)
+    assert not np.array_equal(mid["azimuth"], second["azimuth"])

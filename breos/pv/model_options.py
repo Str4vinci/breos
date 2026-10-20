@@ -10,6 +10,7 @@ already-resolved :class:`PVModelOptions` and do no validation of their own.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -17,6 +18,7 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 from pvlib.albedo import SURFACE_ALBEDOS
+from pvlib.location import Location
 
 from breos.utils import get_hours_per_step
 from breos.weather import weather_representative_time_offset
@@ -270,17 +272,59 @@ def solar_position_time_offset(method: str, weather: pd.DataFrame, freq: str) ->
     return pd.Timedelta(0)
 
 
+# The sun positions computed last, by everything they depend on. The sun is
+# most of a PV run's time, and the optimizer, the terrain horizon and sweeps
+# ask for the same grid again and again. Enough entries for a design study's
+# weather sequence, one per project year.
+_SOLAR_POSITIONS: OrderedDict[tuple, pd.DataFrame] = OrderedDict()
+_SOLAR_POSITIONS_SIZE = 32
+_PVLIB_SOLAR_POSITION = Location.get_solarposition
+
+
+def _solar_position_key(location: Any, times: pd.DatetimeIndex, offset: pd.Timedelta) -> tuple | None:
+    """What pvlib's sun position at ``times + offset`` depends on, or None if it is not kept.
+
+    Only a plain pvlib ``Location`` with pvlib's own method is kept: a
+    subclass or a replaced method may compute something else for the site.
+    """
+    if (
+        type(location) is not Location
+        or Location.get_solarposition is not _PVLIB_SOLAR_POSITION
+        or "get_solarposition" in vars(location)
+    ):
+        return None
+    return (
+        location.latitude,
+        location.longitude,
+        location.altitude,
+        offset.value,
+        str(times.dtype),
+        times.asi8.tobytes(),  # type: ignore[attr-defined]  # pandas-stubs omits asi8
+    )
+
+
 def solar_position_at_labels(
     location: Any, times: pd.DatetimeIndex, weather: pd.DataFrame, freq: str, solar_position: str
 ) -> tuple[pd.DataFrame, str]:
     """Return the sun position for each label in ``times`` and the resolved method.
 
     The sun is evaluated :func:`solar_position_time_offset` after each label,
-    and the result is indexed at the labels.
+    and the result is indexed at the labels. The last positions computed are
+    kept, so a repeated request returns a copy of the same frame.
     """
     method = resolve_solar_position_method(solar_position)
     offset = solar_position_time_offset(method, weather, freq)
-    solarpos = location.get_solarposition(times=times + offset)
+    key = _solar_position_key(location, times, offset)
+    if key is not None and key in _SOLAR_POSITIONS:
+        _SOLAR_POSITIONS.move_to_end(key)
+        solarpos = _SOLAR_POSITIONS[key]
+    else:
+        solarpos = location.get_solarposition(times=times + offset)
+        if key is not None:
+            _SOLAR_POSITIONS[key] = solarpos
+            if len(_SOLAR_POSITIONS) > _SOLAR_POSITIONS_SIZE:
+                _SOLAR_POSITIONS.popitem(last=False)
+    solarpos = solarpos.copy()
     solarpos.index = times
     return solarpos, method
 
