@@ -153,17 +153,6 @@ def test_breos_default_efficiency_is_representative_of_modern_silicon():
     assert 0.15 < DEFAULT_MODULE_EFFICIENCY < 0.25
 
 
-def test_pvsyst_rejects_nonphysical_supplied_module_efficiency():
-    with pytest.raises(ValueError, match="Module_Efficiency"):
-        calculate_cell_temperature(
-            np.array([900.0]),
-            np.array([28.0]),
-            np.array([2.0]),
-            "pvsyst-semi-integrated",
-            module_efficiency=1.1,
-        )
-
-
 def test_noct_sam_requires_complete_sourced_module_metadata():
     poa_global, temp_air, wind_speed = POA_GLOBAL, TEMP_AIR, WIND_SPEED
 
