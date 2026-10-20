@@ -12,7 +12,7 @@ from breos.app_config import resolve_app_config
 from breos.app_inputs import InverterSteps
 from breos.battery import align_simulation_inputs
 from breos.economics import terminal_health_credit
-from breos.montecarlo import MonteCarloSettings, _simulate_trajectory, _summarize, run_montecarlo
+from breos.montecarlo import MonteCarloSettings, _simulate_trajectory, _Study, _summarize, run_montecarlo
 from breos.optimization import evaluate_projected_design
 from breos.projection import ProjectionYear, run_projection, value_projection
 from tests.test_terminal_replacement import BLAST, EVERY_PERIOD_EOL, PRICING, _design_inputs, _inputs
@@ -316,14 +316,15 @@ def test_montecarlo_enabled_and_disabled_keep_existing_trajectory_values(capacit
     for table in (None, ENABLED):
         resolved = resolve_app_config({**BASE, "battery_kwh": capacity, "terminal_value": table})
         row, trajectory = _simulate_trajectory(
-            resolved.cfg,
-            resolved,
-            np.array([2025]),
-            3,
-            MonteCarloSettings(weather_file="unused.csv", execution_backend="python", load_uncertainty=0),
+            _Study(
+                resolved.cfg,
+                resolved,
+                np.array([2025]),
+                3,
+                MonteCarloSettings(weather_file="unused.csv", execution_backend="python", load_uncertainty=0),
+                {2025: aligned},
+            ),
             np.random.default_rng(0),
-            {2025: aligned},
-            None,
         )
         metrics.append(row)
         trajectories.append(trajectory)
@@ -353,14 +354,8 @@ def test_montecarlo_values_each_trajectory_before_aggregation(monkeypatch):
     for i, scale in enumerate((0.2, 1.0, 4.0)):
         scaled = replace(aligned, load_w=aligned.load_w * scale)
         metrics, trajectory = _simulate_trajectory(
-            resolved.cfg,
-            resolved,
-            np.array([2025]),
-            3,
-            replace(settings, load_uncertainty=0),
+            _Study(resolved.cfg, resolved, np.array([2025]), 3, replace(settings, load_uncertainty=0), {2025: scaled}),
             np.random.default_rng(i),
-            {2025: scaled},
-            None,
         )
         credit = _credit(metrics["final_soh_pct"] / 100, npv_savings=metrics["npv_savings"])
         for field, expected in zip(FIELDS, (credit.nominal, credit.npv, credit.adjusted_npv), strict=True):

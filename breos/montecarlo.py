@@ -689,27 +689,36 @@ def _prepare_pv_chains(
     }
 
 
+@dataclass(frozen=True)
+class _Study:
+    """What every trajectory of a study reads: built once, and installed once per worker process."""
+
+    cfg: dict[str, Any]
+    resolved: ResolvedAppConfig
+    available_years: np.ndarray
+    years_per_run: int
+    settings: MonteCarloSettings
+    aligned_by_year: dict[int, AlignedSimulationInputs]
+    # Each (weather year, project year)'s PV chain, already scaled; None
+    # when memoizing them does not pay (_pv_chain_cache_is_worthwhile).
+    pv_chains: dict[tuple[int, int], AlignedSimulationInputs] | None = None
+    tariff: ResolvedTariff | None = None
+    instructions: DispatchInstructions | None = None
+    # Prices each trajectory's no-system household on its own sampled load,
+    # so the with- and without-system costs stay paired.
+    reference_tariff: ResolvedTariff | None = None
+
+
 def _simulate_trajectory(
-    cfg: dict[str, Any],
-    resolved: ResolvedAppConfig,
-    available_years: np.ndarray,
-    years_per_run: int,
-    settings: MonteCarloSettings,
-    rng: np.random.Generator,
-    aligned_by_year: dict[int, AlignedSimulationInputs],
-    pv_chains: dict[tuple[int, int], AlignedSimulationInputs] | None,
-    tariff: ResolvedTariff | None = None,
-    instructions: DispatchInstructions | None = None,
-    reference_tariff: ResolvedTariff | None = None,
-    pv_model_factor: float = 1.0,
+    study: _Study, rng: np.random.Generator, pv_model_factor: float = 1.0
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     """Run one Monte Carlo trajectory and return its summary metrics.
 
-    A ``reference_tariff`` prices the trajectory's no-system household on its
-    own sampled load, so the with- and without-system costs stay paired.
     ``pv_model_factor`` scales the trajectory's PV in every year: a model
     bias persists, unlike the weather.
     """
+    cfg, resolved, settings = study.cfg, study.resolved, study.settings
+    available_years, aligned_by_year, pv_chains = study.available_years, study.aligned_by_year, study.pv_chains
     degradation_rate = cfg["pv_degradation_rate"]
     has_battery = config_has_battery(cfg)
 
@@ -742,13 +751,13 @@ def _simulate_trajectory(
     projection = run_projection(
         cfg,
         resolved,
-        years_per_run,
+        study.years_per_run,
         year_inputs,
         has_battery=has_battery,
         execution_backend=cast(str, settings.execution_backend),
-        tariff=tariff,
-        instructions=instructions,
-        reference_tariff=reference_tariff,
+        tariff=study.tariff,
+        instructions=study.instructions,
+        reference_tariff=study.reference_tariff,
     )
     current_soh = projection.carry.soh_pct
     total_replacements = projection.total_replacements
@@ -851,7 +860,7 @@ def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
     return summary
 
 
-_WORKER_CONTEXT: tuple[Any, ...] | None = None
+_WORKER_STUDY: _Study | None = None
 
 
 def _yield_exceedance(
@@ -908,34 +917,24 @@ def _study_calendar(aligned_by_year: dict[int, AlignedSimulationInputs]) -> pd.D
     return pd.DatetimeIndex(calendar)
 
 
-def _initialize_worker(*context: Any) -> None:
+def _initialize_worker(study: _Study) -> None:
     """Install read-only trajectory inputs once per worker process."""
-    global _WORKER_CONTEXT
-    _WORKER_CONTEXT = context
+    global _WORKER_STUDY
+    _WORKER_STUDY = study
 
 
-def _initialize_pool_worker(*context: Any) -> None:
+def _initialize_pool_worker(study: _Study) -> None:
     """Initialise a pool worker: one native thread, then the trajectory inputs."""
     limit_worker_threads()
-    _initialize_worker(*context)
+    _initialize_worker(study)
 
 
 def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame | None, str | None]:
     """Evaluate one deterministic per-run random stream in a worker."""
-    if _WORKER_CONTEXT is None:
+    study = _WORKER_STUDY
+    if study is None:
         raise RuntimeError("Monte Carlo worker context was not initialized")
-    (
-        cfg,
-        resolved,
-        available_years,
-        years_per_run,
-        settings,
-        aligned_by_year,
-        pv_chains,
-        tariff,
-        instructions,
-        reference_tariff,
-    ) = _WORKER_CONTEXT
+    settings = study.settings
     # One observation window per trajectory: that is the unit of work whose
     # compile cost is being attributed. A no-op on the Python backend.
     reset_jit_cache_observation(settings.execution_backend)
@@ -944,20 +943,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
     # different base seeds share no trajectory. Without a seed, every run
     # draws fresh entropy.
     rng = np.random.default_rng(np.random.SeedSequence(settings.seed, spawn_key=(run_idx,)))
-    metrics, trajectory = _simulate_trajectory(
-        cfg,
-        resolved,
-        available_years,
-        years_per_run,
-        settings,
-        rng,
-        aligned_by_year,
-        pv_chains,
-        tariff,
-        instructions,
-        reference_tariff,
-        pv_model_factor=_sample_pv_model_factor(settings, run_idx),
-    )
+    metrics, trajectory = _simulate_trajectory(study, rng, pv_model_factor=_sample_pv_model_factor(settings, run_idx))
     # None from a numba run means no compiled dispatch call was observed -- a
     # trajectory can legitimately never enter the kernel. Record that as
     # "unknown" rather than aborting: the trajectory's results are valid either
@@ -1064,7 +1050,7 @@ def run_montecarlo(
     # The weather frames and the raw load profile are not passed to the
     # workers: alignment consumed them here, and a worker only ever reads the
     # aligned arrays.
-    context = (
+    study = _Study(
         cfg,
         resolved,
         available_years,
@@ -1077,10 +1063,10 @@ def run_montecarlo(
         reference_tariff,
     )
     if settings.n_procs == 1:
-        _initialize_worker(*context)
+        _initialize_worker(study)
         outputs = [_run_trajectory_index(run_idx) for run_idx in range(settings.n_runs)]
     else:
-        with Pool(settings.n_procs, initializer=_initialize_pool_worker, initargs=context) as pool:
+        with Pool(settings.n_procs, initializer=_initialize_pool_worker, initargs=(study,)) as pool:
             outputs = pool.map(_run_trajectory_index, range(settings.n_runs))
 
     rows: list[dict[str, Any]] = []
