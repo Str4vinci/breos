@@ -46,6 +46,7 @@ from breos.constants import (
     RESOLUTIONS,
     SKIPPED_REPLACEMENT_ACTIONS,
 )
+from breos.degradation.native import CALENDAR_PARAMETERS
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
 from breos.economics import (
     COST_CONFIG_KEY_TO_PARAM,
@@ -286,13 +287,7 @@ def _model_key(value: Any) -> Any:
     return value.strip().lower().replace("-", "_") if isinstance(value, str) else value
 
 
-CALENDAR_MODELS: tuple[str, ...] = (
-    "naumann",
-    "naumann_lam",
-    "naumann_lam_field_calibrated",
-    "naumann_lam_field_calibrated_v1",
-    "naumann_lam_field_calibrated_v2",
-)
+CALENDAR_MODELS: tuple[str, ...] = tuple(CALENDAR_PARAMETERS)
 
 
 def check_calendar_model(value: Any, where: str) -> str:

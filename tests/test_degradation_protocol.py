@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.battery import _detect_cycles_rainflow_arrays
+from breos.degradation.native import _detect_cycles_rainflow_arrays
 from breos.degradation.protocol import (
     DegradationDay,
     NativeDegradationAdapter,

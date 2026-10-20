@@ -12,10 +12,7 @@ from breos.battery import (
     BatteryConfig,
     _datetime_index_ticks,
     _dispatch_no_battery_vectorized,
-    _get_degradation_params,
     _ResultBuffers,
-    _update_battery_soh_cyclewise_arrays,
-    _update_battery_soh_from_cycles,
     align_simulation_inputs,
     resistance_to_efficiency,
     simulate_energy_balance,
@@ -25,6 +22,12 @@ from breos.battery import (
 )
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
 from breos.degradation.engine import BlastEngine
+from breos.degradation.native import (
+    _detect_cycles_rainflow_arrays,
+    _get_degradation_params,
+    _update_battery_soh_cyclewise_arrays,
+    _update_battery_soh_from_cycles,
+)
 from breos.inverter import calculate_dc_ac_power
 from breos.solar import dc_to_ac
 from breos.weather import apply_indoor_temperature_model
@@ -790,7 +793,7 @@ class TestSimulateEnergyBalance:
         anchor_tick = int(ticks[0]) - round(3600 * ticks_per_second)
         continuous_ticks = np.concatenate(([anchor_tick], ticks))
         continuous_soc = np.concatenate(([config.max_soc], results["Battery_SOC_Absolute"].to_numpy()))
-        cycles = battery_module._detect_cycles_rainflow_arrays(
+        cycles = _detect_cycles_rainflow_arrays(
             continuous_soc,
             continuous_ticks,
             ticks_per_second,
