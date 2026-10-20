@@ -293,7 +293,7 @@ def build_year_row(
     """
 
     def kwh(column: str) -> float:
-        return float(sums_w[column] * hours_per_step / 1000)
+        return _kwh(sums_w[column], hours_per_step)
 
     direct_pv_ac_kwh = kwh("PV_AC_To_Load")
     pv_origin_battery_ac_kwh = kwh("PV_Origin_Battery_AC_To_Load")
@@ -376,16 +376,32 @@ def build_year_row(
     return row
 
 
+# The flows a tariff prices, by the money column each fills and the frame
+# column it is summed from, with the step price that applies to it.
+_PRICED_FLOWS: dict[str, tuple[str, str]] = {
+    "Import_Cost": ("Import_From_Grid", "import"),
+    "Export_Revenue": ("PV_AC_Export", "export"),
+    "Baseline_Import_Cost": ("Houseload", "import"),
+    "Grid_Charge_Cost": ("Grid_AC_To_Battery", "import"),
+}
+# The frame columns those flows are summed from, once each.
+_PRICED_FLOW_COLUMNS = tuple(dict.fromkeys(column for column, _kind in _PRICED_FLOWS.values()))
+
+
+def _kwh(sum_w: float, hours_per_step: float) -> float:
+    """Energy (kWh), or money at a price per kWh, from a sum of step powers (W) or price-weighted powers."""
+    return float(sum_w * hours_per_step / 1000)
+
+
 def _tariff_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]:
-    import_prices = np.asarray(tariff.import_price_per_kwh, dtype=float)
-    weights = {
-        "Import_Cost": ("Import_From_Grid", import_prices),
-        "Export_Revenue": ("PV_AC_Export", np.asarray(tariff.export_price_per_kwh, dtype=float)),
-        # The no-system household buys its whole load at the same prices.
-        "Baseline_Import_Cost": ("Houseload", import_prices),
-        # The part of Import_Cost bought to charge the battery.
-        "Grid_Charge_Cost": ("Grid_AC_To_Battery", import_prices),
+    # The no-system household buys its whole load at the system's import
+    # prices, and Grid_Charge_Cost is the part of Import_Cost bought to
+    # charge the battery.
+    prices = {
+        "import": np.asarray(tariff.import_price_per_kwh, dtype=float),
+        "export": np.asarray(tariff.export_price_per_kwh, dtype=float),
     }
+    weights = {name: (column, prices[kind]) for name, (column, kind) in _PRICED_FLOWS.items()}
     if tariff.network_price_per_kwh is not None:
         network_prices = np.asarray(tariff.network_price_per_kwh, dtype=float)
         # The network part of each household's import, which caps its annual
@@ -433,18 +449,6 @@ def _network_credit_money(
     return {columns[0]: charge, columns[1]: min(credit.amount_per_year * fraction, charge)}
 
 
-# The flows a tariff prices, by the money column each fills and the frame
-# column it is summed from, with the step price that applies to it.
-_PRICED_FLOWS: dict[str, tuple[str, str]] = {
-    "Import_Cost": ("Import_From_Grid", "import"),
-    "Export_Revenue": ("PV_AC_Export", "export"),
-    "Baseline_Import_Cost": ("Houseload", "import"),
-    "Grid_Charge_Cost": ("Grid_AC_To_Battery", "import"),
-}
-# The frame columns those flows are summed from, once each.
-_PRICED_FLOW_COLUMNS = tuple(dict.fromkeys(column for column, _kind in _PRICED_FLOWS.values()))
-
-
 def _period_energy_name(money_column: str, bucket: str) -> str:
     return f"{_PRICED_FLOWS[money_column][0]}_kWh@{bucket}"
 
@@ -479,18 +483,17 @@ def _period_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]
     return weights
 
 
-def _fixed_charge(tariff: ResolvedTariff, simulated_hours: float) -> float:
-    # Billed on the simulated duration, as the flat path is (ADR 0003 E5).
+def _fixed_charge(tariff: ResolvedTariff, billed_days: float | None, simulated_hours: float) -> float:
+    # A [period] window bills its civil days (Billed_Days), whatever DST does
+    # to its hours; any other span bills its simulated duration, as the flat
+    # path does (ADR 0003 E5).
+    if billed_days is not None:
+        return tariff.prices.fixed_charge_per_day * billed_days
     return tariff.prices.fixed_charge_per_day * (simulated_hours / 24)
 
 
 def _billed_fixed_charge(tariff: ResolvedTariff, row: pd.Series) -> float:
-    # A [period] row bills its civil days (Billed_Days), whatever DST does to
-    # its hours; any other row bills its simulated duration.
-    billed_days = row.get("Billed_Days")
-    if billed_days is not None and not pd.isna(billed_days):
-        return tariff.prices.fixed_charge_per_day * float(billed_days)
-    return _fixed_charge(tariff, row["Simulated_Hours"])
+    return _fixed_charge(tariff, _billed_days(row), row["Simulated_Hours"])
 
 
 def _tariff_money(
@@ -505,20 +508,14 @@ def _tariff_money(
     The fixed charge is billed on ``billed_days`` when given (a [period]
     window's civil days), otherwise on the simulated duration.
     """
-    money = {name: float(weighted_w[name] * hours_per_step / 1000) for name in _PRICED_FLOWS}
-    money["Fixed_Charge"] = (
-        tariff.prices.fixed_charge_per_day * billed_days
-        if billed_days is not None
-        else _fixed_charge(tariff, n_steps * hours_per_step)
-    )
+    money = {name: _kwh(weighted_w[name], hours_per_step) for name in _PRICED_FLOWS}
+    money["Fixed_Charge"] = _fixed_charge(tariff, billed_days, n_steps * hours_per_step)
     if tariff.prices.annual_network_credit is not None:
         for name, columns in (
             (_NETWORK_IMPORT, SYSTEM_NETWORK_CREDIT_COLUMNS),
             (_BASELINE_NETWORK_IMPORT, BASELINE_NETWORK_CREDIT_COLUMNS),
         ):
-            money.update(
-                _network_credit_money(tariff, float(weighted_w[name] * hours_per_step / 1000), billed_days, columns)
-            )
+            money.update(_network_credit_money(tariff, _kwh(weighted_w[name], hours_per_step), billed_days, columns))
     return money
 
 
@@ -543,18 +540,14 @@ def _reference_money(
     the system tariff gave the no-system household.
     """
     money = {
-        "Baseline_Import_Cost": float(weighted_w["Baseline_Import_Cost"] * hours_per_step / 1000),
-        "Baseline_Fixed_Charge": (
-            reference.prices.fixed_charge_per_day * billed_days
-            if billed_days is not None
-            else _fixed_charge(reference, n_steps * hours_per_step)
-        ),
+        "Baseline_Import_Cost": _kwh(weighted_w["Baseline_Import_Cost"], hours_per_step),
+        "Baseline_Fixed_Charge": _fixed_charge(reference, billed_days, n_steps * hours_per_step),
     }
     if reference.prices.annual_network_credit is not None:
         money.update(
             _network_credit_money(
                 reference,
-                float(weighted_w[_BASELINE_NETWORK_IMPORT] * hours_per_step / 1000),
+                _kwh(weighted_w[_BASELINE_NETWORK_IMPORT], hours_per_step),
                 billed_days,
                 BASELINE_NETWORK_CREDIT_COLUMNS,
             )
@@ -579,10 +572,10 @@ def price_reference_year_rows(
     weights = _reference_weights(reference)
     weighted = weighted_column_sums({"Houseload": np.asarray(houseload_w)}, weights)
     repriced = yearly_df.drop(columns=[column for column in BASELINE_NETWORK_CREDIT_COLUMNS if column in yearly_df])
-    repriced["Baseline_Import_Cost"] = float(weighted["Baseline_Import_Cost"] * hours_per_step / 1000)
+    repriced["Baseline_Import_Cost"] = _kwh(weighted["Baseline_Import_Cost"], hours_per_step)
     repriced["Baseline_Fixed_Charge"] = [_billed_fixed_charge(reference, row) for _, row in repriced.iterrows()]
     if reference.prices.annual_network_credit is not None:
-        network = float(weighted[_BASELINE_NETWORK_IMPORT] * hours_per_step / 1000)
+        network = _kwh(weighted[_BASELINE_NETWORK_IMPORT], hours_per_step)
         credits = [
             _network_credit_money(reference, network, _billed_days(row), BASELINE_NETWORK_CREDIT_COLUMNS)
             for _, row in repriced.iterrows()
@@ -712,15 +705,8 @@ def price_tariff_year_rows_by_step(
         n_steps = len(flows["Import_From_Grid"])
         if n_steps != len(tariff.index):
             raise ValueError("the step flows and the tariff are on different calendars")
-        billed_days = row.get("Billed_Days")
         money_rows.append(
-            _tariff_money(
-                tariff,
-                weighted_column_sums(flows, weights),
-                hours_per_step,
-                n_steps,
-                None if billed_days is None or pd.isna(billed_days) else float(billed_days),
-            )
+            _tariff_money(tariff, weighted_column_sums(flows, weights), hours_per_step, n_steps, _billed_days(row))
         )
     money_columns = (
         *_PRICED_FLOWS,
@@ -1249,9 +1235,7 @@ def project_years(
             )
         )
         if record_period_energy:
-            period_rows.append(
-                {name: float(outcome.weighted_w[name] * hours_per_step / 1000) for name in period_weights}
-            )
+            period_rows.append({name: _kwh(outcome.weighted_w[name], hours_per_step) for name in period_weights})
 
     if not rows:
         raise RuntimeError("projection_years must be at least 1")
