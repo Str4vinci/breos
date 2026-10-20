@@ -719,7 +719,8 @@ def test_a_controller_projection_keeps_its_year_seam():
 
 
 def test_app_daily_persistence_honours_the_guard_with_unchanged_decisions():
-    from tests.test_daily_persistence import COARSE, DAILY, JANUARY, TOU
+    from tests.offline_app import TOU
+    from tests.test_daily_persistence import COARSE, DAILY, JANUARY
 
     config = {
         "location": "porto",

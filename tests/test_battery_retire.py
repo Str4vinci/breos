@@ -394,7 +394,8 @@ def test_retire_beats_keep_when_grid_charging_loses_money():
 
 
 def test_a_daily_controller_cannot_dispatch_a_retired_battery():
-    from tests.test_daily_persistence import COARSE, DAILY, TOU
+    from tests.offline_app import TOU
+    from tests.test_daily_persistence import COARSE, DAILY
 
     _replace, keep, retire = _three(tariff=TOU, smart_charging={**DAILY, **COARSE})
     keep_rows, retire_rows = keep._artifacts.yearly_df, retire._artifacts.yearly_df
