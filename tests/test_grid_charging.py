@@ -1,6 +1,5 @@
 """Grid charging and dispatch instructions in the canonical step (ADR 0002 A6-A8, #178)."""
 
-import importlib.util
 import math
 import sys
 from pathlib import Path
@@ -12,17 +11,12 @@ import pytest
 from breos._dispatch import lfp_capacity_factor
 from breos.battery import BatteryConfig, simulate_energy_balance, simulate_energy_balance_summary
 from breos.dispatch_instructions import DispatchInstructions
+from tests.backend_parity import BACKENDS
 from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity"))
 from harness import INSTRUCTION_SCENARIOS, RESOLUTIONS, build, build_instructed  # noqa: E402
 
-_BACKENDS = [
-    "python",
-    pytest.param(
-        "numba", marks=pytest.mark.skipif(not importlib.util.find_spec("numba"), reason="numba not installed")
-    ),
-]
 EFF = 0.95
 
 
@@ -79,7 +73,7 @@ def _window(config, temperature_c=25.0):
 # --- no-op instructions ---------------------------------------------------
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("scenario", ["baseline", "replacement", "carried_state", "c_rate_limited", "blast"])
 @pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
 def test_noop_instructions_are_the_greedy_step_bit_for_bit(scenario, backend):
@@ -99,7 +93,7 @@ def test_noop_instructions_are_the_greedy_step_bit_for_bit(scenario, backend):
 # --- conservation and origins under grid charging --------------------------
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("freq", RESOLUTIONS)
 @pytest.mark.parametrize("scenario", INSTRUCTION_SCENARIOS)
 @pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
@@ -125,7 +119,7 @@ def test_instructed_runs_conserve_energy_and_reconcile_origins(scenario, freq, b
         assert results["Grid_Origin_Replacement_Energy_Removed"].sum() > 0.0
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("scenario", ["fixed_target_limited", "reserve_floor", "fixed_target_blast"])
 @pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
 def test_the_summary_path_applies_the_same_instructions(scenario, backend):

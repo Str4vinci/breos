@@ -1,6 +1,5 @@
 """Per-step energy conservation across backends, engines and a full year (#184)."""
 
-import importlib.util
 import math
 
 import numpy as np
@@ -8,14 +7,8 @@ import pandas as pd
 import pytest
 
 from breos.battery import BatteryConfig, simulate_energy_balance
+from tests.backend_parity import BACKENDS
 from tests.energy_conservation import LEDGER_COLUMNS, assert_energy_conservation, assert_origin_reconciliation
-
-_BACKENDS = [
-    "python",
-    pytest.param(
-        "numba", marks=pytest.mark.skipif(not importlib.util.find_spec("numba"), reason="numba not installed")
-    ),
-]
 
 
 def _year(freq="h"):
@@ -33,7 +26,7 @@ def _year(freq="h"):
 
 
 @pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize(
     ("engine", "config_kwargs"),
     [
@@ -64,7 +57,7 @@ def test_full_year_conserves_energy_at_every_step(backend, engine, config_kwargs
     assert_origin_reconciliation(results, 1.0)
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_15min_year_conserves_energy_at_every_step(backend):
     pv, load, temperature = _year("15min")
     config = BatteryConfig(nominal_energy_wh=5000.0, eol_percentage=0.985, inverter_ac_capacity_w=4000.0)
@@ -147,7 +140,7 @@ def test_checker_applies_atol_as_an_absolute_bound():
     assert_energy_conservation(off, config, atol=1e-3)
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_carried_grid_origin_is_drawn_down_in_proportion(backend):
     """Grid-origin energy carried in from an earlier span leaves in proportion to its share."""
     pv, load, temperature = _year()

@@ -1,6 +1,5 @@
 """The daily charge-target planner behind daily-persistence smart charging (plan step 7)."""
 
-import importlib.util
 import itertools
 import math
 from dataclasses import replace
@@ -22,13 +21,8 @@ from breos.app_config import resolve_tariff_spec
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
 from breos.smart_charging import SmartChargingSpec, period_layout, resolve_instructions
+from tests.backend_parity import BACKENDS
 
-_BACKENDS = [
-    "python",
-    pytest.param(
-        "numba", marks=pytest.mark.skipif(not importlib.util.find_spec("numba"), reason="numba not installed")
-    ),
-]
 OFF_PEAK, PEAK, EXPORT = 0.10, 0.30, 0.05
 
 
@@ -117,7 +111,7 @@ def _priced_run(problem, instructions, **kwargs):
         (68, [0.9, 0.1, 0.0], 2.5598835185905546, 0.3235974145891044, 1425.8245614035086),
     ],
 )
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_the_plan_matches_the_legacy_dynamic_program(
     n_steps, targets, objective, terminal_cost, end_energy_wh, backend
 ):
