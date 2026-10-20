@@ -460,7 +460,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Changed
 
 - The sun's position, about 80 % of a PV run's time, is computed once per
-  site and time grid and kept for the next request: up to 32 grids per
+  site and time grid and kept for the next request, up to about 20 MB per
   process. A repeated PV run takes a fifth of the time, and the arrays of
   one multi-array call share it. An optimizer search over a 5-year study is
   6–8 % faster, since the dispatch dominates each design. Results are
