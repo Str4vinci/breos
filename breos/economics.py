@@ -137,6 +137,13 @@ class CostParams:
     battery_inverter_cost_per_kw: Optional[float] = None
 
 
+# The error for the 0.6 cost key, in App and the optimizer.
+PANEL_WP_REMOVED = (
+    "costs.panel_wp was removed in 0.7.0: CAPEX is priced at the selected module's own "
+    "rating. Remove the key, or select a module with the wattage you meant."
+)
+
+
 def cost_params_from_config(
     costs_config: Optional[Dict[str, Any]] = None,
     financials_config: Optional[Dict[str, Any]] = None,
@@ -149,10 +156,7 @@ def cost_params_from_config(
     costs_config = costs_config or {}
     financials_config = financials_config or {}
     if "panel_wp" in costs_config:
-        raise ValueError(
-            "costs.panel_wp was removed in 0.7.0: CAPEX is priced at the selected module's own "
-            "rating. Remove the key, or select a module with the wattage you meant."
-        )
+        raise ValueError(PANEL_WP_REMOVED)
     defaults = CostParams()
 
     params = {

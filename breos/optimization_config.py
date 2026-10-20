@@ -47,7 +47,7 @@ from breos.config_schema import (
     text,
 )
 from breos.constants import BATTERY_COUPLINGS, DEGRADATION_ENGINES, RESOLUTIONS, SKIPPED_REPLACEMENT_ACTIONS
-from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
+from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE, PANEL_WP_REMOVED
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import PV_MODEL_CONFIG_KEYS
 from breos.smart_charging import PLANNER_MODES
@@ -84,10 +84,7 @@ _REMOVED_KEYS = {
     ("constraints", "budget_eur"): (
         "constraints.budget_eur was renamed to constraints.budget in 0.7.0; the budget is in the run's currency."
     ),
-    ("costs", "panel_wp"): (
-        "costs.panel_wp was removed in 0.7.0: CAPEX is priced at the selected module's own "
-        "rating. Remove the key, or select a module with the wattage you meant."
-    ),
+    ("costs", "panel_wp"): PANEL_WP_REMOVED,
 }
 
 
