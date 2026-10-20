@@ -11,6 +11,7 @@ from breos import optimization
 from breos.execution import limit_worker_threads
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.utils import package_version
+from tests.offline_app import serve_app_inputs
 
 TARIFF = {
     "schedule": "pt_mainland_2026_daily_bi",
@@ -291,9 +292,7 @@ def test_three_year_tariff_design_reproduces_through_app(
 ):
     import breos.app as app_module
     from breos import App
-    from breos.app_inputs import AppRuntimeDependencies
     from breos.economics import COST_CONFIG_KEY_TO_PARAM
-    from breos.weather import build_battery_temperature_series
 
     if backend == "numba":
         pytest.importorskip("numba")
@@ -336,14 +335,7 @@ def test_three_year_tariff_design_reproduces_through_app(
             else {}
         ),
     }
-    dependencies = AppRuntimeDependencies(
-        load_profile=lambda **kwargs: load.copy(),
-        load_weather=lambda **kwargs: None,
-        fetch_tmy_weather_data=lambda **kwargs: (weather.copy(), {}),
-        resample_to_15min=lambda frame, **kwargs: frame,
-        build_battery_temperature_series=build_battery_temperature_series,
-    )
-    monkeypatch.setattr(App, "_runtime_dependencies", staticmethod(lambda: dependencies))
+    serve_app_inputs(monkeypatch, weather, load)
     artifacts = []
     run_app = app_module.run_app_simulation
 

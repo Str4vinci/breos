@@ -22,13 +22,12 @@ import breos.optimization as optimization_module
 import breos.projection as projection_module
 from breos.app import App
 from breos.app_config import resolve_app_config
-from breos.app_inputs import AppRuntimeDependencies
 from breos.app_results import degradation_history_to_dicts
 from breos.battery import END_OF_LIFE_EVENTS_ATTR
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization import evaluate_projected_design
-from breos.weather import build_battery_temperature_series
 from tests.conftest import _build_open_meteo_weather
+from tests.offline_app import serve_app_inputs
 from tests.test_terminal_replacement import BLAST, EVERY_PERIOD_EOL, _app, _mc_config
 
 pytestmark = pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
@@ -369,14 +368,7 @@ def _optimizer_design(*, battery_kwh, enable_replacement, years):
 
 def test_app_without_replacement_matches_the_optimizer(monkeypatch):
     weather, load = _design_inputs()
-    deps = AppRuntimeDependencies(
-        load_profile=lambda **_kwargs: load.copy(),
-        load_weather=lambda **_kwargs: None,
-        fetch_tmy_weather_data=lambda **_kwargs: (weather.copy(), {}),
-        resample_to_15min=lambda frame, **_kwargs: frame,
-        build_battery_temperature_series=build_battery_temperature_series,
-    )
-    monkeypatch.setattr(App, "_runtime_dependencies", staticmethod(lambda: deps))
+    serve_app_inputs(monkeypatch, weather, load)
     app = App(
         {
             "location": LOCATION,

@@ -6,6 +6,7 @@ import pytest
 
 from breos.optimization import evaluate_projected_design
 from breos.optimization_config import resolve_optimization_config
+from tests.offline_app import serve_app_inputs
 
 MODULE = "Suntech_STP550S_STC"
 COSTS = {
@@ -50,17 +51,8 @@ def year_inputs(open_meteo_weather):
 
 def _app_run(monkeypatch, weather, houseload, battery_kwh, arrays):
     from breos.app import App
-    from breos.app_inputs import AppRuntimeDependencies
-    from breos.weather import build_battery_temperature_series
 
-    dependencies = AppRuntimeDependencies(
-        load_profile=lambda **kwargs: houseload.copy(),
-        load_weather=lambda **kwargs: None,
-        fetch_tmy_weather_data=lambda **kwargs: (weather.copy(), {}),
-        resample_to_15min=lambda frame, **kwargs: frame,
-        build_battery_temperature_series=build_battery_temperature_series,
-    )
-    monkeypatch.setattr(App, "_runtime_dependencies", staticmethod(lambda: dependencies))
+    serve_app_inputs(monkeypatch, weather, houseload)
     app = App(
         {
             "location": dict(LOCATION),

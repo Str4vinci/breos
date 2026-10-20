@@ -119,3 +119,22 @@ def offline_weather():
     fetch, weather = offline()
     with fetch, weather:
         yield
+
+
+def serve_app_inputs(monkeypatch, weather, load):
+    """Make every App in the test read ``weather`` and ``load`` (copies) and run them as given.
+
+    The weather is the TMY fetch's frame, the load the load profile; neither
+    is resampled, and no weather file is read.
+    """
+    from breos.app_inputs import AppRuntimeDependencies
+    from breos.weather import build_battery_temperature_series
+
+    dependencies = AppRuntimeDependencies(
+        load_profile=lambda **_kwargs: load.copy(),
+        load_weather=lambda **_kwargs: None,
+        fetch_tmy_weather_data=lambda **_kwargs: (weather.copy(), {}),
+        resample_to_15min=lambda frame, **_kwargs: frame,
+        build_battery_temperature_series=build_battery_temperature_series,
+    )
+    monkeypatch.setattr(App, "_runtime_dependencies", staticmethod(lambda: dependencies))

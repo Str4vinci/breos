@@ -17,6 +17,7 @@ import pandas as pd
 import pytest
 
 from tests.conftest import _stub_projection_balance
+from tests.offline_app import serve_app_inputs
 
 COSTS_CONFIG = {
     "electricity_cost": 0.25,
@@ -274,9 +275,7 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
     pytest.importorskip("pymoo")
 
     from breos.app import App
-    from breos.app_inputs import AppRuntimeDependencies
     from breos.optimization import optimize_system_multi_objective
-    from breos.weather import build_battery_temperature_series
 
     # A full year: App rejects weather that does not cover the calendar year
     # of start_date, and over a single January day the site-altitude
@@ -322,14 +321,7 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
     # The App facade normally gets these inputs from its weather and load
     # providers. Injecting the same frames keeps this end-to-end check
     # offline and makes both workflows simulate exactly the same interval.
-    dependencies = AppRuntimeDependencies(
-        load_profile=lambda **kwargs: houseload.copy(),
-        load_weather=lambda **kwargs: None,
-        fetch_tmy_weather_data=lambda **kwargs: (weather.copy(), {}),
-        resample_to_15min=lambda frame, **kwargs: frame,
-        build_battery_temperature_series=build_battery_temperature_series,
-    )
-    monkeypatch.setattr(App, "_runtime_dependencies", staticmethod(lambda: dependencies))
+    serve_app_inputs(monkeypatch, weather, houseload)
 
     app_costs = {key: value for key, value in COSTS_CONFIG.items() if key != "dc_ac_ratio"}
     app_config = {
