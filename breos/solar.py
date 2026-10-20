@@ -777,6 +777,10 @@ class _PVArray:
     dual_axis_max_tilt: float = 90.0
     shading: Any = None
 
+    def __post_init__(self) -> None:
+        if self.tracking not in ("fixed", *_TRACKERS):
+            raise ValueError(f"unknown tracking mode {self.tracking!r}. Use 'fixed', 'single_axis', or 'dual_axis'.")
+
     def orientation(self, solarpos: pd.DataFrame) -> tuple[Any, Any]:
         """Surface tilt and azimuth: scalars for a fixed array, one per step for a tracker."""
         if self.tracking == "fixed":
@@ -1491,27 +1495,6 @@ def _configured_array(index: int, arr: Mapping[str, Any], location: Location, de
     )
 
 
-def _empty_breakdown(times: pd.DatetimeIndex, loss_overrides: Optional[Dict[str, float]]) -> PVProductionBreakdown:
-    """The breakdown of a system without modules: zero at every step of ``times``."""
-    zeros = pd.Series(0.0, index=times, name="dc_power_W")
-    static_loss_info = resolve_pvwatts_losses(loss_overrides)
-    return PVProductionBreakdown(
-        horizontal_reference_dc=zeros.rename("horizontal_reference_dc_W"),
-        poa_global_dc=zeros.rename("poa_global_dc_W"),
-        front_effective_irradiance_dc=zeros.rename("front_effective_irradiance_dc_W"),
-        rear_gain_dc=zeros.rename("rear_gain_dc_W"),
-        effective_irradiance_dc=zeros.rename("effective_irradiance_dc_W"),
-        module_dc=zeros.rename("module_dc_W"),
-        dc_after_static_losses=zeros.rename("dc_after_static_losses_W"),
-        dc_after_losses=zeros,
-        pvwatts_component_losses={name: zeros.rename(f"{name}_loss_W") for name in static_loss_info["components_pct"]},
-        pvwatts_components_pct=static_loss_info["components_pct"],
-        pvwatts_combined_pct=static_loss_info["combined_pct"],
-        age_degradation_pct=0.0,
-        age_degradation_loss=zeros.rename("age_degradation_loss_W"),
-    )
-
-
 def calculate_multi_array_production(
     weather_data: pd.DataFrame,
     location: Location,
@@ -1599,12 +1582,13 @@ def calculate_multi_array_production(
             models.append(_configured_array(i, arr, location, options))
 
     if not models:
-        # The same grid a non-empty array is computed on, so an empty system
-        # lines up with the rest of the run; "weather" still needs the
-        # weather's time basis.
+        # Zero on the grid a non-empty array is computed on, so an empty
+        # system lines up with the rest of the run. The inputs are checked as
+        # for one: "weather" still needs its time basis.
         times = _simulation_grid(weather_data, freq, solar_position)
         solar_position_time_offset(solar_position, weather_data, freq)
-        return _empty_breakdown(times, loss_overrides).dc_after_losses
+        resolve_pvwatts_losses(loss_overrides)
+        return pd.Series(0.0, index=times, name="dc_power_W")
     grid = _prepare_solarpos_and_weather(weather_data, location, freq, solar_position)
     breakdowns = [
         _array_breakdown(

@@ -256,3 +256,9 @@ def test_a_repeated_sun_position_is_computed_once_and_returned_as_a_copy(monkeyp
     assert len(calls) == 3
     assert mid.index.equals(times)
     assert not np.array_equal(mid["azimuth"], second["azimuth"])
+
+
+def test_app_defaults_the_pv_model_options_as_the_pv_model_does():
+    from breos.app_config import APP_CONFIG_FIELDS
+
+    assert {key: APP_CONFIG_FIELDS[key].default for key in PV_MODEL_CONFIG_KEYS} == dict(PV_MODEL_DEFAULTS)
