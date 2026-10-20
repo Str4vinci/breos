@@ -35,6 +35,7 @@ from breos.constants import (
 from breos.utils import (
     _datetime_index_seconds,
     find_irradiance_column,
+    find_met_column,
     get_hours_per_step,
     irradiance_component,
     is_leap_year,
@@ -61,9 +62,6 @@ _WEATHER_METADATA_SCHEMA_VERSION = 1
 
 # Timestamp column names a weather or temperature CSV may use, in any case.
 _DATE_COLUMNS = ("date", "datetime", "time")
-# Air-temperature column names, in order of preference: pvlib (PVGIS TMY),
-# Open-Meteo, then generic spellings.
-_AIR_TEMPERATURE_COLUMNS = ("temp_air", "temperature_2m", "temp", "air_temperature")
 
 
 def _find_date_column(columns: Iterable[Hashable]) -> Hashable | None:
@@ -1572,10 +1570,8 @@ def extract_ambient_temperature(weather_df: pd.DataFrame) -> Optional[pd.Series]
     Returns:
         pd.Series of temperatures, or None if no recognised column found.
     """
-    for col in _AIR_TEMPERATURE_COLUMNS:
-        if col in weather_df.columns:
-            return weather_df[col]
-    return None
+    column = find_met_column(weather_df.columns, "temp_air")
+    return None if column is None else weather_df[column]
 
 
 _TEMPERATURE_FILE_VALUE_COLUMNS = ("temp", "temperature", "t_cell", "t_amb")

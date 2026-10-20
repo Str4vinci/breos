@@ -282,6 +282,19 @@ def find_irradiance_column(columns, component: str) -> str | None:
     return None
 
 
+# Air-temperature and wind-speed column names, in order of preference: pvlib
+# (PVGIS TMY), Open-Meteo, then generic spellings. Matched exactly.
+MET_COLUMN_ALIASES = {
+    "temp_air": ("temp_air", "temperature_2m", "temp", "air_temperature"),
+    "wind_speed": ("wind_speed", "wind_speed_10m", "ws", "WS10m"),
+}
+
+
+def find_met_column(columns, quantity: str) -> str | None:
+    """Return the column holding ``quantity`` (``"temp_air"`` or ``"wind_speed"``), preferring the earlier aliases."""
+    return next((alias for alias in MET_COLUMN_ALIASES[quantity] if alias in columns), None)
+
+
 def format_years_months(years_decimal) -> str:
     """Format a decimal number of years as ``"4y"`` or ``"4y 2m"``; None is ``"N/A"``.
 

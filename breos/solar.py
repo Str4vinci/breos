@@ -60,8 +60,7 @@ from breos.pv.model_options import (
 from breos.pv.shading import CIRCUMSOLAR_MODELS, ArrayShading, ModuleMeanShading, ShadingTable, as_shading_table
 from breos.pv.temperature import calculate_cell_temperature
 from breos.pv_modules import PVModuleParams, get_module
-from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column
-from breos.weather import _AIR_TEMPERATURE_COLUMNS
+from breos.utils import IRRADIANCE_COLUMN_ALIASES, MET_COLUMN_ALIASES, find_irradiance_column, find_met_column
 
 # The module an entry point models when it is given none.
 _DEFAULT_MODULE = "Generic_400W"
@@ -1374,15 +1373,15 @@ def _extract_met_data(weather_df: pd.DataFrame):
     ``weather["temp_air"] = 25.0`` and ``weather["wind_speed"] = 1.0``.
     """
     met = []
-    for quantity, names, example in (
-        ("air temperature", list(_AIR_TEMPERATURE_COLUMNS), 'weather["temp_air"] = 25.0'),
-        ("wind speed", ["wind_speed", "wind_speed_10m", "ws", "WS10m"], 'weather["wind_speed"] = 1.0'),
+    for key, quantity, example in (
+        ("temp_air", "air temperature", 'weather["temp_air"] = 25.0'),
+        ("wind_speed", "wind speed", 'weather["wind_speed"] = 1.0'),
     ):
-        name = next((n for n in names if n in weather_df.columns), None)
+        name = find_met_column(weather_df.columns, key)
         if name is None:
             raise ValueError(
-                f"weather has no {quantity} column (tried {names}). The cell temperature needs it; "
-                f"to run with a fixed value, add it explicitly, e.g. {example}."
+                f"weather has no {quantity} column (tried {list(MET_COLUMN_ALIASES[key])}). The cell "
+                f"temperature needs it; to run with a fixed value, add it explicitly, e.g. {example}."
             )
         values = pd.to_numeric(weather_df[name], errors="coerce").to_numpy(dtype=float)
         bad = ~np.isfinite(values)
