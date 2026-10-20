@@ -476,6 +476,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and a top-level `bifacial_model`, `pvrow_height` or `pvrow_pitch` that
   every entry of `pv_arrays` overrides. The optimizer's integer settings,
   such as `pop_size`, now take NumPy integers.
+- The plotting functions no longer print. `plot_breakeven` shows the
+  break-even point only in its figure's annotation, as before, and no longer
+  writes "Break-even point: …" to standard output. `weekly_graphs` for a
+  week with no data and `plot_battery_soh_timeseries` without a
+  `Battery_SOH` column raise a `UserWarning` instead of printing, and still
+  return None. `degradation_plots` with an empty frame and
+  `plot_breakeven_distribution` with no paid-back run return their empty
+  result silently. `plot_montecarlo_simulation(verbose=True)` still prints
+  where it saved the plots.
 - `MonteCarloSettings` checks its values when it is made, instead of when
   `run_montecarlo` starts. `build_year_cache` used to skip these checks, so
   it took settings no study can run: `n_runs`, `years_per_run` or `n_procs`

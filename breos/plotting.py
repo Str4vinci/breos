@@ -517,7 +517,7 @@ def weekly_graphs(
     week_data = df[df["Week"] == week_number]
 
     if week_data.empty:
-        print(f"No data found for week {week_number}")
+        warnings.warn(f"No data found for week {week_number}", UserWarning, stacklevel=2)
         return None
 
     fig, ax = plt.subplots(figsize=(14, 6))
@@ -584,7 +584,6 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: Optional[
     """
     figures: "dict[str, Figure]" = {}
     if degradation_df.empty:
-        print("No degradation data to plot")
         return figures
 
     x = _degradation_x(degradation_df)
@@ -874,9 +873,6 @@ def plot_breakeven(
 
     fig2.tight_layout()
     _finish(fig2, results_directory, f"breakeven_annual{suffix}.png")
-
-    # Print BEP to console
-    print(f"   Break-even point: {be_text}")
     return {"breakeven_cumulative": fig1, "breakeven_annual": fig2}
 
 
@@ -937,7 +933,7 @@ def plot_battery_soh_timeseries(
         df = df[df.index <= _on_index_clock(end_date, df.index)]
 
     if "Battery_SOH" not in df.columns:
-        print("Warning: Battery_SOH column not found in results")
+        warnings.warn("Battery_SOH column not found in results", UserWarning, stacklevel=2)
         return None
 
     fig, ax = plt.subplots(figsize=(14, 6))
@@ -1294,7 +1290,6 @@ def plot_breakeven_distribution(
     """
     paid_back = _finite_payback_years(breakeven_steps)
     if not paid_back.size:
-        print("No break-even points to plot histogram.")
         return None
 
     fig, ax = plt.subplots(figsize=(12, 8))

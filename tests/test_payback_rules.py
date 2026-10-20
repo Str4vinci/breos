@@ -197,17 +197,22 @@ def test_breakeven_comparison_marks_a_crossing_before_the_second_year(tmp_path, 
     assert lines == [pytest.approx(1.0), pytest.approx(2 + 1 / 3), pytest.approx(0.21)]
 
 
-def test_breakeven_plot_uses_the_shared_interpolation(tmp_path, monkeypatch, capsys):
-    plotting.plot_breakeven(_projection([-300.0, -100.0, 200.0]), str(tmp_path), scenario_name="x")
-
-    assert "Break-even point: 2 years 4 months" in capsys.readouterr().out
+def _breakeven_label(figures):
+    return [text.get_text() for text in figures["breakeven_cumulative"].axes[0].texts]
 
 
-def test_breakeven_plot_anchors_at_the_investment(tmp_path, capsys):
-    plotting.plot_breakeven(_cost_projection(investment=40.0), str(tmp_path), scenario_name="x")
+def test_breakeven_plot_uses_the_shared_interpolation(tmp_path, capsys):
+    figures = plotting.plot_breakeven(_projection([-300.0, -100.0, 200.0]), str(tmp_path), scenario_name="x")
+
+    assert _breakeven_label(figures) == ["Break-even\n2 years 4 months"]
+    assert capsys.readouterr().out == ""
+
+
+def test_breakeven_plot_anchors_at_the_investment(tmp_path):
+    figures = plotting.plot_breakeven(_cost_projection(investment=40.0), str(tmp_path), scenario_name="x")
 
     # 40 / 190 of a year is 2.5 months.
-    assert "Break-even point: 0 years 2 months" in capsys.readouterr().out
+    assert _breakeven_label(figures) == ["Break-even\n0 years 2 months"]
 
 
 def test_montecarlo_payback_plots_use_the_interpolated_year(tmp_path, monkeypatch):

@@ -277,9 +277,11 @@ def test_with_a_directory_the_figure_is_saved_closed_and_returned(name, tmp_path
 
 def test_plots_with_nothing_to_draw_return_none_or_an_empty_dict():
     results = _results()
-    assert plotting.weekly_graphs(results.iloc[:0], 10) is None
+    with pytest.warns(UserWarning, match="No data found for week 10"):
+        assert plotting.weekly_graphs(results.iloc[:0], 10) is None
     assert plotting.plot_cell_temperature(results.drop(columns="T_cell")) is None
-    assert plotting.plot_battery_soh_timeseries(results.drop(columns="Battery_SOH")) is None
+    with pytest.warns(UserWarning, match="Battery_SOH column not found"):
+        assert plotting.plot_battery_soh_timeseries(results.drop(columns="Battery_SOH")) is None
     assert plotting.plot_breakeven_cdf([np.nan, np.nan]) is None
     assert plotting.plot_co2_savings(_cost_projection().drop(columns="CO2_Avoided_Total_kg")) == {}
     assert plotting.degradation_plots(pd.DataFrame()) == {}
