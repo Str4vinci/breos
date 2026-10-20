@@ -587,11 +587,18 @@ def price_reference_year_rows(
     return repriced
 
 
-def _billed_days(row: Mapping[str, Any] | pd.Series) -> float | None:
-    # A [period] window's civil days; None, or NaN in a row of another span,
-    # bills the simulated duration.
+def _billed_days(row: pd.Series) -> float | None:
+    # A [period] window's civil days; NaN, in a row of another span, bills
+    # the simulated duration.
     billed_days = row.get("Billed_Days")
     return None if billed_days is None or pd.isna(billed_days) else float(billed_days)
+
+
+def _window_days(extra: Mapping[str, Any]) -> Any:
+    # A projection year's Billed_Days as the caller gave it, so its scalar
+    # type prices as before; None and NaN bill the simulated duration.
+    billed_days = extra.get("Billed_Days")
+    return None if billed_days is None or pd.isna(billed_days) else billed_days
 
 
 def _period_prices(tariff: ResolvedTariff, kind: str) -> dict[str, float]:
@@ -1232,7 +1239,7 @@ def project_years(
                     outcome.weighted_w,
                     hours_per_step,
                     outcome.n_steps,
-                    _billed_days(year.extra),
+                    _window_days(year.extra),
                 ),
             )
         )

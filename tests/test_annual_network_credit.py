@@ -125,6 +125,9 @@ def test_a_nan_billed_days_bills_the_simulated_duration_as_revaluation_does():
     nan = _pv_equals_load(index, tariff=_flat_tariff(index), extra={"Billed_Days": np.nan}).iloc[0]
     assert nan["Fixed_Charge"] == unset["Fixed_Charge"] == pytest.approx(2 * 0.4405, rel=1e-15)
     assert nan["Network_Credit"] == unset["Network_Credit"]
+    # A finite value is billed as given, its scalar type included.
+    days32 = _pv_equals_load(index, tariff=_flat_tariff(index), extra={"Billed_Days": np.float32(2.0)}).iloc[0]
+    assert days32["Fixed_Charge"] == 0.4405 * np.float32(2.0)
 
 
 def test_a_leap_year_gets_the_annual_amount_and_a_window_its_share_of_the_year():
