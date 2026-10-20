@@ -1264,7 +1264,9 @@ def calculate_lcoe_from_projection(
     # carries it, matching how the NPV above books the same outlay.
     if "Replacement_Time_Years" in cost_projection.columns:
         replacement_time = pd.to_numeric(cost_projection["Replacement_Time_Years"], errors="coerce")
-        replacement_discount_factors = _discount_factor(discount_rate, replacement_time.fillna(years))
+        replacement_discount_factors = _discount_factor(
+            discount_rate, _booking_exponents(replacement_time.to_numpy(dtype=float), years.to_numpy(dtype=float))
+        )
     else:
         replacement_discount_factors = discount_factors
 
