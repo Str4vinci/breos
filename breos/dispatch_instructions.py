@@ -136,6 +136,16 @@ class DispatchInstructions:
     def __len__(self) -> int:
         return len(self.discharge_allowed)
 
+    def take(self, index: slice | np.ndarray) -> DispatchInstructions:
+        """The instructions at ``index``, a slice or an array of step positions, with the same two scalars."""
+        return DispatchInstructions(
+            discharge_allowed=self.discharge_allowed[index],
+            reserve_fraction=self.reserve_fraction[index],
+            grid_target_fraction=self.grid_target_fraction[index],
+            grid_charge_efficiency=self.grid_charge_efficiency,
+            grid_import_limit_w=self.grid_import_limit_w,
+        )
+
     def instruction_hash(self) -> str:
         """A sha256 of every array and scalar, the same on every platform and run."""
         digest = hashlib.sha256(_HASH_SCHEMA)

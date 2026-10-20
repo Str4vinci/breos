@@ -190,16 +190,6 @@ def _checked_day_starts(day_starts: Sequence[int], n_steps: int) -> np.ndarray:
     return starts.astype(np.int64)
 
 
-def _slice(instructions: DispatchInstructions, lo: int, hi: int) -> DispatchInstructions:
-    return DispatchInstructions(
-        discharge_allowed=instructions.discharge_allowed[lo:hi],
-        reserve_fraction=instructions.reserve_fraction[lo:hi],
-        grid_target_fraction=instructions.grid_target_fraction[lo:hi],
-        grid_charge_efficiency=instructions.grid_charge_efficiency,
-        grid_import_limit_w=instructions.grid_import_limit_w,
-    )
-
-
 @dataclass(frozen=True)
 class DailyTargetProblem:
     """What the planner sees over its window, one entry per step.
@@ -318,7 +308,7 @@ class DailyTargetProblem:
             import_price_per_kwh=self.import_price_per_kwh[lo:hi],
             export_price_per_kwh=self.export_price_per_kwh[lo:hi],
             day_starts=tuple(start - lo for start in self.day_starts[first_day : last + 1]),
-            instructions=_slice(self.instructions, lo, hi),
+            instructions=self.instructions.take(slice(lo, hi)),
             battery_config=self.battery_config,
             hours_per_step=self.hours_per_step,
             soh_fraction=self.soh_fraction,

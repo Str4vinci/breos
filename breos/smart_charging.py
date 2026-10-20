@@ -394,17 +394,7 @@ class FixedTargetDayController:
 
     def decide_day(self, day: ControllerDayInput, policy_state: object | None) -> ControllerDayDecision:
         positions = np.asarray(day.tariff.calendar_positions[: day.decision_step_count], dtype=np.intp)
-        source = self.instructions
-        return ControllerDayDecision(
-            DispatchInstructions(
-                discharge_allowed=source.discharge_allowed[positions],
-                reserve_fraction=source.reserve_fraction[positions],
-                grid_target_fraction=source.grid_target_fraction[positions],
-                grid_charge_efficiency=source.grid_charge_efficiency,
-                grid_import_limit_w=source.grid_import_limit_w,
-            ),
-            policy_state,
-        )
+        return ControllerDayDecision(self.instructions.take(positions), policy_state)
 
 
 def stored_energy_by_origin(energy_wh: float, pv_origin_wh: float, grid_origin_wh: float) -> dict[str, float]:
