@@ -67,15 +67,15 @@ from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import (
     ProjectionYear,
     build_pv_only_battery_config,
-    effective_reference_escalation,
     first_end_of_life_metrics,
     run_projection,
+    tariff_records,
     value_projection,
 )
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
-from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
+from breos.tariffs import ResolvedTariff
 from breos.utils import package_version
 from breos.weather import (
     _weather_file_sha256,
@@ -1126,18 +1126,7 @@ def run_montecarlo(
                 else {}
             ),
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
-            **({"tariff": tariff_provenance(tariff, calendar_year=settings.target_year)} if tariff is not None else {}),
-            **(
-                {
-                    "reference_tariff": reference_tariff_provenance(
-                        reference_tariff,
-                        calendar_year=settings.target_year,
-                        import_price_escalation=effective_reference_escalation(resolved),
-                    )
-                }
-                if reference_tariff is not None
-                else {}
-            ),
+            **tariff_records(resolved, tariff, reference_tariff, calendar_year=settings.target_year),
             **(
                 {"smart_charging": smart_charging_provenance(spec, instructions, tariff)}
                 if spec is not None and instructions is not None and tariff is not None

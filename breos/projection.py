@@ -49,7 +49,7 @@ from breos.economics import (
 )
 from breos.execution import config_has_battery, observed_jit_cache_state, reset_jit_cache_observation
 from breos.inverter import InverterUnits
-from breos.tariffs import ResolvedTariff
+from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
 from breos.utils import get_hours_per_step
 
 
@@ -1321,6 +1321,29 @@ def effective_reference_escalation(resolved: ResolvedAppConfig) -> float:
     if resolved.reference_tariff is not None and resolved.reference_tariff.import_price_escalation is not None:
         return float(resolved.reference_tariff.import_price_escalation)
     return projection_rates_record(resolved.cfg)["import_price_escalation"]
+
+
+def tariff_records(
+    resolved: ResolvedAppConfig,
+    tariff: ResolvedTariff | None,
+    reference_tariff: ResolvedTariff | None,
+    *,
+    calendar_year: int,
+) -> dict[str, dict[str, Any]]:
+    """The provenance records of a run's tariff and no-system reference tariff, keyed as App and Monte Carlo report them.
+
+    Each is left out when the run has none.
+    """
+    records = {}
+    if tariff is not None:
+        records["tariff"] = tariff_provenance(tariff, calendar_year=calendar_year)
+    if reference_tariff is not None:
+        records["reference_tariff"] = reference_tariff_provenance(
+            reference_tariff,
+            calendar_year=calendar_year,
+            import_price_escalation=effective_reference_escalation(resolved),
+        )
+    return records
 
 
 def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: ProjectionRun) -> ProjectionValue:

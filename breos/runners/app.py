@@ -33,12 +33,12 @@ from breos.projection import (
     ProjectionYear,
     YearInstructions,
     build_pv_only_battery_config,
-    effective_reference_escalation,
     price_reference_year_rows,
     price_tariff_year_rows_by_step,
     reprice_network_credit_year_rows,
     reprice_tariff_year_rows,
     run_projection,
+    tariff_records,
     value_projection,
 )
 from breos.pv.model_options import normalise_model_name
@@ -52,7 +52,7 @@ from breos.smart_charging import (
     stored_energy_by_origin,
 )
 from breos.solar import PVProductionBreakdown
-from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
+from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 from breos.weather import WEATHER_METADATA_KEY
 
@@ -788,14 +788,12 @@ def run_app_simulation(
         ),
         degradation_summary=degradation_summary,
         execution=execution,
-        tariff=tariff_provenance(tariff, calendar_year=int(cfg["start_date"][:4])) if tariff is not None else None,
         smart_charging=smart_charging,
         projection=projection,
-        resolved_tariff=tariff,
         # Only one static set can be re-resolved and compared on revaluation.
         instructions=instructions if isinstance(instructions, DispatchInstructions) else None,
         period=period.record() if period is not None else None,
-        **_reference_fields(resolved, reference_tariff),
+        **_tariff_fields(resolved, tariff, reference_tariff),
     )
 
 
@@ -810,16 +808,17 @@ def _price_blind(instructions: object, day_controller: object) -> bool:
     return instructions is None and day_controller is None
 
 
-def _reference_fields(resolved: ResolvedAppConfig, reference: ResolvedTariff | None) -> dict[str, Any]:
-    """The artifact fields of a run's no-system reference tariff."""
-    if reference is None or resolved.reference_tariff is None:
-        return {"reference_tariff": None, "resolved_reference_tariff": None}
-    record = reference_tariff_provenance(
-        reference,
-        calendar_year=int(resolved.cfg["start_date"][:4]),
-        import_price_escalation=effective_reference_escalation(resolved),
-    )
-    return {"reference_tariff": record, "resolved_reference_tariff": reference}
+def _tariff_fields(
+    resolved: ResolvedAppConfig, tariff: ResolvedTariff | None, reference: ResolvedTariff | None
+) -> dict[str, Any]:
+    """The artifact fields of a run's tariff and no-system reference tariff: each resolved, and its record."""
+    records = tariff_records(resolved, tariff, reference, calendar_year=int(resolved.cfg["start_date"][:4]))
+    return {
+        "tariff": records.get("tariff"),
+        "resolved_tariff": tariff,
+        "reference_tariff": records.get("reference_tariff"),
+        "resolved_reference_tariff": reference,
+    }
 
 
 # The year-row columns a tariff fills; without one, economics prices the
@@ -944,9 +943,7 @@ def revalue_app_simulation(
     revalued = replace(
         artifacts,
         **_economics_fields(value, resolved.period),
-        tariff=tariff_provenance(tariff, calendar_year=int(cfg["start_date"][:4])) if tariff is not None else None,
         smart_charging=smart_charging,
-        resolved_tariff=tariff,
-        **_reference_fields(resolved, reference),
+        **_tariff_fields(resolved, tariff, reference),
     )
     return revalued, "repriced_by_step" if new_schedule else "repriced"
