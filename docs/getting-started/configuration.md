@@ -74,6 +74,11 @@ optimization reads the same values from `simulation.irradiance_resampling`:
   difference. It needs coordinates and all three components, and refuses
   missing or non-finite irradiance instead of filling it. The minute
   solar positions make it slower: about 1.6 s a weather year against 0.2 s.
+  Against measured 1-minute irradiance at five stations, its quarter-hours
+  were slightly less accurate than `"clear_sky_energy_conserving"`'s (0.6 to
+  1.6 points more RMSE on a tilted plane), better in clear hours and worse
+  in broken cloud; annual energy differed by under 0.2 %. Choose it when
+  GHI, DNI and DHI must agree in every step, not for accuracy.
 
 PVGIS TMY is instantaneous with a provider offset, so `"auto"` resolves to
 `"clear_sky"`. Open-Meteo interval means and EPW use hourly conservation.
