@@ -294,7 +294,10 @@ def _provenance(
         "resolution": cfg["resolution"],
         "timezone": resolved.timezone,
         "start_date": cfg["start_date"],
-        "pv_model": {"bifacial": deepcopy(artifacts.pv_loss_waterfall["bifacial"])},
+        "pv_model": {
+            "bifacial": deepcopy(artifacts.pv_loss_waterfall["bifacial"]),
+            **({"solar_position": deepcopy(artifacts.solar_position)} if artifacts.solar_position else {}),
+        },
         "degradation": artifacts.degradation_summary,
         # Which dispatch implementation produced these numbers, and the
         # toolchain it ran on. A bit-identity claim cannot be checked after the

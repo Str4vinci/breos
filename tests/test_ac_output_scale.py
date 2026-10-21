@@ -51,6 +51,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity")
 
 from harness import FREQ, build  # noqa: E402
 
+from tests.conftest import declare_instant_at_labels
+
 AC_RATING = 3520.0
 EFFICIENCY = 0.96
 # A measured-bias AC-side factor, a deeper trim, plus a no-op.
@@ -324,7 +326,7 @@ class TestProjectedWeatherSequence:
         from breos.optimization import evaluate_projected_design
 
         idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
-        weather = pd.DataFrame({"temp_air": np.full(24, 20.0)}, index=idx)
+        weather = declare_instant_at_labels(pd.DataFrame({"temp_air": np.full(24, 20.0)}, index=idx))
         load = pd.DataFrame({"Load": np.full(24, 500.0)}, index=idx)
         seen: list = []
 
@@ -446,7 +448,7 @@ class TestUnlimitedInverterAndOptimizer:
         from breos.optimization import SolarDesignProblem
 
         idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
-        weather = pd.DataFrame({"temp_air": np.full(24, 20.0)}, index=idx)
+        weather = declare_instant_at_labels(pd.DataFrame({"temp_air": np.full(24, 20.0)}, index=idx))
         load = pd.DataFrame({"Load": np.full(24, 500.0)}, index=idx)
         config = {
             "location": {"latitude": 41.15, "longitude": -8.63},
@@ -508,7 +510,7 @@ class TestUnlimitedInverterAndOptimizer:
         from breos.optimization import SolarDesignProblem
 
         idx = pd.date_range("2025-01-01", periods=3, freq="h", tz="UTC")
-        weather = pd.DataFrame({"temp_air": np.full(3, 20.0)}, index=idx)
+        weather = declare_instant_at_labels(pd.DataFrame({"temp_air": np.full(3, 20.0)}, index=idx))
         load = pd.DataFrame({"Load": np.full(3, 100.0)}, index=idx)
         raw = pd.Series([100.0, 200.0, 300.0], index=idx)
         seen = {}
@@ -561,7 +563,7 @@ class TestDcOutputScale:
         from breos.optimization import evaluate_projected_design
 
         idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
-        weather = pd.DataFrame({"temp_air": np.full(24, 20.0)}, index=idx)
+        weather = declare_instant_at_labels(pd.DataFrame({"temp_air": np.full(24, 20.0)}, index=idx))
         load = pd.DataFrame({"Load": np.full(24, 500.0)}, index=idx)
         raw = pd.Series(np.linspace(0.0, 4000.0, 24), index=idx)
         seen: dict = {}

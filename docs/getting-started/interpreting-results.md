@@ -278,7 +278,12 @@ The `bifacial` block identifies the resolved model and per-array module factor
 and geometry. It reports rear gain in effective-DC-equivalent kWh and as a
 percentage of front effective irradiance. The same block is retained under
 `provenance.pv_model.bifacial` so serialized results carry the assumptions that
-produced the gain.
+produced the gain. `provenance.pv_model.solar_position` records the
+`solar_position` method asked for (`requested`), the method it resolved to on
+the run's weather (`resolved`; `"auto"` resolves to `"weather"` or
+`"interval-start"`) and the offset after each label at which the sun was
+evaluated (`offset_minutes`); see
+[Solar position](configuration.md#solar-position).
 
 The `pvwatts` block contains fixed-loss percentages and attributed kWh. The
 `inverter` block reports AC rating plus separate direct-PV and

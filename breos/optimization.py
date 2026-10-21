@@ -40,7 +40,13 @@ from breos.optimization_config import (
     resolve_run_settings,
 )
 from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years
-from breos.pv.model_options import configured_pv_model_kwargs
+from breos.pv.model_options import (
+    DEFAULT_SOLAR_POSITION,
+    configured_pv_model_kwargs,
+    solar_position_record,
+    solar_position_warning_scope,
+    warn_solar_position_fallback,
+)
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import resolve_instructions, smart_charging_provenance
 from breos.solar import (
@@ -729,6 +735,9 @@ def _layout_dc_production(
     return total
 
 
+# Each weather frame computes the sun position, and an "auto" fallback warns
+# once for the design, not once per frame or array.
+@solar_position_warning_scope()
 def evaluate_projected_design(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -903,6 +912,11 @@ def evaluate_projected_design(
         "simulation": dict(config["simulation"]),
         "weather": weather_metadata(tmy_data),
         **({"weather_by_year": [weather_metadata(frame) for frame in frames]} if frames is not None else {}),
+        # Recorded on the weather the PV model ran on: the first frame of a
+        # sequence, else the representative year.
+        "solar_position": solar_position_record(
+            config.get("solar_position", DEFAULT_SOLAR_POSITION), frames[0] if frames else tmy_data, freq
+        ),
         "battery_replacement_treatment": _battery_replacement_treatment(battery),
     }
     return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=provenance)
@@ -1017,6 +1031,14 @@ try:
             self.freq = config["simulation"]["resolution"]
             # Resolved once: candidate scoring is the hottest loop here.
             self.model_options = configured_pv_model_kwargs(config)
+            # "auto" is resolved on the search weather here, so it warns once
+            # and malformed metadata raises before the first candidate, not
+            # in every candidate or worker.
+            self.solar_position = solar_position_record(
+                self.model_options.get("solar_position", DEFAULT_SOLAR_POSITION), self.tmy_data, self.freq
+            )
+            warn_solar_position_fallback(self.solar_position["requested"], self.solar_position["resolved"])
+            self.model_options["solar_position"] = self.solar_position["resolved"]
             self.opt_cfg = config["optimization"]
             # Candidates are scored over the project lifetime only; the
             # resolver refuses the removed annual basis.
@@ -1444,6 +1466,7 @@ def optimize_system_multi_objective(
         "economics": economics,
         "simulation": dict(config["simulation"]),
         "weather": weather_metadata(problem.tmy_data),
+        "solar_position": dict(problem.solar_position),
         # The search bounds and run settings the search used, defaults included.
         "constraints": dict(config["constraints"]),
         "mode": {**config["mode"], "layouts": list(config["mode"]["layouts"])},

@@ -63,7 +63,12 @@ from breos.projection import (
     run_projection,
     value_projection,
 )
-from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
+from breos.pv.model_options import (
+    DEFAULT_SOLAR_POSITION,
+    resolve_solar_position_method,
+    solar_position_record,
+    solar_position_warning_scope,
+)
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
 from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
@@ -208,16 +213,17 @@ def _load_weather_years(
         )
         if runtime_weather is not None and not runtime_weather:
             # The same resolution the PV model applies, so a spelling such as
-            # "Mid-Interval" is recorded with the offset it actually gets.
-            method = resolve_solar_position_method(cfg.get("solar_position", DEFAULT_SOLAR_POSITION))
-            offset = solar_position_time_offset(method, weather, freq)
+            # "Mid-Interval" is recorded with the offset it actually gets, and
+            # "auto" with the method it resolves to on this weather.
+            solar_position = solar_position_record(cfg.get("solar_position", DEFAULT_SOLAR_POSITION), weather, freq)
             runtime_weather.update(
                 {
                     "representative_source_year": int(year),
                     "input_resolution": input_frequency,
                     "output_resolution": str(freq),
-                    "solar_position_method": method,
-                    "solar_position_offset_minutes": offset.total_seconds() / 60.0,
+                    "solar_position_requested": solar_position["requested"],
+                    "solar_position_method": solar_position["resolved"],
+                    "solar_position_offset_minutes": solar_position["offset_minutes"],
                     "metadata": weather_metadata(weather),
                 }
             )
@@ -225,6 +231,9 @@ def _load_weather_years(
     return indexed_by_year
 
 
+# Every weather year computes the sun position, and an "auto" fallback warns
+# once for the study, not once per year.
+@solar_position_warning_scope()
 def _build_pv_years(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,

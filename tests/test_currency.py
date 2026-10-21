@@ -16,6 +16,7 @@ from breos.app_config import resolve_app_config
 from breos.economics import default_amount_cost_keys, find_payback_year_interpolated, write_cost_projection
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
+from tests.conftest import declare_instant_at_labels
 from tools.generate_app_golden import SCENARIOS, _fake_fetch
 from tools.parity.app_parity import flatten
 
@@ -393,7 +394,7 @@ def test_monte_carlo_money_scales_and_records_the_currency(tmp_path, write_multi
 
 def _optimizer_case(monkeypatch):
     index = pd.date_range("2026-01-05", periods=48, freq="h", tz="Europe/Lisbon")
-    weather = pd.DataFrame({"temp_air": 20.0}, index=index)
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": 20.0}, index=index))
     load = pd.DataFrame({"Load": 1000.0}, index=index)
     pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
     monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())

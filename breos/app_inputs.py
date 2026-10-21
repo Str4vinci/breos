@@ -17,7 +17,7 @@ from pvlib.location import Location
 
 from breos.app_config import ResolvedAppConfig, SimulationPeriod, resolve_app_config
 from breos.pv.horizon import apply_terrain_horizon_profile
-from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs
+from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs, solar_position_warning_scope
 from breos.solar import (
     PVProductionBreakdown,
     calculate_multi_array_production_breakdown,
@@ -507,6 +507,9 @@ def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies, 
     )
 
 
+# Terrain shading and every PV array compute the sun position: one
+# solar_position = "auto" fallback warning for them all.
+@solar_position_warning_scope()
 def prepare_simulation_inputs(
     cfg: dict[str, Any], resolved: ResolvedAppConfig, deps: AppRuntimeDependencies
 ) -> PreparedSimulationInputs:

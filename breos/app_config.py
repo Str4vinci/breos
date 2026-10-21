@@ -428,13 +428,16 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--solar-position",),
         cli_choices=tuple(SOLAR_POSITION_METHODS),
         cli_help=(
-            "Where within each timestep the sun position is evaluated. 'mid-interval' matches "
-            "PVWatts/SAM for interval-averaged weather (default: interval-start)."
+            "Where within each timestep the sun position is evaluated (default: auto, which reads the "
+            "weather metadata and falls back to interval-start with a warning when it has no time basis)."
         ),
         doc=(
-            'Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. '
-            '`"weather"` reads the representative-time offset from content-bound weather metadata, including provider '
-            "offsets for instantaneous irradiance and left- or right-labelled interval means"
+            'Where within each timestep the sun position is evaluated. `"weather"` reads the representative-time '
+            "offset from content-bound weather metadata, including provider offsets for instantaneous irradiance "
+            "and left- or right-labelled interval means, and raises when the metadata has no `radiation_time_basis`. "
+            '`"auto"` is `"weather"` when the metadata states a `radiation_time_basis` and `"interval-start"`, '
+            'with a warning, when it does not. `"interval-start"` takes the sun at the step label (the default '
+            'before 0.8.0) and `"mid-interval"` half a timestep later'
         ),
         summary="pv.solar_position",
     ),

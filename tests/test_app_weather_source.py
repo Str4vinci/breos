@@ -7,7 +7,15 @@ import pytest
 from breos import cli
 from breos.app import App
 
-BASE = {"location": "porto", "n_modules": 6, "annual_consumption_kwh": 3000, "projection_years": 1}
+# The cached weather CSVs these tests write carry no metadata sidecar, so the
+# sun position is pinned at the step labels rather than left to "auto".
+BASE = {
+    "location": "porto",
+    "n_modules": 6,
+    "annual_consumption_kwh": 3000,
+    "projection_years": 1,
+    "solar_position": "interval-start",
+}
 SARAH3_FILE = "porto_tmy_2005_2023_pvgis-sarah3.csv"
 NSRDB_FILE = "porto_tmy_2014_nsrdb.csv"
 

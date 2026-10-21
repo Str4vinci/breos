@@ -101,6 +101,7 @@ def test_apply_horizon_zeros_beam_and_removes_direct_horizontal_from_ghi():
         location,
         [[0, 10], [180, 0]],
         freq="h",
+        solar_position="interval-start",
     )
 
     assert shaded["dni"].tolist() == [0.0, 500.0, 0.0]
@@ -187,6 +188,7 @@ def test_active_profile_requests_unshaded_pvgis_weather(monkeypatch, tmp_path):
         deps,
         weather_dir=tmp_path,
         horizon_profile=[[0, 10], [180, 0]],
+        solar_position="interval-start",
     )
 
     assert captured["use_horizon"] is False
@@ -273,7 +275,9 @@ def test_apply_horizon_finds_irradiance_under_every_recognised_name(names):
     weather.columns = list(names)
     weather.attrs["breos_weather_metadata"] = {"horizon": {"status": "not_applied"}}
 
-    shaded = apply_terrain_horizon_profile(weather, location, [[0, 30], [90, 30], [180, 30], [270, 30]], freq="h")
+    shaded = apply_terrain_horizon_profile(
+        weather, location, [[0, 30], [90, 30], [180, 30], [270, 30]], freq="h", solar_position="interval-start"
+    )
 
     assert list(shaded.columns) == list(names)
     assert shaded.attrs["breos_weather_metadata"]["horizon"]["profile"]["shaded_timesteps"] == 9
@@ -312,8 +316,10 @@ def test_apply_horizon_accepts_any_numeric_irradiance_dtype(dtype, shaded_ghi_dt
     weather.attrs = reference.attrs
     profile = [[0, 30], [90, 30], [180, 30], [270, 30]]
 
-    shaded = apply_terrain_horizon_profile(weather, location, profile, freq="h")
-    expected = apply_terrain_horizon_profile(weather.astype("float64"), location, profile, freq="h")
+    shaded = apply_terrain_horizon_profile(weather, location, profile, freq="h", solar_position="interval-start")
+    expected = apply_terrain_horizon_profile(
+        weather.astype("float64"), location, profile, freq="h", solar_position="interval-start"
+    )
 
     assert shaded.attrs["breos_weather_metadata"]["horizon"]["profile"]["shaded_timesteps"] == 9
     assert shaded["dhi"].dtype == weather["dhi"].dtype
@@ -333,8 +339,10 @@ def test_apply_horizon_treats_missing_nullable_irradiance_as_zero():
     weather.iloc[12, :] = pd.NA
     profile = [[0, 30], [90, 30], [180, 30], [270, 30]]
 
-    shaded = apply_terrain_horizon_profile(weather, location, profile, freq="h")
-    expected = apply_terrain_horizon_profile(weather.astype("float64"), location, profile, freq="h")
+    shaded = apply_terrain_horizon_profile(weather, location, profile, freq="h", solar_position="interval-start")
+    expected = apply_terrain_horizon_profile(
+        weather.astype("float64"), location, profile, freq="h", solar_position="interval-start"
+    )
 
     assert shaded["ghi"].dtype == "Float64"
     assert shaded.iloc[12].isna().all()

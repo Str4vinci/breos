@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tests.conftest import _stub_projection_balance
+from tests.conftest import _stub_projection_balance, declare_instant_at_labels
 
 COSTS_CONFIG = {
     "electricity_cost": 0.25,
@@ -60,7 +60,7 @@ def _run_evaluate(monkeypatch, config, houseload, tmy_index):
     pytest.importorskip("pymoo")
     from breos.optimization import SolarDesignProblem
 
-    tmy_data = pd.DataFrame({"temp_air": 15.0, "ghi": 0.0}, index=tmy_index)
+    tmy_data = declare_instant_at_labels(pd.DataFrame({"temp_air": 15.0, "ghi": 0.0}, index=tmy_index))
     dc = pd.Series(0.0, index=tmy_index)
     captured: dict = {}
 

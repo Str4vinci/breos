@@ -221,6 +221,41 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- **`solar_position` defaults to the new `"auto"`**
+  ([#418](https://github.com/Str4vinci/breos/issues/418)), in App, Monte
+  Carlo, the optimizer and the solar-chain functions; the default was
+  `"interval-start"`. When the weather metadata states a
+  `radiation_time_basis`, `"auto"` is `"weather"`, bit for bit: the sun is
+  evaluated a PVGIS TMY's provider offset after each label (about 10 minutes
+  for PVGIS-SARAH3, 30 minutes for PVGIS-ERA5), or at the middle of each
+  interval for interval means such as Open-Meteo and EPW. The PVGIS fetch,
+  the Open-Meteo and EPW readers and every weather CSV with a
+  `.metadata.json` sidecar state it. When the metadata does not, as for most
+  user CSVs and injected weather frames, `"auto"` takes the sun at the step
+  labels, as `"interval-start"` did, and warns once per run (a
+  `UserWarning`; a Monte Carlo study or an optimizer search warns once, not
+  once per weather year or candidate). Malformed metadata raises, as under
+  `"weather"`. Explicit `"weather"` still raises without the metadata, and
+  explicit `"interval-start"` and `"mid-interval"` are unchanged. **Results
+  change for weather that states its time basis.** To get the old results,
+  set `solar_position = "interval-start"` (CLI: `--solar-position
+  interval-start`). For 10 modules, 4000 kWh/yr and no battery at the seven
+  bundled locations, annual DC energy changes by −0.16 to +0.21% on the
+  PVGIS-SARAH3 TMYs (Porto, hourly: 8671.67 to 8662.34 kWh) and by +1.8% on
+  Melbourne's PVGIS-ERA5 TMY. On Open-Meteo 2023 interval means it changes by
+  −0.01 to +1.15% hourly, where the sun moves 30 minutes, and by −0.07 to
+  +0.20% at 15 minutes. AC energy changes within
+  0.05 percentage points of DC. The daily production centroid moves 3 to 5
+  minutes earlier on the SARAH3 TMYs, about 14 minutes earlier on the ERA5
+  TMY, 10 to 14 minutes earlier on hourly Open-Meteo and about 3 minutes
+  earlier on 15-minute Open-Meteo. With a 5 kWh battery over 20 years
+  (`residential_pt`), NPV changes by −21 to +10 € on the SARAH3 TMYs, +15 to
+  +45 € on the ERA5 TMY, −54 to +52 € on hourly Open-Meteo and −12 to +2 € at
+  15 minutes. `provenance.pv_model.solar_position` records the `requested`
+  method, the method it `resolved` to and the `offset_minutes`; Monte Carlo
+  adds `solar_position_requested` next to `solar_position_method`, now the
+  resolved method, in `runtime_weather`, and optimizer provenance gains a
+  `solar_position` record. The result format version is unchanged.
 - CI runs less on PRs that cannot need it. Draft PRs run nothing until they
   are marked ready for review. A PR that changes only documentation runs the
   test suite, checks and docs build on Python 3.12 alone, and skips the other

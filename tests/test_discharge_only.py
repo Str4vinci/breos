@@ -28,6 +28,7 @@ from breos.smart_charging import (
     resolve_instructions,
     smart_charging_provenance,
 )
+from tests.conftest import declare_instant_at_labels
 
 LISBON = "Europe/Lisbon"
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 2}
@@ -358,7 +359,7 @@ TARIFF_CASE_INDEX = pd.date_range("2026-01-05", periods=48, freq="h", tz=LISBON)
 
 @pytest.fixture
 def tariff_case(monkeypatch):
-    weather = pd.DataFrame({"temp_air": 20.0}, index=TARIFF_CASE_INDEX)
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": 20.0}, index=TARIFF_CASE_INDEX))
     load = pd.DataFrame({"Load": 1000.0}, index=TARIFF_CASE_INDEX)
     pv = pd.Series(
         np.where((TARIFF_CASE_INDEX.hour >= 10) & (TARIFF_CASE_INDEX.hour < 16), 1800.0, 0.0), index=TARIFF_CASE_INDEX

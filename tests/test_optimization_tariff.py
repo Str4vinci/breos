@@ -11,6 +11,7 @@ from breos import optimization
 from breos.execution import limit_worker_threads
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.utils import package_version
+from tests.conftest import declare_instant_at_labels
 
 TARIFF = {
     "schedule": "pt_mainland_2026_daily_bi",
@@ -56,7 +57,7 @@ CUSTOM_TARIFF = {
 @pytest.fixture
 def tariff_case(monkeypatch):
     index = pd.date_range("2026-01-05", periods=48, freq="h", tz="Europe/Lisbon")
-    weather = pd.DataFrame({"temp_air": 20.0}, index=index)
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": 20.0}, index=index))
     load = pd.DataFrame({"Load": 1000.0}, index=index)
     pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
     monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())

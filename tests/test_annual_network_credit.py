@@ -24,6 +24,7 @@ from breos.montecarlo import MonteCarloSettings, _pv_cache_key, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
 from breos.projection import ProjectionYear, project_years
 from breos.tariffs import FLAT_SCHEDULE, AnnualNetworkCredit, TariffPrices, resolve_tariff
+from tests.conftest import declare_instant_at_labels
 from tools.generate_app_golden import EXCLUDED_PREFIXES, SCENARIOS, _fake_fetch, flatten
 
 BERLIN = "Europe/Berlin"
@@ -441,7 +442,7 @@ def test_montecarlo_caps_each_trajectory_at_its_own_import(tmp_path, write_multi
 @pytest.fixture
 def optimizer_case(monkeypatch):
     index = pd.date_range("2026-01-05", periods=48, freq="h", tz=LISBON)
-    weather = pd.DataFrame({"temp_air": 20.0}, index=index)
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": 20.0}, index=index))
     load = pd.DataFrame({"Load": 1000.0}, index=index)
     pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
     monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())

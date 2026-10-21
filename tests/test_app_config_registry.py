@@ -28,7 +28,7 @@ EXPECTED_DEFAULTS = {
     "albedo": None,
     "surface_type": None,
     "model_perez": "allsitescomposite1990",
-    "solar_position": "interval-start",
+    "solar_position": "auto",
     "irradiance_resampling": "auto",
     "iam_model": "ashrae",
     "diffuse_iam": "none",

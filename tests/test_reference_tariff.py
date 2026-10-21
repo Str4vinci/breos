@@ -20,6 +20,7 @@ from breos.app_config import resolve_app_config, resolve_reference_tariff_spec
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
 from breos.runners.app import run_app_simulation
+from tests.conftest import declare_instant_at_labels
 from tools.generate_app_golden import EXCLUDED_PREFIXES, SCENARIOS, _fake_fetch, flatten
 
 BASE = {**SCENARIOS["native_h_replacement"], "execution_backend": "python"}
@@ -506,7 +507,7 @@ def test_montecarlo_prices_each_trajectory_load_at_the_reference(tmp_path, write
 @pytest.fixture
 def optimizer_case(monkeypatch):
     index = pd.date_range("2026-01-05", periods=48, freq="h", tz=LISBON)
-    weather = pd.DataFrame({"temp_air": 20.0}, index=index)
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": 20.0}, index=index))
     load = pd.DataFrame({"Load": 1000.0}, index=index)
     pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
     monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())

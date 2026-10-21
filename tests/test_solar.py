@@ -26,6 +26,7 @@ from breos.solar import (
     default_azimuth,
     estimate_optimal_tilt,
 )
+from tests.conftest import declare_instant_at_labels
 
 
 def _spy_on_faiman(monkeypatch):
@@ -553,9 +554,8 @@ class TestPVProduction:
     def test_zero_ghi_zero_production(self, porto_location, pv_params):
         # Night-time weather: all irradiance = 0
         idx = pd.date_range("2023-01-01", periods=24, freq="h", tz="UTC")
-        weather = pd.DataFrame(
-            {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 10.0, "wind_speed": 3.0},
-            index=idx,
+        weather = declare_instant_at_labels(
+            pd.DataFrame({"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 10.0, "wind_speed": 3.0}, index=idx)
         )
         dc = calculate_pv_production_dc(
             weather_data=weather,
@@ -661,9 +661,8 @@ class TestTracking:
 
     def test_zero_ghi_zero_production_tracking(self, porto_location, pv_params):
         idx = pd.date_range("2023-01-01", periods=24, freq="h", tz="UTC")
-        weather = pd.DataFrame(
-            {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 10.0, "wind_speed": 3.0},
-            index=idx,
+        weather = declare_instant_at_labels(
+            pd.DataFrame({"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 10.0, "wind_speed": 3.0}, index=idx)
         )
         for mode in ("single_axis", "dual_axis"):
             dc = calculate_pv_production_dc_tracking(
