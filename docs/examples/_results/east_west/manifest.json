@@ -2,9 +2,9 @@
  "case": "east_west",
  "title": "East-west and south-facing arrays",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-106-g489c4e5",
- "generated_utc": "2026-10-18T15:12:59+00:00",
- "runtime_s": 5.9,
+ "git_describe": "v0.7.0-108-g02711cf-dirty",
+ "generated_utc": "2026-10-21T22:59:46+00:00",
+ "runtime_s": 6.0,
  "cheap": true,
  "configs": {
   "configs/examples/east-west-roof.toml": "3c7ac2449fc6717d2828c23e108fd9ff649eb252082a07f6fc8f8f6965a577a8"
@@ -50,8 +50,8 @@
   "winter": 3
  },
  "files": {
-  "designs.csv": "ba7f3fd1bc86f588c58320bf2962580af74f95ce6b6762809591917da819a07d",
-  "week_summer.csv": "4d728762eda4ecc96d962d7582fee24577bc59065e8af6a2225c4e344bc7e8fc",
-  "week_winter.csv": "c3b5998905057709249a1a6f8bc560c3f7eef085975ef7ca712fc19cfe24fc00"
+  "designs.csv": "cff82046696d4cf00b10c893c893b426fa9f06ef217cdbd6d4f1946070c6f868",
+  "week_summer.csv": "c90fb74d90baca6b0b098e87012956baaed96387b9e9146046f350e38c0cd830",
+  "week_winter.csv": "88d6d8cae6c594c2a457edc5c50df537848519510c8df778cc098488c67522df"
  }
 }
