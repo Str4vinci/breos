@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 import pvlib
@@ -223,7 +223,7 @@ class ShadedStringCurve:
         limited: np.ndarray,
         per_substring: float,
         cells: float,
-    ) -> list[tuple[int, list[tuple[np.ndarray, ...]], np.ndarray]]:
+    ) -> list[_Substring]:
         """Each distinct substring's count and its parts' single-diode parameters on the mismatched steps."""
         rows = self.mismatched
         groups: dict[tuple[Any, ...], list[tuple[int, int]]] = {}
@@ -254,31 +254,38 @@ class ShadedStringCurve:
         brightest = np.max(np.where(limited[:, :, rows], -np.inf, e_mean[:, :, rows]), axis=(0, 1))
         brightest = np.where(np.isfinite(brightest), brightest, e_mean[:, :, rows].max(axis=(0, 1)))
         self._reference = [element(brightest, per_substring / cells)]
-        substrings: list[tuple[int, Any, np.ndarray]] = []
+        substrings: list[_Substring] = []
+        # Each part's photocurrent: the curve's knees lie just below them.
+        photocurrents = [self._reference[0][0]]
+        # Each part's short-circuit current, where its substring drops to the bypass diode.
+        short_circuits = [self._reference[0][5]]
         for members in groups.values():
             m, k = members[0]
-            if self._halved[m, k, rows].any():
-                section = self._half_section(m, k, rows, per_substring, cells)
-                substrings.append((len(members), section, np.ones(rows.size, dtype=bool)))
-                continue
-            own = limited[m, k, rows] | (e_mean[m, k, rows] != brightest)
+            # Only the steps whose parallel strings are shaded differently need
+            # a half section; on the others the halves are one substring.
+            split = self._halved[m, k, rows]
+            own = (limited[m, k, rows] | (e_mean[m, k, rows] != brightest)) & ~split
             if limited[m, k, rows].any():
                 # Unlimited steps split the substring the same way at one irradiance.
                 parts = [element(e[m, k, rows], c[m, k, rows] / cells) for e, c in zip(e_parts, counts, strict=True)]
             else:
                 parts = [element(e_mean[m, k, rows], per_substring / cells)]
-            substrings.append((len(members), parts, own))
-        # Each part's photocurrent: the curve's knees lie just below them.
-        photocurrents = [self._reference[0][0]]
-        # Each part's short-circuit current, where its substring drops to the bypass diode.
-        short_circuits = [self._reference[0][5]]
-        for _, parts, _ in substrings:
-            if isinstance(parts, _HalfSection):
-                photocurrents.extend(parts.knees)
-                short_circuits.extend(parts.caps)
-            else:
-                photocurrents.extend(p[0] for p in parts)
-                short_circuits.extend(p[5] for p in parts)
+            photocurrents.extend(p[0] for p in parts)
+            short_circuits.extend(p[5] for p in parts)
+            section = None
+            if split.any():
+                section = self._half_section(m, k, rows[split], per_substring, cells)
+                # The section's knees and caps on its own steps; elsewhere the
+                # first part's repeat a point the grid already holds.
+                for values, fill, into in (
+                    (section.knees, parts[0][0], photocurrents),
+                    (section.caps, parts[0][5], short_circuits),
+                ):
+                    for value in values:
+                        spread = np.array(fill, dtype=float)
+                        spread[split] = value
+                        into.append(spread)
+            substrings.append(_Substring(len(members), parts, own, section, split, np.cumsum(split) - 1))
         self._photocurrents = np.asarray(photocurrents)
         self._short_circuits = np.asarray(short_circuits)
         return substrings
@@ -335,8 +342,6 @@ class ShadedStringCurve:
 
     def _substring_voltage(self, current: np.ndarray, parts: Any, rows: Any) -> np.ndarray:
         """One substring's voltage at ``current`` on the mismatched steps ``rows``, held by its bypass diode."""
-        if isinstance(parts, _HalfSection):
-            return parts.voltage(current, rows)
         shape = (-1,) + (1,) * (current.ndim - 1)
         voltage = np.zeros(current.shape)
         for params in parts:
@@ -353,12 +358,16 @@ class ShadedStringCurve:
             select = np.arange(self.mismatched.size)
         reference = self._substring_voltage(current, self._reference, select)
         total = np.zeros(current.shape)
-        for count, parts, own in self._substrings:
+        for substring in self._substrings:
             voltage = reference.copy()
-            mine = np.flatnonzero(own[select])
+            mine = np.flatnonzero(substring.own[select])
             if mine.size:
-                voltage[mine] = self._substring_voltage(current[mine], parts, select[mine])
-            total += count * voltage
+                voltage[mine] = self._substring_voltage(current[mine], substring.parts, select[mine])
+            if substring.section is not None:
+                cut = np.flatnonzero(substring.split[select])
+                if cut.size:
+                    voltage[cut] = substring.section.voltage(current[cut], substring.position[select[cut]])
+            total += substring.members * voltage
         return total
 
     def _current_grid(self) -> np.ndarray:
@@ -699,6 +708,23 @@ def _rowwise_interp(x: np.ndarray, y: np.ndarray, query: np.ndarray) -> np.ndarr
     with np.errstate(divide="ignore", invalid="ignore"):
         weight = np.where(x1 > x0, (clipped - x0) / (x1 - x0), 0.0)
     return y0 + weight * (y1 - y0)
+
+
+class _Substring(NamedTuple):
+    """``members`` identical substrings of a string, on its mismatched steps.
+
+    ``parts`` are the substring's parts in series; ``own`` marks the steps
+    they are solved on, the others sharing the brightest substring's curve.
+    On the ``split`` steps its parallel strings are shaded differently and
+    ``section`` holds it instead, at row ``position`` of its table.
+    """
+
+    members: int
+    parts: list[tuple[np.ndarray, ...]]
+    own: np.ndarray
+    section: _HalfSection | None
+    split: np.ndarray
+    position: np.ndarray
 
 
 class _HalfSection:

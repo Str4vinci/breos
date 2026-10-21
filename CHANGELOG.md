@@ -380,7 +380,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   cells' breakdown voltage where that keeps its substring above the bypass
   diode's clamp (ADR 0009 M3). Each chain's shade is concentrated: as many
   cells as its mean allows at its most-shaded cell's fraction, one at the
-  remainder and the rest clear (ADR 0009 M6). Against a cell-level model of
+  remainder and the rest clear (ADR 0009 M6). Only the steps on which a
+  substring's halves differ are solved as two chains; on the others it is
+  one substring, on its exact curve rather than the two chains' tabled one
+  (string energy up to 0.01 % higher than before this was split). Against a cell-level model of
   a 144 half-cell module, portrait and landscape row shade came
   within 0.05 % of module power, with or without breakdown, and soft shade
   within 0.15 % without it; with breakdown, soft shade around a dark cell
