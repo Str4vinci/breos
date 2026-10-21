@@ -259,12 +259,16 @@ class ShadedStringCurve:
         photocurrents = [self._reference[0][0]]
         # Each part's short-circuit current, where its substring drops to the bypass diode.
         short_circuits = [self._reference[0][5]]
-        for members in groups.values():
+        weights, merged = self._merge_alike(
+            list(groups.values()), e_mean, e_parts, counts, limited, brightest, per_substring
+        )
+        for members, weight, absorbed in zip(groups.values(), weights, merged, strict=True):
             m, k = members[0]
             # Only the steps whose parallel strings are shaded differently need
             # a half section; on the others the halves are one substring.
-            split = self._halved[m, k, rows]
-            own = (limited[m, k, rows] | (e_mean[m, k, rows] != brightest)) & ~split
+            halved = self._halved[m, k, rows]
+            split = halved & ~absorbed
+            own = (limited[m, k, rows] | (e_mean[m, k, rows] != brightest)) & ~halved & ~absorbed
             if limited[m, k, rows].any():
                 # Unlimited steps split the substring the same way at one irradiance.
                 parts = [element(e[m, k, rows], c[m, k, rows] / cells) for e, c in zip(e_parts, counts, strict=True)]
@@ -273,8 +277,10 @@ class ShadedStringCurve:
             photocurrents.extend(p[0] for p in parts)
             short_circuits.extend(p[5] for p in parts)
             section = None
-            if split.any():
-                section = self._half_section(m, k, rows[split], per_substring, cells)
+            if halved.any():
+                # Built on every step its halves differ, merged or not: its
+                # table and the grid's points then do not depend on merging.
+                section = self._half_section(m, k, rows[halved], per_substring, cells)
                 # The section's knees and caps on its own steps; elsewhere the
                 # first part's repeat a point the grid already holds.
                 for values, fill, into in (
@@ -283,12 +289,61 @@ class ShadedStringCurve:
                 ):
                     for value in values:
                         spread = np.array(fill, dtype=float)
-                        spread[split] = value
+                        spread[halved] = value
                         into.append(spread)
-            substrings.append(_Substring(len(members), parts, own, section, split, np.cumsum(split) - 1))
+            substrings.append(_Substring(weight, parts, own, section, split, np.cumsum(halved) - 1))
         self._photocurrents = np.asarray(photocurrents)
         self._short_circuits = np.asarray(short_circuits)
         return substrings
+
+    def _merge_alike(
+        self,
+        groups: list[list[tuple[int, int]]],
+        e_mean: np.ndarray,
+        e_parts: list[np.ndarray],
+        counts: list[np.ndarray],
+        limited: np.ndarray,
+        brightest: np.ndarray,
+        per_substring: float,
+    ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+        """Each group's weight on the mismatched steps, and the steps another group alike solves for it.
+
+        On a step where two groups are built from the same inputs their
+        curves are one: the first solves it at both groups' weight and the
+        other's weight there is 0. Steps on the brightest curve are left as
+        they are; they cost nothing to share. Whether a group's parts and
+        each of its half section's chains are concentrated is decided over
+        all its steps, so groups merge only where that choice agrees too.
+        """
+        rows = self.mismatched
+
+        def inputs(m: int, k: int) -> np.ndarray:
+            arrays = [e_mean[m, k, rows], limited[m, k, rows], self._halved[m, k, rows]]
+            arrays += [e[m, k, rows] for e in e_parts] + [c[m, k, rows] for c in counts]
+            if self._halves is not None:
+                arrays += [table[m, k, h, rows] for table in self._halves for h in range(self.strings)]
+            arrays.append(np.broadcast_to(self._sky_view[m], rows.shape))
+            arrays.append(np.broadcast_to(limited[m, k, rows].any(), rows.shape))
+            if self._halves is not None:
+                halved = self._halved[m, k, rows]
+                _, half_mean, half_limiting = self._halves
+                for h in range(self.strings):
+                    lim = (half_limiting[m, k, h, rows] > half_mean[m, k, h, rows]) & (per_substring > 1.0)
+                    arrays.append(np.broadcast_to((lim & halved).any(), rows.shape))
+            return np.stack([np.asarray(a, dtype=float) for a in arrays])
+
+        firsts = [members[0] for members in groups]
+        features = [inputs(m, k) for m, k in firsts]
+        solved = [limited[m, k, rows] | (e_mean[m, k, rows] != brightest) | self._halved[m, k, rows] for m, k in firsts]
+        weights = [np.full(rows.size, float(len(members))) for members in groups]
+        merged = [np.zeros(rows.size, dtype=bool) for _ in groups]
+        for h in range(len(groups)):
+            for g in range(h):
+                alike = solved[h] & ~merged[h] & ~merged[g] & np.all(features[g] == features[h], axis=0)
+                weights[g][alike] += weights[h][alike]
+                merged[h] |= alike
+            weights[h][merged[h]] = 0.0
+        return weights, merged
 
     def _half_section(self, m: int, k: int, rows: np.ndarray, per_substring: float, cells: float) -> _HalfSection:
         """Substring ``k`` of module ``m``, whose parallel strings are shaded differently, on the steps ``rows``.
@@ -367,7 +422,7 @@ class ShadedStringCurve:
                 cut = np.flatnonzero(substring.split[select])
                 if cut.size:
                     voltage[cut] = substring.section.voltage(current[cut], substring.position[select[cut]])
-            total += substring.members * voltage
+            total += substring.weight[select].reshape((-1,) + (1,) * (current.ndim - 1)) * voltage
         return total
 
     def _current_grid(self) -> np.ndarray:
@@ -711,15 +766,17 @@ def _rowwise_interp(x: np.ndarray, y: np.ndarray, query: np.ndarray) -> np.ndarr
 
 
 class _Substring(NamedTuple):
-    """``members`` identical substrings of a string, on its mismatched steps.
+    """Identical substrings of a string, on its mismatched steps.
 
-    ``parts`` are the substring's parts in series; ``own`` marks the steps
+    ``weight`` is how many substrings each step's curve stands for: their
+    count, plus any substrings lit alike on that step, or 0 where another
+    group solves it. ``parts`` are the substring's parts in series; ``own`` marks the steps
     they are solved on, the others sharing the brightest substring's curve.
     On the ``split`` steps its parallel strings are shaded differently and
     ``section`` holds it instead, at row ``position`` of its table.
     """
 
-    members: int
+    weight: np.ndarray
     parts: list[tuple[np.ndarray, ...]]
     own: np.ndarray
     section: _HalfSection | None

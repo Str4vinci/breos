@@ -284,3 +284,58 @@ def test_a_chains_shade_is_concentrated_without_an_empty_part():
     assert [c[1] for c in counts] == [23.0, 0.5, 0.5] and [f[1] for f in fractions] == [1.0, 0.5, 0.5]
     # Unlimited, every cell at the mean.
     assert all(f[2] == 0.2 and f[3] == 0.0 for f in fractions)
+
+
+def test_merging_alike_substrings_leaves_the_half_sections_and_the_grid_as_they_were(monkeypatch):
+    # Two modules with equal tables whose cells break down: merging solves one
+    # of them per step, and must not change a section's table, the current
+    # grid, or the current read back from it.
+    two = np.ones(2)
+    module = replace(MODULE, breakdown_voltage_v=-15.0)
+    steps = replace(PARTS, beam=BEAM * two, circumsolar=0.0 * two, sky=100.0 * two, other=20.0 * two,
+                    temp_cell=40.0 * two, sun_azimuth=np.array([90.0, 180.0]), sun_elevation=20.0 * two,
+                    pv_params=module)  # fmt: skip
+    halves = {"halves": [{"beam_shaded_fraction": [[0.1, 0.1]], "limiting_shaded_fraction": [[0.8, 0.8]]}, LIT_2]}
+    modules = [{"substrings": [halves, LIT_2, LIT_2]} for _ in range(2)] + [LIT_2]
+    shading = ModuleShading.from_mapping({"azimuth_deg": [90, 180], "elevation_deg": [0], "modules": modules})
+
+    merged = ShadedStringCurve(shading.for_module(3, 2), steps, two, 3)
+    assert any((s.weight == 0).any() for s in merged._substrings)
+
+    def unmerged(self, groups, *args):
+        rows = self.mismatched.size
+        return [np.full(rows, float(len(g))) for g in groups], [np.zeros(rows, dtype=bool) for _ in groups]
+
+    monkeypatch.setattr(ShadedStringCurve, "_merge_alike", unmerged)
+    each = ShadedStringCurve(shading.for_module(3, 2), steps, two, 3)
+    np.testing.assert_array_equal(merged._table_i, each._table_i)
+    query, everything = np.full((2, 1), 125.0), np.ones(2, dtype=bool)
+    np.testing.assert_allclose(merged.current(query, everything), each.current(query, everything), rtol=1e-12)
+    np.testing.assert_allclose(merged.mpp_bare, each.mpp_bare, rtol=1e-12)
+
+
+def test_substrings_whose_chains_are_concentrated_differently_are_not_merged(monkeypatch):
+    # Equal on the second step, but the first module's shaded chain is
+    # concentrated (its worst cell is darker on the first step) and the
+    # second's is not: their sections differ, so they stay apart there.
+    two = np.ones(2)
+    steps = replace(PARTS, beam=BEAM * two, circumsolar=0.0 * two, sky=100.0 * two, other=20.0 * two,
+                    temp_cell=40.0 * two, sun_azimuth=np.array([90.0, 180.0]), sun_elevation=20.0 * two)  # fmt: skip
+
+    def module(first_mean: float, first_limiting: float) -> dict:
+        shaded = {"beam_shaded_fraction": [[first_mean, 0.1]], "limiting_shaded_fraction": [[first_limiting, 0.1]]}
+        return {"substrings": [{"halves": [shaded, LIT_2]}, LIT_2, LIT_2]}
+
+    modules = [module(0.1, 0.8), module(0.2, 0.2), LIT_2]
+    shading = ModuleShading.from_mapping({"azimuth_deg": [90, 180], "elevation_deg": [0], "modules": modules})
+    merged = ShadedStringCurve(shading.for_module(3, 2), steps, two, 3)
+    shaded = [s for s in merged._substrings if s.section is not None]
+    assert len(shaded) == 2 and all(s.weight[1] == 1 for s in shaded)
+
+    def unmerged(self, groups, *args):
+        rows = self.mismatched.size
+        return [np.full(rows, float(len(g))) for g in groups], [np.zeros(rows, dtype=bool) for _ in groups]
+
+    monkeypatch.setattr(ShadedStringCurve, "_merge_alike", unmerged)
+    each = ShadedStringCurve(shading.for_module(3, 2), steps, two, 3)
+    np.testing.assert_allclose(merged.mpp_bare, each.mpp_bare, rtol=1e-12)

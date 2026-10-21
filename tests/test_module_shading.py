@@ -720,3 +720,25 @@ def test_a_numpy_diode_count_is_stored_as_an_int():
     shading = ModuleShading.from_mapping({"azimuth_deg": [0], "elevation_deg": [0], "modules": [LIT]})
     assert type(shading.for_module(np.int64(2)).bypass_diodes) is int
     json.dumps(shading.for_module(np.int64(2)).as_dict())
+
+
+def test_substrings_lit_alike_on_a_step_are_solved_once(monkeypatch):
+    # Two modules with their own, equal tables: each step's curve is solved
+    # for one of them at twice the weight, as if they shared one table.
+    def shaded() -> dict:
+        corner = {"beam_shaded_fraction": _table(0.02), "limiting_shaded_fraction": _table(0.5)}
+        return {"substrings": [corner, {"beam_shaded_fraction": _table(0.3)}, LIT]}
+
+    modules = [shaded(), shaded(), LIT]
+    merged = _curve(modules)
+    weights = [s.weight for s in merged._substrings]
+    assert any((w == 0).all() for w in weights) and any((w == 2).all() for w in weights)
+
+    def unmerged(self, groups, *args):
+        rows = self.mismatched.size
+        return [np.full(rows, float(len(g))) for g in groups], [np.zeros(rows, dtype=bool) for _ in groups]
+
+    monkeypatch.setattr(ShadedStringCurve, "_merge_alike", unmerged)
+    each = _curve(modules)
+    np.testing.assert_allclose(merged.mpp_bare, each.mpp_bare, rtol=1e-12)
+    np.testing.assert_allclose(merged.v_oc, each.v_oc, rtol=1e-12)
