@@ -9,11 +9,12 @@ from breos.optimization import OptimizationResult
 from breos.optimization_config import resolve_optimization_config
 
 
-def test_format_years_months_warns_and_still_formats():
+@pytest.mark.parametrize(("years", "text"), [(None, "N/A"), (4.0, "4y"), (4.25, "4y 3m")])
+def test_format_years_months_warns_and_still_formats(years, text):
     from breos.utils import format_years_months
 
     with pytest.warns(DeprecationWarning, match=r"format_years_months .*0\.9\.0"):
-        assert format_years_months(4.25) == "4y 3m"
+        assert format_years_months(years) == text
 
 
 def test_calculate_pv_production_breakdown_warns_and_matches_the_per_array_breakdown(synthetic_weather, porto_location):

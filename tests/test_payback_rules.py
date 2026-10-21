@@ -14,7 +14,6 @@ pytest.importorskip("matplotlib")
 
 from breos import plotting  # noqa: E402
 from breos.economics import cost_analysis_projection, find_payback_year, find_payback_year_interpolated  # noqa: E402
-from breos.utils import format_years_months  # noqa: E402
 
 
 def _projection(savings, first_year=1, investment=None):
@@ -233,11 +232,6 @@ def test_montecarlo_payback_plots_use_the_interpolated_year(tmp_path, monkeypatc
 
     assert received["dist"] == [4.2]
     assert received["cdf"] == [4.2]
-
-
-@pytest.mark.parametrize(("years", "text"), [(None, "N/A"), (4.0, "4y"), (4.25, "4y 3m")])
-def test_format_years_months(years, text):
-    assert format_years_months(years) == text
 
 
 def test_breakeven_plot_reads_the_investment_as_the_library_does(tmp_path):
