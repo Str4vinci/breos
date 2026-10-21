@@ -34,6 +34,7 @@ from breos.execution import (
 )
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.optimization_config import (
+    DEFAULT_OBJECTIVE_BASIS,
     EARLY_STOP_DEFAULTS,
     LAYOUTS,
     adjusted_max_tilt_deg,
@@ -1087,7 +1088,7 @@ try:
             )
             # Candidates are scored over the project lifetime only; the
             # resolver refuses the removed annual basis.
-            self.objective_basis = config["optimization"]["objective_basis"]
+            self.objective_basis = DEFAULT_OBJECTIVE_BASIS
 
             self.fixed_azimuth = config["mode"]["fixed_azimuth"]
             # The layouts searched, in LAYOUTS order, and the fixed tilt of

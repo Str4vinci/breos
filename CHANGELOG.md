@@ -569,7 +569,8 @@ removed in 0.9.0.
   NaN for a multi-objective search; read the front in `details["pareto"]`.
   They are no longer constructor arguments.
 - `optimization.objective_basis`. `"projected"` is the only basis, so remove
-  the key; 0.9.0 refuses it. The example optimizer config no longer sets it.
+  the key; 0.9.0 refuses it. The example optimizer config no longer sets it,
+  and the resolved config drops it, so worker processes do not warn again.
 
 ### Removed
 

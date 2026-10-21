@@ -63,14 +63,15 @@ def test_optimization_result_nan_fields_warn(name):
         assert math.isnan(getattr(result, name))
 
 
-def test_objective_basis_warns_when_set_and_is_silent_when_omitted(recwarn):
+def test_objective_basis_warns_once_when_set_and_is_silent_when_omitted(recwarn):
     location = {"latitude": 41.15, "longitude": -8.61}
 
     with pytest.warns(DeprecationWarning, match=r"objective_basis .*0\.9\.0"):
         resolved = resolve_optimization_config({"location": location, "optimization": {"objective_basis": "projected"}})
-    assert resolved["optimization"]["objective_basis"] == "projected"
+    assert "objective_basis" not in resolved["optimization"]
 
+    # Workers resolve the resolved config again; that must not warn.
     recwarn.clear()
-    resolved = resolve_optimization_config({"location": location})
-    assert resolved["optimization"]["objective_basis"] == "projected"
+    assert resolve_optimization_config(resolved) == resolved
+    assert resolve_optimization_config({"location": location}) == resolved
     assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]

@@ -651,7 +651,9 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
     optimization = resolved.setdefault("optimization", {}) or {}
     resolved["optimization"] = optimization
-    optimization.setdefault("objective_basis", DEFAULT_OBJECTIVE_BASIS)
+    # The key is deprecated: drop it once validated, so that resolving the
+    # resolved config again (as worker processes do) does not warn again.
+    optimization.pop("objective_basis", None)
     optimization.setdefault("early_stop", None)
     for key in ("emissions", "tariff", "reference_tariff", "smart_charging"):
         resolved.setdefault(key, None)
