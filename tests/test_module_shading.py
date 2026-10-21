@@ -535,7 +535,7 @@ def test_reusing_the_brightest_substring_matches_solving_each():
     curve = ShadedStringCurve(shading, parts, np.ones(STEPS), 3)
     assert curve.mismatched.size == STEPS
     reused = curve._voltage(curve._table_i)
-    curve._substrings = [(count, p, np.ones_like(own)) for count, p, own in curve._substrings]
+    curve._substrings = [s._replace(own=~s.split) for s in curve._substrings]
     np.testing.assert_allclose(curve._voltage(curve._table_i), reused, rtol=0, atol=1e-12)
     # A row subset reads the same rows.
     select = np.array([2, 0])

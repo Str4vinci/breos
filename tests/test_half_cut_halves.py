@@ -37,6 +37,7 @@ def _half(mean: float, limiting: float | None = None) -> dict:
 
 
 LIT = {"beam_shaded_fraction": _table(0.0)}
+LIT_2 = {"beam_shaded_fraction": [[0.0, 0.0]]}
 
 
 # -- the configuration ----------------------------------------------------------------------------
@@ -207,6 +208,40 @@ def test_a_dark_section_reads_alike_on_its_own_and_beside_steps_with_differing_h
     alone_parts = replace(PARTS, sky=0.0 * ONE, other=0.0 * ONE)
     alone = ShadedStringCurve(_raw([{"substrings": [_half(1.0), LIT, LIT]}]).for_module(3, 2), alone_parts, ONE, 1)
     assert batched.v_oc[1] == pytest.approx(alone.v_oc[0], rel=1e-6)
+
+
+def test_a_half_section_is_built_only_on_the_steps_its_halves_differ():
+    # Halves shaded differently on the first step only: the second step is
+    # solved as the substring without halves, the first as a section alone.
+    two = np.ones(2)
+    parts = replace(PARTS, beam=BEAM * two, circumsolar=0.0 * two, sky=DIFFUSE * two, other=0.0 * two,
+                    temp_cell=TEMP * two, sun_azimuth=np.array([90.0, 180.0]), sun_elevation=50.0 * two)  # fmt: skip
+    grid = {"azimuth_deg": [90, 180], "elevation_deg": [0]}
+
+    def substring(first: dict, second: dict, lit: dict = LIT_2) -> dict:
+        return {"substrings": [{"halves": [first, second]}, lit, lit]}
+
+    mixed = substring(
+        {"beam_shaded_fraction": [[0.2, 0.1]], "limiting_shaded_fraction": [[0.6, 0.5]]},
+        {"beam_shaded_fraction": [[0.0, 0.1]], "limiting_shaded_fraction": [[0.0, 0.5]]},
+    )
+    curve = ShadedStringCurve(
+        ModuleShading.from_mapping({**grid, "modules": [mixed, LIT_2]}).for_module(3, 2), parts, two, 2
+    )
+    [section] = [s.section for s in curve._substrings if s.section is not None]
+    assert section._current.shape[0] == 1
+
+    plain = {"substrings": [_half(0.1, 0.5), LIT, LIT]}
+    alike = ShadedStringCurve(_raw([plain, LIT]).for_module(3, 2), replace(parts, **{
+        k: getattr(parts, k)[1:] for k in ("beam", "circumsolar", "sky", "other", "temp_cell", "sun_azimuth", "sun_elevation")
+    }), ONE, 2)  # fmt: skip
+    assert curve.mpp_bare[1] == pytest.approx(alike.mpp_bare[0], rel=1e-12)
+
+    differing = substring(_half(0.2, 0.6), _half(0.0), LIT)
+    alone = ShadedStringCurve(_raw([differing, LIT]).for_module(3, 2), replace(parts, **{
+        k: getattr(parts, k)[:1] for k in ("beam", "circumsolar", "sky", "other", "temp_cell", "sun_azimuth", "sun_elevation")
+    }), ONE, 2)  # fmt: skip
+    assert curve.mpp_bare[0] == pytest.approx(alone.mpp_bare[0], rel=1e-9)
 
 
 def test_a_cell_string_count_that_does_not_divide_the_cells_is_refused_on_edit():
