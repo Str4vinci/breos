@@ -13,6 +13,8 @@ from breos.app import App
 from breos.app_config import merge_defaults, validate_config
 from tools.generate_app_golden import _fake_fetch as golden_fetch
 
+_SIX_MODULE_BASE = {"location": "porto", "n_modules": 6, "annual_consumption_kwh": 3000}
+
 # ---------------------------------------------------------------------------
 # Config validation
 # ---------------------------------------------------------------------------
@@ -313,9 +315,7 @@ class TestAppValidation:
     def test_cost_overrides_resolve_through_app_facade(self):
         app = App(
             {
-                "location": "porto",
-                "n_modules": 10,
-                "annual_consumption_kwh": 4000,
+                **self.BASE,
                 "cost_preset": "residential_pt",
                 "costs": {
                     "electricity_cost": 0.22,
@@ -335,9 +335,7 @@ class TestAppValidation:
         # path; it must not be flagged as an unknown key.
         app = App(
             {
-                "location": "porto",
-                "n_modules": 10,
-                "annual_consumption_kwh": 4000,
+                **self.BASE,
                 "montecarlo": {"n_runs": 10, "weather_file": "weather.csv"},
             }
         )
@@ -367,9 +365,7 @@ class TestAppValidation:
         def _run(**extra):
             app = App(
                 {
-                    "location": "porto",
-                    "n_modules": 6,
-                    "annual_consumption_kwh": 3000,
+                    **_SIX_MODULE_BASE,
                     "battery_kwh": 5.0,
                     "projection_years": 1,
                     **extra,
@@ -389,9 +385,7 @@ class TestAppValidation:
         def _run(**extra):
             app = App(
                 {
-                    "location": "porto",
-                    "n_modules": 6,
-                    "annual_consumption_kwh": 3000,
+                    **_SIX_MODULE_BASE,
                     "projection_years": 2,
                     **extra,
                 }
@@ -444,9 +438,7 @@ class TestAppValidation:
     def test_undefined_lcoe_uses_json_null(self, _patch_weather):
         app = App(
             {
-                "location": "porto",
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
+                **_SIX_MODULE_BASE,
                 "projection_years": 1,
                 "pv_loss_overrides": {"shading": 100.0},
             }
@@ -459,9 +451,7 @@ class TestAppValidation:
 
     def test_horizon_profile_reduces_generation_and_is_serialized(self, _patch_weather):
         common = {
-            "location": "porto",
-            "n_modules": 6,
-            "annual_consumption_kwh": 3000,
+            **_SIX_MODULE_BASE,
             "projection_years": 1,
         }
         baseline = App(common)
@@ -565,9 +555,7 @@ class TestAppSimulateNoBattery:
         ):
             app = App(
                 {
-                    "location": "porto",
-                    "n_modules": 6,
-                    "annual_consumption_kwh": 3000,
+                    **_SIX_MODULE_BASE,
                     "cost_preset": "residential_pt",
                     "emissions_country": "PT",
                     "projection_years": 5,
@@ -621,9 +609,7 @@ class TestAppSimulateNoBattery:
 def test_blast_result_reports_model_identity_and_state_provenance(_patch_weather):
     app = App(
         {
-            "location": "porto",
-            "n_modules": 6,
-            "annual_consumption_kwh": 3000,
+            **_SIX_MODULE_BASE,
             "battery_kwh": 5.0,
             "projection_years": 1,
             "degradation_engine": "blast",
@@ -657,9 +643,7 @@ def test_native_result_reports_the_normalised_calendar_model(_patch_weather, spe
     # given, or that the aging model could not look up (surrounding spaces).
     app = App(
         {
-            "location": "porto",
-            "n_modules": 6,
-            "annual_consumption_kwh": 3000,
+            **_SIX_MODULE_BASE,
             "battery_kwh": 5.0,
             "projection_years": 1,
             "calendar_model": spelling,
@@ -734,9 +718,7 @@ def test_multi_array_run_echoes_its_arrays_and_reports_every_table(_patch_weathe
 class TestAppBifacialConfig:
     def _config(self, **overrides):
         return {
-            "location": "porto",
-            "n_modules": 6,
-            "annual_consumption_kwh": 3000,
+            **_SIX_MODULE_BASE,
             "pv_module": "Generic_600W_Bifacial",
             **overrides,
         }
@@ -835,9 +817,7 @@ class TestAppSimulateTracking:
     def test_dual_axis_runs(self, _patch_weather):
         app = App(
             {
-                "location": "porto",
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
+                **_SIX_MODULE_BASE,
                 "cost_preset": "residential_pt",
                 "projection_years": 3,
                 "tracking": "dual_axis",
@@ -850,9 +830,7 @@ class TestAppSimulateTracking:
     def test_tracking_beats_fixed_via_app(self, _patch_weather):
         """At the App level, single-axis (no backtrack, ±90°) should beat optimal fixed tilt."""
         common = {
-            "location": "porto",
-            "n_modules": 6,
-            "annual_consumption_kwh": 3000,
+            **_SIX_MODULE_BASE,
             "cost_preset": "residential_pt",
             "projection_years": 1,
         }
@@ -910,9 +888,7 @@ class TestAppSimulateWithBattery:
     def _setup(self, _patch_weather):
         self.app = App(
             {
-                "location": "porto",
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
+                **_SIX_MODULE_BASE,
                 "battery_kwh": 5.0,
                 "cost_preset": "residential_pt",
                 "emissions_country": "PT",
@@ -942,9 +918,7 @@ class TestAppSimulateWithBattery:
         # Same system without battery should have lower grid independence
         app_no_batt = App(
             {
-                "location": "porto",
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
+                **_SIX_MODULE_BASE,
                 "cost_preset": "residential_pt",
                 "projection_years": 5,
             }
@@ -978,9 +952,7 @@ def test_multiyear_battery_inventory_and_pv_origin_cross_year_boundary(_patch_we
     monkeypatch.setattr(projection_module, "simulate_energy_balance", _capture)
     app = App(
         {
-            "location": "porto",
-            "n_modules": 6,
-            "annual_consumption_kwh": 3000,
+            **_SIX_MODULE_BASE,
             "battery_kwh": 5.0,
             "emissions_country": "PT",
             "projection_years": 2,
