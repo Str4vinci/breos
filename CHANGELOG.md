@@ -668,6 +668,16 @@ removed in 0.9.0.
   `collect_yearly = "no"` turned yearly output on. App configs that carry a
   `[montecarlo]` table get the same checks, and an unknown key is reported as
   `Unknown key 'montecarlo.<key>'`.
+- The PVWatts v8 band of the PV validation suite runs again
+  ([#422](https://github.com/Str4vinci/breos/issues/422)). The API moved to
+  `developer.nlr.gov`; the references for all seven sites were refetched on
+  2026-10-22 (PVWatts 8.5.0, NSRDB at every site) and record the API version,
+  the weather source and a check that the API echoed every request input
+  back unchanged. The band now compares the performance ratio, annual AC per
+  unit of plane-of-array irradiation and DC nameplate, within ±8 %, instead
+  of annual AC within ±15 %: BREOS runs on PVGIS TMYs and PVWatts on NSRDB
+  TMYs, whose irradiance differs by −14 % to +18 % at these sites, while the
+  performance ratios agree within 4.2 %. No change to the PV model.
 - `breos.cec_fit.fit_cec_params` reproduces `pvlib.ivtools.sdm.fit_cec_sam`
   (#433). The open-circuit-voltage constraint is evaluated 5 °C above the
   reference, as in SAM's `6par_solve.h`, instead of 2 °C; temperatures are
