@@ -8,6 +8,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pvlib
+from pvlib.location import Location
+
+from breos.pv_modules import get_module
+from breos.solar import calculate_pv_production_ac
 
 VALIDATION_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = VALIDATION_DIR.parent
@@ -87,6 +92,59 @@ MODEL_CONFIGS = {
         "pvrow_pitch": 6.0,
     },
 }
+
+
+def compute_annual_poa(weather: pd.DataFrame, loc: dict, system: dict) -> float:
+    """Independent pvlib Perez front-side irradiation (kWh/m²), once per site.
+
+    Use the weather timestamps without a shift, and the same Perez POA for
+    every BREOS variant so transposition changes cannot cancel out of PR.
+    """
+    solarpos = pvlib.solarposition.get_solarposition(weather.index, loc["latitude"], loc["longitude"])
+    poa = pvlib.irradiance.get_total_irradiance(
+        surface_tilt=loc["tilt"],
+        surface_azimuth=loc["azimuth"],
+        solar_zenith=solarpos["apparent_zenith"],
+        solar_azimuth=solarpos["azimuth"],
+        ghi=weather["ghi"],
+        dni=weather["dni"],
+        dhi=weather["dhi"],
+        dni_extra=pvlib.irradiance.get_extra_radiation(weather.index),
+        airmass=pvlib.atmosphere.get_relative_airmass(solarpos["apparent_zenith"]),
+        model="perez",
+        albedo=system["albedo"],
+    )
+    return float(poa["poa_global"].fillna(0.0).sum()) / 1000.0
+
+
+def compute_model_result(
+    weather: pd.DataFrame, loc: dict, system: dict, model_kwargs: dict, annual_poa_kwh_m2: float
+) -> dict:
+    """Run the public AC path with independent pvlib Perez POA supplied per site."""
+    model_kwargs = dict(model_kwargs)
+    pv_params = get_module(model_kwargs.pop("pv_module", system["module"]))
+    n_modules = model_kwargs.pop("n_modules", system["n_modules"])
+    nameplate_w = n_modules * pv_params.Mpp
+    ac = calculate_pv_production_ac(
+        weather_data=weather,
+        location=Location(loc["latitude"], loc["longitude"], tz=loc["timezone"]),
+        tilt=loc["tilt"],
+        surface_azimuth=loc["azimuth"],
+        n_modules=n_modules,
+        pv_params=pv_params,
+        freq="h",
+        inverter_loading_ratio=system["dc_ac_ratio"],
+        inverter_efficiency=system["inverter_efficiency"],
+        albedo=system["albedo"],
+        **model_kwargs,
+    )
+    monthly = ac.groupby(ac.index.month).sum() / 1000.0
+    return {
+        "monthly_kwh": [float(monthly.get(m, 0.0)) for m in range(1, 13)],
+        "annual_kwh": float(ac.sum()) / 1000.0,
+        "annual_poa_kwh_m2": annual_poa_kwh_m2,
+        "dc_nameplate_kw": nameplate_w / 1000.0,
+    }
 
 
 def load_spec():

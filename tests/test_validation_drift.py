@@ -12,8 +12,11 @@ Two layers:
    the independent PVGIS PVcalc reference for every location. The band is
    loose because the references use different underlying weather (TMY vs the
    full multi-year record); it exists to catch gross model errors, not to
-   prove accuracy. Same idea for PVWatts v8 (±15%) where a trusted reference
-   has been fetched.
+   prove accuracy. For trusted PVWatts v8 references, compare performance
+   ratios within ±8%: AC / (front-side POA irradiation × DC nameplate).
+   BREOS AC is normalized by an independent pvlib Perez transposition of
+   its PVGIS TMY, while PVWatts uses its NSRDB POA. This takes irradiance
+   differences out of the comparison without masking BREOS transposition errors.
 """
 
 import json
@@ -21,7 +24,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from pvlib.location import Location
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALIDATION_DIR = PROJECT_ROOT / "validation"
@@ -37,7 +39,7 @@ pytestmark = pytest.mark.skipif(
 REGRESSION_RTOL = 1e-3  # 0.1% — cross-platform numerical headroom, catches real drift
 MONTHLY_ABS_FLOOR_KWH = 0.5  # winter months are small; don't turn noise into failures
 PVGIS_BAND = 0.10
-PVWATTS_BAND = 0.15
+PVWATTS_PR_BAND = 0.08
 
 
 def _load_json(path):
@@ -58,6 +60,7 @@ else:  # pragma: no cover - guarded by pytestmark
     _BASELINE, _CASES, _KEYS = None, [], []
 
 _RESULT_CACHE = {}
+_POA_CACHE = {}
 
 
 def test_every_baseline_location_has_its_weather_file():
@@ -93,36 +96,21 @@ def _compute(key, model):
     if (key, model) in _RESULT_CACHE:
         return _RESULT_CACHE[(key, model)]
 
-    from breos.pv_modules import get_module
-    from breos.solar import calculate_pv_production_ac
-    from validation.common import MODEL_CONFIGS, load_spec, load_validation_weather
+    from validation.common import (
+        MODEL_CONFIGS,
+        compute_annual_poa,
+        compute_model_result,
+        load_spec,
+        load_validation_weather,
+    )
 
     system, locations = load_spec()
     loc = locations[key]
     entry = _BASELINE["locations"][key]
     weather = load_validation_weather(VALIDATION_DIR / "data" / "weather" / entry["weather_file"])
-    model_kwargs = dict(MODEL_CONFIGS[model])
-    pv_params = get_module(model_kwargs.pop("pv_module", system["module"]))
-    n_modules = model_kwargs.pop("n_modules", system["n_modules"])
-
-    ac = calculate_pv_production_ac(
-        weather_data=weather,
-        location=Location(loc["latitude"], loc["longitude"], tz=loc["timezone"]),
-        tilt=loc["tilt"],
-        surface_azimuth=loc["azimuth"],
-        n_modules=n_modules,
-        pv_params=pv_params,
-        freq="h",
-        inverter_loading_ratio=system["dc_ac_ratio"],
-        inverter_efficiency=system["inverter_efficiency"],
-        albedo=system["albedo"],
-        **model_kwargs,
-    )
-    monthly = ac.groupby(ac.index.month).sum() / 1000.0
-    result = {
-        "monthly_kwh": [float(monthly.get(m, 0.0)) for m in range(1, 13)],
-        "annual_kwh": float(ac.sum()) / 1000.0,
-    }
+    if key not in _POA_CACHE:
+        _POA_CACHE[key] = compute_annual_poa(weather, loc, system)
+    result = compute_model_result(weather, loc, system, MODEL_CONFIGS[model], _POA_CACHE[key])
     _RESULT_CACHE[(key, model)] = result
     return result
 
@@ -166,9 +154,17 @@ def test_pvwatts_validation_band(key):
     if not pvwatts.get("annual_kwh") or not pvwatts.get("trusted"):
         pytest.skip(f"no trusted PVWatts reference fetched for {key}")
 
-    annual = _compute(key, "perez")["annual_kwh"]
-    deviation = annual / pvwatts["annual_kwh"] - 1.0
-    assert abs(deviation) <= PVWATTS_BAND, (
-        f"{key}: BREOS (perez) annual {annual:.0f} kWh deviates {deviation:+.1%} from "
-        f"PVWatts v8 {pvwatts['annual_kwh']:.0f} kWh — beyond the ±{PVWATTS_BAND:.0%} gross-error band."
+    computed = _compute(key, "perez")
+    reference_capacity = pvwatts["params"]["system_capacity"]
+    assert computed["dc_nameplate_kw"] == pytest.approx(reference_capacity), (
+        f"{key}: BREOS DC nameplate {computed['dc_nameplate_kw']} kW differs from PVWatts {reference_capacity} kW"
+    )
+    pr_breos = computed["annual_kwh"] / (computed["annual_poa_kwh_m2"] * computed["dc_nameplate_kw"])
+    pr_pvwatts = pvwatts["annual_kwh"] / (pvwatts["solrad_annual_kwh_m2_day"] * 365 * reference_capacity)
+    deviation = pr_breos / pr_pvwatts - 1.0
+    print(f"{key}: PR BREOS={pr_breos:.6f}, PR PVWatts={pr_pvwatts:.6f}, deviation={deviation:+.4%}")
+    assert abs(deviation) <= PVWATTS_PR_BAND, (
+        f"{key}: BREOS (perez) PR {pr_breos:.4f} vs PVWatts v8 PR {pr_pvwatts:.4f}, "
+        f"deviation {deviation:+.1%} — beyond the ±{PVWATTS_PR_BAND:.0%} PR band. "
+        f"Annual AC: BREOS {computed['annual_kwh']:.0f} kWh, PVWatts {pvwatts['annual_kwh']:.0f} kWh."
     )

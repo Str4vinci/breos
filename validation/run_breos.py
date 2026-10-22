@@ -4,10 +4,13 @@
 For every location in ``validation/locations.json`` with a weather file under
 ``validation/data/weather/``, computes hourly AC production with
 ``breos.solar.calculate_pv_production_ac`` for the focused model variants in
-``validation.common.MODEL_CONFIGS`` and writes monthly/annual energies to
+``validation.common.MODEL_CONFIGS`` and writes monthly/annual energies,
+annual front-side POA (kWh/m²), and DC nameplate (kW) to
 ``validation/results/breos_results.json``. The variants cover the shipped
 isotropic default, Perez, timestamp and IAM choices, roof temperature, and
 front-only/rear-gain comparisons including equal-nameplate module counts.
+POA is an independent pvlib Perez transposition of the same weather, computed
+once per location and shared across variants to normalize the PR comparison.
 
 ``--write-baseline`` additionally snapshots the results to
 ``validation/baselines/breos_baseline.json``, the file
@@ -29,16 +32,14 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from pvlib.location import Location  # noqa: E402
-
 import breos  # noqa: E402
-from breos.pv_modules import get_module  # noqa: E402
-from breos.solar import calculate_pv_production_ac  # noqa: E402
 from validation.common import (  # noqa: E402
     BASELINE_PATH,
     MODEL_CONFIGS,
     RESULTS_DIR,
     RESULTS_PATH,
+    compute_annual_poa,
+    compute_model_result,
     find_weather_file,
     load_spec,
     load_validation_weather,
@@ -47,29 +48,16 @@ from validation.common import (  # noqa: E402
 
 def run_location(key: str, loc: dict, system: dict, weather_file: Path) -> dict:
     weather = load_validation_weather(weather_file)
-    location = Location(loc["latitude"], loc["longitude"], tz=loc["timezone"])
+    annual_poa = compute_annual_poa(weather, loc, system)
     models = {}
     for name, model_kwargs in MODEL_CONFIGS.items():
-        model_kwargs = dict(model_kwargs)
-        pv_params = get_module(model_kwargs.pop("pv_module", system["module"]))
-        n_modules = model_kwargs.pop("n_modules", system["n_modules"])
-        ac = calculate_pv_production_ac(
-            weather_data=weather,
-            location=location,
-            tilt=loc["tilt"],
-            surface_azimuth=loc["azimuth"],
-            n_modules=n_modules,
-            pv_params=pv_params,
-            freq="h",
-            inverter_loading_ratio=system["dc_ac_ratio"],
-            inverter_efficiency=system["inverter_efficiency"],
-            albedo=system["albedo"],
-            **model_kwargs,
-        )
-        monthly = ac.groupby(ac.index.month).sum() / 1000.0  # Wh -> kWh at hourly steps
-        monthly_kwh = [round(float(monthly.get(m, 0.0)), 3) for m in range(1, 13)]
-        annual_kwh = round(float(ac.sum()) / 1000.0, 3)
-        models[name] = {"monthly_kwh": monthly_kwh, "annual_kwh": annual_kwh}
+        result = compute_model_result(weather, loc, system, model_kwargs, annual_poa)
+        annual_kwh = round(result["annual_kwh"], 3)
+        models[name] = {
+            **result,
+            "monthly_kwh": [round(v, 3) for v in result["monthly_kwh"]],
+            "annual_kwh": annual_kwh,
+        }
         print(f"  {name:>10}: {annual_kwh:8.1f} kWh/yr")
 
     return {"weather_file": weather_file.name, "models": models}

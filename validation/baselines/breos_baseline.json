@@ -29,7 +29,9 @@
             368.834,
             256.256
           ],
-          "annual_kwh": 6042.884
+          "annual_kwh": 6042.884,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 4.0
         },
         "perez": {
           "monthly_kwh": [
@@ -46,7 +48,9 @@
             403.288,
             281.648
           ],
-          "annual_kwh": 6331.491
+          "annual_kwh": 6331.491,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 4.0
         },
         "perez_mid": {
           "monthly_kwh": [
@@ -63,7 +67,9 @@
             403.123,
             284.279
           ],
-          "annual_kwh": 6285.792
+          "annual_kwh": 6285.792,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 4.0
         },
         "perez_diffuse": {
           "monthly_kwh": [
@@ -80,7 +86,9 @@
             398.073,
             277.422
           ],
-          "annual_kwh": 6243.449
+          "annual_kwh": 6243.449,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 4.0
         },
         "perez_physical": {
           "monthly_kwh": [
@@ -97,7 +105,9 @@
             398.515,
             277.92
           ],
-          "annual_kwh": 6232.032
+          "annual_kwh": 6232.032,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 4.0
         },
         "perez_martin_ruiz": {
           "monthly_kwh": [
@@ -114,7 +124,9 @@
             399.973,
             278.936
           ],
-          "annual_kwh": 6257.341
+          "annual_kwh": 6257.341,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 4.0
         },
         "perez_roof": {
           "monthly_kwh": [
@@ -131,7 +143,9 @@
             390.389,
             273.259
           ],
-          "annual_kwh": 6078.039
+          "annual_kwh": 6078.039,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 4.0
         },
         "perez_sapm_roof": {
           "monthly_kwh": [
@@ -148,7 +162,9 @@
             382.316,
             268.801
           ],
-          "annual_kwh": 5940.359
+          "annual_kwh": 5940.359,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 4.0
         },
         "bifacial_front": {
           "monthly_kwh": [
@@ -165,7 +181,9 @@
             606.088,
             423.224
           ],
-          "annual_kwh": 9520.789
+          "annual_kwh": 9520.789,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 6.0
         },
         "bifacial_rear": {
           "monthly_kwh": [
@@ -182,7 +200,9 @@
             631.453,
             442.113
           ],
-          "annual_kwh": 10210.535
+          "annual_kwh": 10210.535,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 6.0
         },
         "nameplate_mono_1200": {
           "monthly_kwh": [
@@ -199,7 +219,9 @@
             119.504,
             84.15
           ],
-          "annual_kwh": 1857.024
+          "annual_kwh": 1857.024,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_front_1200": {
           "monthly_kwh": [
@@ -216,7 +238,9 @@
             119.734,
             84.3
           ],
-          "annual_kwh": 1861.682
+          "annual_kwh": 1861.682,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_rear_1200": {
           "monthly_kwh": [
@@ -233,7 +257,9 @@
             124.798,
             88.086
           ],
-          "annual_kwh": 2000.517
+          "annual_kwh": 2000.517,
+          "annual_poa_kwh_m2": 2027.172,
+          "dc_nameplate_kw": 1.2
         }
       }
     },
@@ -255,7 +281,9 @@
             232.712,
             89.941
           ],
-          "annual_kwh": 4044.728
+          "annual_kwh": 4044.728,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 4.0
         },
         "perez": {
           "monthly_kwh": [
@@ -272,7 +300,9 @@
             259.91,
             105.617
           ],
-          "annual_kwh": 4294.834
+          "annual_kwh": 4294.834,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 4.0
         },
         "perez_mid": {
           "monthly_kwh": [
@@ -289,7 +319,9 @@
             259.065,
             104.523
           ],
-          "annual_kwh": 4279.612
+          "annual_kwh": 4279.612,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 4.0
         },
         "perez_diffuse": {
           "monthly_kwh": [
@@ -306,7 +338,9 @@
             256.648,
             103.438
           ],
-          "annual_kwh": 4214.818
+          "annual_kwh": 4214.818,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 4.0
         },
         "perez_physical": {
           "monthly_kwh": [
@@ -323,7 +357,9 @@
             257.331,
             103.507
           ],
-          "annual_kwh": 4205.186
+          "annual_kwh": 4205.186,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 4.0
         },
         "perez_martin_ruiz": {
           "monthly_kwh": [
@@ -340,7 +376,9 @@
             258.349,
             104.067
           ],
-          "annual_kwh": 4224.909
+          "annual_kwh": 4224.909,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 4.0
         },
         "perez_roof": {
           "monthly_kwh": [
@@ -357,7 +395,9 @@
             253.773,
             104.098
           ],
-          "annual_kwh": 4170.529
+          "annual_kwh": 4170.529,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 4.0
         },
         "perez_sapm_roof": {
           "monthly_kwh": [
@@ -374,7 +414,9 @@
             249.233,
             103.1
           ],
-          "annual_kwh": 4082.9
+          "annual_kwh": 4082.9,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 4.0
         },
         "bifacial_front": {
           "monthly_kwh": [
@@ -391,7 +433,9 @@
             390.481,
             158.713
           ],
-          "annual_kwh": 6458.375
+          "annual_kwh": 6458.375,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 6.0
         },
         "bifacial_rear": {
           "monthly_kwh": [
@@ -408,7 +452,9 @@
             402.126,
             166.788
           ],
-          "annual_kwh": 6962.234
+          "annual_kwh": 6962.234,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 6.0
         },
         "nameplate_mono_1200": {
           "monthly_kwh": [
@@ -425,7 +471,9 @@
             76.943,
             30.728
           ],
-          "annual_kwh": 1256.933
+          "annual_kwh": 1256.933,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_front_1200": {
           "monthly_kwh": [
@@ -442,7 +490,9 @@
             77.064,
             30.784
           ],
-          "annual_kwh": 1260.108
+          "annual_kwh": 1260.108,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_rear_1200": {
           "monthly_kwh": [
@@ -459,7 +509,9 @@
             79.389,
             32.398
           ],
-          "annual_kwh": 1361.564
+          "annual_kwh": 1361.564,
+          "annual_poa_kwh_m2": 1357.695,
+          "dc_nameplate_kw": 1.2
         }
       }
     },
@@ -481,7 +533,9 @@
             495.127,
             462.691
           ],
-          "annual_kwh": 6940.201
+          "annual_kwh": 6940.201,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 4.0
         },
         "perez": {
           "monthly_kwh": [
@@ -498,7 +552,9 @@
             528.651,
             499.972
           ],
-          "annual_kwh": 7243.302
+          "annual_kwh": 7243.302,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 4.0
         },
         "perez_mid": {
           "monthly_kwh": [
@@ -515,7 +571,9 @@
             538.062,
             510.15
           ],
-          "annual_kwh": 7439.491
+          "annual_kwh": 7439.491,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 4.0
         },
         "perez_diffuse": {
           "monthly_kwh": [
@@ -532,7 +590,9 @@
             523.854,
             495.308
           ],
-          "annual_kwh": 7162.691
+          "annual_kwh": 7162.691,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 4.0
         },
         "perez_physical": {
           "monthly_kwh": [
@@ -549,7 +609,9 @@
             524.202,
             496.327
           ],
-          "annual_kwh": 7150.062
+          "annual_kwh": 7150.062,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 4.0
         },
         "perez_martin_ruiz": {
           "monthly_kwh": [
@@ -566,7 +628,9 @@
             526.076,
             498.119
           ],
-          "annual_kwh": 7180.314
+          "annual_kwh": 7180.314,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 4.0
         },
         "perez_roof": {
           "monthly_kwh": [
@@ -583,7 +647,9 @@
             514.7,
             490.19
           ],
-          "annual_kwh": 7055.332
+          "annual_kwh": 7055.332,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 4.0
         },
         "perez_sapm_roof": {
           "monthly_kwh": [
@@ -600,7 +666,9 @@
             499.02,
             475.609
           ],
-          "annual_kwh": 6831.261
+          "annual_kwh": 6831.261,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 4.0
         },
         "bifacial_front": {
           "monthly_kwh": [
@@ -617,7 +685,9 @@
             794.201,
             750.918
           ],
-          "annual_kwh": 10888.836
+          "annual_kwh": 10888.836,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 6.0
         },
         "bifacial_rear": {
           "monthly_kwh": [
@@ -634,7 +704,9 @@
             820.904,
             772.067
           ],
-          "annual_kwh": 11585.23
+          "annual_kwh": 11585.23,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 6.0
         },
         "nameplate_mono_1200": {
           "monthly_kwh": [
@@ -651,7 +723,9 @@
             160.271,
             152.104
           ],
-          "annual_kwh": 2203.651
+          "annual_kwh": 2203.651,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_front_1200": {
           "monthly_kwh": [
@@ -668,7 +742,9 @@
             160.511,
             152.291
           ],
-          "annual_kwh": 2208.431
+          "annual_kwh": 2208.431,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_rear_1200": {
           "monthly_kwh": [
@@ -685,7 +761,9 @@
             165.837,
             156.518
           ],
-          "annual_kwh": 2343.866
+          "annual_kwh": 2343.866,
+          "annual_poa_kwh_m2": 2317.345,
+          "dc_nameplate_kw": 1.2
         }
       }
     },
@@ -707,7 +785,9 @@
             496.321,
             609.659
           ],
-          "annual_kwh": 6199.285
+          "annual_kwh": 6199.285,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 4.0
         },
         "perez": {
           "monthly_kwh": [
@@ -724,7 +804,9 @@
             491.242,
             603.906
           ],
-          "annual_kwh": 6214.741
+          "annual_kwh": 6214.741,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 4.0
         },
         "perez_mid": {
           "monthly_kwh": [
@@ -741,7 +823,9 @@
             484.35,
             596.393
           ],
-          "annual_kwh": 6117.379
+          "annual_kwh": 6117.379,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 4.0
         },
         "perez_diffuse": {
           "monthly_kwh": [
@@ -758,7 +842,9 @@
             480.588,
             595.425
           ],
-          "annual_kwh": 6092.178
+          "annual_kwh": 6092.178,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 4.0
         },
         "perez_physical": {
           "monthly_kwh": [
@@ -775,7 +861,9 @@
             479.142,
             594.349
           ],
-          "annual_kwh": 6072.31
+          "annual_kwh": 6072.31,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 4.0
         },
         "perez_martin_ruiz": {
           "monthly_kwh": [
@@ -792,7 +880,9 @@
             481.672,
             597.607
           ],
-          "annual_kwh": 6101.855
+          "annual_kwh": 6101.855,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 4.0
         },
         "perez_roof": {
           "monthly_kwh": [
@@ -809,7 +899,9 @@
             476.359,
             576.683
           ],
-          "annual_kwh": 5998.213
+          "annual_kwh": 5998.213,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 4.0
         },
         "perez_sapm_roof": {
           "monthly_kwh": [
@@ -826,7 +918,9 @@
             464.344,
             565.217
           ],
-          "annual_kwh": 5845.975
+          "annual_kwh": 5845.975,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 4.0
         },
         "bifacial_front": {
           "monthly_kwh": [
@@ -843,7 +937,9 @@
             739.084,
             908.298
           ],
-          "annual_kwh": 9350.288
+          "annual_kwh": 9350.288,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 6.0
         },
         "bifacial_rear": {
           "monthly_kwh": [
@@ -860,7 +956,9 @@
             809.681,
             999.87
           ],
-          "annual_kwh": 10169.791
+          "annual_kwh": 10169.791,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 6.0
         },
         "nameplate_mono_1200": {
           "monthly_kwh": [
@@ -877,7 +975,9 @@
             141.639,
             175.769
           ],
-          "annual_kwh": 1793.2
+          "annual_kwh": 1793.2,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_front_1200": {
           "monthly_kwh": [
@@ -894,7 +994,9 @@
             142.073,
             176.248
           ],
-          "annual_kwh": 1798.725
+          "annual_kwh": 1798.725,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_rear_1200": {
           "monthly_kwh": [
@@ -911,7 +1013,9 @@
             156.214,
             194.725
           ],
-          "annual_kwh": 1964.371
+          "annual_kwh": 1964.371,
+          "annual_poa_kwh_m2": 2014.249,
+          "dc_nameplate_kw": 1.2
         }
       }
     },
@@ -933,7 +1037,9 @@
             546.743,
             568.525
           ],
-          "annual_kwh": 6350.238
+          "annual_kwh": 6350.238,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 4.0
         },
         "perez": {
           "monthly_kwh": [
@@ -950,7 +1056,9 @@
             574.329,
             598.17
           ],
-          "annual_kwh": 6567.904
+          "annual_kwh": 6567.904,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 4.0
         },
         "perez_mid": {
           "monthly_kwh": [
@@ -967,7 +1075,9 @@
             587.462,
             618.244
           ],
-          "annual_kwh": 6726.203
+          "annual_kwh": 6726.203,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 4.0
         },
         "perez_diffuse": {
           "monthly_kwh": [
@@ -984,7 +1094,9 @@
             569.294,
             593.235
           ],
-          "annual_kwh": 6486.632
+          "annual_kwh": 6486.632,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 4.0
         },
         "perez_physical": {
           "monthly_kwh": [
@@ -1001,7 +1113,9 @@
             569.101,
             592.294
           ],
-          "annual_kwh": 6475.976
+          "annual_kwh": 6475.976,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 4.0
         },
         "perez_martin_ruiz": {
           "monthly_kwh": [
@@ -1018,7 +1132,9 @@
             571.255,
             594.891
           ],
-          "annual_kwh": 6503.253
+          "annual_kwh": 6503.253,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 4.0
         },
         "perez_roof": {
           "monthly_kwh": [
@@ -1035,7 +1151,9 @@
             560.692,
             584.008
           ],
-          "annual_kwh": 6359.578
+          "annual_kwh": 6359.578,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 4.0
         },
         "perez_sapm_roof": {
           "monthly_kwh": [
@@ -1052,7 +1170,9 @@
             540.39,
             564.24
           ],
-          "annual_kwh": 6177.32
+          "annual_kwh": 6177.32,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 4.0
         },
         "bifacial_front": {
           "monthly_kwh": [
@@ -1069,7 +1189,9 @@
             864.594,
             899.802
           ],
-          "annual_kwh": 9888.444
+          "annual_kwh": 9888.444,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 6.0
         },
         "bifacial_rear": {
           "monthly_kwh": [
@@ -1086,7 +1208,9 @@
             904.121,
             935.435
           ],
-          "annual_kwh": 10590.766
+          "annual_kwh": 10590.766,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 6.0
         },
         "nameplate_mono_1200": {
           "monthly_kwh": [
@@ -1103,7 +1227,9 @@
             174.892,
             184.064
           ],
-          "annual_kwh": 1990.265
+          "annual_kwh": 1990.265,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_front_1200": {
           "monthly_kwh": [
@@ -1120,7 +1246,9 @@
             175.516,
             184.577
           ],
-          "annual_kwh": 1997.605
+          "annual_kwh": 1997.605,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_rear_1200": {
           "monthly_kwh": [
@@ -1137,7 +1265,9 @@
             183.444,
             191.726
           ],
-          "annual_kwh": 2137.654
+          "annual_kwh": 2137.654,
+          "annual_poa_kwh_m2": 2184.294,
+          "dc_nameplate_kw": 1.2
         }
       }
     },
@@ -1159,7 +1289,9 @@
             588.155,
             596.164
           ],
-          "annual_kwh": 5768.328
+          "annual_kwh": 5768.328,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 4.0
         },
         "perez": {
           "monthly_kwh": [
@@ -1176,7 +1308,9 @@
             600.403,
             603.219
           ],
-          "annual_kwh": 6054.427
+          "annual_kwh": 6054.427,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 4.0
         },
         "perez_mid": {
           "monthly_kwh": [
@@ -1193,7 +1327,9 @@
             609.557,
             607.608
           ],
-          "annual_kwh": 6164.32
+          "annual_kwh": 6164.32,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 4.0
         },
         "perez_diffuse": {
           "monthly_kwh": [
@@ -1210,7 +1346,9 @@
             591.57,
             593.955
           ],
-          "annual_kwh": 5973.965
+          "annual_kwh": 5973.965,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 4.0
         },
         "perez_physical": {
           "monthly_kwh": [
@@ -1227,7 +1365,9 @@
             589.699,
             591.725
           ],
-          "annual_kwh": 5958.985
+          "annual_kwh": 5958.985,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 4.0
         },
         "perez_martin_ruiz": {
           "monthly_kwh": [
@@ -1244,7 +1384,9 @@
             592.494,
             594.665
           ],
-          "annual_kwh": 5984.791
+          "annual_kwh": 5984.791,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 4.0
         },
         "perez_roof": {
           "monthly_kwh": [
@@ -1261,7 +1403,9 @@
             576.222,
             578.527
           ],
-          "annual_kwh": 5819.104
+          "annual_kwh": 5819.104,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 4.0
         },
         "perez_sapm_roof": {
           "monthly_kwh": [
@@ -1278,7 +1422,9 @@
             564.386,
             566.814
           ],
-          "annual_kwh": 5712.225
+          "annual_kwh": 5712.225,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 4.0
         },
         "bifacial_front": {
           "monthly_kwh": [
@@ -1295,7 +1441,9 @@
             902.807,
             907.182
           ],
-          "annual_kwh": 9103.24
+          "annual_kwh": 9103.24,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 6.0
         },
         "bifacial_rear": {
           "monthly_kwh": [
@@ -1312,7 +1460,9 @@
             985.204,
             1001.009
           ],
-          "annual_kwh": 9757.638
+          "annual_kwh": 9757.638,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 6.0
         },
         "nameplate_mono_1200": {
           "monthly_kwh": [
@@ -1329,7 +1479,9 @@
             179.501,
             178.888
           ],
-          "annual_kwh": 1821.673
+          "annual_kwh": 1821.673,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_front_1200": {
           "monthly_kwh": [
@@ -1346,7 +1498,9 @@
             179.941,
             179.353
           ],
-          "annual_kwh": 1825.963
+          "annual_kwh": 1825.963,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_rear_1200": {
           "monthly_kwh": [
@@ -1363,7 +1517,9 @@
             196.558,
             197.786
           ],
-          "annual_kwh": 1955.01
+          "annual_kwh": 1955.01,
+          "annual_poa_kwh_m2": 1923.125,
+          "dc_nameplate_kw": 1.2
         }
       }
     },
@@ -1385,7 +1541,9 @@
             449.903,
             472.653
           ],
-          "annual_kwh": 5463.746
+          "annual_kwh": 5463.746,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 4.0
         },
         "perez": {
           "monthly_kwh": [
@@ -1402,7 +1560,9 @@
             448.358,
             467.13
           ],
-          "annual_kwh": 5588.962
+          "annual_kwh": 5588.962,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 4.0
         },
         "perez_mid": {
           "monthly_kwh": [
@@ -1419,7 +1579,9 @@
             451.595,
             471.465
           ],
-          "annual_kwh": 5611.172
+          "annual_kwh": 5611.172,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 4.0
         },
         "perez_diffuse": {
           "monthly_kwh": [
@@ -1436,7 +1598,9 @@
             437.624,
             455.042
           ],
-          "annual_kwh": 5483.34
+          "annual_kwh": 5483.34,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 4.0
         },
         "perez_physical": {
           "monthly_kwh": [
@@ -1453,7 +1617,9 @@
             436.419,
             453.485
           ],
-          "annual_kwh": 5472.745
+          "annual_kwh": 5472.745,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 4.0
         },
         "perez_martin_ruiz": {
           "monthly_kwh": [
@@ -1470,7 +1636,9 @@
             438.531,
             455.93
           ],
-          "annual_kwh": 5496.316
+          "annual_kwh": 5496.316,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 4.0
         },
         "perez_roof": {
           "monthly_kwh": [
@@ -1487,7 +1655,9 @@
             434.02,
             452.044
           ],
-          "annual_kwh": 5417.133
+          "annual_kwh": 5417.133,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 4.0
         },
         "perez_sapm_roof": {
           "monthly_kwh": [
@@ -1504,7 +1674,9 @@
             423.457,
             442.609
           ],
-          "annual_kwh": 5273.198
+          "annual_kwh": 5273.198,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 4.0
         },
         "bifacial_front": {
           "monthly_kwh": [
@@ -1521,7 +1693,9 @@
             674.657,
             703.004
           ],
-          "annual_kwh": 8410.433
+          "annual_kwh": 8410.433,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 6.0
         },
         "bifacial_rear": {
           "monthly_kwh": [
@@ -1538,7 +1712,9 @@
             740.268,
             777.457
           ],
-          "annual_kwh": 9089.462
+          "annual_kwh": 9089.462,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 6.0
         },
         "nameplate_mono_1200": {
           "monthly_kwh": [
@@ -1555,7 +1731,9 @@
             131.896,
             137.311
           ],
-          "annual_kwh": 1648.743
+          "annual_kwh": 1648.743,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_front_1200": {
           "monthly_kwh": [
@@ -1572,7 +1750,9 @@
             132.32,
             137.771
           ],
-          "annual_kwh": 1654.11
+          "annual_kwh": 1654.11,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 1.2
         },
         "nameplate_bifacial_rear_1200": {
           "monthly_kwh": [
@@ -1589,7 +1769,9 @@
             145.575,
             152.679
           ],
-          "annual_kwh": 1790.394
+          "annual_kwh": 1790.394,
+          "annual_poa_kwh_m2": 1816.512,
+          "dc_nameplate_kw": 1.2
         }
       }
     }
