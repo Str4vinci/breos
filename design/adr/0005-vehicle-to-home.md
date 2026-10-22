@@ -1,10 +1,11 @@
 # 0005 — Vehicle-to-home: the vehicle as a second, part-time AC-coupled store
 
-- **Status:** Proposed, with the fourteen decisions taken by the maintainer
-  on 2026-10-06 and 2026-10-07 (see [Decisions](#decisions)). No code yet;
+- **Status:** Proposed, with the decisions taken by the maintainer
+  on 2026-10-06, 2026-10-07 and 2026-10-22 (see [Decisions](#decisions)). No code yet;
   implementation is planned for 0.8.0, after the AC-coupled battery work
   (#419). Tracked in #420.
-- **Date:** 2026-10-06; decisions taken 2026-10-06 and 2026-10-07
+- **Date:** 2026-10-06; decisions taken 2026-10-06, 2026-10-07 and
+  2026-10-22; amended 2026-10-22
 
 ## Context
 
@@ -54,9 +55,10 @@ charging.
 
 ## Current behaviour this record relies on
 
-Line numbers are at `567df2a` (`origin/develop`, 2026-10-06). ADR 0004 is
-accepted and not implemented; where this record relies on it, it cites its
-sections (C1–C14), not code.
+Line numbers are at `567df2a` (`origin/develop`, 2026-10-06). At that
+revision ADR 0004 was accepted and not implemented; this historical account
+cites its sections (C1–C14), not code. See the
+[Amendments of 2026-10-22](#amendments-of-2026-10-22) for the implemented base.
 
 **One store per site.** `BatteryConfig` (`breos/battery.py:94-322`) describes
 one stationary pack. `_simulate_core` (`breos/battery.py:1725-2241`) runs it
@@ -351,7 +353,7 @@ the vehicle second, on the AC flows the stationary step left:
    -> pv_ac_export, grid_import, grid_ac (stationary grid charge)
 2. vehicle step on the AC residual:
    surplus      = pv_ac_export                  # PV the house would export
-   deficit      = grid_import - grid_ac         # load the house would import
+   deficit      = max(0, grid_import - grid_ac - night)  # house load only (A5)
    site_room    = max(0, grid_import_cap_wh - grid_import)   # load import is never cut
    -> PV_AC_To_Vehicle, Grid_AC_To_Vehicle, Vehicle_AC_To_Load
    PV_AC_Export    = pv_ac_export - PV_AC_To_Vehicle
@@ -380,9 +382,10 @@ as an amendment.
 vehicle, and the vehicle never charges the stationary battery or exports.
 Order (a) gives this without a new rule: the stationary step sees only the
 house load, and the vehicle's discharge serves only `deficit`, which
-excludes the stationary battery's grid charge. Energy moved from one store
-to the other would pay two conversions and two battery efficiencies for no
-service.
+excludes the stationary battery's grid charge and the PV inverter's night
+draw. The grid keeps that draw as a documented simplification (ADR 0004
+M3; A5). Energy moved from one store to the other would pay two
+conversions and two battery efficiencies for no service.
 
 **Which PV inverter.** With a DC-coupled stationary battery, the vehicle
 takes PV AC after the hybrid inverter. With an AC-coupled one, or none, the
@@ -390,7 +393,10 @@ house side is ADR 0004's AC path: the PV inverter's output comes from the PV
 chain arrays computed before the day loop (ADR 0004 C3). A run with a
 vehicle and no stationary battery therefore enters the day loop with the
 AC step and an absent battery, whose house flows equal the PV-only run's
-bit for bit (ADR 0004 P2, P3).
+bit for bit (ADR 0004 P2, P3). With several PV inverters, the vehicle
+uses their summed AC residual, with no stationary battery or beside an
+AC-coupled one. A DC stationary battery beside several inverters stays
+refused, as does Monte Carlo with several inverters (A6).
 
 ### V5. The vehicle step and the departure target
 
@@ -434,7 +440,9 @@ draw    = dc_out / eff_d                                  # Vehicle_Discharge_DC
   discharge the guard binds lands exactly on `T − (k − 1) × s_max`, so a
   rounding residue cannot leave the last step one ulp short. A departure
   counts as short only when it misses `T` by more than 1e-9 of `cap_v`.
-- **Site limit.** With `grid_import_limit_w` set, `s_max` uses the smaller
+- **Site limit.** `[smart_charging].grid_import_limit_w` is the one site
+  limit key, accepted without a stationary battery when a vehicle is
+  configured (A12). With it set, `s_max` uses the smaller
   of the charger rating and the limit. The house load can still take part
   of the import room on a later step, which the guard cannot know without
   reading future load. A departure that V1G or V2H leaves short while the
@@ -541,8 +549,12 @@ studies test their sensitivity with a trip file.
 Decided 2026-10-06 (decision 7).
 
 - `[smart_charging]` keeps its meaning and gates the stationary battery
-  only. The vehicle's own `charge_periods` and `discharge_periods` select
-  tariff periods, need a `[tariff]`, must be disjoint, and are refused with
+  only, except that its `grid_import_limit_w` also limits vehicle grid
+  charging and is accepted without a stationary battery when `[vehicle]`
+  is configured (A12). No new site-limit key is added, and stationary
+  instructions do not change. The vehicle's own `charge_periods` and
+  `discharge_periods` select tariff periods, need a `[tariff]`, must be
+  disjoint, and are refused with
   `"uncontrolled"`; `discharge_periods` is refused with `"v1g"`. Without
   them, `"v1g"` charges from the grid only as the guard requires, and
   `"v2h"` may discharge on any step.
@@ -767,7 +779,8 @@ does.
   with the PV- and grid-origin shares of each removal, as A9 has for the
   stationary pack.
 
-The ledger schema becomes `"3.2"` (additive, after ADR 0004's 3.1). The
+The vehicle columns join the unreleased ledger `"3.1"` (see A2), as ADR
+0004 M1 did. If V2H ships after 0.8.0, they become `"3.2"` then. The
 result format stays `"1"`.
 
 **Existing columns.** `PV_AC_Export` and `Import_From_Grid` are the site's
@@ -833,7 +846,9 @@ Decided 2026-10-06 (decision 13).
   = "none"`, R1 on the same sampled weather and load, so both comparisons
   are paired. The load scale applies to the house load only; trips are not
   sampled. A trajectory then costs about twice the dispatch and three times
-  the vehicle ageing of one without a vehicle (V8).
+  the vehicle ageing of one without a vehicle (V8). The existing BLAST
+  refusal applies: a Monte Carlo vehicle uses native ageing; requesting
+  BLAST is refused, never silently substituted (A15).
 - **Optimizer.** Refused with a `[vehicle]` table in 0.8.0. The vehicle is
   not a design variable, and the three households would triple every
   candidate's vehicle work. A study can sweep App runs meanwhile.
@@ -846,7 +861,7 @@ the pack everywhere.
 
 1. Load supply: `Houseload = PV_AC_To_Load + Battery_AC_To_Load +
    Vehicle_AC_To_Load + Import_From_Grid − Grid_AC_To_Battery −
-   Grid_AC_To_Vehicle`.
+   Grid_AC_To_Vehicle − Inverter_Night_Consumption`.
 2. PV AC. AC coupling or no stationary battery (ADR 0004 identity 4,
    extended): `PV_DC_To_Inverter − PV_Direct_Inverter_Loss = PV_AC_To_Load +
    PV_AC_Export + PV_AC_To_Battery + PV_AC_To_Vehicle`. DC coupling: the
@@ -998,8 +1013,10 @@ first pack and ends at health 0.78; R2 swaps once at `t` = 12.5 and ends at
 The draft's final-health formula would have given −1316.372872: it would
 have credited V2H for the new pack its extra wear made the household buy.
 
-VH1–VH6 are computed with `_dc_ac` and `_dc_for_ac` at `567df2a` by the
-script that accompanies the PR, following V5 and V6; VH7 follows V10. The
+VH1–VH6 were first computed with `_dc_ac` and `_dc_for_ac` at `567df2a`
+by the script that accompanies the PR, following V5 and V6; VH7 follows
+V10. Recomputed at `4a3cc04` on 2026-10-22 with the current converter
+arguments, all published values are unchanged (amendment A16). The
 tests compare with the full-precision values to 1e-9 relative, and the
 exact landings exactly, as ADR 0004's AC7 does.
 
@@ -1049,29 +1066,24 @@ exact landings exactly, as ADR 0004's AC7 does.
 
 ## Implementation plan and effort
 
-Six PRs, about 22 working days for one developer, plus review and the
+Six PRs, about 22.5 working days for one developer, plus review and the
 platform CI runs each kernel change needs; the decisions of 2026-10-07
 (driving legs, away charging, vehicle pack replacement and the
-replacement-aware wear valuation) added about 4 to the draft's 18. Once the
-work ships, this section is replaced by an implementation status, as in
+replacement-aware wear valuation) added about 4 to the draft's 18. The
+2026-10-22 decision to support several PV inverters adds about 0.5 day to
+PR 2. Once the work ships, this section is replaced by an implementation status, as in
 ADR 0002.
 
-**Dependency on ADR 0004 (#419).** V2H reuses ADR 0004's charging and
-discharging conversion (C4), its rating units (`P_wh`), the PV chain arrays
-in the day loop (C3) and the AC step with an absent battery (C5, P2, P3),
-and the ledger schema 3.1 (C8). Precisely:
-
-- PR 1 below needs nothing from #419 and may start at once.
-- PR 2 changes the day loop and the kernel, so it starts after #419 PR 2
-  merges (the AC step, the PV chain arrays, ledger 3.1, AC1–AC7 passing).
-  Building both kernel changes at once would put two branches in one
-  function and break each other's bit-identity gates.
-- PR 4 follows #419 PR 4, so App exposes the vehicle only after App
-  exposes AC coupling, and the cost refusal follows the pattern of #419
-  PR 3.
-- The reference cases and goldens are computed after #417 and #418, on the
-  final PV defaults, as ADR 0004's are. ADR 0006 is implemented after this
-  work.
+**Dependency on ADR 0004 (#419).** At `4a3cc04`, #419 is implemented,
+including its amendments M1–M8 and App exposure; #417 and #418 have also
+landed. PR 2's wait for #419 PR 2 and PR 4's wait for #419 PR 4 are
+satisfied. V2H reuses the implemented conversion helpers, `P_wh`, the
+four-array PV chain and AC step. The six PRs below retain their own order
+and rollout gates, with the amendments decided on 2026-10-22, including
+ledger 3.1 (see A2). VH1–VH7 have been recomputed on this base and are
+unchanged; App goldens and invariants must use the current PV defaults.
+ADR 0006 remains planned after this work. See the amendments for the current
+edit locations and the no-stationary-pack routing PR 2 must add.
 
 **Rollout gates.** No merged state runs a vehicle half-built:
 
@@ -1086,8 +1098,8 @@ and the ledger schema 3.1 (C8). Precisely:
 
 | PR | Scope | Effort | Main risk |
 |---|---|---|---|
-| 1 | `VehicleConfig` and `[vehicle]` validation, with `[vehicle.away_charging]` and the replacement keys; schedule resolution to per-step arrays (civil time, rounding, year seam, the leg template, the trip file's drive and park segments, charging windows), its hash; simulation refused. No behaviour change. | 3 days | Civil-time edge cases (DST, year seam) and multi-day absences. |
-| 2 | `_dispatch_vehicle_step` with the deadline guard and exact landings; departure, driving legs, away charging and arrival; vehicle rows and ledger schema 3.2; on-board and site balances; origins; the day-loop branch and its arguments in `_day_arguments`; Numba registration; closure helper; reference cases VH1–VH5 and invariants Q1–Q5; parity scenarios. | 6 days | Stationary bit identity (Q2), and the kernel's compile time and memory with more rows. |
+| 1 | `VehicleConfig` and `[vehicle]` validation, with `[vehicle.away_charging]` and the replacement keys; accept `[smart_charging].grid_import_limit_w` without a stationary battery when a vehicle is configured, leaving stationary instructions unchanged (A12); schedule resolution to per-step arrays (civil time, rounding, year seam, the leg template, the trip file's drive and park segments, charging windows), its hash; simulation refused. No behaviour change. | 3 days | Civil-time edge cases (DST, year seam) and multi-day absences. |
+| 2 | `_dispatch_vehicle_step` with the deadline guard and exact landings; departure, driving legs, away charging and arrival; vehicle rows in ledger schema 3.1 (see A2); on-board and site balances; origins; the day-loop branch and its arguments in `_day_arguments`; Numba registration; closure helper; reference cases VH1–VH5 and invariants Q1–Q5, with Q1–Q4 also on the several-PV-inverter path (A6); parity scenarios. | 6.5 days | Stationary bit identity (Q2), and the kernel's compile time and memory with more rows. |
 | 3 | The vehicle's degradation lifecycle between day windows, its temperature, capacity-window loss, replacement with the stationary rules and explicit replacement energy, plugged in or away, its carry between years; VH6 and Q7; refusal of `daily_persistence` with a vehicle. | 3.5 days | A second lifecycle and a second swap path in the day-close code without moving the stationary one. |
 | 4 | App: R0 as a vehicle-only projection (invariant Q6), R1 and R2; the baseline with R0's charging; away purchases; `P_r`, `H_r` and the wear `W`; the household-adjusted NPV, the V2H benefit and the `comparable` flags; `outside_charging_price`; `charger_cost` and `battery_cost_per_kwh` required and refused when missing; emissions with away purchases; year rows, the `vehicle` result block, provenance, regenerated config docs and golden provenance; VH7. | 5.5 days | A path that reaches economics before a price is checked, and three projections' memory. |
 | 5 | Monte Carlo: R0, R1 and R2 paired per trajectory, load scale on the house only; optimizer refusal. | 2 days | Memory and run time of three households per trajectory. |
@@ -1108,11 +1120,201 @@ Risks across the work:
 - **Data.** Charger premiums, charger efficiencies, away charging prices
   and vehicle pack prices are user inputs; BREOS ships none.
 
+## Amendments of 2026-10-22
+
+Checked against `4a3cc04` (`refactor/0.8.0-deslop`). ADR 0004, including
+M1–M8, is implemented there, as are the electrical work of ADR 0007–0009,
+#416–#418 and the 0.8.0 refactors. These notes give the implementation base
+for V1–V12 and the first three implementation PRs. The line references in **Current behaviour
+this record relies on** remain at `567df2a`; every code reference in this
+section is at `4a3cc04`. Where these amendments correct an implementation
+assumption above, they apply. The maintainer settled the four open
+questions on 2026-10-22 and confirmed the existing BLAST rule; the
+[Decisions](#decisions) section records the outcomes, preserving decisions
+1–14 with a dated amendment under decision 12.
+
+- **A1. The dependencies have landed.** #419's AC step and App exposure
+  are available (`breos/_dispatch.py:918-1109`,
+  `breos/projection.py:56-123`, `breos/runners/app.py:620-815`). PR 2 no
+  longer waits for #419 PR 2, nor PR 4 for #419 PR 4. The six V2H PRs keep
+  their own rollout gates and order. The before/after baseline for Q1, Q2
+  and ADR 0004's gates is now `4a3cc04`, including both topologies and the
+  electrical options, rather than the pre-#419 release.
+- **A2. Vehicle columns join unreleased ledger 3.1.** Decided 2026-10-22:
+  follow ADR 0004 M1 and add the vehicle columns to `"3.1"`, with no new
+  version for 0.8.0 (`breos/_dispatch.py:255-285`, `:313-357`). If V2H
+  ships after 0.8.0, it becomes `"3.2"` then. This amends decision 12;
+  PR 2's schema assertions and PR 4's goldens follow it. The result format
+  remains `"1"` (`breos/result_schema.py:16`).
+- **A3. The charger conversion is still PVWatts only.** `_dc_ac` and
+  `_dc_for_ac` retain their names, but now require curve arrays, a curve
+  row and an AC cable coefficient (`breos/_dispatch.py:113-252`). Reuse
+  `_battery_inverter_charge` and `_battery_inverter_charge_input`
+  (`:899-915`) for V5's charging direction, and the scalar cores for
+  discharge, with empty curve arrays, row 0, cable 0 and scale 1. This is
+  ADR 0004 M4's inverter model, as decision 2 requires: no measured charger
+  curve, temperature derating, AC cable or night consumption is introduced.
+  Its finite AC rating still becomes Wh per step.
+- **A4. The AC step consumes the complete PV chain.** `_dispatch_ac_step`
+  takes PV DC, PV AC, conversion loss, clipping and night draw; it returns
+  the DC step's sixteen values plus `pv_ac_to_battery` and `pv_dc_charge`,
+  not a separate returned PV charging-loss value
+  (`breos/_dispatch.py:918-1109`). The day loop derives that loss and books
+  PV origin from `pv_dc_charge` (`:1240-1356`). The four-array chain comes
+  from `_pv_inverter_conversion` (`breos/battery.py:1308-1358`,
+  `:2352-2363`): per-step curve row, derating, AC cable, `ac_output_scale`
+  and each PV inverter's own conversion, as M2 specifies. V4 must consume
+  these outputs, never reconstruct PV AC with a scalar efficiency.
+- **A5. The grid keeps PV inverter night draw.** Decided 2026-10-22:
+  preserve ADR 0004 M3's documented simplification. The vehicle's deficit
+  is `max(0, grid_import - grid_ac - night)`; night draw still counts
+  against `site_room` and stays stationary-independent (Q2)
+  (`breos/battery.py:1415-1419`, `breos/_dispatch.py:1046-1048`,
+  `:1322-1331`). Closure identity 1 subtracts
+  `Inverter_Night_Consumption`, as the current helper does
+  (`tests/energy_conservation.py:115-128`); a whole-site balance using
+  total grid import includes that draw as an output. Identity 2 already
+  includes PV cable/scale losses in `PV_Direct_Inverter_Loss`.
+- **A6. Several PV inverters are supported.** Decided 2026-10-22: the
+  vehicle uses their summed AC residual, with no stationary battery or
+  beside an AC one, extending M6's implemented bus
+  (`breos/battery.py:1323-1335`). A DC stationary battery beside several
+  inverters stays refused (`breos/app_config.py:3544-3559`), and Monte
+  Carlo keeps its refusal (`breos/montecarlo.py:522-534`). PR 2 runs Q1–Q4
+  on this path, including one inverter producing while another draws at
+  night; add about 0.5 day to its estimate.
+- **A7. No stationary pack is not yet an AC day-loop mode.**
+  `_simulate_core` routes a missing/zero usable pack straight to the
+  vectorised path (`breos/battery.py:2130-2152`, `:2326-2347`); setting
+  `coupling = "ac"` on a zero-capacity config does not change that.
+  A retired pack also bypasses `_dispatch_day` (`:2394-2410`). PR 2 must
+  arrange a vehicle step on both paths while preserving their stationary
+  outputs and the no-vehicle fast path. Do not fake a positive stationary
+  capacity to reach the loop: it would create health, standby and origin
+  state. The AC step itself can serve an absent pack; the surrounding
+  routing and stationary state handling still need work (V4, V12, Q3).
+- **A8. One matrix, with explicit units.** `_ROW_COLUMNS` now combines
+  `_STATE_COLUMNS` and `_LEDGER_COLUMNS`, with module-level row indices
+  (`breos/_dispatch.py:290-423`), and both full and reduced summary buffers
+  use that layout (`breos/battery.py:910-947`, `:997-1040`). PR 2 adds the
+  vehicle states and flows there and extends summary reductions as well as
+  frame writes. Vehicle stored-energy states are Wh; energy transfers,
+  including departure, arrival, driving and replacement, are accumulated
+  in Wh and written as average W, like stationary replacement flows
+  (`breos/battery.py:1248-1254`). Closure identities 5–7 and origin
+  reconciliation must multiply those flows by `hours_per_step` when
+  comparing them with differences of stored-energy states.
+- **A9. Ageing carries unresolved cycles.** V9's second lifecycle must
+  use `DegradationDay` and `DegradationLifecycle`
+  (`breos/degradation/protocol.py:226-273`), including the incremental
+  native rainflow state (`:24-222`). Carry the on-board SOC endpoint,
+  temperature endpoint and lifecycle snapshot across windows and years;
+  finalise half cycles only at the project end or when a pack leaves
+  service (`breos/battery.py:1259-1273`, `:1676-1702`,
+  `breos/projection.py:1130-1154`). The stationary close still changes no
+  dispatch flow except replacement/retirement; its faded capacity window
+  is enforced in the next step (`breos/_dispatch.py:492-567`). V9's
+  vehicle clipping at day close remains a vehicle-specific operation,
+  booked in its own rows with consistent on-board state and carry.
+- **A10. Replacement and terminal credit are implemented foundations.**
+  The stationary swap still starts at `max_soc`
+  (`breos/battery.py:1203-1256`); PR 3 needs V9's distinct same-SOC vehicle
+  swap, including away swaps. Reuse the policy checks, not the stationary
+  energy reset (`:1625-1639`). Retirement removes the old energy without
+  adding a pack (`:1276-1305`); a kept pack also retires at zero health
+  (`:1561-1584`), so a vehicle then serves no further trips. App and Monte
+  Carlo now accept `battery_replacement_cost`, while terminal credit uses
+  the pack-only price (`breos/projection.py:1388-1407`). V10 already
+  matches this distinction. Use the existing booking and credit helpers
+  (`breos/economics.py:344-383`, `:599-690`) with the vehicle's own inputs;
+  its wear credit remains independent of the optional system credit.
+- **A11. Configuration and temperature use the current boundaries.**
+  PR 1 registers `[vehicle]` in `APP_CONFIG_FIELDS` and the nested table
+  specifications, and extends `ValidatedSpecs`/`ResolvedAppConfig`
+  (`breos/app_config.py:305-1299`, `:1525-1576`, `:1969-2014`,
+  `:2578-2588`, `:3302-3421`). It must validate equipment, prices, mode
+  combinations and the simulation refusal before input preparation.
+  Temperature construction lives in `breos.weather`, including the fixed,
+  weather and CSV forms (`breos/weather.py:1709-1786`), not the deprecated battery-module
+  alias. Load preparation is `breos/app_inputs.py:538-556`. The common
+  weather timestamp parser (`breos/weather.py:437-472`) is not a vehicle
+  trip parser: V3's configured-zone, DST and conservative-rounding rules
+  still need their own resolution.
+- **A12. One site-limit key; stationary instructions unchanged.** Decided
+  2026-10-22: `[smart_charging].grid_import_limit_w` stays the one key.
+  PR 1 accepts it without a stationary battery when a vehicle is configured
+  (`breos/app_config.py:2459-2554`, `:2591-2626`); no new key is added.
+  Stationary instructions and their hashes stay unchanged, including AC
+  efficiency None/NaN and controller binding
+  (`breos/_dispatch.py:1497-1570`, `breos/_controller.py:307-394`).
+  `daily_persistence` remains refused with a vehicle for every forecast
+  and decision boundary (`breos/smart_charging.py:195-275`).
+- **A13. R0 must reach every pricing path.** `project_years` is the shared
+  App/Monte Carlo/optimizer loop, with separate frame and aligned-summary
+  runners and `CarryState` (`breos/projection.py:126-225`, `:902-1012`,
+  `:1026-1262`). Extend it for independent vehicle carry in each household.
+  `Baseline_Import_Cost` still prices `Houseload` (`:379-387`); R0's actual
+  import must replace that baseline in tariff, reference-tariff, flat-price
+  and annual-network-credit paths. Ageing means R0's charging is not one
+  first-year profile replayed unchanged. R0 must also omit PV equipment and
+  its night draw, rather than only zeroing the PV input
+  (`breos/battery.py:1355-1358`). Extend the emissions caller as well as
+  the helper (`breos/economics.py:904-935`, `breos/emissions.py:61-114`).
+- **A14. Revaluation must retain the three households.** App now reprices
+  from retained per-period/per-step flows, or simulates again when a tariff
+  can change dispatch (`breos/runners/app.py:818-826`, `:873-967`). With a
+  vehicle, that choice must also inspect its tariff-period controls even
+  without stationary smart charging. Repricing needs R0's own import in
+  each year, R1/R2's exchange, away purchases and separate swap histories;
+  it must not restore the current house-only baseline. Vehicle prices use
+  the run's currency, and currency changes must restate its non-zero
+  amounts as for other equipment (`breos/app.py:84-125`). No new equipment
+  price default is implied.
+- **A15. Pair Monte Carlo inputs; retain the existing BLAST rule.** Draw
+  each year's weather, house-load scale and trajectory PV factor once for
+  R0/R1/R2 (`breos/montecarlo.py:722-775`); its PV-chain memo remains
+  PV-only (`:657-699`). Confirmed 2026-10-22, with no new decision: App's
+  existing BLAST-with-Monte-Carlo refusal applies to the vehicle too
+  (`breos/app_config.py:2903-2913`). A Monte Carlo vehicle uses native
+  ageing; requesting BLAST is refused, never silently substituted. Add the
+  optimizer's vehicle refusal before its shared study/scoring path
+  (`breos/optimization_config.py:484-522`,
+  `breos/optimization.py:733-928`).
+- **A16. PV defaults and the reference cases.** `solar_position = "auto"`
+  is now the default: it uses the weather's stated radiation time basis,
+  falling back to interval-start with a warning when that basis is absent
+  (`breos/pv/model_options.py:70-96`). PV preparation uses the single array
+  engine (`breos/app_inputs.py:474-535`, `breos/solar.py:1526-1574`).
+  Future App goldens and Q1–Q3 compare against these defaults, including
+  #417's weather handling; they must not restore the old solar position.
+  VH1–VH7 were recomputed with the supplied script adapted only for the
+  new converter arguments and import path. Every published number is
+  unchanged, including the exact target landings: these cases supply PV
+  DC directly (VH1 uses an unbounded flat PV inverter), so neither the PV
+  defaults nor the new optional electrical effects change their inputs.
+  This is a calculation of the proposal, not a test of implemented V2H.
+
+Current edit locations for the first three PRs, at `4a3cc04`:
+
+| PR | Existing boundary to extend | File:line range |
+|---|---|---|
+| 1 | Lower-level config beside `BatteryConfig` | `breos/battery.py:85-349` |
+| 1 | App field/table registry, validation and resolution | `breos/app_config.py:305-1299`, `:1525-1576`, `:1969-2014`, `:2578-2588`, `:3302-3421` |
+| 1 | Prepared inputs and calendar for schedule resolution | `breos/app_inputs.py:68-84`, `:561-602`; `breos/battery.py:494-633` |
+| 2 | Converter helpers and stationary steps beside the new vehicle step | `breos/_dispatch.py:113-252`, `:658-1109` |
+| 2 | Row layout, day loop, shared backend arguments and registration | `breos/_dispatch.py:290-423`, `:1112-1442`, `:1445-1571`; `breos/_numba_dispatch_kernels.py:36-56` |
+| 2 | Buffers, PV conversion, no-pack/retired routing and day orchestration | `breos/battery.py:910-1040`, `:1308-1448`, `:1909-2494` |
+| 2 | Energy and origin closure assertions | `tests/energy_conservation.py:63-202`, `:218-254` |
+| 3 | Lifecycle construction, close, cycle settlement, replacement, retirement and snapshot | `breos/battery.py:805-859`, `:1203-1305`, `:1451-1639`, `:1676-1702`; `breos/degradation/protocol.py:226-273` |
+| 3 | Physical carry and project-year guards; vehicle temperature | `breos/projection.py:126-225`, `:1026-1262`; `breos/weather.py:1709-1786` |
+
 ## Decisions
 
 Taken by the maintainer on 2026-10-06, and for decisions 4, 6, 10 and 11
 on 2026-10-07, after a second design review. The body sections follow them.
-Decisions 4, 6, 10 and 11 changed the proposal.
+Decisions 4, 6, 10 and 11 changed the proposal. On 2026-10-22 the
+maintainer amended decision 12, settled the four amendment questions in
+decisions 15–18 and confirmed the existing BLAST rule below.
 
 1. **Dispatch order** (2026-10-06): the stationary battery first, the
    vehicle second on the AC residual; no storage-to-storage transfer (V4).
@@ -1163,10 +1365,38 @@ Decisions 4, 6, 10 and 11 changed the proposal.
     household pays, and warranty, resale and downtime are excluded (V10).
 12. **Ledger** (2026-10-06): vehicle rows in the one ledger, schema 3.2
     (V11).
+
+    Amended 2026-10-22: the vehicle columns join unreleased ledger 3.1,
+    as ADR 0004 M1 did; no 3.2 for 0.8.0. If V2H ships after 0.8.0,
+    it becomes 3.2 then (A2, decision 15).
 13. **Entry points** (2026-10-06): App and Monte Carlo; the optimizer
     refuses `[vehicle]` (V12).
 14. **Target release** (2026-10-06): 0.8.0, after #419 (see
     [Implementation plan and effort](#implementation-plan-and-effort)).
+
+15. **Ledger version** (Decided 2026-10-22): the vehicle columns join
+    unreleased ledger 3.1, as ADR 0004 M1 did; no 3.2 for 0.8.0. If V2H
+    ships after 0.8.0, it becomes 3.2 then. This amends decision 12 (A2).
+16. **PV inverter night draw** (Decided 2026-10-22): the grid keeps the
+    draw, as ADR 0004 M3. The vehicle's discharge deficit is
+    `max(0, grid_import - grid_ac - night)`, and closure identity 1
+    subtracts `Inverter_Night_Consumption`. This is a documented
+    simplification (A5).
+17. **Several PV inverters** (Decided 2026-10-22): supported. The vehicle
+    uses the summed AC residual, with no stationary battery or beside an
+    AC one. A DC stationary battery beside several inverters stays refused,
+    and Monte Carlo keeps its refusal of several inverters. PR 2 runs
+    Q1–Q4 on this path, adding about 0.5 day to its estimate (A6).
+18. **Site import limit** (Decided 2026-10-22):
+    `[smart_charging].grid_import_limit_w` stays the one key, accepted
+    without a stationary battery when a vehicle is configured. PR 1 makes
+    this validation change; stationary instructions do not change. No new
+    key is added (A12).
+
+**BLAST in Monte Carlo — existing rule, confirmed 2026-10-22.** No new
+decision is needed: App refuses BLAST with Monte Carlo, so a Monte Carlo
+vehicle uses native ageing. Requesting BLAST is refused; nothing silently
+substitutes an engine (A15).
 
 ## Consequences
 
@@ -1179,8 +1409,8 @@ Decisions 4, 6, 10 and 11 changed the proposal.
   labelled household-adjusted NPV adds the vehicle's wear and away
   purchases.
 - Runs without `[vehicle]` keep every existing value bit for bit; the
-  ledger schema moves to 3.2 with additive rows and the result format stays
-  "1".
+  vehicle columns join ledger 3.1 (see A2), and the result format stays
+  "1". If V2H ships after 0.8.0, its ledger version becomes 3.2 then.
 - The stationary battery's dispatch does not change when a vehicle is
   added.
 - A V2H run simulates three households; Monte Carlo pairs them per
