@@ -449,6 +449,22 @@ def test_reused_inputs_are_prepared_again_when_the_weather_csv_changes(tmp_path)
     assert cached.result()["pv_dc_generation_kwh"] == _simulated(config).result()["pv_dc_generation_kwh"]
 
 
+def test_reused_inputs_keep_their_own_copy_of_a_fetched_weather_frame(tmp_path, monkeypatch):
+    # A provider that hands out one frame and later changes its metadata must
+    # not change the cached inputs' metadata without their PV.
+    monkeypatch.chdir(tmp_path)
+    shared = _weather({"source": "pvgis", "radiation_time_basis": "instant", "irradiance_time_offset_hours": 0.0})
+    config = {"location": "porto", "n_modules": 4, "annual_consumption_kwh": 3000, "start_date": "2023-01-01",
+              "projection_years": 1}  # fmt: skip
+    with mock.patch("breos.app.fetch_tmy_weather_data", return_value=(shared, {})):
+        with reuse_prepared_inputs():
+            first = _simulated(config)
+            shared.attrs[WEATHER_METADATA_KEY]["irradiance_time_offset_hours"] = 0.5
+            cached = _simulated(config)
+    np.testing.assert_array_equal(_series(cached), _series(first))
+    assert cached.result()["provenance"]["pv_model"]["solar_position"]["offset_minutes"] == 0.0
+
+
 def test_every_app_run_warns_even_on_reused_inputs(tmp_path):
     config, _path = _weather_file_config(tmp_path, {"source": "user_csv"})
     with _auto_warnings() as caught:

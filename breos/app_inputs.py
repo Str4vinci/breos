@@ -841,6 +841,8 @@ def prepare_simulation_inputs_cached(
         return prepare(cfg, resolved, deps)
     if not hit:
         cache.clear()
-        cache[entry] = prepare(cfg, resolved, deps)
+        # A copy, so a weather frame the provider keeps and later changes
+        # cannot change the cached inputs' metadata without their PV.
+        cache[entry] = deepcopy(prepare(cfg, resolved, deps))
     # A copy per run, so nothing a run does to its inputs reaches the next.
     return deepcopy(cache[entry])
