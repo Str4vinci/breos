@@ -2,8 +2,8 @@
  "case": "east_west",
  "title": "East-west and south-facing arrays",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-108-g02711cf-dirty",
- "generated_utc": "2026-10-21T22:59:46+00:00",
+ "git_describe": "v0.7.0-308-g09d373d",
+ "generated_utc": "2026-10-22T08:51:30+00:00",
  "runtime_s": 6.0,
  "cheap": true,
  "configs": {

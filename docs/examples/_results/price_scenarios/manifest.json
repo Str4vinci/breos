@@ -2,8 +2,8 @@
  "case": "price_scenarios",
  "title": "Price scenarios with App.revalue",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-108-g02711cf-dirty",
- "generated_utc": "2026-10-21T22:59:50+00:00",
+ "git_describe": "v0.7.0-308-g09d373d",
+ "generated_utc": "2026-10-22T08:57:13+00:00",
  "runtime_s": 4.1,
  "cheap": true,
  "configs": {
@@ -29,7 +29,7 @@
  "scenarios": 24,
  "base_peak_price": 0.231,
  "base_import_price_escalation": 0.02,
- "simulate_s": 1.86,
+ "simulate_s": 1.89,
  "revalue_all_s": 0.34,
  "files": {
   "scenarios.csv": "97a8889b59c9b6ad549ca94fed36653e5ad119abe2c089a840557c81f32a54a3",

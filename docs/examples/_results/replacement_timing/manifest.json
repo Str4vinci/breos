@@ -2,9 +2,9 @@
  "case": "replacement_timing",
  "title": "Battery replacement timing",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-112-gded4bb6",
- "generated_utc": "2026-10-22T07:48:13+00:00",
- "runtime_s": 61.6,
+ "git_describe": "v0.7.0-308-g09d373d",
+ "generated_utc": "2026-10-22T08:56:39+00:00",
+ "runtime_s": 58.2,
  "cheap": false,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"

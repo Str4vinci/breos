@@ -2,12 +2,12 @@
  "case": "nsga2_front",
  "title": "Multi-objective sizing with NSGA-II",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-112-gded4bb6",
- "generated_utc": "2026-10-22T07:47:11+00:00",
- "runtime_s": 259.6,
+ "git_describe": "v0.7.0-308-g09d373d",
+ "generated_utc": "2026-10-22T09:44:13+00:00",
+ "runtime_s": 200.0,
  "cheap": false,
  "configs": {
-  "configs/optimization/projected-optimization.toml": "3cfc1530f6c87e282032ff00b62a7111817f54a2873af44a0c07630ed30bcffa"
+  "configs/optimization/projected-optimization.toml": "c0f8303aff05aaf8a021102deb049569615d8c5e8b0208172e1c21c808ff7cae"
  },
  "weather": {
   "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
@@ -27,7 +27,7 @@
  "currency": "EUR",
  "annual_consumption_kwh": 4000.0,
  "load_profile": "demandlib_h0",
- "n_procs": 8,
+ "n_procs": 10,
  "generations": 40,
  "constraints": {
   "budget": 15000.0,
