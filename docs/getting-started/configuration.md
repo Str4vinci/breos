@@ -888,15 +888,18 @@ charging targets of `daily_persistence` are chosen on one row, the row of
 the strings' STC maximum power voltage with string-level energy, and the
 full rating; dispatch then applies the per-step row and the derating.
 
-`night_consumption_w` is what the inverter draws from the grid while it
+`night_consumption_w` is what the inverter draws from the AC bus while it
 converts nothing: a step with no PV DC and, with a DC-coupled battery, no
 battery charge or discharge. Beside an AC-coupled battery the PV inverter
 draws on every step without PV DC, whatever the battery does.
-Take it from the datasheet; unset, it is not modelled. It adds to `Import_From_Grid`, and so to the
-import cost, and the results frame reports it as `Inverter_Night_Consumption`.
-It does not change dispatch: the planned charging targets are chosen without
-it. With several inverters, aggregate energy adds their stated values up, and
-string-level energy has each draw its own on the steps it receives no DC.
+Take it from the datasheet; unset, it is not modelled. The results frame
+reports the whole draw as `Inverter_Night_Consumption`. With several
+inverters, PV AC surplus after the house load serves the draw before AC
+battery charging or export. Only the uncovered part adds to
+`Import_From_Grid` and the import cost; the battery never serves the draw.
+The planned charging targets are chosen without it. Aggregate energy adds
+the stated values up, and string-level energy has each inverter draw its
+own on the steps it receives no DC. Single-inverter results are unchanged.
 
 ### AC cable
 

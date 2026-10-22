@@ -335,9 +335,12 @@ agree exactly. With none of the three, every operation is the PVWatts path's,
 so results are unchanged bit for bit.
 
 `night_consumption_w` is the inverter's draw while it converts nothing: a step
-with no PV DC and no battery charge or discharge. It is taken from the grid,
-as `Inverter_Night_Consumption` within `Import_From_Grid`, and leaves dispatch
-unchanged. Unset, it is not modelled and not reported missing.
+with no PV DC and, for a hybrid, no battery charge or discharge.
+`Inverter_Night_Consumption` records the whole draw. With several inverters,
+PV AC surplus after the house load serves the draw before AC battery
+charging or export; only the uncovered part enters `Import_From_Grid`.
+The battery never serves it (ADR 0004 M9, amended 2026-10-22). Unset, it is
+not modelled and not reported missing.
 
 The daily-target planner plans on the scalar row, the middle one in
 aggregate energy and the strings' STC voltage in string-level energy, at
@@ -366,7 +369,9 @@ rating. String mode with several inverters therefore runs each on its own:
 3. Each inverter converts its DC with its own nameplate, efficiency, curve
    (read at its own inputs' voltage, D9), temperature derating and optional
    own AC cable, and draws its night consumption on the steps it receives no
-   DC. The AC outputs add up; the top-level `[ac_cable]` is the run they
+   DC. Their draw nets against the AC surplus after the house load, before
+   AC battery charging or export (ADR 0004 M9, amended 2026-10-22).
+   The AC outputs add up; the top-level `[ac_cable]` is the run they
    share, and loses `k * (sum ac)**2`. With one inverter, its own cable and
    `[ac_cable]` are the same cable, so giving both is refused.
 4. The conversion runs on the PV-only path, before the energy balance, as

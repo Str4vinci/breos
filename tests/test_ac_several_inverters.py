@@ -9,6 +9,7 @@ import pytest
 from breos import App
 from breos.app_config import resolve_app_config
 from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.dispatch_instructions import DispatchInstructions
 from breos.inverter import InverterConversion, InverterUnits
 from tests.energy_conservation import assert_energy_conservation
 from tests.test_inverter_curve import CURVE
@@ -45,6 +46,62 @@ TOU = {
 
 
 # --- the dispatch -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("pack", ["pv-only", "ac-empty", "ac-full"])
+@pytest.mark.parametrize(
+    "pv_w,load_w,import_wh,export_wh,charge_wh,discharge_wh",
+    [
+        (2000.0, 0.0, 0.0, 498.0, 498.0, 0.0),
+        (2000.0, 1996.0, 1.0, 0.0, 0.0, 0.0),
+        (2000.0, 2000.0, 2.0, 0.0, 0.0, 0.0),
+        (0.0, 100.0, 27.0, 0.0, 0.0, 25.0),
+    ],
+    ids=["full-surplus", "partial-surplus", "no-surplus", "night-deficit"],
+)
+def test_idle_draw_is_served_before_charge_or_export(
+    backend, pack, pv_w, load_w, import_wh, export_wh, charge_wh, discharge_wh
+):
+    index = pd.date_range("2025-06-01", periods=1, freq="15min", tz="UTC")
+    units = InverterUnits(
+        ac_capacity_w=(float("inf"), float("inf")),
+        efficiency=(1.0, 1.0),
+        conversions=(InverterConversion(), InverterConversion(night_consumption_w=8.0)),
+        shares=pd.DataFrame({0: [1.0], 1: [0.0]}, index=index),
+        ac_derate=pd.DataFrame(1.0, index=index, columns=[0, 1]),
+        curve_rows=pd.DataFrame(0.0, index=index, columns=[0, 1]),
+    )
+    battery = BatteryConfig(
+        nominal_energy_wh=0.0 if pack == "pv-only" else 10000.0,
+        coupling="ac",
+        battery_inverter_efficiency=1.0,
+        min_soc=0.0,
+        max_soc=1.0,
+        charge_efficiency=1.0,
+        discharge_efficiency=1.0,
+        standby_loss_wh=0.0,
+    )
+    frame = simulate_energy_balance(
+        pv_dc=pd.Series(pv_w, index=index),
+        houseload=pd.DataFrame({"Load": load_w}, index=index),
+        battery_config=battery,
+        freq="15min",
+        temperature_series=pd.Series(25.0, index=index),
+        inverter_units=units,
+        initial_energy_wh=10000.0 if pack == "ac-full" else 0.0,
+        execution_backend=backend,
+    )[0]
+    expected = {
+        "Import_From_Grid": import_wh - (discharge_wh if pack == "ac-full" else 0.0),
+        "PV_AC_Export": 0.0 if pack == "ac-empty" else export_wh,
+        "PV_AC_To_Battery": charge_wh if pack == "ac-empty" else 0.0,
+        "Battery_AC_To_Load": discharge_wh if pack == "ac-full" else 0.0,
+        "Inverter_Night_Consumption": 2.0,
+    }
+    for column, wh in expected.items():
+        assert frame[column].iloc[0] * 0.25 == pytest.approx(wh), column
+    assert_energy_conservation(frame, battery)
 
 
 def _inputs(days=3, freq="h", rich=False):
@@ -127,10 +184,43 @@ def test_each_pv_inverter_converts_as_without_the_battery(backend, freq, rich):
     assert_energy_conservation(frame, battery)
 
 
-def test_both_backends_agree_beside_several_inverters():
+@pytest.mark.parametrize("rich", [False, True])
+def test_both_backends_agree_beside_several_inverters(rich):
     pytest.importorskip("numba")
-    python, compiled = _run(_ac(), "python"), _run(_ac(), "numba")
+    python, compiled = _run(_ac(), "python", rich=rich), _run(_ac(), "numba", rich=rich)
     pd.testing.assert_frame_equal(python, compiled, check_exact=False, rtol=1e-12, atol=1e-9)
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_pv_only_vectorized_matches_scalar_bus_balance(backend, freq):
+    # A full pack with discharge disabled cannot exchange energy, leaving
+    # the scalar day loop to perform the same AC bus balance as PV-only.
+    pv, _, _, _ = _inputs(days=1, freq=freq, rich=True)
+    instructions = DispatchInstructions(
+        discharge_allowed=np.zeros(len(pv), dtype=bool),
+        reserve_fraction=np.zeros(len(pv)),
+        grid_target_fraction=np.full(len(pv), np.nan),
+        grid_charge_efficiency=None,
+        grid_import_limit_w=float("inf"),
+    )
+    battery = _ac(max_soc=1.0, standby_loss_wh=0.0)
+    scalar = _run(
+        battery,
+        backend,
+        freq,
+        rich=True,
+        days=1,
+        initial_energy_wh=battery.nominal_energy_wh,
+        dispatch_instructions=instructions,
+    )
+    vectorized = _run(BatteryConfig(nominal_energy_wh=0.0), backend, freq, rich=True, days=1)
+    assert (scalar["PV_AC_To_Battery"] == 0.0).all()
+    assert (scalar["Battery_AC_To_Load"] == 0.0).all()
+    for column in (*PV_SIDE, "PV_AC_To_Load", "PV_AC_Export", "Import_From_Grid"):
+        np.testing.assert_array_equal(scalar[column], vectorized[column], err_msg=column)
+    assert_energy_conservation(scalar, battery)
+    assert_energy_conservation(vectorized, BatteryConfig(nominal_energy_wh=0.0))
 
 
 @pytest.mark.parametrize("freq", ["h", "15min"])

@@ -150,6 +150,25 @@ def test_own_cables_and_curves_belong_to_each_inverter(trina, _patch_weather):
     assert block["ac_cable"]["loss_kwh"] > 0
 
 
+def test_shared_cable_report_includes_ac_serving_an_idle_inverter(trina, _patch_weather):
+    from breos.inverter import AcCable
+
+    cable = {"length_m": 50, "cross_section_mm2": 4, "phases": 1, "voltage_v": 230}
+    # Keep the first inverter idle, while the second produces on the same bus.
+    cfg = {
+        **TWO_INVERTERS,
+        "inverters": [{**SMALL, "startup_voltage_v": 500.0}, FRONIUS_GEN24_6],
+        "ac_cable": cable,
+    }
+    frame, result = timeseries(cfg)
+    assert ((frame["Inverter_Night_Consumption"] > 0.0) & (frame["PV_AC_Export"] > 0.0)).any()
+    net = frame["PV_Production"].to_numpy()
+    k = AcCable(**cable).loss_coefficient_per_w
+    gross = 2.0 * net / (1.0 + np.sqrt(1.0 - 4.0 * k * net))
+    expected_kwh = float((gross - net).sum()) / 1000.0
+    assert result["pv_loss_waterfall"]["inverter"]["ac_cable"]["loss_kwh"] == round(expected_kwh, 2)
+
+
 def test_a_battery_with_several_inverters_is_refused(trina):
     with pytest.raises(ValueError, match="a battery beside 2 inverters must be AC-coupled"):
         resolve_app_config({**TWO_INVERTERS, "battery_kwh": 5.0})
