@@ -1213,6 +1213,9 @@ def _mc_history(ctx: Context) -> Path:
         source = Path(ctx.options.mc_weather).resolve()
         target = ctx.work / "weather" / source.name
         shutil.copyfile(source, target)
+        sidecar = source.with_name(source.name + ".metadata.json")
+        if sidecar.exists():
+            shutil.copyfile(sidecar, target.with_name(sidecar.name))
         return target
     from breos.resources import load_config_json
     from breos.weather import fetch_weather_data
@@ -1463,7 +1466,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("cases", nargs="*", help="Cases to run (default: all; with --check: the cheap ones).")
     parser.add_argument("--check", action="store_true", help="Rerun cases and compare with the stored results.")
     parser.add_argument("--list", action="store_true", help="List the cases and exit.")
-    parser.add_argument("--mc-weather", help="Local Open-Meteo history CSV for the Monte Carlo case (no fetch).")
+    parser.add_argument(
+        "--mc-weather",
+        help="Local Open-Meteo history CSV for the Monte Carlo case (no fetch; copies sidecar if present).",
+    )
     parser.add_argument(
         "--cross-machine",
         action="store_true",
