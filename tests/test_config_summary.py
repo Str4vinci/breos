@@ -8,8 +8,9 @@ from breos import cli
 from breos.app_config import APP_CONFIG_FIELDS
 
 BASE = {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000}
-# Runner sections are not App settings.
-NOT_SUMMARISED = {"montecarlo", "sweep"}
+# Runner sections are not App settings. A vehicle is refused by resolution
+# until its simulation rollout gate opens, and adds no summary key meanwhile.
+NOT_SUMMARISED = {"montecarlo", "sweep", "vehicle"}
 
 
 def test_every_app_key_has_one_place_in_the_summary():

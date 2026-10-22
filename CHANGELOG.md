@@ -6,6 +6,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- `[vehicle]` configuration and schedules are validated but not yet simulated;
+  `[smart_charging].grid_import_limit_w` also accepts a vehicle without a stationary battery (#420).
 - AC-coupled batteries ([#419](https://github.com/Str4vinci/breos/issues/419),
   ADR 0004). `battery_coupling = "ac"` gives the battery its own
   bidirectional inverter on the AC bus beside the PV inverter, sized by

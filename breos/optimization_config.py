@@ -501,6 +501,8 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """
     if not isinstance(config, Mapping):
         raise TypeError("The optimization config must be a table/dict")
+    if "vehicle" in config:
+        raise ValueError("'[vehicle]' is not supported by the optimizer")
     simulation_table = config.get("simulation")
     if "period" in config or (isinstance(simulation_table, Mapping) and "period" in simulation_table):
         raise ValueError(

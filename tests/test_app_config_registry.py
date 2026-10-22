@@ -181,6 +181,7 @@ def test_registry_preserves_defaults_and_allowed_top_level_keys():
             "period",
             "montecarlo",
             "sweep",
+            "vehicle",
         }
     )
 

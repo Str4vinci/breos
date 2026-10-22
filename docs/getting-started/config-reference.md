@@ -104,6 +104,7 @@ is a `breos run` option that overrides the config file.
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
 | `tracking` | `"fixed"` | — | Tracking mode. One of `"fixed"`, `"single_axis"`, `"dual_axis"` |
 | `transposition_model` | `"isotropic"` | `--transposition-model`, `--sky-model` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model). One of `"isotropic"`, `"klucher"`, `"haydavies"`, `"reindl"`, `"king"`, `"perez"`, `"perez-driesse"` |
+| `vehicle` | *unset* | — | Vehicle equipment, prices and schedule; validated, but vehicle simulation is not available yet. See [vehicle](#vehicle) |
 | `weather_file` | `None` | `--weather-file` | One-year weather CSV (or gzip-compressed `.csv.gz`) to simulate, in the layout of the cached `weather/` files, instead of the `weather/` cache or a PVGIS fetch. Any filename and any location work. A relative path is taken from the working directory. The file's path and SHA-256 digest are recorded under `provenance.weather`; see [Run offline with cached weather](../how-to/offline-weather.md#name-the-weather-file) |
 | `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Run offline with cached weather](../how-to/offline-weather.md) |
 
@@ -309,7 +310,7 @@ Optional estimated residual value of the final battery pack, as `[terminal_value
 
 ## smart_charging
 
-Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and, with a DC-coupled battery, `grid_charge_efficiency`, which `battery_coupling = "ac"` refuses; it refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels`, `soc_states`, `wear_cost_per_kwh` and `decision_boundary`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; `"hold_target"` permits overlapping periods for `fixed_target` and `daily_persistence`, retaining the target as the discharge floor.
+Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and, with a DC-coupled battery, `grid_charge_efficiency`, which `battery_coupling = "ac"` refuses; it refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels`, `soc_states`, `wear_cost_per_kwh` and `decision_boundary`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from the grid. `mode = "disabled"` takes no other key, except `grid_import_limit_w` when `[vehicle]` is present. `overlap_policy` defaults to `"reject"`; `"hold_target"` permits overlapping periods for `fixed_target` and `daily_persistence`, retaining the target as the discharge floor.
 
 | Key | Required | Description |
 |---|---|---|
@@ -323,11 +324,77 @@ Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart cha
 | `forecast_horizon_days` |  | `daily_persistence` only: civil days the planner looks ahead, today included; under `charge_window_start`, the windows that start within that many days. An integer of at least 1; default 2 |
 | `forecast_publication_delay_hours` |  | `forecast = "weather"` only: hours between a forecast's nominal issue (its valid hour less one day per lead day) and the first decision that may use it. At least 0; default 6 |
 | `forecast_weather_files` |  | `forecast = "weather"` only: forecast weather files, the first for lead day 1 (the values forecast at least one day before their valid hour), the next for lead day 2, and so on, each in the layout of `weather_file` and on the same year. A relative path is taken from the working directory |
-| `grid_import_limit_w` |  | Site import limit in W for grid charging, which may import up to the limit minus the load's import. Load import is never cut. Unset is unlimited. Not with `discharge_only` |
+| `grid_import_limit_w` |  | Site import limit in W for grid charging, which may import up to the limit minus the load's import. Load import is never cut. Unset is unlimited. Not with `discharge_only`. With `[vehicle]`, also accepted without a stationary battery alongside `mode = "disabled"`; stationary instructions stay disabled |
 | `overlap_policy` |  | Default `reject`: charge and discharge periods must be disjoint. `hold_target` (`fixed_target` and `daily_persistence`) uses the grid target as the discharge floor on overlapping steps. Above it the battery may discharge; below it the grid may charge; PV may charge above it. Under `daily_persistence` the floor is each day's planned target, and 0 on a day with no grid target |
 | `soc_states` |  | `daily_persistence` only: stored-energy grid points of the planner's value function. An integer of at least 2; default 21 |
 | `target_levels` |  | `daily_persistence` only: candidate targets, evenly spaced from 0 to 1 of the usable window. An integer of at least 1 (one level selects target 0); default 11 |
 | `wear_cost_per_kwh` |  | `daily_persistence` only: a planning weight, in the tariff's currency per kWh of DC energy the battery discharges, that the planner adds to each day's cost. Not a degradation model: realised ageing still comes from the battery model. At least 0; default 0 |
+
+## vehicle
+
+Vehicle inputs are validated, but simulation is not available yet (ADR 0005, PR 1). All prices use the run currency; equipment facts and the pack price have no defaults. `daily_persistence` is refused with a vehicle. Without this table, existing behavior is unchanged.
+
+| Key | Required | Description |
+|---|---|---|
+| `battery_cost_per_kwh` | yes | Pack-only replacement/wear price per nominal kWh in run currency; required, no default |
+| `battery_kwh` | yes | Nominal pack capacity in kWh; greater than 0, no default |
+| `charger_ac_rating_kw` | yes | Charger AC input/output rating in kW; greater than 0, no default |
+| `charger_cost` | `mode = "v2h"` | Installed charger premium in run currency; required with v2h, no default; otherwise default 0 |
+| `charger_efficiency` | yes | Charger nominal efficiency in (0, 1]; no default |
+| `departure_soc` | yes | Required SOC at each departure, within the SOC window; no default |
+| `mode` | yes | Required study mode: "uncontrolled", "v1g" or "v2h"; no default; simulation is not available yet |
+| `schedule` | yes | Required weekday/weekend rules or trip-segment CSV; see vehicle.schedule |
+| `away_charging` |  | Optional away charging equipment and price; all four nested keys required |
+| `battery_replacement_cost` |  | Optional price of one swap, including installation; terminal credit remains pack-only |
+| `battery_temperature` |  | "weather" (default), fixed °C or timestamped CSV; no indoor model |
+| `blast_model` |  | Enabled BLAST cell-model key; required with blast, refused with native |
+| `calendar_model` |  | Native calendar model; default "naumann_lam_field_calibrated" |
+| `charge_efficiency` |  | Battery DC-in to stored efficiency; default 0.974679 |
+| `charge_periods` |  | Disjoint tariff periods for grid charging; needs tariff; refused with uncontrolled |
+| `degradation_engine` |  | "native" (default) or "blast"; BLAST is refused with Monte Carlo |
+| `discharge_efficiency` |  | Battery stored to DC-out efficiency; default 0.974679 |
+| `discharge_periods` |  | Tariff periods for discharge; needs tariff and v2h; disjoint from charge_periods |
+| `enable_replacement` |  | Replace the pack at its health threshold; default true |
+| `eol_percentage` |  | Pack replacement health threshold; default 0.7 |
+| `max_soc` |  | Maximum SOC; default 1 |
+| `min_soc` |  | Minimum SOC; default 0.1 |
+| `outside_charging_price` |  | Optional penalty per kWh of unserved driving; restores no energy; no default |
+| `reference_mode` |  | Reference household mode; default v1g for v2h, uncontrolled for v1g, none for uncontrolled; must differ from mode |
+| `replacement_min_remaining_years` |  | Minimum project years remaining for a replacement; default 0 |
+| `skipped_replacement_action` |  | "keep" (default) or "retire" the old pack when replacement is skipped |
+| `v2h_min_soc` |  | V2H discharge floor within the SOC window; v2h only; default min_soc |
+
+## vehicle.away_charging
+
+Optional away charger. All four keys are required; purchases cross no site meter. Charging occurs only during schedule charging windows.
+
+| Key | Required | Description |
+|---|---|---|
+| `efficiency` | yes | Stored energy per purchased energy, in (0, 1]; no default |
+| `power_kw` | yes | Charging power at the purchased-energy boundary, in kW; greater than 0, no default |
+| `price` | yes | Price per purchased kWh in the run currency; required, 0 means free charging |
+| `target_soc` | yes | Stopping target within the vehicle SOC window, not a ceiling on energy already on board |
+
+## vehicle.schedule
+
+Set weekday and weekend rules, or a CSV file timestamped in the simulation's reference year. A step is plugged in only when home for all of it: departure rounds down, arrival up. The calendar replays across the year seam; departure counts include steps beyond a period window. Times use the configured zone, including DST. For a repeated template time, departure uses its first occurrence and arrival its last; nonexistent times shift to the DST transition. Naive CSV times at DST transitions are refused; use explicit offsets. CSV columns are `start`, `end`, `kind`, `energy_kwh` (drive) and `away_charging` (park, true/false). Rows are ordered, non-overlapping segments; gaps mean home. Adjacent segments form one absence. Driving is distributed by elapsed overlap; parked charging hours are never rounded up. Multiple drive/park alternations within one step collapse into driving before the first park, all eligible parked hours, then the remaining driving. A header-only CSV means always home with no departure target.
+
+| Key | Required | Description |
+|---|---|---|
+| `weekday` | unless file is set | Monday–Friday rule; see vehicle.schedule.weekday |
+| `weekend` | unless file is set | Saturday–Sunday rule, with the same keys as vehicle.schedule.weekday |
+| `file` |  | Trip-segment CSV path, relative to the working directory; replaces both day rules |
+
+## vehicle.schedule.weekday
+
+Weekday and weekend rules share these keys. The departure date selects the day type. The coarse leg template withdraws half the gross trip energy in the first away step and half in the last, with parked charging windows only between those steps. A one-step trip combines both legs and has no parked time. This approximates driving; use segments for measured trips.
+
+| Key | Required | Description |
+|---|---|---|
+| `arrive` | yes | Local arrival time, HH:MM; at or before departure means arrival on the following day |
+| `depart` | yes | Local departure time, HH:MM; the departure date selects the day type |
+| `trip_kwh` | yes | Gross stored energy withdrawn while driving, in kWh; half in the first and last away steps |
+| `away_charging` |  | Allow away charging in the parked steps between the two legs; default true |
 
 ## period
 
