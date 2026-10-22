@@ -50,6 +50,7 @@ for _helper in (
     _dispatch._battery_inverter_charge,
     _dispatch._battery_inverter_charge_input,
     _dispatch._dispatch_ac_step,
+    _dispatch._dispatch_vehicle_step,
 ):
     register_jitable(fastmath=False)(_helper)
 

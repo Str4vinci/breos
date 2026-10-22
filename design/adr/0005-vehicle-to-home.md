@@ -1,8 +1,8 @@
 # 0005 — Vehicle-to-home: the vehicle as a second, part-time AC-coupled store
 
 - **Status:** Proposed, with the decisions taken by the maintainer
-  on 2026-10-06, 2026-10-07 and 2026-10-22 (see [Decisions](#decisions)). No code yet;
-  implementation is planned for 0.8.0, after the AC-coupled battery work
+  on 2026-10-06, 2026-10-07 and 2026-10-22 (see [Decisions](#decisions)).
+  Implementation is in progress for 0.8.0, after the AC-coupled battery work
   (#419). Tracked in #420.
 - **Date:** 2026-10-06; decisions taken 2026-10-06, 2026-10-07 and
   2026-10-22; amended 2026-10-22
@@ -1063,6 +1063,62 @@ exact landings exactly, as ADR 0004's AC7 does.
   alone.** Rejected (V9, V10, decisions 10 and 11; VH7).
 - **Whole-vehicle replacement.** Rejected (V9): it needs purchase, resale
   and non-battery depreciation that are not battery wear.
+
+## Implementation status
+
+PR 1 implements configuration, schedule resolution and the App rollout refusal.
+PR 2(a) implements home dispatch in `_simulate_core` and the shared Python/Numba
+day loop: stationary first, then the vehicle on the AC residual, including
+missing and retired stationary packs. Those paths retain the vectorised house
+rows and run the shared loop with stationary dispatch disabled; no stationary
+capacity, health or standby state is invented. Without a vehicle the PV-only
+path remains vectorised. Ledger 3.1 includes all V11 vehicle columns, zero
+without a vehicle, plus PV/grid stored-charge and discharge-DC origin flows
+for stepwise reconciliation. States are Wh, SOC and vehicle SOH are fractions,
+and transfers are average W. Year rows and App results remain PR 4 work.
+
+Vehicle capacity is fixed at nominal in PR 2(a): **no vehicle ageing**,
+capacity-temperature derating, standby or replacement. Direct calls must set
+`vehicle.enable_replacement = false`; the App refusal remains until PR 4.
+Departure/arrival bookings, driving and away charging are deferred to PR 2(b).
+One explicit away branch carries on-board energy and origins unchanged and
+writes zero site energy and zero flows. Home closure checks therefore compare
+each home step with its starting on-board energy, without asserting boundary
+bookings across a home/away transition yet.
+
+Implementation interpretations for PR 2(a):
+
+- A plugged step with `steps_to_departure = 0` (an empty trip file) has no
+  deadline. V1G/V2H use PV and charge periods; V2H may discharge to its floor.
+  Uncontrolled charging still charges toward the target.
+- The lower-level `grid_import_limit_w` argument carries the existing
+  `[smart_charging]` key without constructing stationary instructions for a
+  vehicle-only run. When instructions also provide a limit, the vehicle uses
+  the smaller limit and leaves the stationary instructions and their hash
+  unchanged. App wiring remains PR 4 work.
+- Exact charge landings require that the requested stored energy fits one
+  full charger step: the converter inverse saturates above its rating and
+  cannot establish that an arbitrarily large target was reached.
+- ADR 0004 M9 refines identity 1's night term to grid-served night draw
+  (`night - min(PV AC surplus before charging, night)`). Identity 2 includes
+  that PV-served draw as an output before stationary/vehicle charging and
+  export. The vehicle still uses decision 16's literal deficit expression.
+
+PR 2(a) performance measured on 2026-10-23, against unchanged `2443c37`,
+using the same Python 3.12 environment and offline synthetic weather.
+`tools.generate_app_golden.run_scenario` ran `native_h_battery` (5 kWh)
+and `native_h_pv_only` with `projection_years = 1`, Python execution, one
+warm-up and five timed repetitions; the table reports medians. Cold and warm
+Numba first calls use `tools.benchmark_montecarlo.measure_compilation`, with
+a fresh temporary cache for the cold call and the same cache for the warm
+call. These are single-machine samples, not a platform performance guarantee.
+
+| No-vehicle measurement | Before | After |
+|---|---:|---:|
+| Hourly App year, stationary battery | 0.122921 s | 0.123874 s |
+| Hourly App year, PV-only | 0.036595 s | 0.037687 s |
+| Cold Numba first kernel call | 1.781 s | 2.369 s |
+| Warm-cache Numba first kernel call | 0.170 s | 0.175 s |
 
 ## Implementation plan and effort
 

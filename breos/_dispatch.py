@@ -30,6 +30,7 @@ from breos.dispatch_instructions import DispatchInstructions
 
 if TYPE_CHECKING:
     from breos.battery import BatteryConfig
+    from breos.vehicle import VehicleConfig, VehicleSchedule
 
 # PVWatts part-load curve. The inverter cores live here, beside the day loop,
 # because Numba's cache is keyed on this file: an edit to them or to these
@@ -38,6 +39,13 @@ PVWATTS_REFERENCE_EFFICIENCY = 0.9637
 PVWATTS_CURVE_QUADRATIC = -0.0162
 PVWATTS_CURVE_LINEAR = 0.9858
 PVWATTS_CURVE_CONSTANT = -0.0059
+
+# Empty schedules use the resolved schedule's readonly array types too, so
+# toggling a vehicle does not introduce another Numba signature.
+_EMPTY_VEHICLE_MASK: np.ndarray = np.empty(0, dtype=np.bool_)
+_EMPTY_VEHICLE_COUNTDOWN: np.ndarray = np.empty(0, dtype=np.int64)
+_EMPTY_VEHICLE_MASK.setflags(write=False)
+_EMPTY_VEHICLE_COUNTDOWN.setflags(write=False)
 
 
 def _curve_efficiency(curve_eff: np.ndarray, curve_row: float, point: int) -> float:
@@ -281,12 +289,13 @@ def _dc_for_ac(
 # derating and night consumption entries. It also adds PV_AC_To_Battery and
 # PV_Charge_Conversion_Loss, the PV inverter's AC that an AC-coupled battery
 # inverter takes in and that inverter's charging loss on it (ADR 0004 C8);
-# both are zero in a DC-coupled or PV-only run.
+# both are zero in a DC-coupled or PV-only run. Vehicle states, home,
+# boundary, away and origin flows also join unreleased 3.1 (ADR 0005 A2).
 LEDGER_SCHEMA_VERSION = "3.1"
 
 # Per-step state columns, by results-frame name, in their row order inside the
-# shared buffer matrix. Stored-energy columns are Wh; every other column is
-# average W over the timestep.
+# shared buffer matrix. Stored-energy columns are Wh, SOC is a fraction,
+# stationary SOH is percent, and T_cell is Celsius. Power is average W.
 _STATE_COLUMNS: Tuple[str, ...] = (
     "PV_DC",
     "PV_Production",
@@ -365,6 +374,51 @@ _LEDGER_COLUMNS: Tuple[str, ...] = (
 # day loop writes it, the buffers expose it and the results frame reports it
 # under this name. The day loop addresses rows by the indices below, so the
 # order is its contract.
+_VEHICLE_STATE_COLUMNS: Tuple[str, ...] = (
+    "Vehicle_Plugged",
+    "Vehicle_Energy",
+    "Vehicle_Energy_Onboard",
+    "Vehicle_SOC_Absolute",
+    "Vehicle_SOH",
+    "Vehicle_PV_Origin_Energy_End",
+    "Vehicle_Grid_Origin_Energy_End",
+)
+_VEHICLE_LEDGER_COLUMNS: Tuple[str, ...] = (
+    "PV_AC_To_Vehicle",
+    "Grid_AC_To_Vehicle",
+    "Vehicle_Charge_Conversion_Loss",
+    "Vehicle_Charge_Input",
+    "Vehicle_Charge_Loss",
+    "Vehicle_Discharge_DC",
+    "Vehicle_Discharge_Loss",
+    "Vehicle_Charger_Loss",
+    "Vehicle_AC_To_Load",
+    "PV_Origin_Vehicle_AC_To_Load",
+    "Grid_Origin_Vehicle_AC_To_Load",
+    "Vehicle_Departure_Energy",
+    "Vehicle_Arrival_Energy",
+    "Vehicle_Departure_Shortfall",
+    "Vehicle_Drive_Energy",
+    "Vehicle_Drive_Unserved",
+    "Vehicle_Away_Charge_Purchased",
+    "Vehicle_Away_Charge_Loss",
+    "PV_Origin_Vehicle_Drive_Energy",
+    "Grid_Origin_Vehicle_Drive_Energy",
+    "Vehicle_Capacity_Window_Loss",
+    "Vehicle_Replacement_Energy_Removed",
+    "Vehicle_Replacement_Energy_Added",
+    "PV_Origin_Vehicle_Capacity_Window_Loss",
+    "Grid_Origin_Vehicle_Capacity_Window_Loss",
+    "PV_Origin_Vehicle_Replacement_Energy_Removed",
+    "Grid_Origin_Vehicle_Replacement_Energy_Removed",
+    "PV_Origin_Vehicle_Charge_Stored",
+    "Grid_Origin_Vehicle_Charge_Stored",
+    "PV_Origin_Vehicle_Discharge_DC",
+    "Grid_Origin_Vehicle_Discharge_DC",
+)
+
+_STATE_COLUMNS += _VEHICLE_STATE_COLUMNS
+_LEDGER_COLUMNS += _VEHICLE_LEDGER_COLUMNS
 _ROW_COLUMNS: Tuple[str, ...] = _STATE_COLUMNS + _LEDGER_COLUMNS
 _ROW: Dict[str, int] = {name: row for row, name in enumerate(_ROW_COLUMNS)}
 _N_ROWS: int = len(_ROW_COLUMNS)
@@ -423,6 +477,46 @@ L_GRID_ORIGIN_BATTERY_AC_TO_LOAD = _ROW["Grid_Origin_Battery_AC_To_Load"]
 L_GRID_ORIGIN_STANDBY_LOSS = _ROW["Grid_Origin_Standby_Loss"]
 L_GRID_ORIGIN_CAPACITY_WINDOW_LOSS = _ROW["Grid_Origin_Capacity_Window_Loss"]
 L_GRID_ORIGIN_REPLACEMENT_REMOVED = _ROW["Grid_Origin_Replacement_Energy_Removed"]
+
+# Vehicle states are Wh (SOC, SOH and plugged are fractions); flows are average W.
+R_VEHICLE_PLUGGED = _ROW["Vehicle_Plugged"]
+R_VEHICLE_ENERGY = _ROW["Vehicle_Energy"]
+R_VEHICLE_ENERGY_ONBOARD = _ROW["Vehicle_Energy_Onboard"]
+R_VEHICLE_SOC_ABSOLUTE = _ROW["Vehicle_SOC_Absolute"]
+R_VEHICLE_SOH = _ROW["Vehicle_SOH"]
+R_VEHICLE_PV_ORIGIN_ENERGY_END = _ROW["Vehicle_PV_Origin_Energy_End"]
+R_VEHICLE_GRID_ORIGIN_ENERGY_END = _ROW["Vehicle_Grid_Origin_Energy_End"]
+L_PV_AC_TO_VEHICLE = _ROW["PV_AC_To_Vehicle"]
+L_GRID_AC_TO_VEHICLE = _ROW["Grid_AC_To_Vehicle"]
+L_VEHICLE_CHARGE_CONVERSION_LOSS = _ROW["Vehicle_Charge_Conversion_Loss"]
+L_VEHICLE_CHARGE_INPUT = _ROW["Vehicle_Charge_Input"]
+L_VEHICLE_CHARGE_LOSS = _ROW["Vehicle_Charge_Loss"]
+L_VEHICLE_DISCHARGE_DC = _ROW["Vehicle_Discharge_DC"]
+L_VEHICLE_DISCHARGE_LOSS = _ROW["Vehicle_Discharge_Loss"]
+L_VEHICLE_CHARGER_LOSS = _ROW["Vehicle_Charger_Loss"]
+L_VEHICLE_AC_TO_LOAD = _ROW["Vehicle_AC_To_Load"]
+L_PV_ORIGIN_VEHICLE_AC_TO_LOAD = _ROW["PV_Origin_Vehicle_AC_To_Load"]
+L_GRID_ORIGIN_VEHICLE_AC_TO_LOAD = _ROW["Grid_Origin_Vehicle_AC_To_Load"]
+L_VEHICLE_DEPARTURE_ENERGY = _ROW["Vehicle_Departure_Energy"]
+L_VEHICLE_ARRIVAL_ENERGY = _ROW["Vehicle_Arrival_Energy"]
+L_VEHICLE_DEPARTURE_SHORTFALL = _ROW["Vehicle_Departure_Shortfall"]
+L_VEHICLE_DRIVE_ENERGY = _ROW["Vehicle_Drive_Energy"]
+L_VEHICLE_DRIVE_UNSERVED = _ROW["Vehicle_Drive_Unserved"]
+L_VEHICLE_AWAY_CHARGE_PURCHASED = _ROW["Vehicle_Away_Charge_Purchased"]
+L_VEHICLE_AWAY_CHARGE_LOSS = _ROW["Vehicle_Away_Charge_Loss"]
+L_PV_ORIGIN_VEHICLE_DRIVE_ENERGY = _ROW["PV_Origin_Vehicle_Drive_Energy"]
+L_GRID_ORIGIN_VEHICLE_DRIVE_ENERGY = _ROW["Grid_Origin_Vehicle_Drive_Energy"]
+L_VEHICLE_CAPACITY_WINDOW_LOSS = _ROW["Vehicle_Capacity_Window_Loss"]
+L_VEHICLE_REPLACEMENT_ENERGY_REMOVED = _ROW["Vehicle_Replacement_Energy_Removed"]
+L_VEHICLE_REPLACEMENT_ENERGY_ADDED = _ROW["Vehicle_Replacement_Energy_Added"]
+L_PV_ORIGIN_VEHICLE_CAPACITY_WINDOW_LOSS = _ROW["PV_Origin_Vehicle_Capacity_Window_Loss"]
+L_GRID_ORIGIN_VEHICLE_CAPACITY_WINDOW_LOSS = _ROW["Grid_Origin_Vehicle_Capacity_Window_Loss"]
+L_PV_ORIGIN_VEHICLE_REPLACEMENT_ENERGY_REMOVED = _ROW["PV_Origin_Vehicle_Replacement_Energy_Removed"]
+L_GRID_ORIGIN_VEHICLE_REPLACEMENT_ENERGY_REMOVED = _ROW["Grid_Origin_Vehicle_Replacement_Energy_Removed"]
+L_PV_ORIGIN_VEHICLE_CHARGE_STORED = _ROW["PV_Origin_Vehicle_Charge_Stored"]
+L_GRID_ORIGIN_VEHICLE_CHARGE_STORED = _ROW["Grid_Origin_Vehicle_Charge_Stored"]
+L_PV_ORIGIN_VEHICLE_DISCHARGE_DC = _ROW["PV_Origin_Vehicle_Discharge_DC"]
+L_GRID_ORIGIN_VEHICLE_DISCHARGE_DC = _ROW["Grid_Origin_Vehicle_Discharge_DC"]
 
 
 def lfp_capacity_factor(T_C: float) -> float:
@@ -1113,6 +1207,94 @@ def _dispatch_ac_step(
     )
 
 
+def _dispatch_vehicle_step(
+    energy: float,
+    surplus: float,
+    deficit: float,
+    site_room: float,
+    steps_to_departure: int,
+    mode: int,
+    target: float,
+    ceiling: float,
+    floor: float,
+    rating_wh: float,
+    charger_eff: float,
+    eff_c: float,
+    eff_d: float,
+    s_max: float,
+    charge_period: bool,
+    discharge_period: bool,
+    pow_two: float,
+    flat_ac: np.ndarray,
+    flat_eff: np.ndarray,
+) -> tuple[float, float, float, float, float, float, float, float, float, float]:
+    """Home dispatch in Wh, after the stationary store (ADR 0005 V4/V5).
+
+    Modes are 0 uncontrolled, 1 V1G, 2 V2H. A zero departure countdown
+    means no scheduled departure: PV/period charging may still run, but
+    neither mandatory charging nor the discharge deadline binds.
+
+    Returns ending energy, PV AC in, grid AC in, DC charge input, battery
+    charge loss, stored-energy discharge draw, battery discharge loss,
+    charger discharge loss, AC to load, and PV-origin charge stored.
+    """
+    need = max(0.0, target - energy)
+    future = max(0, steps_to_departure - 1) * s_max
+    mandatory = (
+        min(s_max, need) if mode == 0 else (min(s_max, max(0.0, need - future)) if steps_to_departure > 0 else 0.0)
+    )
+    room = max(0.0, (target if mode == 0 else ceiling) - energy)
+    room_ac = _battery_inverter_charge_input(room / eff_c, rating_wh, charger_eff, flat_ac, flat_eff)
+    pv_ac = min(surplus, rating_wh, room_ac)
+    full_charge = rating_wh * charger_eff * eff_c
+    desired = min(room, full_charge, max(mandatory, need if charge_period else 0.0))
+    total_ac_needed = _battery_inverter_charge_input(desired / eff_c, rating_wh, charger_eff, flat_ac, flat_eff)
+    grid_needed = max(0.0, total_ac_needed - pv_ac)
+    grid_ac = min(grid_needed, max(0.0, rating_wh - pv_ac), site_room)
+    ac_in = pv_ac + grid_ac
+    dc_in = _battery_inverter_charge(ac_in, rating_wh, charger_eff, pow_two, flat_ac, flat_eff)
+    stored = dc_in * eff_c
+    # One charger operating point for both sources, including its start-up loss.
+    pv_stored = stored * pv_ac / ac_in if ac_in > 0.0 else 0.0
+    draw = 0.0
+    discharge_loss = 0.0
+    charger_loss = 0.0
+    ac_out = 0.0
+    if ac_in > 0.0:
+        end = energy + stored
+        # Reached target and capacity bounds are exact, like hold_target.
+        bound = target if mode == 0 else ceiling
+        # Check the supplied components, not their rounded sum: PV + (AC
+        # request - PV) may be one ulp below the request even when neither
+        # source was limited. Such a reached target must still land exactly.
+        room_met = pv_ac >= room_ac or grid_ac >= max(0.0, room_ac - pv_ac)
+        if stored >= room or (room <= full_charge and room_met):
+            end = bound
+        elif desired > 0.0 and pv_ac <= total_ac_needed and grid_ac >= grid_needed:
+            end = target if desired >= need else energy + desired
+        # Derive the stored amount after snapping so origins close in Wh.
+        stored = end - energy
+        pv_stored = stored * pv_ac / ac_in
+        energy = end
+    elif mode == 2 and discharge_period:
+        guard = target - future if steps_to_departure > 0 else floor
+        bound = max(floor, guard)
+        available = max(0.0, energy - bound)
+        ac_target = min(deficit, rating_wh)
+        dc_needed = _dc_for_ac(ac_target, rating_wh, charger_eff, 1.0, flat_ac, flat_eff, 0.0, 0.0)
+        dc_out = min(available * eff_d, dc_needed)
+        draw = dc_out / eff_d
+        ac_out = min(ac_target, _dc_ac(dc_out, rating_wh, charger_eff, 1.0, pow_two, flat_ac, flat_eff, 0.0, 0.0)[0])
+        end = energy - draw
+        if available > 0.0 and dc_out >= available * eff_d:
+            end = bound
+            draw = energy - end
+        energy = end
+        discharge_loss = draw - dc_out
+        charger_loss = dc_out - ac_out
+    return energy, pv_ac, grid_ac, dc_in, dc_in - stored, draw, discharge_loss, charger_loss, ac_out, pv_stored
+
+
 def _dispatch_day(
     matrix: np.ndarray,
     pv_dc_vals: np.ndarray,
@@ -1157,13 +1339,33 @@ def _dispatch_day(
     pv_chain_loss: np.ndarray,
     pv_chain_clip: np.ndarray,
     pv_chain_night: np.ndarray,
+    stationary_active: bool,
+    vehicle_enabled: bool,
+    vehicle_energy: float,
+    vehicle_pv_origin: float,
+    vehicle_grid_origin: float,
+    vehicle_mode: int,
+    vehicle_capacity: float,
+    vehicle_target: float,
+    vehicle_ceiling: float,
+    vehicle_floor: float,
+    vehicle_rating_wh: float,
+    vehicle_charger_eff: float,
+    vehicle_eff_c: float,
+    vehicle_eff_d: float,
+    vehicle_import_cap_wh: float,
+    vehicle_plugged: np.ndarray,
+    vehicle_countdown: np.ndarray,
+    vehicle_charge_period: np.ndarray,
+    vehicle_discharge_period: np.ndarray,
 ) -> None:
     """Dispatch timesteps ``[lo, hi)`` at fixed health, writing rows of *matrix*.
 
     State of health, resistance-derived efficiencies and the replacement
     decision are unchanged for the duration of the call; the caller advances
-    them at the day boundary. Only battery runs come here: PV-only runs take
-    the vectorised path in :mod:`breos.battery`.
+    them at the day boundary. Without a stationary pack (or with a retired
+    one), stationary_active=False retains the vectorised house rows and
+    dispatches only the vehicle. Without a vehicle PV-only stays vectorised.
 
     ``discharge_allowed``, ``reserve_fraction`` and ``grid_target_fraction``
     are the per-step instruction arrays (ADR 0002), indexed like the inputs.
@@ -1188,262 +1390,365 @@ def _dispatch_day(
     Nothing is returned: the state the next window and the day-close
     replacement path need is the final step's row of *matrix*.
     """
+    matrix[R_VEHICLE_PLUGGED : R_VEHICLE_GRID_ORIGIN_ENERGY_END + 1, lo:hi] = 0.0
+    matrix[L_PV_AC_TO_VEHICLE:, lo:hi] = 0.0
     soh_percent = soh_fraction * 100.0
     # Empty curve arrays of the right types: the battery inverter's PVWatts curve.
     flat_ac = curve_ac[:0]
     flat_eff = curve_eff[:0]
+    vehicle_s_max = (
+        _battery_inverter_charge(
+            min(vehicle_rating_wh, vehicle_import_cap_wh),
+            vehicle_rating_wh,
+            vehicle_charger_eff,
+            pow_two,
+            flat_ac,
+            flat_eff,
+        )
+        * vehicle_eff_c
+        if vehicle_enabled
+        else 0.0
+    )
     for i in range(lo, hi):
-        # Treat negative model/data artefacts as zero generation, matching the
-        # public inverter helper and preventing negative PV from being
-        # allocated through the shared PV/battery conversion path.
-        pv_dc_power = max(0.0, pv_dc_vals[i] * hours_per_step)  # DC power (Wh) before inverter
-        load = load_vals[i] * hours_per_step  # AC Load in Wh
-        t_ambient = temp_vals[i]
-        t_cell = t_ambient  # default; overridden by thermal model below
+        if stationary_active:
+            # Treat negative model/data artefacts as zero generation, matching the
+            # public inverter helper and preventing negative PV from being
+            # allocated through the shared PV/battery conversion path.
+            pv_dc_power = max(0.0, pv_dc_vals[i] * hours_per_step)  # DC power (Wh) before inverter
+            load = load_vals[i] * hours_per_step  # AC Load in Wh
+            t_ambient = temp_vals[i]
+            t_cell = t_ambient  # default; overridden by thermal model below
 
-        battery_energy_beginning = battery_energy
-        pv_origin_beginning = pv_origin
-        grid_origin_beginning = grid_origin
-        (
-            battery_energy,
-            pv_origin,
-            grid_origin,
-            emin,
-            emax,
-            capacity_window_loss,
-            battery_standby_loss,
-            pv_window_loss,
-            grid_window_loss,
-            pv_standby_loss,
-            grid_standby_loss,
-        ) = _apply_capacity_window(
-            nominal_energy_wh,
-            soh_fraction,
-            max_soc,
-            min_soc,
-            standby_loss_per_step_wh,
-            battery_energy,
-            pv_origin,
-            grid_origin,
-            t_cell,
-        )
-
-        # Instructions apply to this step's window. A zero reserve and no
-        # target leave the greedy floor, emin, exactly as it is.
-        reserve = reserve_fraction[i]
-        discharge_floor = emin + reserve * (emax - emin) if reserve > 0.0 else emin
-        target = grid_target_fraction[i]
-        grid_target_energy = emin + target * (emax - emin) if not math.isnan(target) else math.nan
-        if discharge_allowed[i] and reserve == target:
-            # A14's shared fraction has one A7 energy bound, exactly.
-            discharge_floor = grid_target_energy
-
-        # Discharge takes from every origin in proportion to its share before
-        # dispatch. One share per step is exact only because a step either
-        # charges or discharges, which is checked below.
-        energy_before_dispatch = battery_energy
-        origin_before_dispatch = pv_origin
-        grid_before_dispatch = grid_origin
-        origin_fraction = (
-            min(1.0, max(0.0, origin_before_dispatch / energy_before_dispatch)) if energy_before_dispatch > 0.0 else 0.0
-        )
-        grid_fraction = (
-            min(1.0, max(0.0, grid_before_dispatch / energy_before_dispatch)) if energy_before_dispatch > 0.0 else 0.0
-        )
-        if ac_coupled:
+            battery_energy_beginning = battery_energy
+            pv_origin_beginning = pv_origin
+            grid_origin_beginning = grid_origin
             (
                 battery_energy,
-                pv_dc_to_battery,
-                pv_dc_to_inverter,
-                pv_dc_curtailed,
-                pv_ac_to_load,
-                pv_ac_export,
-                battery_charge_input,
-                battery_discharge_dc,
-                battery_ac_to_load,
-                battery_charge_loss,
-                battery_discharge_loss,
-                pv_direct_inverter_loss,
-                battery_inverter_loss,
-                grid_import,
-                grid_ac,
-                grid_dc,
-                pv_ac_to_battery,
-                pv_dc_charge,
-            ) = _dispatch_ac_step(
-                pv_dc_power,
-                pv_chain_ac[i],
-                pv_chain_loss[i],
-                pv_chain_clip[i],
-                pv_chain_night[i],
-                load,
-                battery_energy,
-                emax,
-                eff_charge,
-                eff_discharge,
-                battery_inverter_wh,
-                battery_inverter_eff,
-                cap_charge_in_wh,
-                cap_discharge_ac_wh,
-                cap_stored_wh,
-                pow_two,
-                discharge_allowed[i],
-                discharge_floor,
-                grid_target_energy,
-                grid_import_cap_wh,
-                flat_ac,
-                flat_eff,
-            )
-            pv_charge_conversion_loss = pv_ac_to_battery - pv_dc_charge
-        else:
-            (
-                battery_energy,
-                pv_dc_to_battery,
-                pv_dc_to_inverter,
-                pv_dc_curtailed,
-                pv_ac_to_load,
-                pv_ac_export,
-                battery_charge_input,
-                battery_discharge_dc,
-                battery_ac_to_load,
-                battery_charge_loss,
-                battery_discharge_loss,
-                pv_direct_inverter_loss,
-                battery_inverter_loss,
-                grid_import,
-                grid_ac,
-                grid_dc,
-            ) = _dispatch_dc_step(
-                pv_dc_power,
-                load,
-                battery_energy,
+                pv_origin,
+                grid_origin,
                 emin,
                 emax,
-                eff_charge,
-                eff_discharge,
-                inv_eff,
-                cap_charge_in_wh,
-                cap_discharge_ac_wh,
-                inv_cap_ac_wh * ac_derate[i],
-                ac_output_scale,
-                cap_stored_wh,
-                pow_two,
-                discharge_allowed[i],
-                discharge_floor,
-                grid_target_energy,
-                grid_eff,
-                grid_import_cap_wh,
-                curve_ac,
-                curve_eff,
-                curve_rows[i],
-                cable_k,
-            )
-            pv_ac_to_battery = 0.0
-            pv_charge_conversion_loss = 0.0
-            # The DC PV put into the battery: PV DC itself when DC-coupled.
-            pv_dc_charge = pv_dc_to_battery
-        if battery_charge_input > 0.0 and battery_discharge_dc > 0.0:
-            raise ValueError("a dispatch step both charged and discharged the battery")
-        night_consumption = 0.0
-        if ac_coupled:
-            # Keep the whole draw; the AC step nets PV surplus against it
-            # before charging and imports only the remainder (ADR 0004 M9).
-            night_consumption = pv_chain_night[i]
-        elif night_wh > 0.0 and pv_dc_power <= 0.0 and battery_charge_input <= 0.0 and battery_discharge_dc <= 0.0:
-            night_consumption = night_wh
-            grid_import += night_consumption
-        charge_stored = battery_charge_input * eff_charge
-        # Each source's charge adds to its own origin: PV DC to PV, grid to grid.
-        pv_charge_stored = pv_dc_charge * eff_charge
-        grid_charge_stored = grid_dc * eff_charge
-        pv_origin_discharge_dc = battery_discharge_dc * origin_fraction
-        pv_origin_battery_ac = battery_ac_to_load * origin_fraction
-        pv_origin = max(0.0, origin_before_dispatch - pv_origin_discharge_dc + pv_charge_stored)
-        pv_origin = min(pv_origin, battery_energy)
-        grid_origin_discharge_dc = battery_discharge_dc * grid_fraction
-        grid_origin_battery_ac = battery_ac_to_load * grid_fraction
-        grid_origin = max(
-            0.0,
-            min(grid_before_dispatch - grid_origin_discharge_dc + grid_charge_stored, battery_energy - pv_origin),
-        )
-
-        # PV output after clipping and the direct PV inverter loss: AC to load
-        # and export plus DC to the battery, with or without an inverter rating.
-        pv_production = pv_dc_power - pv_dc_curtailed - pv_direct_inverter_loss
-        battery_energy_delta = battery_energy - battery_energy_beginning
-
-        # Compute cell temperature via lumped thermal model
-        if thermal_resistance_k_per_w > 0:
-            # The ledger is in Wh; convert to W for the thermal calculation
-            charge_power_w = battery_charge_input / hours_per_step if hours_per_step > 0 else 0.0
-            discharge_power_w = battery_discharge_dc / hours_per_step if hours_per_step > 0 else 0.0
-            t_cell = compute_cell_temperature(
-                t_ambient,
-                charge_power_w,
-                discharge_power_w,
-                eff_charge,
-                eff_discharge,
-                thermal_resistance_k_per_w,
+                capacity_window_loss,
+                battery_standby_loss,
+                pv_window_loss,
+                grid_window_loss,
+                pv_standby_loss,
+                grid_standby_loss,
+            ) = _apply_capacity_window(
+                nominal_energy_wh,
+                soh_fraction,
+                max_soc,
+                min_soc,
+                standby_loss_per_step_wh,
+                battery_energy,
+                pv_origin,
+                grid_origin,
+                t_cell,
             )
 
-        soc_normalized = (battery_energy - emin) / (emax - emin) if (emax - emin) > 0 else 0.0
-        soc_normalized = max(0.0, min(1.0, soc_normalized))
-        soc_absolute = battery_energy / (nominal_energy_wh * soh_fraction) if soh_fraction > 0 else 0.0
-        soc_absolute = max(0.0, min(1.0, soc_absolute))
+            # Instructions apply to this step's window. A zero reserve and no
+            # target leave the greedy floor, emin, exactly as it is.
+            reserve = reserve_fraction[i]
+            discharge_floor = emin + reserve * (emax - emin) if reserve > 0.0 else emin
+            target = grid_target_fraction[i]
+            grid_target_energy = emin + target * (emax - emin) if not math.isnan(target) else math.nan
+            if discharge_allowed[i] and reserve == target:
+                # A14's shared fraction has one A7 energy bound, exactly.
+                discharge_floor = grid_target_energy
 
-        matrix[R_PV_DC, i] = pv_dc_power / hours_per_step
-        matrix[R_PV_PRODUCTION, i] = pv_production / hours_per_step
-        matrix[R_LOAD, i] = load / hours_per_step
-        matrix[R_PV_DELTA, i] = (pv_production - load) / hours_per_step
-        matrix[R_GRID_IMPORT, i] = grid_import / hours_per_step
-        matrix[R_BATTERY_ENERGY, i] = battery_energy
-        matrix[R_SOC_NORMALIZED, i] = soc_normalized
-        matrix[R_SOC_ABSOLUTE, i] = soc_absolute
-        matrix[R_SOH, i] = soh_percent
-        matrix[R_T_CELL, i] = t_cell
-        matrix[R_CHARGE_LOSS, i] = battery_charge_loss / hours_per_step
-        matrix[R_DISCHARGE_LOSS, i] = battery_discharge_loss / hours_per_step
-        matrix[R_BATTERY_ENERGY_BEGIN, i] = battery_energy_beginning
-        matrix[R_PV_ORIGIN_BEGIN, i] = pv_origin_beginning
-        matrix[R_PV_ORIGIN_END, i] = pv_origin
-        matrix[R_GRID_ORIGIN_BEGIN, i] = grid_origin_beginning
-        matrix[R_GRID_ORIGIN_END, i] = grid_origin
+            # Discharge takes from every origin in proportion to its share before
+            # dispatch. One share per step is exact only because a step either
+            # charges or discharges, which is checked below.
+            energy_before_dispatch = battery_energy
+            origin_before_dispatch = pv_origin
+            grid_before_dispatch = grid_origin
+            origin_fraction = (
+                min(1.0, max(0.0, origin_before_dispatch / energy_before_dispatch))
+                if energy_before_dispatch > 0.0
+                else 0.0
+            )
+            grid_fraction = (
+                min(1.0, max(0.0, grid_before_dispatch / energy_before_dispatch))
+                if energy_before_dispatch > 0.0
+                else 0.0
+            )
+            if ac_coupled:
+                (
+                    battery_energy,
+                    pv_dc_to_battery,
+                    pv_dc_to_inverter,
+                    pv_dc_curtailed,
+                    pv_ac_to_load,
+                    pv_ac_export,
+                    battery_charge_input,
+                    battery_discharge_dc,
+                    battery_ac_to_load,
+                    battery_charge_loss,
+                    battery_discharge_loss,
+                    pv_direct_inverter_loss,
+                    battery_inverter_loss,
+                    grid_import,
+                    grid_ac,
+                    grid_dc,
+                    pv_ac_to_battery,
+                    pv_dc_charge,
+                ) = _dispatch_ac_step(
+                    pv_dc_power,
+                    pv_chain_ac[i],
+                    pv_chain_loss[i],
+                    pv_chain_clip[i],
+                    pv_chain_night[i],
+                    load,
+                    battery_energy,
+                    emax,
+                    eff_charge,
+                    eff_discharge,
+                    battery_inverter_wh,
+                    battery_inverter_eff,
+                    cap_charge_in_wh,
+                    cap_discharge_ac_wh,
+                    cap_stored_wh,
+                    pow_two,
+                    discharge_allowed[i],
+                    discharge_floor,
+                    grid_target_energy,
+                    grid_import_cap_wh,
+                    flat_ac,
+                    flat_eff,
+                )
+                pv_charge_conversion_loss = pv_ac_to_battery - pv_dc_charge
+            else:
+                (
+                    battery_energy,
+                    pv_dc_to_battery,
+                    pv_dc_to_inverter,
+                    pv_dc_curtailed,
+                    pv_ac_to_load,
+                    pv_ac_export,
+                    battery_charge_input,
+                    battery_discharge_dc,
+                    battery_ac_to_load,
+                    battery_charge_loss,
+                    battery_discharge_loss,
+                    pv_direct_inverter_loss,
+                    battery_inverter_loss,
+                    grid_import,
+                    grid_ac,
+                    grid_dc,
+                ) = _dispatch_dc_step(
+                    pv_dc_power,
+                    load,
+                    battery_energy,
+                    emin,
+                    emax,
+                    eff_charge,
+                    eff_discharge,
+                    inv_eff,
+                    cap_charge_in_wh,
+                    cap_discharge_ac_wh,
+                    inv_cap_ac_wh * ac_derate[i],
+                    ac_output_scale,
+                    cap_stored_wh,
+                    pow_two,
+                    discharge_allowed[i],
+                    discharge_floor,
+                    grid_target_energy,
+                    grid_eff,
+                    grid_import_cap_wh,
+                    curve_ac,
+                    curve_eff,
+                    curve_rows[i],
+                    cable_k,
+                )
+                pv_ac_to_battery = 0.0
+                pv_charge_conversion_loss = 0.0
+                # The DC PV put into the battery: PV DC itself when DC-coupled.
+                pv_dc_charge = pv_dc_to_battery
+            if battery_charge_input > 0.0 and battery_discharge_dc > 0.0:
+                raise ValueError("a dispatch step both charged and discharged the battery")
+            night_consumption = 0.0
+            if ac_coupled:
+                # Keep the whole draw; the AC step nets PV surplus against it
+                # before charging and imports only the remainder (ADR 0004 M9).
+                night_consumption = pv_chain_night[i]
+            elif night_wh > 0.0 and pv_dc_power <= 0.0 and battery_charge_input <= 0.0 and battery_discharge_dc <= 0.0:
+                night_consumption = night_wh
+                grid_import += night_consumption
+            charge_stored = battery_charge_input * eff_charge
+            # Each source's charge adds to its own origin: PV DC to PV, grid to grid.
+            pv_charge_stored = pv_dc_charge * eff_charge
+            grid_charge_stored = grid_dc * eff_charge
+            pv_origin_discharge_dc = battery_discharge_dc * origin_fraction
+            pv_origin_battery_ac = battery_ac_to_load * origin_fraction
+            pv_origin = max(0.0, origin_before_dispatch - pv_origin_discharge_dc + pv_charge_stored)
+            pv_origin = min(pv_origin, battery_energy)
+            grid_origin_discharge_dc = battery_discharge_dc * grid_fraction
+            grid_origin_battery_ac = battery_ac_to_load * grid_fraction
+            grid_origin = max(
+                0.0,
+                min(grid_before_dispatch - grid_origin_discharge_dc + grid_charge_stored, battery_energy - pv_origin),
+            )
 
-        matrix[L_PV_DC_TO_BATTERY, i] = pv_dc_to_battery / hours_per_step
-        matrix[L_PV_DC_TO_INVERTER, i] = pv_dc_to_inverter / hours_per_step
-        matrix[L_PV_DC_CURTAILED, i] = pv_dc_curtailed / hours_per_step
-        matrix[L_PV_AC_TO_LOAD, i] = pv_ac_to_load / hours_per_step
-        matrix[L_PV_AC_EXPORT, i] = pv_ac_export / hours_per_step
-        matrix[L_BATTERY_CHARGE_INPUT, i] = battery_charge_input / hours_per_step
-        matrix[L_BATTERY_CHARGE_STORED, i] = charge_stored / hours_per_step
-        matrix[L_GRID_AC_TO_BATTERY, i] = grid_ac / hours_per_step
-        matrix[L_GRID_DC_TO_BATTERY, i] = grid_dc / hours_per_step
-        matrix[L_GRID_CHARGE_CONVERSION_LOSS, i] = (grid_ac - grid_dc) / hours_per_step
-        matrix[L_PV_AC_TO_BATTERY, i] = pv_ac_to_battery / hours_per_step
-        matrix[L_PV_CHARGE_CONVERSION_LOSS, i] = pv_charge_conversion_loss / hours_per_step
-        matrix[L_BATTERY_DISCHARGE_DC, i] = battery_discharge_dc / hours_per_step
-        matrix[L_BATTERY_AC_TO_LOAD, i] = battery_ac_to_load / hours_per_step
-        matrix[L_PV_DIRECT_INVERTER_LOSS, i] = pv_direct_inverter_loss / hours_per_step
-        matrix[L_BATTERY_INVERTER_LOSS, i] = battery_inverter_loss / hours_per_step
-        matrix[L_INVERTER_LOSS, i] = (pv_direct_inverter_loss + battery_inverter_loss) / hours_per_step
-        matrix[L_INVERTER_NIGHT_CONSUMPTION, i] = night_consumption / hours_per_step
-        matrix[L_STANDBY_LOSS, i] = battery_standby_loss / hours_per_step
-        matrix[L_CAPACITY_WINDOW_LOSS, i] = capacity_window_loss / hours_per_step
-        matrix[L_REPLACEMENT_ENERGY_REMOVED, i] = 0.0
-        matrix[L_REPLACEMENT_ENERGY_ADDED, i] = 0.0
-        matrix[L_BATTERY_ENERGY_DELTA, i] = battery_energy_delta / hours_per_step
-        matrix[L_PV_ORIGIN_CHARGE_STORED, i] = pv_charge_stored / hours_per_step
-        matrix[L_PV_ORIGIN_DISCHARGE_DC, i] = pv_origin_discharge_dc / hours_per_step
-        matrix[L_PV_ORIGIN_BATTERY_AC_TO_LOAD, i] = pv_origin_battery_ac / hours_per_step
-        matrix[L_PV_ORIGIN_STANDBY_LOSS, i] = pv_standby_loss / hours_per_step
-        matrix[L_PV_ORIGIN_CAPACITY_WINDOW_LOSS, i] = pv_window_loss / hours_per_step
-        matrix[L_PV_ORIGIN_REPLACEMENT_REMOVED, i] = 0.0
-        matrix[L_GRID_ORIGIN_CHARGE_STORED, i] = grid_charge_stored / hours_per_step
-        matrix[L_GRID_ORIGIN_DISCHARGE_DC, i] = grid_origin_discharge_dc / hours_per_step
-        matrix[L_GRID_ORIGIN_BATTERY_AC_TO_LOAD, i] = grid_origin_battery_ac / hours_per_step
-        matrix[L_GRID_ORIGIN_STANDBY_LOSS, i] = grid_standby_loss / hours_per_step
-        matrix[L_GRID_ORIGIN_CAPACITY_WINDOW_LOSS, i] = grid_window_loss / hours_per_step
-        matrix[L_GRID_ORIGIN_REPLACEMENT_REMOVED, i] = 0.0
+            # PV output after clipping and the direct PV inverter loss: AC to load
+            # and export plus DC to the battery, with or without an inverter rating.
+            pv_production = pv_dc_power - pv_dc_curtailed - pv_direct_inverter_loss
+            battery_energy_delta = battery_energy - battery_energy_beginning
+
+            # Compute cell temperature via lumped thermal model
+            if thermal_resistance_k_per_w > 0:
+                # The ledger is in Wh; convert to W for the thermal calculation
+                charge_power_w = battery_charge_input / hours_per_step if hours_per_step > 0 else 0.0
+                discharge_power_w = battery_discharge_dc / hours_per_step if hours_per_step > 0 else 0.0
+                t_cell = compute_cell_temperature(
+                    t_ambient,
+                    charge_power_w,
+                    discharge_power_w,
+                    eff_charge,
+                    eff_discharge,
+                    thermal_resistance_k_per_w,
+                )
+
+            soc_normalized = (battery_energy - emin) / (emax - emin) if (emax - emin) > 0 else 0.0
+            soc_normalized = max(0.0, min(1.0, soc_normalized))
+            soc_absolute = battery_energy / (nominal_energy_wh * soh_fraction) if soh_fraction > 0 else 0.0
+            soc_absolute = max(0.0, min(1.0, soc_absolute))
+
+            matrix[R_PV_DC, i] = pv_dc_power / hours_per_step
+            matrix[R_PV_PRODUCTION, i] = pv_production / hours_per_step
+            matrix[R_LOAD, i] = load / hours_per_step
+            matrix[R_PV_DELTA, i] = (pv_production - load) / hours_per_step
+            matrix[R_GRID_IMPORT, i] = grid_import / hours_per_step
+            matrix[R_BATTERY_ENERGY, i] = battery_energy
+            matrix[R_SOC_NORMALIZED, i] = soc_normalized
+            matrix[R_SOC_ABSOLUTE, i] = soc_absolute
+            matrix[R_SOH, i] = soh_percent
+            matrix[R_T_CELL, i] = t_cell
+            matrix[R_CHARGE_LOSS, i] = battery_charge_loss / hours_per_step
+            matrix[R_DISCHARGE_LOSS, i] = battery_discharge_loss / hours_per_step
+            matrix[R_BATTERY_ENERGY_BEGIN, i] = battery_energy_beginning
+            matrix[R_PV_ORIGIN_BEGIN, i] = pv_origin_beginning
+            matrix[R_PV_ORIGIN_END, i] = pv_origin
+            matrix[R_GRID_ORIGIN_BEGIN, i] = grid_origin_beginning
+            matrix[R_GRID_ORIGIN_END, i] = grid_origin
+
+            matrix[L_PV_DC_TO_BATTERY, i] = pv_dc_to_battery / hours_per_step
+            matrix[L_PV_DC_TO_INVERTER, i] = pv_dc_to_inverter / hours_per_step
+            matrix[L_PV_DC_CURTAILED, i] = pv_dc_curtailed / hours_per_step
+            matrix[L_PV_AC_TO_LOAD, i] = pv_ac_to_load / hours_per_step
+            matrix[L_PV_AC_EXPORT, i] = pv_ac_export / hours_per_step
+            matrix[L_BATTERY_CHARGE_INPUT, i] = battery_charge_input / hours_per_step
+            matrix[L_BATTERY_CHARGE_STORED, i] = charge_stored / hours_per_step
+            matrix[L_GRID_AC_TO_BATTERY, i] = grid_ac / hours_per_step
+            matrix[L_GRID_DC_TO_BATTERY, i] = grid_dc / hours_per_step
+            matrix[L_GRID_CHARGE_CONVERSION_LOSS, i] = (grid_ac - grid_dc) / hours_per_step
+            matrix[L_PV_AC_TO_BATTERY, i] = pv_ac_to_battery / hours_per_step
+            matrix[L_PV_CHARGE_CONVERSION_LOSS, i] = pv_charge_conversion_loss / hours_per_step
+            matrix[L_BATTERY_DISCHARGE_DC, i] = battery_discharge_dc / hours_per_step
+            matrix[L_BATTERY_AC_TO_LOAD, i] = battery_ac_to_load / hours_per_step
+            matrix[L_PV_DIRECT_INVERTER_LOSS, i] = pv_direct_inverter_loss / hours_per_step
+            matrix[L_BATTERY_INVERTER_LOSS, i] = battery_inverter_loss / hours_per_step
+            matrix[L_INVERTER_LOSS, i] = (pv_direct_inverter_loss + battery_inverter_loss) / hours_per_step
+            matrix[L_INVERTER_NIGHT_CONSUMPTION, i] = night_consumption / hours_per_step
+            matrix[L_STANDBY_LOSS, i] = battery_standby_loss / hours_per_step
+            matrix[L_CAPACITY_WINDOW_LOSS, i] = capacity_window_loss / hours_per_step
+            matrix[L_REPLACEMENT_ENERGY_REMOVED, i] = 0.0
+            matrix[L_REPLACEMENT_ENERGY_ADDED, i] = 0.0
+            matrix[L_BATTERY_ENERGY_DELTA, i] = battery_energy_delta / hours_per_step
+            matrix[L_PV_ORIGIN_CHARGE_STORED, i] = pv_charge_stored / hours_per_step
+            matrix[L_PV_ORIGIN_DISCHARGE_DC, i] = pv_origin_discharge_dc / hours_per_step
+            matrix[L_PV_ORIGIN_BATTERY_AC_TO_LOAD, i] = pv_origin_battery_ac / hours_per_step
+            matrix[L_PV_ORIGIN_STANDBY_LOSS, i] = pv_standby_loss / hours_per_step
+            matrix[L_PV_ORIGIN_CAPACITY_WINDOW_LOSS, i] = pv_window_loss / hours_per_step
+            matrix[L_PV_ORIGIN_REPLACEMENT_REMOVED, i] = 0.0
+            matrix[L_GRID_ORIGIN_CHARGE_STORED, i] = grid_charge_stored / hours_per_step
+            matrix[L_GRID_ORIGIN_DISCHARGE_DC, i] = grid_origin_discharge_dc / hours_per_step
+            matrix[L_GRID_ORIGIN_BATTERY_AC_TO_LOAD, i] = grid_origin_battery_ac / hours_per_step
+            matrix[L_GRID_ORIGIN_STANDBY_LOSS, i] = grid_standby_loss / hours_per_step
+            matrix[L_GRID_ORIGIN_CAPACITY_WINDOW_LOSS, i] = grid_window_loss / hours_per_step
+            matrix[L_GRID_ORIGIN_REPLACEMENT_REMOVED, i] = 0.0
+
+        if vehicle_enabled:
+            plugged = vehicle_plugged[i]
+            if plugged:
+                before = vehicle_energy
+                pv_fraction = vehicle_pv_origin / before if before > 0.0 else 0.0
+                grid_fraction = vehicle_grid_origin / before if before > 0.0 else 0.0
+                surplus = matrix[L_PV_AC_EXPORT, i] * hours_per_step
+                imported = matrix[R_GRID_IMPORT, i] * hours_per_step
+                stationary_grid = matrix[L_GRID_AC_TO_BATTERY, i] * hours_per_step
+                night = matrix[L_INVERTER_NIGHT_CONSUMPTION, i] * hours_per_step
+                deficit = max(0.0, imported - stationary_grid - night)
+                site_room = max(0.0, vehicle_import_cap_wh - imported)
+                (
+                    vehicle_energy,
+                    pv_ac,
+                    grid_ac_v,
+                    dc_in,
+                    charge_loss_v,
+                    draw,
+                    discharge_loss_v,
+                    charger_loss_v,
+                    ac_out,
+                    pv_stored,
+                ) = _dispatch_vehicle_step(
+                    vehicle_energy,
+                    surplus,
+                    deficit,
+                    site_room,
+                    vehicle_countdown[i],
+                    vehicle_mode,
+                    vehicle_target,
+                    vehicle_ceiling,
+                    vehicle_floor,
+                    vehicle_rating_wh,
+                    vehicle_charger_eff,
+                    vehicle_eff_c,
+                    vehicle_eff_d,
+                    vehicle_s_max,
+                    vehicle_charge_period[i],
+                    vehicle_discharge_period[i],
+                    pow_two,
+                    flat_ac,
+                    flat_eff,
+                )
+                grid_stored = dc_in - charge_loss_v - pv_stored
+                pv_draw = draw * pv_fraction
+                grid_draw = draw * grid_fraction
+                vehicle_pv_origin = min(vehicle_energy, max(0.0, vehicle_pv_origin - pv_draw + pv_stored))
+                vehicle_grid_origin = min(
+                    vehicle_energy - vehicle_pv_origin, max(0.0, vehicle_grid_origin - grid_draw + grid_stored)
+                )
+                # No arithmetic on an unchanged residual: Q3 also pins signed zeros.
+                if pv_ac > 0.0:
+                    matrix[L_PV_AC_EXPORT, i] = (surplus - pv_ac) / hours_per_step
+                if grid_ac_v > 0.0 or ac_out > 0.0:
+                    matrix[R_GRID_IMPORT, i] = (imported + grid_ac_v - ac_out) / hours_per_step
+                matrix[L_PV_AC_TO_VEHICLE, i] = pv_ac / hours_per_step
+                matrix[L_GRID_AC_TO_VEHICLE, i] = grid_ac_v / hours_per_step
+                matrix[L_VEHICLE_CHARGE_CONVERSION_LOSS, i] = (pv_ac + grid_ac_v - dc_in) / hours_per_step
+                matrix[L_VEHICLE_CHARGE_INPUT, i] = dc_in / hours_per_step
+                matrix[L_VEHICLE_CHARGE_LOSS, i] = charge_loss_v / hours_per_step
+                matrix[L_VEHICLE_DISCHARGE_DC, i] = draw / hours_per_step
+                matrix[L_VEHICLE_DISCHARGE_LOSS, i] = discharge_loss_v / hours_per_step
+                matrix[L_VEHICLE_CHARGER_LOSS, i] = charger_loss_v / hours_per_step
+                matrix[L_VEHICLE_AC_TO_LOAD, i] = ac_out / hours_per_step
+                matrix[L_PV_ORIGIN_VEHICLE_AC_TO_LOAD, i] = (ac_out * pv_fraction) / hours_per_step
+                matrix[L_GRID_ORIGIN_VEHICLE_AC_TO_LOAD, i] = (ac_out * grid_fraction) / hours_per_step
+                matrix[L_PV_ORIGIN_VEHICLE_CHARGE_STORED, i] = pv_stored / hours_per_step
+                matrix[L_GRID_ORIGIN_VEHICLE_CHARGE_STORED, i] = grid_stored / hours_per_step
+                matrix[L_PV_ORIGIN_VEHICLE_DISCHARGE_DC, i] = pv_draw / hours_per_step
+                matrix[L_GRID_ORIGIN_VEHICLE_DISCHARGE_DC, i] = grid_draw / hours_per_step
+            else:
+                # Part (b) fills this seam: departure/arrival, driving and away
+                # charging. For now absence carries on-board energy unchanged.
+                pass
+            matrix[R_VEHICLE_PLUGGED, i] = 1.0 if plugged else 0.0
+            matrix[R_VEHICLE_ENERGY, i] = vehicle_energy if plugged else 0.0
+            matrix[R_VEHICLE_ENERGY_ONBOARD, i] = vehicle_energy
+            matrix[R_VEHICLE_SOC_ABSOLUTE, i] = vehicle_energy / vehicle_capacity
+            matrix[R_VEHICLE_SOH, i] = 1.0
+            matrix[R_VEHICLE_PV_ORIGIN_ENERGY_END, i] = vehicle_pv_origin
+            matrix[R_VEHICLE_GRID_ORIGIN_ENERGY_END, i] = vehicle_grid_origin
 
 
 def _day_arguments(
@@ -1471,6 +1776,15 @@ def _day_arguments(
     ac_derate: Optional[np.ndarray] = None,
     curve_rows: Optional[np.ndarray] = None,
     pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None,
+    stationary_active: bool = True,
+    vehicle_config: Optional["VehicleConfig"] = None,
+    vehicle_schedule: Optional["VehicleSchedule"] = None,
+    vehicle_energy_wh: float = 0.0,
+    vehicle_pv_origin_wh: float = 0.0,
+    vehicle_grid_origin_wh: float = 0.0,
+    vehicle_charge_period: Optional[np.ndarray] = None,
+    vehicle_discharge_period: Optional[np.ndarray] = None,
+    grid_import_limit_w: float = math.inf,
 ) -> Tuple[Any, ...]:
     """Pack one day's state into the positional arguments of :func:`_dispatch_day`.
 
@@ -1498,8 +1812,13 @@ def _day_arguments(
     carry no ``grid_charge_efficiency``; the kernels receive NaN. A
     DC-coupled one takes no chain and needs the efficiency.
     """
-    ac_coupled = battery_config.coupling == "ac"
-    if instructions is not None and instructions.grid_charge_efficiency is None and not ac_coupled:
+    ac_coupled = stationary_active and battery_config.coupling == "ac"
+    if (
+        stationary_active
+        and instructions is not None
+        and instructions.grid_charge_efficiency is None
+        and not ac_coupled
+    ):
         raise ValueError(
             "a DC-coupled battery needs a grid_charge_efficiency in its dispatch instructions; "
             "only an AC-coupled battery converts grid charge in its own inverter"
@@ -1518,7 +1837,7 @@ def _day_arguments(
         assert battery_config.battery_inverter_efficiency is not None
         battery_inverter_eff = battery_config.battery_inverter_efficiency
     else:
-        if pv_chain is not None:
+        if stationary_active and pv_chain is not None:
             raise ValueError("pv_chain is for an AC-coupled battery; a hybrid inverter converts PV in the step")
         chain = (np.empty(0), np.empty(0), np.empty(0), np.empty(0))
         battery_inverter_wh = math.inf
@@ -1572,6 +1891,29 @@ def _day_arguments(
         float(battery_inverter_wh),
         float(battery_inverter_eff),
         *chain,
+        stationary_active,
+        vehicle_config is not None,
+        float(vehicle_energy_wh),
+        float(vehicle_pv_origin_wh),
+        float(vehicle_grid_origin_wh),
+        0 if vehicle_config is None else {"uncontrolled": 0, "v1g": 1, "v2h": 2}[vehicle_config.mode],
+        1.0 if vehicle_config is None else float(vehicle_config.battery_kwh * 1000.0),
+        0.0 if vehicle_config is None else float(vehicle_config.departure_soc * vehicle_config.battery_kwh * 1000.0),
+        0.0 if vehicle_config is None else float(vehicle_config.max_soc * vehicle_config.battery_kwh * 1000.0),
+        0.0
+        if vehicle_config is None
+        else float(
+            max(vehicle_config.min_soc, vehicle_config.v2h_min_soc or 0.0) * vehicle_config.battery_kwh * 1000.0
+        ),
+        1.0 if vehicle_config is None else float(vehicle_config.charger_ac_rating_kw * 1000.0 * hours_per_step),
+        1.0 if vehicle_config is None else float(vehicle_config.charger_efficiency),
+        1.0 if vehicle_config is None else float(vehicle_config.charge_efficiency),
+        1.0 if vehicle_config is None else float(vehicle_config.discharge_efficiency),
+        float(min(grid_import_limit_w, instructions.grid_import_limit_w) * hours_per_step),
+        _EMPTY_VEHICLE_MASK if vehicle_schedule is None else vehicle_schedule.plugged,
+        _EMPTY_VEHICLE_COUNTDOWN if vehicle_schedule is None else vehicle_schedule.steps_to_departure,
+        _EMPTY_VEHICLE_MASK if vehicle_charge_period is None else vehicle_charge_period,
+        _EMPTY_VEHICLE_MASK if vehicle_discharge_period is None else vehicle_discharge_period,
     )
 
 
