@@ -281,6 +281,17 @@ def _inverter_model_fields(
             + first_year_results_df["PV_AC_Export"]
             + first_year_results_df[third]
         ).to_numpy(dtype=float)
+        if electrical is not None and len(electrical.inverters) > 1:
+            # The cable also delivered PV AC that served idle units before
+            # battery charging or export (ADR 0004 M9).
+            surplus = (
+                first_year_results_df["PV_DC_To_Inverter"]
+                - first_year_results_df["PV_Direct_Inverter_Loss"]
+                - first_year_results_df["PV_AC_To_Load"]
+            ).clip(lower=0.0)
+            delivered = delivered + np.minimum(
+                surplus.to_numpy(dtype=float), first_year_results_df["Inverter_Night_Consumption"].to_numpy(dtype=float)
+            )
         root = np.sqrt(np.clip(1.0 - 4.0 * k * delivered, 0.0, None))
         gross = 2.0 * delivered / (1.0 + root)
         loss = pd.Series(gross - delivered, index=first_year_results_df.index)

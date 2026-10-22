@@ -1735,8 +1735,9 @@ INVERTER_TABLE = TableSpec(
             "(of the nameplate). See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
         ),
         "night_consumption_w": (
-            "What the inverter draws from the grid while it converts nothing (W), as its datasheet states; "
-            "unset, it is not modelled. See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
+            "What the inverter draws from the AC bus while it converts nothing (W), as its datasheet states; "
+            "PV surplus after the house load serves it before charging or export, and only the remainder is imported. "
+            "Unset, it is not modelled. See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
         ),
         "ac_cable": (
             "The inverter's own AC cable, with the keys of [`[ac_cable]`](#ac_cable); with several inverters it "

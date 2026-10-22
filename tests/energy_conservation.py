@@ -66,7 +66,7 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
     ``config`` is the run's :class:`breos.battery.BatteryConfig`, for the
     charge efficiency, which is fixed unless resistance fade is enabled.
     """
-    optional = (*GRID_CHARGE_COLUMNS, *PV_AC_CHARGE_COLUMNS)
+    optional = (*GRID_CHARGE_COLUMNS, *PV_AC_CHARGE_COLUMNS, "Inverter_Night_Consumption")
     columns = [*LEDGER_COLUMNS, *(column for column in optional if column in results.columns)]
     ledger = results[columns].to_numpy(dtype=float)
     # assert_allclose treats NaN as equal to NaN, so a NaN row would pass
@@ -91,11 +91,18 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
         atol,
         "charge input split",
     )
-    # What the PV inverter takes in and loses leaves it as AC: to the load,
-    # to export, or to an AC-coupled battery inverter.
+    # Idle-inverter draw is served after the house load, before charging or
+    # export (ADR 0004 M9). Derive its PV share from the existing ledger.
+    night = _column(results, "Inverter_Night_Consumption")
+    pv_surplus = (results["PV_DC_To_Inverter"] - results["PV_Direct_Inverter_Loss"] - results["PV_AC_To_Load"]).clip(
+        lower=0.0
+    )
+    pv_to_night = np.minimum(pv_surplus, night)
+    # What the PV inverter takes in and loses leaves it as AC: to the house,
+    # idle inverters, export, or an AC-coupled battery inverter.
     _assert_balanced(
         results["PV_DC_To_Inverter"] - results["PV_Direct_Inverter_Loss"],
-        results["PV_AC_To_Load"] + results["PV_AC_Export"] + pv_ac_to_battery,
+        results["PV_AC_To_Load"] + pv_to_night + results["PV_AC_Export"] + pv_ac_to_battery,
         atol,
         "PV inverter output",
     )
@@ -105,15 +112,14 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
         atol,
         "PV DC split",
     )
-    # Import also feeds grid charging and the inverter's night consumption.
-    night = _column(results, "Inverter_Night_Consumption")
+    # Import also feeds grid charging and the part of the draw PV cannot cover.
     _assert_balanced(
         results["Houseload"],
         results["PV_AC_To_Load"]
         + results["Battery_AC_To_Load"]
         + results["Import_From_Grid"]
         - grid_to_battery
-        - night,
+        - (night - pv_to_night),
         atol,
         "load supply",
     )
@@ -184,6 +190,7 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
     # a replaced pack are outputs.
     outputs = (
         results["PV_AC_To_Load"]
+        + pv_to_night
         + results["PV_AC_Export"]
         + results["Battery_AC_To_Load"]
         + results["PV_DC_Curtailed"]

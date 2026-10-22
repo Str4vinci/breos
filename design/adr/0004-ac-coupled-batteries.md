@@ -983,6 +983,20 @@ differ from the sections above, they apply. Line references above stay at
   defaults do not change them; App-level results computed for the invariants
   are regenerated with those changes.
 
+## Amendment of 2026-10-22
+
+- **M9. Net idle PV inverter draw on the AC bus.** After the house load,
+  PV AC surplus serves idle inverters' draw before AC battery charging or
+  export. Only the uncovered draw is imported; the battery never serves it
+  (M3). A hybrid's no-PV/no-battery-flow rule and all single-inverter results
+  stay unchanged. `Inverter_Night_Consumption` records the whole draw. No
+  ledger column is needed: its PV share is
+  `min(Inverter_Night_Consumption, max(0, PV_DC_To_Inverter - PV_Direct_Inverter_Loss - PV_AC_To_Load))`;
+  the rest is the imported share. Include the PV share in the PV inverter
+  output and whole-system balances, and subtract only the imported share
+  from grid import in the house-load balance. This amends M3 for several
+  inverters and ADR 0007 D9/D10.
+
 ## Decisions on the open questions
 
 Decided by the maintainer on 2026-10-04. The proposal's eight open questions

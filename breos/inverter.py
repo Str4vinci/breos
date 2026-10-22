@@ -45,7 +45,7 @@ class InverterConversion:
     ``curve_row`` is the operating voltage's position among the rows. Empty
     arrays keep the PVWatts part-load curve. ``ac_cable_k_per_w`` is the AC
     cable's loss over the square of the AC output, in 1/W (:class:`AcCable`).
-    ``night_consumption_w`` is what the inverter draws from the grid while it
+    ``night_consumption_w`` is what the inverter draws from the AC bus while it
     converts nothing. The default converts exactly as no conversion does.
     """
 
