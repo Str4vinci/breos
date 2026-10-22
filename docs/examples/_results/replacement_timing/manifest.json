@@ -1,10 +1,10 @@
 {
  "case": "replacement_timing",
- "title": "When the battery swap lands",
+ "title": "Battery replacement timing",
  "breos_version": "0.7.0",
- "git_describe": "v0.6.2-610-gd29419b",
- "generated_utc": "2026-10-01T20:56:34+00:00",
- "runtime_s": 53.2,
+ "git_describe": "v0.7.0-112-gded4bb6",
+ "generated_utc": "2026-10-22T07:48:13+00:00",
+ "runtime_s": 61.6,
  "cheap": false,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
@@ -63,7 +63,7 @@
   14
  ],
  "files": {
-  "horizons.csv": "46e630330a54ca4933b0fe70d6abffced06d1c385fc92de0bc95684fe4ac0b95",
-  "modules.csv": "ee97a2b1301db7acd4ea8403881e67345a50ac63fd1f498fb37da8f0cf79e132"
+  "horizons.csv": "145e9d564e3cffec66f99c9f4ef2e985297a02208ae66e65d5bd80740e7a8411",
+  "modules.csv": "88b883de576f978e62be04ef48e617286db839f8cfab88e4038236364bc27d98"
  }
 }
