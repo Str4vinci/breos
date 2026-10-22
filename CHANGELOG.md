@@ -710,6 +710,10 @@ removed in 0.9.0.
   keeps the datasheet Isc (previously 0.03 % typical and 2.4 % worst), and
   5.7 times faster. **Fitted parameters change for every module**, by about
   0.03 % in power for most of them.
+- Idle PV inverter draw now uses the shared AC bus surplus after the house
+  load, before AC battery charging or export; only the uncovered draw is
+  imported (ADR 0004 M9). Several-inverter runs change by the netted draw,
+  typically a few Wh a year; single-inverter runs are unchanged.
 - Monte Carlo and optimizer workers no longer oversubscribe the CPU at
   15-minute resolution (#382). Each worker process limits its BLAS and
   OpenMP pools to one thread; the parent process keeps its own. On a

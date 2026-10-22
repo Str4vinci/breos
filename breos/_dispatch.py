@@ -963,17 +963,19 @@ def _dispatch_ac_step(
     The PV inverter has already converted the step: ``pv_ac``,
     ``pv_conversion_loss`` and ``pv_clipping_dc`` are the PV-only run's
     conversion of ``pv_dc``, whatever the battery does. PV AC serves the load
-    first, then charges the battery through its own inverter, then is
-    exported. The battery serves the remaining deficit through the same
-    inverter, rated ``battery_inverter_wh`` (AC, per step; infinite for flat
-    conversion) at nominal efficiency ``battery_inverter_eff``. Grid charge
+    first, then serves idle PV inverters' draw, then charges the battery
+    through its own inverter, then is exported. The battery serves the
+    remaining deficit through the same inverter, rated ``battery_inverter_wh``
+    (AC, per step; infinite for flat conversion) at nominal efficiency
+    ``battery_inverter_eff``. Grid charge
     then runs as in the DC-coupled step, but through the battery inverter:
     PV and grid AC entering it in one step convert at one operating point,
     and the DC is split in proportion to each source's AC.
 
-    ``night`` is the PV inverter's draw this step, from the grid whatever
-    the battery does (ADR 0004 M3). It is part of ``grid_import`` before
-    grid charge takes what is left of the site limit.
+    ``night`` is the PV inverters' whole draw this step (ADR 0004 M9).
+    PV surplus serves it before charging; only the remainder is imported,
+    whatever the battery does. It is part of ``grid_import`` before grid
+    charge takes what is left of the site limit.
 
     ``flat_ac`` and ``flat_eff`` are empty curve arrays, which select the
     PVWatts curve for the battery inverter.
@@ -996,6 +998,8 @@ def _dispatch_ac_step(
     pv_ac_to_load = min(pv_ac, load)
     surplus_ac = pv_ac - pv_ac_to_load
     deficit = load - pv_ac_to_load
+    pv_to_night = min(surplus_ac, night)
+    surplus_ac = surplus_ac - pv_to_night
     energy_before_charge = battery_energy
 
     # 1. PV surplus charges through the battery inverter.
@@ -1045,7 +1049,7 @@ def _dispatch_ac_step(
         battery_inverter_loss = battery_dc - battery_ac_to_load
     grid_import = max(0.0, deficit - battery_ac_to_load)
     if night > 0.0:
-        grid_import = grid_import + night
+        grid_import = grid_import + (night - pv_to_night)
 
     # 3. Grid charge toward the target, with what PV left of every shared
     # limit, including the battery inverter's AC input (C7).
@@ -1342,8 +1346,8 @@ def _dispatch_day(
             raise ValueError("a dispatch step both charged and discharged the battery")
         night_consumption = 0.0
         if ac_coupled:
-            # The PV inverter draws on its PV-less steps whatever the battery
-            # does; the AC step already counted it in grid_import (ADR 0004 M3).
+            # Keep the whole draw; the AC step nets PV surplus against it
+            # before charging and imports only the remainder (ADR 0004 M9).
             night_consumption = pv_chain_night[i]
         elif night_wh > 0.0 and pv_dc_power <= 0.0 and battery_charge_input <= 0.0 and battery_discharge_dc <= 0.0:
             night_consumption = night_wh

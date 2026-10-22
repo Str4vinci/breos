@@ -193,7 +193,7 @@ One entry per specified inverter, as `[[inverters]]` in TOML. `None` or an omitt
 | `max_usable_dc_power_w` |  | DC power the inverter converts over all inputs (W), or `inf` for none; string-level energy applies it |
 | `min_mppt_voltage_v` |  | Lower end of the MPPT voltage range (V), or 0 for none |
 | `mppts` |  | One table per MPPT input, in datasheet order; see [`mppts`](#mppts) |
-| `night_consumption_w` |  | What the inverter draws from the grid while it converts nothing (W), as its datasheet states; unset, it is not modelled. See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve) |
+| `night_consumption_w` |  | What the inverter draws from the AC bus while it converts nothing (W), as its datasheet states; PV surplus after the house load serves it before charging or export, and only the remainder is imported. Unset, it is not modelled. See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve) |
 | `recommended_dc_power_w` |  | Recommended PV generator power (W), or `inf` for none |
 | `startup_voltage_v` |  | Start-up voltage (V), or 0 for none |
 | `temperature_derating` |  | Allowed AC output against ambient: `ambient_temp_c` (°C, increasing) and `max_output_fraction` (of the nameplate). See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve) |

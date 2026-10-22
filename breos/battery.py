@@ -1416,7 +1416,11 @@ def _dispatch_no_battery_vectorized(
     grid_export_wh = ac_wh - pv_ac_to_load_wh
     grid_import_wh = np.maximum(0.0, load_wh - pv_ac_to_load_wh)
     if night_consumption_wh is not None:
-        grid_import_wh = grid_import_wh + night_consumption_wh
+        # Idle units share the bus: their draw precedes export. The battery
+        # never supplies it (ADR 0004 M9).
+        pv_to_night_wh = np.minimum(grid_export_wh, night_consumption_wh)
+        grid_export_wh = grid_export_wh - pv_to_night_wh
+        grid_import_wh = grid_import_wh + (night_consumption_wh - pv_to_night_wh)
     # Keep the scalar reference's subtraction order. Returning ``ac_wh``
     # here is algebraically equivalent but differs by one ULP at low load.
     pv_production_wh = pv_dc_wh - clipping_loss_dc_wh - conversion_loss_wh

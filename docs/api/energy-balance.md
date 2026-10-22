@@ -94,7 +94,8 @@ inverter losses.
 
 ### AC coupling
 
-With `"ac"`, PV AC serves the load first. Surplus AC enters the battery
+With `"ac"`, PV AC serves the house load first, then idle PV inverters'
+draw. The remaining surplus AC enters the battery
 inverter, up to its rating and the battery's charge-input and stored-energy
 limits, and what is left is exported. Clipping and curtailment are the PV
 inverter's alone. The battery discharges through its inverter to the
@@ -103,8 +104,13 @@ battery inverter's AC output. The two limits keep their meaning:
 `max_charge_power_w` is the DC side of the battery inverter while charging.
 A step either charges or discharges, never both.
 
-The PV inverter's night draw is grid import on every step without PV,
-whatever the battery does. An AC-coupled battery is costed with its own
+Each PV inverter draws on every step without its own PV DC. PV surplus
+after the house load serves that draw before battery charging or export;
+the uncovered part is grid import, whatever the battery does. The battery
+never serves the draw. `Inverter_Night_Consumption` records the whole draw;
+its PV share is
+`min(Inverter_Night_Consumption, max(0, PV_DC_To_Inverter - PV_Direct_Inverter_Loss - PV_AC_To_Load))`.
+Single-inverter runs are unchanged. An AC-coupled battery is costed with its own
 inverter price, `battery_inverter_cost_per_kw`; see
 [Cost and emissions presets](../getting-started/configuration.md#cost-and-emissions-presets). Inverter replacement on
 its own schedule is not modelled, for the PV, hybrid and battery inverters
