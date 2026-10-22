@@ -1077,14 +1077,29 @@ without a vehicle, plus PV/grid stored-charge and discharge-DC origin flows
 for stepwise reconciliation. States are Wh, SOC and vehicle SOH are fractions,
 and transfers are average W. Year rows and App results remain PR 4 work.
 
-Vehicle capacity is fixed at nominal in PR 2(a): **no vehicle ageing**,
+Vehicle capacity is fixed at nominal in PR 2: **no vehicle ageing**,
 capacity-temperature derating, standby or replacement. Direct calls must set
 `vehicle.enable_replacement = false`; the App refusal remains until PR 4.
-Departure/arrival bookings, driving and away charging are deferred to PR 2(b).
-One explicit away branch carries on-board energy and origins unchanged and
-writes zero site energy and zero flows. Home closure checks therefore compare
-each home step with its starting on-board energy, without asserting boundary
-bookings across a home/away transition yet.
+PR 2(b) implements departure and arrival bookings, the ordered driving legs,
+and parked away charging in the shared Python/Numba loop. A departure books
+the pre-driving on-board energy and a shortfall only above `1e-9 × cap_v`;
+arrival books the pre-home-dispatch energy. Driving removes each origin in
+proportion, stops at `min_soc`, and reports the rest as unserved without
+borrowing from charging later in the step. Away charging uses its own power
+and purchased-energy efficiency, with stored energy added to the grid origin.
+Away purchases and driving never cross the site meter.
+
+`VehicleCarry` holds on-board Wh, PV/grid origins and the previous plug state.
+It is returned by `_simulate_core`, detailed runs and summary reductions, and
+passed back through `vehicle_carry`. The shared `project_years` loop accepts a
+lower-level vehicle config plus each `ProjectionYear.vehicle_schedule`, and
+carries that state independently of a stationary pack on both frame and
+aligned-summary paths. This is one household; App's R0/R1/R2, pricing and
+annual vehicle result rows remain PR 4 work. Closure checks now include
+identities 5–10 across home/away transitions, with Wh/W scaling, ordered
+withdrawals, parked-time power limits and a full site balance excluding away
+flows. VH4/VH5 and full-trip Q4/Q5 run hourly and at 15 minutes on both backends,
+including multi-day, day-window and year seams.
 
 Implementation interpretations for PR 2(a):
 
@@ -1104,6 +1119,21 @@ Implementation interpretations for PR 2(a):
   that PV-served draw as an output before stationary/vehicle charging and
   export. The vehicle still uses decision 16's literal deficit expression.
 
+Implementation interpretations for PR 2(b):
+
+- A fresh simulation starts where its first schedule step says. Starting
+  already away creates no synthetic departure, shortfall or arrival at the
+  initial instant, and deducts no driving that occurred before the span.
+  Explicit carry supplies the previous plug state when resuming a span.
+- The resolved arrays supply the remaining leg energy and parked hours;
+  the carried plug state supplies the position inside an absence needed for
+  boundary detection. Continuing away across a day/year seam never repeats
+  departure; the next home step books arrival once, before charging.
+- The away charging stopping target applies after the first driving leg,
+  before the second: an initially above-target vehicle may fall below the
+  target on its first leg and then charge. Away charging does not revise
+  the departure shortfall already booked at the start of the absence.
+
 PR 2(a) performance measured on 2026-10-23, against unchanged `2443c37`,
 using the same Python 3.12 environment and offline synthetic weather.
 `tools.generate_app_golden.run_scenario` ran `native_h_battery` (5 kWh)
@@ -1119,6 +1149,20 @@ call. These are single-machine samples, not a platform performance guarantee.
 | Hourly App year, PV-only | 0.036595 s | 0.037687 s |
 | Cold Numba first kernel call | 1.781 s | 2.369 s |
 | Warm-cache Numba first kernel call | 0.170 s | 0.175 s |
+
+PR 2(b) performance measured on 2026-10-23 against unchanged `a680092`,
+using the same offline synthetic App-year setup and compilation probes as
+part (a), with one warm-up and five repetitions for each Python App median.
+The small App differences are within the ranges of these single-machine
+samples; no-vehicle ledger values remain pinned by the golden and digest
+checks. Numba first calls use an isolated temporary cache.
+
+| No-vehicle measurement | Before part (b) | After part (b) |
+|---|---:|---:|
+| Hourly App year, stationary battery | 0.124105 s | 0.123167 s |
+| Hourly App year, PV-only | 0.037053 s | 0.036862 s |
+| Cold Numba first kernel call | 2.383 s | 2.528 s |
+| Warm-cache Numba first kernel call | 0.170 s | 0.166 s |
 
 ## Implementation plan and effort
 

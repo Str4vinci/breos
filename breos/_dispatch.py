@@ -21,7 +21,7 @@ This module must not import Numba. ``import breos`` reaches it through
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
 
 import numpy as np
 
@@ -30,7 +30,7 @@ from breos.dispatch_instructions import DispatchInstructions
 
 if TYPE_CHECKING:
     from breos.battery import BatteryConfig
-    from breos.vehicle import VehicleConfig, VehicleSchedule
+    from breos.vehicle import AwayChargingConfig, VehicleConfig, VehicleSchedule
 
 # PVWatts part-load curve. The inverter cores live here, beside the day loop,
 # because Numba's cache is keyed on this file: an edit to them or to these
@@ -46,6 +46,8 @@ _EMPTY_VEHICLE_MASK: np.ndarray = np.empty(0, dtype=np.bool_)
 _EMPTY_VEHICLE_COUNTDOWN: np.ndarray = np.empty(0, dtype=np.int64)
 _EMPTY_VEHICLE_MASK.setflags(write=False)
 _EMPTY_VEHICLE_COUNTDOWN.setflags(write=False)
+_EMPTY_VEHICLE_FLOAT: np.ndarray = np.empty(0)
+_EMPTY_VEHICLE_FLOAT.setflags(write=False)
 
 
 def _curve_efficiency(curve_eff: np.ndarray, curve_row: float, point: int) -> float:
@@ -1295,6 +1297,70 @@ def _dispatch_vehicle_step(
     return energy, pv_ac, grid_ac, dc_in, dc_in - stored, draw, discharge_loss, charger_loss, ac_out, pv_stored
 
 
+def _vehicle_drive(
+    energy: float,
+    pv_origin: float,
+    grid_origin: float,
+    requested: float,
+    floor: float,
+) -> tuple[float, float, float, float, float, float]:
+    """Withdraw one driving leg in Wh, proportionally, never below min_soc."""
+    served = min(requested, max(0.0, energy - floor))
+    pv_used = served * (pv_origin / energy) if energy > 0.0 else 0.0
+    grid_used = served * (grid_origin / energy) if energy > 0.0 else 0.0
+    end = max(floor, energy - served)
+    return end, max(0.0, pv_origin - pv_used), max(0.0, grid_origin - grid_used), served, pv_used, grid_used
+
+
+def _dispatch_vehicle_away_step(
+    energy: float,
+    pv_origin: float,
+    grid_origin: float,
+    floor: float,
+    drive_first: float,
+    park_hours: float,
+    drive_second: float,
+    away_target: float,
+    away_power_w: float,
+    away_efficiency: float,
+) -> tuple[float, float, float, float, float, float, float, float, float]:
+    """Drive, charge while parked, then drive; away purchases never cross the site meter."""
+    energy, pv_origin, grid_origin, first, pv_first, grid_first = _vehicle_drive(
+        energy,
+        pv_origin,
+        grid_origin,
+        drive_first,
+        floor,
+    )
+    room = max(0.0, away_target - energy)
+    purchased = min(away_power_w * park_hours, room / away_efficiency)
+    stored = purchased * away_efficiency
+    end = energy + stored
+    if room > 0.0 and purchased >= room / away_efficiency:
+        end = away_target
+    stored = end - energy
+    grid_origin += stored
+    energy, pv_origin, grid_origin, second, pv_second, grid_second = _vehicle_drive(
+        end,
+        pv_origin,
+        grid_origin,
+        drive_second,
+        floor,
+    )
+    served = first + second
+    return (
+        energy,
+        pv_origin,
+        grid_origin,
+        served,
+        max(0.0, drive_first - first) + max(0.0, drive_second - second),
+        purchased,
+        purchased - stored,
+        pv_first + pv_second,
+        grid_first + grid_second,
+    )
+
+
 def _dispatch_day(
     matrix: np.ndarray,
     pv_dc_vals: np.ndarray,
@@ -1358,6 +1424,14 @@ def _dispatch_day(
     vehicle_countdown: np.ndarray,
     vehicle_charge_period: np.ndarray,
     vehicle_discharge_period: np.ndarray,
+    vehicle_was_plugged: bool,
+    vehicle_minimum: float,
+    vehicle_drive_first: np.ndarray,
+    vehicle_park_hours: np.ndarray,
+    vehicle_drive_second: np.ndarray,
+    vehicle_away_target: float,
+    vehicle_away_power_w: float,
+    vehicle_away_efficiency: float,
 ) -> None:
     """Dispatch timesteps ``[lo, hi)`` at fixed health, writing rows of *matrix*.
 
@@ -1669,6 +1743,15 @@ def _dispatch_day(
 
         if vehicle_enabled:
             plugged = vehicle_plugged[i]
+            # Boundaries are booked before any home or away operation. The
+            # previous plug state is carried across windows and project years.
+            if vehicle_was_plugged and not plugged:
+                matrix[L_VEHICLE_DEPARTURE_ENERGY, i] = vehicle_energy / hours_per_step
+                shortfall = max(0.0, vehicle_target - vehicle_energy)
+                if shortfall > 1e-9 * vehicle_capacity:
+                    matrix[L_VEHICLE_DEPARTURE_SHORTFALL, i] = shortfall / hours_per_step
+            elif not vehicle_was_plugged and plugged:
+                matrix[L_VEHICLE_ARRIVAL_ENERGY, i] = vehicle_energy / hours_per_step
             if plugged:
                 before = vehicle_energy
                 pv_fraction = vehicle_pv_origin / before if before > 0.0 else 0.0
@@ -1739,9 +1822,35 @@ def _dispatch_day(
                 matrix[L_PV_ORIGIN_VEHICLE_DISCHARGE_DC, i] = pv_draw / hours_per_step
                 matrix[L_GRID_ORIGIN_VEHICLE_DISCHARGE_DC, i] = grid_draw / hours_per_step
             else:
-                # Part (b) fills this seam: departure/arrival, driving and away
-                # charging. For now absence carries on-board energy unchanged.
-                pass
+                (
+                    vehicle_energy,
+                    vehicle_pv_origin,
+                    vehicle_grid_origin,
+                    drive_served,
+                    drive_unserved,
+                    away_purchased,
+                    away_loss,
+                    pv_drive,
+                    grid_drive,
+                ) = _dispatch_vehicle_away_step(
+                    vehicle_energy,
+                    vehicle_pv_origin,
+                    vehicle_grid_origin,
+                    vehicle_minimum,
+                    vehicle_drive_first[i],
+                    vehicle_park_hours[i],
+                    vehicle_drive_second[i],
+                    vehicle_away_target,
+                    vehicle_away_power_w,
+                    vehicle_away_efficiency,
+                )
+                matrix[L_VEHICLE_DRIVE_ENERGY, i] = drive_served / hours_per_step
+                matrix[L_VEHICLE_DRIVE_UNSERVED, i] = drive_unserved / hours_per_step
+                matrix[L_VEHICLE_AWAY_CHARGE_PURCHASED, i] = away_purchased / hours_per_step
+                matrix[L_VEHICLE_AWAY_CHARGE_LOSS, i] = away_loss / hours_per_step
+                matrix[L_PV_ORIGIN_VEHICLE_DRIVE_ENERGY, i] = pv_drive / hours_per_step
+                matrix[L_GRID_ORIGIN_VEHICLE_DRIVE_ENERGY, i] = grid_drive / hours_per_step
+            vehicle_was_plugged = plugged
             matrix[R_VEHICLE_PLUGGED, i] = 1.0 if plugged else 0.0
             matrix[R_VEHICLE_ENERGY, i] = vehicle_energy if plugged else 0.0
             matrix[R_VEHICLE_ENERGY_ONBOARD, i] = vehicle_energy
@@ -1785,6 +1894,7 @@ def _day_arguments(
     vehicle_charge_period: Optional[np.ndarray] = None,
     vehicle_discharge_period: Optional[np.ndarray] = None,
     grid_import_limit_w: float = math.inf,
+    vehicle_was_plugged: bool = True,
 ) -> Tuple[Any, ...]:
     """Pack one day's state into the positional arguments of :func:`_dispatch_day`.
 
@@ -1850,6 +1960,8 @@ def _day_arguments(
     curve_ac, curve_eff, curve_row, cable_k = conversion.kernel_arguments(hours_per_step)
     if curve_rows is None:
         curve_rows = np.full(len(pv_dc_vals), curve_row)
+    away = cast("Optional[AwayChargingConfig]", None if vehicle_config is None else vehicle_config.away_charging)
+    vehicle_capacity_wh = 1.0 if vehicle_config is None else float(vehicle_config.battery_kwh * 1000.0)
     return (
         out.matrix,
         pv_dc_vals,
@@ -1914,6 +2026,14 @@ def _day_arguments(
         _EMPTY_VEHICLE_COUNTDOWN if vehicle_schedule is None else vehicle_schedule.steps_to_departure,
         _EMPTY_VEHICLE_MASK if vehicle_charge_period is None else vehicle_charge_period,
         _EMPTY_VEHICLE_MASK if vehicle_discharge_period is None else vehicle_discharge_period,
+        bool(vehicle_was_plugged),
+        0.0 if vehicle_config is None else float(vehicle_config.min_soc * vehicle_config.battery_kwh * 1000.0),
+        _EMPTY_VEHICLE_FLOAT if vehicle_schedule is None else vehicle_schedule.drive_first_wh,
+        _EMPTY_VEHICLE_FLOAT if vehicle_schedule is None else vehicle_schedule.park_hours,
+        _EMPTY_VEHICLE_FLOAT if vehicle_schedule is None else vehicle_schedule.drive_second_wh,
+        0.0 if away is None else float(away.target_soc * vehicle_capacity_wh),
+        0.0 if away is None else float(away.power_kw * 1000.0),
+        1.0 if away is None else float(away.efficiency),
     )
 
 

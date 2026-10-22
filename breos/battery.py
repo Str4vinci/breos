@@ -63,7 +63,7 @@ from breos.inverter import (
     convert_units,
 )
 from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
-from breos.vehicle import VehicleConfig, VehicleSchedule
+from breos.vehicle import VehicleCarry, VehicleConfig, VehicleSchedule
 
 if TYPE_CHECKING:
     from breos.tariffs import ResolvedTariff
@@ -1744,6 +1744,7 @@ class _CoreRun:
     # A copy of the instructions a daily controller's decisions dispatched,
     # one per simulated step; None without a controller.
     controller_instructions: Optional[DispatchInstructions] = None
+    vehicle_carry: Optional[VehicleCarry] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1798,6 +1799,7 @@ class SimulationSummary:
     # The ledger schema the column sums follow; App and Monte Carlo report
     # the same version.
     ledger_schema_version: str = LEDGER_SCHEMA_VERSION
+    vehicle_carry: Optional[VehicleCarry] = None
 
 
 def frame_replaced_capacity_wh(results_df: pd.DataFrame) -> float:
@@ -1891,6 +1893,7 @@ def _build_simulation_summary(
         replacement_steps=tuple(int(i) for i in np.flatnonzero(buffers.replaced)),
         fec_all_packs=aging.fec_lifetime,
         final_degradation_state=final_state,
+        vehicle_carry=core.vehicle_carry,
         end_of_life_events=tuple(aging.end_of_life_events),
         weighted_sums=weighted_column_sums(columns, weights),
         in_service_t_cell_sum=float(np.sum(columns["T_cell"][: retiring + 1])) if retiring is not None else None,
@@ -1952,6 +1955,7 @@ def _simulate_core(
     initial_vehicle_energy_wh: Optional[float] = None,
     initial_vehicle_pv_origin_energy_wh: Optional[float] = None,
     initial_vehicle_grid_origin_energy_wh: Optional[float] = None,
+    vehicle_carry: Optional[VehicleCarry] = None,
 ) -> "_CoreRun":
     """
     Simulate energy balance with battery storage and degradation.
@@ -2060,6 +2064,9 @@ def _simulate_core(
         initial_vehicle_energy_wh, initial_vehicle_pv_origin_energy_wh,
             initial_vehicle_grid_origin_energy_wh: On-board starting energy
             and attributed shares in Wh. Default: departure target, unattributed.
+        vehicle_carry: Previous span's energy, origins and last plug state.
+            Pass instead of initial_vehicle values. Without carry the first
+            step starts where its schedule says, with no synthetic boundary.
 
     Returns:
         A :class:`_CoreRun` holding the filled result buffers, the calendar,
@@ -2069,6 +2076,23 @@ def _simulate_core(
     """
     if (vehicle_config is None) != (vehicle_schedule is None):
         raise ValueError("pass vehicle_config and its resolved vehicle_schedule together")
+    if vehicle_carry is not None:
+        if vehicle_config is None:
+            raise ValueError("vehicle_carry needs a vehicle_config and resolved vehicle_schedule")
+        if any(
+            value is not None
+            for value in (
+                initial_vehicle_energy_wh,
+                initial_vehicle_pv_origin_energy_wh,
+                initial_vehicle_grid_origin_energy_wh,
+            )
+        ):
+            raise ValueError("pass vehicle_carry or initial_vehicle energy/origin values, not both")
+        if not isinstance(vehicle_carry.plugged, (bool, np.bool_)):
+            raise ValueError("vehicle_carry.plugged must be a bool")
+        initial_vehicle_energy_wh = vehicle_carry.energy_wh
+        initial_vehicle_pv_origin_energy_wh = vehicle_carry.pv_origin_energy_wh
+        initial_vehicle_grid_origin_energy_wh = vehicle_carry.grid_origin_energy_wh
     if vehicle_config is not None and vehicle_config.enable_replacement:
         raise ValueError("vehicle enable_replacement must be False: vehicle ageing and replacement arrive in PR 3")
     if math.isnan(grid_import_limit_w) or grid_import_limit_w <= 0.0:
@@ -2327,7 +2351,7 @@ def _simulate_core(
         )
     # No instructions is greedy dispatch; one no-op set serves every day.
     instructions = dispatch_instructions if dispatch_instructions is not None else DispatchInstructions.noop(n_steps)
-    # Vehicle capacity stays nominal in PR 2(a): no ageing, standby,
+    # Vehicle capacity stays nominal in PR 2: no ageing, standby,
     # temperature derating or replacement. PR 3 adds its own lifecycle.
     vehicle_state: Dict[str, Any] = {}
     if vehicle_config is not None:
@@ -2375,9 +2399,22 @@ def _simulate_core(
             vehicle_energy_wh=energy_v,
             vehicle_pv_origin_wh=pv_v,
             vehicle_grid_origin_wh=grid_v,
+            vehicle_was_plugged=bool(vehicle_schedule.plugged[0])
+            if vehicle_carry is None
+            else bool(vehicle_carry.plugged),
             vehicle_charge_period=charge_v,
             vehicle_discharge_period=discharge_v,
             grid_import_limit_w=grid_import_limit_w,
+        )
+
+    def final_vehicle_carry() -> Optional[VehicleCarry]:
+        if vehicle_config is None:
+            return None
+        return VehicleCarry(
+            energy_wh=float(out.columns["Vehicle_Energy_Onboard"][-1]),
+            pv_origin_energy_wh=float(out.columns["Vehicle_PV_Origin_Energy_End"][-1]),
+            grid_origin_energy_wh=float(out.columns["Vehicle_Grid_Origin_Energy_End"][-1]),
+            plugged=bool(out.columns["Vehicle_Plugged"][-1]),
         )
 
     def dispatch_vehicle_only(lo: int, hi: int) -> None:
@@ -2457,6 +2494,7 @@ def _simulate_core(
             lifecycle=degradation_lifecycle,
             degradation_tracking=degradation_tracking,
             hours_per_step=hours_per_step,
+            vehicle_carry=final_vehicle_carry(),
         )
 
     # An AC-coupled battery's PV inverter converts as in a PV-only run,
@@ -2554,6 +2592,7 @@ def _simulate_core(
                 session.complete_segment(_pv_dc_vals, _load_vals, _temp_vals)
             segment_last = segment_end - 1
             if vehicle_config is not None:
+                vehicle_state["vehicle_was_plugged"] = bool(out.columns["Vehicle_Plugged"][segment_last])
                 vehicle_state["vehicle_energy_wh"] = float(out.columns["Vehicle_Energy_Onboard"][segment_last])
                 vehicle_state["vehicle_pv_origin_wh"] = float(out.columns["Vehicle_PV_Origin_Energy_End"][segment_last])
                 vehicle_state["vehicle_grid_origin_wh"] = float(
@@ -2611,6 +2650,7 @@ def _simulate_core(
         lifecycle=degradation_lifecycle,
         degradation_tracking=degradation_tracking,
         hours_per_step=hours_per_step,
+        vehicle_carry=final_vehicle_carry(),
         controller_carry=None if session is None else session.finish(),
         controller_instructions=None if session is None else session.executed_instructions(),
     )
@@ -2746,6 +2786,7 @@ class _DetailedRun:
     degradation_state: Dict[str, Any]
     controller_carry: Optional[ControllerCarry]
     controller_instructions: Optional[DispatchInstructions]
+    vehicle_carry: Optional[VehicleCarry] = None
 
 
 def _simulate_detailed_run(
@@ -2771,6 +2812,7 @@ def _simulate_detailed_run(
         degradation_state=_build_final_degradation_state(core.lifecycle, core.aging),
         controller_carry=core.controller_carry,
         controller_instructions=core.controller_instructions,
+        vehicle_carry=core.vehicle_carry,
     )
 
 

@@ -30,6 +30,8 @@ from breos.battery import (
     BatteryConfig,
     EndOfLifeEvent,
     SimulationSummary,
+    _build_simulation_summary,
+    _simulate_core,
     _simulate_detailed_run,
     frame_replaced_capacity_wh,
     retiring_step,
@@ -51,6 +53,7 @@ from breos.execution import config_has_battery, observed_jit_cache_state, reset_
 from breos.inverter import InverterUnits
 from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
 from breos.utils import get_hours_per_step
+from breos.vehicle import VehicleCarry, VehicleConfig, VehicleSchedule
 
 
 def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, initial_soh: float) -> BatteryConfig:
@@ -151,6 +154,8 @@ class CarryState:
     # True once a year has retired the battery (ADR 0003 E12); every later
     # year starts with it switched off.
     battery_retired: bool = False
+    # Independent physical state, including when the stationary pack is absent.
+    vehicle: VehicleCarry | None = None
 
     def simulation_kwargs(self) -> dict[str, Any]:
         """Keyword arguments that start a simulation from this state."""
@@ -168,6 +173,8 @@ class CarryState:
             kwargs["initial_grid_origin_energy_wh"] = self.grid_origin_energy_wh or 0.0
         if self.battery_retired:
             kwargs["battery_retired"] = True
+        if self.vehicle is not None:
+            kwargs["vehicle_carry"] = self.vehicle
         return kwargs
 
     def after_frames(
@@ -177,15 +184,17 @@ class CarryState:
         degradation_state: dict[str, Any] | None,
         *,
         has_battery: bool,
+        vehicle_carry: VehicleCarry | None = None,
     ) -> CarryState:
         """The state after a year run with per-step frames."""
         if not has_battery:
-            return replace(self, degradation_state=degradation_state)
+            return replace(self, degradation_state=degradation_state, vehicle=vehicle_carry)
         changes: dict[str, Any] = {
             "energy_wh": float(results_df["Battery_Energy_End"].iloc[-1]),
             "pv_origin_energy_wh": float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1]),
             "grid_origin_energy_wh": float(results_df["Battery_Grid_Origin_Energy_End"].iloc[-1]),
             "degradation_state": degradation_state,
+            "vehicle": vehicle_carry,
         }
         if not degradation_df.empty:
             last = degradation_df.iloc[-1]
@@ -205,12 +214,13 @@ class CarryState:
     def after_summary(self, summary: SimulationSummary, *, has_battery: bool, resistance_fade: bool) -> CarryState:
         """The state after a year run as a summary; the same rule as :meth:`after_frames`."""
         if not has_battery:
-            return replace(self, degradation_state=summary.final_degradation_state)
+            return replace(self, degradation_state=summary.final_degradation_state, vehicle=summary.vehicle_carry)
         changes: dict[str, Any] = {
             "energy_wh": summary.carried_energy_wh,
             "pv_origin_energy_wh": summary.carried_pv_origin_energy_wh,
             "grid_origin_energy_wh": summary.carried_grid_origin_energy_wh,
             "degradation_state": summary.final_degradation_state,
+            "vehicle": summary.vehicle_carry,
         }
         if summary.has_degradation_rows:
             changes.update(
@@ -765,6 +775,8 @@ class ProjectionYear:
     # run without a battery or with an AC-coupled one; None converts through
     # the battery config.
     inverter_units: InverterUnits | None = None
+    # Resolved on this year's calendar; legs already include any year seam.
+    vehicle_schedule: VehicleSchedule | None = None
 
 
 @dataclass(frozen=True)
@@ -908,7 +920,12 @@ def _run_summary_year(
     weights: Mapping[str, tuple[str, np.ndarray]] | None,
 ) -> _YearOutcome:
     """Run one year from aligned inputs, as a summary without per-step frames."""
-    summary = simulate_energy_balance_summary(aligned=aligned, weights=weights, **common)
+    if common.get("vehicle_config") is None:
+        summary = simulate_energy_balance_summary(aligned=aligned, weights=weights, **common)
+    else:
+        core_kwargs = {key: value for key, value in common.items() if key != "return_degradation_state"}
+        core = _simulate_core(aligned=aligned, summary_only=True, **core_kwargs)
+        summary = _build_simulation_summary(core, return_degradation_state=True, weights=weights)
     batt_cfg: BatteryConfig = common["battery_config"]
     return _YearOutcome(
         carry=carry.after_summary(summary, has_battery=has_battery, resistance_fade=batt_cfg.enable_resistance_fade),
@@ -949,7 +966,7 @@ def _run_frame_year(
     }
     planned: list[DispatchInstructions] = []
     executed = None
-    if planner is None and day_controller is None:
+    if planner is None and day_controller is None and common.get("vehicle_config") is None:
         results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
             "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
             simulate_energy_balance(**step_inputs, **common),
@@ -966,7 +983,7 @@ def _run_frame_year(
                 return chosen
 
             run_kwargs: dict[str, Any] = {"instruction_planner": plan_year}
-        else:
+        elif day_controller is not None:
             run_kwargs = {
                 "day_controller": day_controller,
                 "controller_tariff": tariff,
@@ -974,9 +991,17 @@ def _run_frame_year(
                 "projection_year": year_idx,
                 "replay_seam": replay_seam,
             }
+        else:
+            run_kwargs = {}
         detailed = _simulate_detailed_run(**step_inputs, **run_kwargs, **core_kwargs)
         results_df, n_rep, degradation_df = detailed.results_df, detailed.n_replacements, detailed.degradation_df
-        carry = carry.after_frames(results_df, degradation_df, detailed.degradation_state, has_battery=has_battery)
+        carry = carry.after_frames(
+            results_df,
+            degradation_df,
+            detailed.degradation_state,
+            has_battery=has_battery,
+            vehicle_carry=detailed.vehicle_carry,
+        )
         if day_controller is not None:
             carry = replace(carry, controller_carry=detailed.controller_carry)
             executed = detailed.controller_instructions
@@ -1042,10 +1067,17 @@ def project_years(
     replay_seam: bool = True,
     reference_tariff: ResolvedTariff | None = None,
     record_priced_flows: bool = False,
+    vehicle_config: VehicleConfig | None = None,
+    grid_import_limit_w: float = math.inf,
 ) -> ProjectionRun:
-    """Simulate ``years`` project years, carrying the battery from one to the next.
+    """Simulate ``years`` project years, carrying both stores from one to the next.
 
     App, Monte Carlo and the projected optimizer all run this loop.
+    Direct callers may pass a ``vehicle_config`` with replacement disabled
+    and a ``ProjectionYear.vehicle_schedule`` on each year's calendar.
+    On-board energy, origins and the last plug state carry independently of
+    a stationary battery on both frame and aligned-summary paths. App's
+    vehicle rollout refusal remains in place until PR 4.
     ``year_inputs(year_idx)`` supplies each year, and ``battery_config(soh)``
     builds the battery at the carried SOH. The rainflow residue is counted
     once, at the end of the last year. ``observe_jit_per_year`` records the
@@ -1099,6 +1131,10 @@ def project_years(
     system tariff's credit covers both households unless a reference prices
     the no-system one, which then has the reference's credit or none.
     """
+    if initial_carry is not None and initial_carry.vehicle is not None and vehicle_config is None:
+        raise ValueError("a carried vehicle needs vehicle_config and a resolved schedule in each projection year")
+    if vehicle_config is not None and vehicle_config.enable_replacement:
+        raise ValueError("vehicle enable_replacement must be False: vehicle ageing and replacement arrive in PR 3")
     instructions_for_year = _instructions_by_year(instructions, years)
     if day_controller is not None:
         if instructions is not None:
@@ -1146,6 +1182,16 @@ def project_years(
             "execution_backend": execution_backend,
             "dispatch_instructions": static,
         }
+
+        if (vehicle_config is None) != (year.vehicle_schedule is None):
+            raise ValueError("each projection year needs vehicle_config and its resolved vehicle_schedule together")
+        if vehicle_config is not None:
+            common.update(
+                vehicle_config=vehicle_config,
+                vehicle_schedule=year.vehicle_schedule,
+                vehicle_tariff=tariff,
+                grid_import_limit_w=grid_import_limit_w,
+            )
 
         if observe_jit_per_year:
             # A multi-year run enters the kernel once per year, so the compile

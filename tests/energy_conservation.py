@@ -211,8 +211,9 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
         + results["Battery_Replacement_Energy_Removed"]
         + results["Battery_Energy_Delta"]
     )
-    # Vehicle home conversion, battery losses and movement. Boundary and away
-    # operations are deferred to PR 2(b); their zero rows are already present.
+    # Vehicle home conversion, battery losses and home movement. The vehicle
+    # helper additionally checks actual site movement and boundary bookings;
+    # away operations never enter this site balance.
     outputs = outputs + _column(results, "Vehicle_AC_To_Load")
     for name in (
         "Vehicle_Charge_Conversion_Loss",
@@ -293,34 +294,60 @@ def assert_vehicle_conservation(
     vehicle_config,
     hours_per_step: float,
     *,
+    schedule=None,
+    initial_carry=None,
     initial_energy_wh: float | None = None,
     initial_pv_origin_wh: float = 0.0,
     initial_grid_origin_wh: float = 0.0,
+    initial_plugged: bool | None = None,
     atol: float = 1e-7,
 ) -> None:
-    """ADR 0005 home identities 3–7, 10, 11, alongside the site helper.
+    """ADR 0005 identities 3–11, including home/away transitions.
 
-    States are Wh; transfers are average W. In part (a), home/away crossings
-    carry on-board energy unchanged and boundary flows are deferred to (b).
-    Thus identity 7 is checked within each home step, from its starting
-    on-board energy, without asserting the unimplemented boundary bookings.
+    States are Wh and transfers average W. ``schedule`` additionally checks
+    scheduled driving, leg order and the parked-time purchase limits.
+    A fresh run starts where its first schedule step says, without a boundary
+    booking. A resumed span uses the preceding ``initial_carry``.
     """
     from breos._dispatch import _VEHICLE_LEDGER_COLUMNS, _VEHICLE_STATE_COLUMNS
 
     columns = (*_VEHICLE_STATE_COLUMNS, *_VEHICLE_LEDGER_COLUMNS)
     assert np.isfinite(results[list(columns)].to_numpy()).all(), "non-finite vehicle ledger"
-    col = lambda name: results[name]  # noqa: E731
+    col = results.__getitem__
     capacity = vehicle_config.battery_kwh * 1000.0
+    if initial_carry is not None:
+        initial_energy_wh = initial_carry.energy_wh
+        initial_pv_origin_wh = initial_carry.pv_origin_energy_wh
+        initial_grid_origin_wh = initial_carry.grid_origin_energy_wh
+        initial_plugged = initial_carry.plugged
     initial = capacity * vehicle_config.departure_soc if initial_energy_wh is None else initial_energy_wh
     onboard = col("Vehicle_Energy_Onboard")
     begin = onboard.shift(1, fill_value=initial)
     plugged = col("Vehicle_Plugged").astype(bool)
+    previous = plugged.shift(1, fill_value=bool(plugged.iloc[0]) if initial_plugged is None else initial_plugged)
+    departure = previous & ~plugged
+    arrival = ~previous & plugged
     _assert_balanced(col("Vehicle_Energy"), np.where(plugged, onboard, 0.0), 0.0, "vehicle site boundary")
+    _assert_balanced(
+        col("Vehicle_Departure_Energy") * hours_per_step, np.where(departure, begin, 0.0), atol, "vehicle departure"
+    )
+    _assert_balanced(
+        col("Vehicle_Arrival_Energy") * hours_per_step, np.where(arrival, begin, 0.0), atol, "vehicle arrival"
+    )
+    shortfall = (capacity * vehicle_config.departure_soc - begin).clip(lower=0.0)
+    _assert_balanced(
+        col("Vehicle_Departure_Shortfall") * hours_per_step,
+        np.where(departure & (shortfall > 1e-9 * capacity), shortfall, 0.0),
+        atol,
+        "departure target shortfall",
+    )
     _assert_balanced(col("Vehicle_SOC_Absolute"), onboard / capacity, atol, "vehicle SOC")
     _assert_balanced(col("Vehicle_SOH"), 1.0, 0.0, "fixed vehicle health")
     ac_in = col("PV_AC_To_Vehicle") + col("Grid_AC_To_Vehicle")
     stored = col("Vehicle_Charge_Input") - col("Vehicle_Charge_Loss")
     draw = col("Vehicle_Discharge_DC")
+    drive = col("Vehicle_Drive_Energy")
+    away_stored = col("Vehicle_Away_Charge_Purchased") - col("Vehicle_Away_Charge_Loss")
     _assert_balanced(
         ac_in - col("Vehicle_Charge_Conversion_Loss"), col("Vehicle_Charge_Input"), atol, "vehicle charger in"
     )
@@ -330,32 +357,119 @@ def assert_vehicle_conservation(
         atol,
         "vehicle charger out",
     )
-    _assert_balanced(onboard - begin, (stored - draw) * hours_per_step, atol, "vehicle on-board movement")
-    # Whole-site vehicle contribution (Wh), only on home steps: AC in is an
-    # internal transfer from PV/grid, AC out goes to the house, the four
-    # conversion/battery losses and the site's store movement close it.
-    losses = (
-        col("Vehicle_Charge_Conversion_Loss")
-        + col("Vehicle_Charge_Loss")
-        + col("Vehicle_Discharge_Loss")
-        + col("Vehicle_Charger_Loss")
+    movement = (
+        stored
+        - draw
+        + away_stored
+        - drive
+        - col("Vehicle_Capacity_Window_Loss")
+        - col("Vehicle_Replacement_Energy_Removed")
+        + col("Vehicle_Replacement_Energy_Added")
     )
-    _assert_balanced(
-        ac_in[plugged] * hours_per_step,
-        (col("Vehicle_AC_To_Load")[plugged] + losses[plugged]) * hours_per_step + (onboard - begin)[plugged],
-        atol,
-        "vehicle whole-site home contribution",
+    _assert_balanced(onboard - begin, movement * hours_per_step, atol, "vehicle on-board movement")
+
+    # The full site meter supplies the house, both stores and idle inverters.
+    # Driving and away purchases are deliberately absent from this identity.
+    initial_site = initial if bool(previous.iloc[0]) else 0.0
+    delta_site = col("Vehicle_Energy") - col("Vehicle_Energy").shift(1, fill_value=initial_site)
+    losses = sum(
+        col(name)
+        for name in (
+            "Vehicle_Charge_Conversion_Loss",
+            "Vehicle_Charge_Loss",
+            "Vehicle_Discharge_Loss",
+            "Vehicle_Charger_Loss",
+        )
     )
+    inputs = (
+        col("PV_DC")
+        + col("Import_From_Grid")
+        + col("Battery_Replacement_Energy_Added")
+        + col("Vehicle_Arrival_Energy")
+        + col("Vehicle_Replacement_Energy_Added") * plugged
+    )
+    outputs = sum(
+        col(name)
+        for name in (
+            "Houseload",
+            "PV_AC_Export",
+            "PV_DC_Curtailed",
+            "Inverter_Loss",
+            "Inverter_Night_Consumption",
+            "Battery_Charge_Loss",
+            "Battery_Discharge_Loss",
+            "Grid_Charge_Conversion_Loss",
+            "PV_Charge_Conversion_Loss",
+            "Standby_Loss",
+            "Capacity_Window_Loss",
+            "Battery_Replacement_Energy_Removed",
+            "Battery_Energy_Delta",
+            "Vehicle_Departure_Energy",
+        )
+    )
+    outputs = (
+        outputs
+        + losses
+        + delta_site / hours_per_step
+        + (col("Vehicle_Capacity_Window_Loss") + col("Vehicle_Replacement_Energy_Removed")) * plugged
+    )
+    _assert_balanced(inputs, outputs, atol, "whole-site balance including vehicle boundaries")
     if ((ac_in > atol) & (draw > atol)).any():
         raise AssertionError("vehicle charges and discharges in the same step")
     rating = vehicle_config.charger_ac_rating_kw * 1000.0
     assert (ac_in <= rating + atol).all(), "vehicle input exceeds charger rating"
     assert (col("Vehicle_AC_To_Load") <= rating + atol).all(), "vehicle output exceeds charger rating"
+    residual = (col("Houseload") - col("PV_AC_To_Load") - col("Battery_AC_To_Load")).clip(lower=0.0)
+    assert (col("Vehicle_AC_To_Load") <= residual + atol).all(), "vehicle exports or supplies another store"
+    assert (col("Import_From_Grid") >= -atol).all(), "vehicle exports to the grid"
     assert (onboard >= vehicle_config.min_soc * capacity - atol).all(), "vehicle below minimum SOC"
     assert (onboard <= vehicle_config.max_soc * capacity + atol).all(), "vehicle above maximum SOC"
+    away_columns = (
+        "Vehicle_Drive_Energy",
+        "Vehicle_Drive_Unserved",
+        "Vehicle_Away_Charge_Purchased",
+        "Vehicle_Away_Charge_Loss",
+        "PV_Origin_Vehicle_Drive_Energy",
+        "Grid_Origin_Vehicle_Drive_Energy",
+    )
+    boundaries = ("Vehicle_Departure_Energy", "Vehicle_Arrival_Energy", "Vehicle_Departure_Shortfall")
     for name in _VEHICLE_LEDGER_COLUMNS:
         assert (col(name) >= -atol).all(), f"negative {name}"
-        _assert_balanced(col(name)[~plugged], 0.0, 0.0, f"away home flow {name}")
+        if name in away_columns:
+            _assert_balanced(col(name)[plugged], 0.0, 0.0, f"home away flow {name}")
+        elif name not in boundaries:
+            _assert_balanced(col(name)[~plugged], 0.0, 0.0, f"away home flow {name}")
+
+    expected_first = None
+    if schedule is not None:
+        np.testing.assert_array_equal(plugged, schedule.plugged)
+        first = np.where(plugged, 0.0, schedule.drive_first_wh)
+        second = np.where(plugged, 0.0, schedule.drive_second_wh)
+        minimum = vehicle_config.min_soc * capacity
+        expected_first = np.minimum(first, (begin - minimum).clip(lower=0.0))
+        after_first = begin - expected_first
+        away = vehicle_config.away_charging
+        if away is None:
+            expected_away = np.zeros(len(results))
+        else:
+            expected_away = np.minimum(
+                away.power_kw * 1000.0 * schedule.park_hours * away.efficiency,
+                (away.target_soc * capacity - after_first).clip(lower=0.0),
+            )
+        expected_away = np.where(plugged, 0.0, expected_away)
+        expected_second = np.minimum(second, (after_first + expected_away - minimum).clip(lower=0.0))
+        _assert_balanced(drive * hours_per_step, expected_first + expected_second, atol, "ordered driving withdrawals")
+        _assert_balanced(
+            (drive + col("Vehicle_Drive_Unserved")) * hours_per_step, first + second, atol, "scheduled driving"
+        )
+        _assert_balanced(
+            away_stored * hours_per_step, expected_away, atol, "away charging target and parked-power limit"
+        )
+        efficiency = 1.0 if away is None else away.efficiency
+        _assert_balanced(
+            away_stored, col("Vehicle_Away_Charge_Purchased") * efficiency, atol, "away charging efficiency"
+        )
+
     initial_origins = {
         "PV": initial_pv_origin_wh,
         "Grid": initial_grid_origin_wh,
@@ -368,10 +482,12 @@ def assert_vehicle_conservation(
         if origin == "Unattributed":
             charged = stored - col("PV_Origin_Vehicle_Charge_Stored") - col("Grid_Origin_Vehicle_Charge_Stored")
             discharged = draw - col("PV_Origin_Vehicle_Discharge_DC") - col("Grid_Origin_Vehicle_Discharge_DC")
+            driven = drive - col("PV_Origin_Vehicle_Drive_Energy") - col("Grid_Origin_Vehicle_Drive_Energy")
         else:
             charged = col(f"{origin}_Origin_Vehicle_Charge_Stored")
             discharged = col(f"{origin}_Origin_Vehicle_Discharge_DC")
-            fraction = (start / begin).fillna(0.0)
+            driven = col(f"{origin}_Origin_Vehicle_Drive_Energy")
+            fraction = (start / begin.replace(0.0, np.nan)).fillna(0.0)
             _assert_balanced(discharged, draw * fraction, atol, f"vehicle {origin} proportional withdrawal")
             _assert_balanced(
                 col(f"{origin}_Origin_Vehicle_AC_To_Load"),
@@ -380,6 +496,33 @@ def assert_vehicle_conservation(
                 f"vehicle {origin} AC share",
             )
             ac_share = col("PV_AC_To_Vehicle" if origin == "PV" else "Grid_AC_To_Vehicle")
-            _assert_balanced(charged, stored * (ac_share / ac_in).fillna(0.0), atol, f"vehicle {origin} charge share")
+            _assert_balanced(
+                charged,
+                stored * (ac_share / ac_in.replace(0.0, np.nan)).fillna(0.0),
+                atol,
+                f"vehicle {origin} charge share",
+            )
+            if expected_first is not None:
+                first_share = expected_first * fraction
+                origin_before_second = start - first_share + (expected_away if origin == "Grid" else 0.0)
+                second_fraction = (origin_before_second / (after_first + expected_away).replace(0.0, np.nan)).fillna(
+                    0.0
+                )
+                _assert_balanced(
+                    driven * hours_per_step,
+                    first_share + expected_second * second_fraction,
+                    atol,
+                    f"vehicle {origin} driving share",
+                )
+        added = (
+            away_stored
+            if origin == "Grid"
+            else (col("Vehicle_Replacement_Energy_Added") if origin == "Unattributed" else 0.0)
+        )
         assert (end >= -atol).all(), f"negative vehicle {origin} origin"
-        _assert_balanced(end, start + (charged - discharged) * hours_per_step, atol, f"vehicle {origin} origin balance")
+        _assert_balanced(
+            end,
+            start + (charged + added - discharged - driven) * hours_per_step,
+            atol,
+            f"vehicle {origin} origin balance",
+        )
