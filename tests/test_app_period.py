@@ -22,6 +22,7 @@ from breos.app_inputs import input_configuration_key
 from breos.load_profiles import load_profile
 from breos.montecarlo import MonteCarloSettings, build_year_cache, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
+from tests.conftest import INSTANT_AT_LABELS
 from tools.generate_app_golden import synthetic_weather
 
 BASE = {
@@ -55,6 +56,7 @@ def _weather(frame=None):
         weather = (synthetic_weather(int(kwargs.get("sample_year") or 2025)) if frame is None else frame).copy()
         weather.attrs["breos_weather_metadata"] = {
             "source": "synthetic_period",
+            **INSTANT_AT_LABELS,
             "horizon": {"status": "not_applied", "provider": "pvgis", "profile": None},
         }
         return weather, {"inputs": {"location": {"latitude": 41.1579, "longitude": -8.6291, "elevation": 0}}}

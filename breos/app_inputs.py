@@ -25,7 +25,7 @@ from breos.app_config import (
 from breos.electrical import string_cable_loss, string_limited_dc
 from breos.inverter import AcCable, InverterConversion, InverterUnits, ac_derate
 from breos.pv.horizon import apply_terrain_horizon_profile
-from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs
+from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs, solar_position_warning_scope
 from breos.pv.shading import ModuleMeanShading
 from breos.pv_modules import catalogue_snapshot, get_module
 from breos.solar import (
@@ -41,8 +41,11 @@ from breos.weather import (
     WEATHER_METADATA_KEY,
     AmbiguousWeatherError,
     _normalised_horizon_metadata,
+    _weather_file_sha256,
+    _weather_metadata_sidecar_path,
     build_battery_temperature_series,
     fill_leap_day,
+    parse_weather_filename,
     read_weather_csv,
     warn_if_naive_weather_timestamps,
 )
@@ -552,6 +555,9 @@ def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies, 
     )
 
 
+# Terrain shading and every PV array compute the sun position: one
+# solar_position = "auto" fallback warning for them all.
+@solar_position_warning_scope()
 def prepare_simulation_inputs(
     cfg: dict[str, Any], resolved: ResolvedAppConfig, deps: AppRuntimeDependencies
 ) -> PreparedSimulationInputs:
@@ -835,7 +841,7 @@ INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
     key for key, field in APP_CONFIG_FIELDS.items() if not field.affects_inputs
 )
 
-# The block's one cached preparation, by (input key, dependencies, prepare).
+# The block's one cached preparation, by input key, weather contents, dependencies and preparation.
 _PREPARED_INPUTS_CACHE: ContextVar[dict[tuple[Any, ...], PreparedSimulationInputs] | None] = ContextVar(
     "breos_prepared_inputs_cache", default=None
 )
@@ -852,10 +858,12 @@ def reuse_prepared_inputs() -> Iterator[None]:
     configuration its own deep copy. It holds one preparation, the latest,
     so memory stays at one run's inputs however many configurations the
     block sees; run the Apps grouped by :func:`input_configuration_key` to
-    reuse each preparation fully. The cache lives only for the block. Files
-    are read once per preparation, so a file changed meanwhile is not re-read,
-    and a warning the input stage raises appears only for the run that
-    prepared those inputs.
+    reuse each preparation fully. The cache lives only for the block. A
+    weather file, or its metadata sidecar, changed between two runs is read
+    again; other files are read once per preparation, so a load profile
+    changed meanwhile is not re-read. A warning the input stage raises
+    appears only for the run that prepared those inputs, except the
+    ``solar_position = "auto"`` fallback warning, which every run gives.
     """
     token = _PREPARED_INPUTS_CACHE.set({})
     try:
@@ -919,6 +927,44 @@ def input_configuration_key(config: dict[str, Any]) -> str | None:
     return _input_cache_key(resolved.cfg, resolved)
 
 
+def _weather_files_fingerprint(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> tuple[tuple[str, ...], ...]:
+    """The weather files a preparation may read, each with its digest and its metadata sidecar's.
+
+    The sidecar carries the weather's timing, which decides where
+    ``solar_position = "auto"`` puts the sun, and it is bound to the CSV's
+    digest, so both are part of what the inputs depend on. The files are the
+    ``weather_file``, or else the cached TMY files in ``weather/`` that
+    :func:`load_weather_for_simulation` would choose from. A weather fetch
+    reads no file and adds nothing.
+    """
+    if cfg["weather_file"] is not None:
+        paths = [Path(cfg["weather_file"])]
+    else:
+        directory = Path.cwd() / "weather"
+        paths = []
+        if resolved.loc_key and directory.is_dir():
+            for path in sorted(directory.iterdir()):
+                parsed = parse_weather_filename(path.name)
+                if (
+                    parsed is not None
+                    and parsed["location"] == resolved.loc_key
+                    and parsed["type"] == "tmy"
+                    and cfg["weather_source"] in (None, parsed["source"])
+                ):
+                    paths.append(path)
+    fingerprint = []
+    for path in paths:
+        sidecar = _weather_metadata_sidecar_path(path)
+        fingerprint.append(
+            (
+                str(path.resolve()),
+                _weather_file_sha256(path) if path.is_file() else "",
+                _weather_file_sha256(sidecar) if sidecar.is_file() else "",
+            )
+        )
+    return tuple(fingerprint)
+
+
 def prepare_simulation_inputs_cached(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
@@ -934,7 +980,7 @@ def prepare_simulation_inputs_cached(
     key = _input_cache_key(cfg, resolved) if cache is not None else None
     if cache is None or key is None:
         return prepare_simulation_inputs(cfg, resolved, deps)
-    entry = (key, deps)
+    entry = (key, _weather_files_fingerprint(cfg, resolved), deps, prepare_simulation_inputs)
     try:
         hit = entry in cache
     except TypeError:
@@ -942,6 +988,7 @@ def prepare_simulation_inputs_cached(
         return prepare_simulation_inputs(cfg, resolved, deps)
     if not hit:
         cache.clear()
-        cache[entry] = prepare_simulation_inputs(cfg, resolved, deps)
+        # Copy the provider frame too, so later mutations cannot change cached metadata.
+        cache[entry] = deepcopy(prepare_simulation_inputs(cfg, resolved, deps))
     # A copy per run, so nothing a run does to its inputs reaches the next.
     return deepcopy(cache[entry])

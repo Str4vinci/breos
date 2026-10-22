@@ -41,7 +41,12 @@ from breos.projection import (
     tariff_records,
     value_projection,
 )
-from breos.pv.model_options import normalise_model_name
+from breos.pv.model_options import (
+    normalise_model_name,
+    solar_position_record,
+    solar_position_warning_scope,
+    warn_solar_position_fallback,
+)
 from breos.pv.shading import CIRCUMSOLAR_MODELS, as_shading_table
 from breos.pv_modules import get_module
 from breos.smart_charging import (
@@ -98,6 +103,9 @@ class SimulationArtifacts:
     terminal_health: TerminalHealthCredit | None = None
     # Each end-of-life crossing of the battery, in project order (ADR 0003 E11).
     end_of_life_events: tuple[dict[str, Any], ...] = ()
+    # The solar-position method asked for, the one it resolved to on the
+    # run's weather, and the offset after each label it applied.
+    solar_position: dict[str, Any] | None = None
 
 
 # The avoided-CO2 columns a result reports for its first year, or its window.
@@ -606,6 +614,9 @@ def _build_pv_loss_waterfall(
     }
 
 
+# One solar_position = "auto" fallback warning per run, however many times
+# the run computes the sun position (arrays, terrain shading, forecast files).
+@solar_position_warning_scope()
 def run_app_simulation(
     resolved: ResolvedAppConfig,
     deps: AppRuntimeDependencies,
@@ -645,6 +656,11 @@ def run_app_simulation(
         )
 
     inputs = prepare_simulation_inputs_cached(cfg, resolved, deps)
+    # Reused inputs skip the preparation that warns about an "auto" fallback,
+    # so the run warns from its own record. Inside this run's scope, a run
+    # whose preparation warned already does not warn again.
+    solar_position = solar_position_record(cfg["solar_position"], inputs.weather, cfg["resolution"])
+    warn_solar_position_fallback(solar_position["requested"], solar_position["resolved"])
 
     # A [period] window runs once. Replayed as project years, it would carry
     # degradation over copies of one window as if each were a year.
@@ -795,6 +811,7 @@ def run_app_simulation(
         instructions=instructions if isinstance(instructions, DispatchInstructions) else None,
         period=period.record() if period is not None else None,
         **_tariff_fields(resolved, tariff, reference_tariff),
+        solar_position=solar_position,
     )
 
 

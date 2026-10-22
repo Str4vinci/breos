@@ -52,6 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity")
 from harness import FREQ, build  # noqa: E402
 
 from tests.backend_parity import assert_frames_bit_equal  # noqa: E402
+from tests.conftest import declare_instant_at_labels
 
 AC_RATING = 3520.0
 EFFICIENCY = 0.96
@@ -238,7 +239,7 @@ def _optimizer_config(years: int = 1, **extra) -> dict:
 def _frames(periods: int, load_w: float = 500.0):
     """Hourly index, 20 degC weather and a flat load for the optimizer entry points."""
     idx = pd.date_range("2025-01-01", periods=periods, freq="h", tz="UTC")
-    weather = pd.DataFrame({"temp_air": np.full(periods, 20.0)}, index=idx)
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": np.full(periods, 20.0)}, index=idx))
     load = pd.DataFrame({"Load": np.full(periods, load_w)}, index=idx)
     return idx, weather, load
 

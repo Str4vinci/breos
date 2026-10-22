@@ -202,14 +202,17 @@ def test_a_cache_is_refused_for_another_weather_file_or_once_its_file_changes(tm
     path = write_multiyear_weather(tmp_path / "multi.csv")
     cache = build_year_cache(BASE, _settings(path))
 
-    # The same contents at another path are still another file.
+    # The same contents at another path are still another file, even with
+    # the same metadata sidecar beside it.
     copy = tmp_path / "copy.csv"
     shutil.copyfile(path, copy)
+    shutil.copyfile(f"{path}.metadata.json", f"{copy}.metadata.json")
     with pytest.raises(ValueError, match="\\(weather_file differ"):
         run_montecarlo(BASE, _settings(copy), year_cache=cache)
 
+    # The rewritten sidecar records the new CSV digest, so it differs too.
     write_multiyear_weather(path, years=(2021, 2022, 2023))
-    with pytest.raises(ValueError, match="\\(weather_file_sha256 differ"):
+    with pytest.raises(ValueError, match="\\(weather_file_sha256, weather_metadata_sidecar_sha256 differ"):
         run_montecarlo(BASE, _settings(path), year_cache=cache)
 
 
@@ -258,6 +261,7 @@ def test_a_battery_temperature_file_rewritten_in_place_rebuilds_the_pv_layer(tmp
 def test_a_cache_built_through_a_symlink_is_refused_for_the_real_file(tmp_path, weather):
     link = tmp_path / "link.csv"
     link.symlink_to(weather)
+    Path(f"{link}.metadata.json").symlink_to(f"{weather}.metadata.json")
     cache = build_year_cache(BASE, _settings(link))
     # Provenance records the path as given, so the link and its target are
     # two weather files, and reusing one for the other would record the wrong one.

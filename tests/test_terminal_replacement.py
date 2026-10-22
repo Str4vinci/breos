@@ -32,6 +32,7 @@ from breos.optimization import _evaluate_projected_design_metrics, evaluate_proj
 from breos.projection import ProjectionYear, project_years, value_projection
 from breos.pv_modules import get_module
 from breos.smart_charging import FixedTargetDayController
+from tests.conftest import declare_instant_at_labels
 from tests.offline_app import offline_weather
 from tests.test_controller_seam import _battery, _core, _Recording, _scenario
 from tests.test_daily_persistence import _small_grid
@@ -590,7 +591,9 @@ def test_an_optimizer_search_records_the_policy(monkeypatch, value):
     from breos.optimization import optimize_system_multi_objective
 
     idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
-    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0, 17.0, 18.0], "ghi": [0.0, 500.0, 500.0, 0.0]}, index=idx)
+    tmy_data = declare_instant_at_labels(
+        pd.DataFrame({"temp_air": [15.0, 16.0, 17.0, 18.0], "ghi": [0.0, 500.0, 500.0, 0.0]}, index=idx)
+    )
     houseload = pd.DataFrame({"Load": [500.0] * 4}, index=idx)
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **_kwargs: pd.Series(0.0, index=idx))
     seen: list[bool] = []

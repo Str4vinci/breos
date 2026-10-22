@@ -10,7 +10,7 @@ from breos.optimization import (
     SolarDesignProblem,
     optimize_system_multi_objective,
 )
-from tests.conftest import _stub_projection_balance
+from tests.conftest import _stub_projection_balance, declare_instant_at_labels
 
 LOCATION = {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"}
 LOOSE = {"budget": 100000.0, "max_area_m2": 100.0}
@@ -20,7 +20,7 @@ LOOSE = {"budget": 100000.0, "max_area_m2": 100.0}
 def tiny_inputs():
     """Two dark hourly steps of weather and a flat 500 W load."""
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
-    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    tmy_data = declare_instant_at_labels(pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx))
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
     return idx, tmy_data, houseload
 
@@ -187,7 +187,7 @@ def test_optimize_system_multi_objective_reports_a_missing_pymoo(monkeypatch):
 
 def test_solar_design_problem_uses_configured_resolution(monkeypatch):
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="15min", tz="UTC")
-    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    tmy_data = declare_instant_at_labels(pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx))
     houseload = pd.DataFrame({"Load": [1000.0, 1000.0]}, index=idx)
     dc = pd.Series([0.0, 0.0], index=idx)
     captured: dict = {}
@@ -217,7 +217,7 @@ def test_solar_design_problem_uses_configured_resolution(monkeypatch):
 
 def test_solar_design_problem_scores_zeb_from_explicit_ac_ledger(monkeypatch, tiny_inputs):
     idx, _tmy_data, houseload = tiny_inputs  # 1 kWh of load
-    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [500.0, 500.0]}, index=idx)
+    tmy_data = declare_instant_at_labels(pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [500.0, 500.0]}, index=idx))
     dc = pd.Series([1000.0, 1000.0], index=idx)  # 2 kWh raw DC
     config = _config(
         simulation={"resolution": "h", "years_projection": 1}, constraints=LOOSE, battery={"temperature": 20.0}
@@ -272,12 +272,14 @@ _SMALL_SEARCH = {**LOOSE, "max_modules": 4, "max_battery_kwh": 3.0, "max_tilt_de
 
 def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatch):
     idx = pd.date_range("2025-01-01", periods=4, freq="h", tz="UTC")
-    tmy_data = pd.DataFrame(
-        {
-            "temp_air": [15.0, 16.0, 17.0, 18.0],
-            "ghi": [0.0, 500.0, 500.0, 0.0],
-        },
-        index=idx,
+    tmy_data = declare_instant_at_labels(
+        pd.DataFrame(
+            {
+                "temp_air": [15.0, 16.0, 17.0, 18.0],
+                "ghi": [0.0, 500.0, 500.0, 0.0],
+            },
+            index=idx,
+        )
     )
     houseload = pd.DataFrame({"Load": [500.0] * 4}, index=idx)
     dc = pd.Series([0.0, 1000.0, 1000.0, 0.0], index=idx)
@@ -358,15 +360,17 @@ def test_projected_optimization_uses_worker_diagnostics_without_parent_rescoring
 
     idx = pd.date_range("2025-06-21", periods=24, freq="h", tz="UTC")
     ghi = [0, 0, 0, 0, 0, 0, 100, 250, 400, 550, 700, 800, 850, 800, 700, 550, 400, 250, 100, 0, 0, 0, 0, 0]
-    tmy_data = pd.DataFrame(
-        {
-            "temp_air": [20.0] * len(idx),
-            "ghi": ghi,
-            "dni": [value * 0.75 for value in ghi],
-            "dhi": [value * 0.25 for value in ghi],
-            "wind_speed": [2.0] * len(idx),
-        },
-        index=idx,
+    tmy_data = declare_instant_at_labels(
+        pd.DataFrame(
+            {
+                "temp_air": [20.0] * len(idx),
+                "ghi": ghi,
+                "dni": [value * 0.75 for value in ghi],
+                "dhi": [value * 0.25 for value in ghi],
+                "wind_speed": [2.0] * len(idx),
+            },
+            index=idx,
+        )
     )
     houseload = pd.DataFrame({"Load": [500.0] * len(idx)}, index=idx)
     config = _config(
@@ -411,7 +415,7 @@ def test_projected_optimization_uses_worker_diagnostics_without_parent_rescoring
 def _projected_capture(monkeypatch, config, x):
     """Score one design on a stubbed projection; return the calls the scorer made."""
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
-    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    tmy_data = declare_instant_at_labels(pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx))
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
     captured: dict = {"balance": {}}
 
@@ -516,7 +520,7 @@ def test_early_stopping_optimizer_result_pickles(monkeypatch):
         battery={"temperature": 20.0},
     )
     result = optimize_system_multi_objective(
-        pd.DataFrame({"temp_air": 15.0, "ghi": 0.0}, index=idx),
+        declare_instant_at_labels(pd.DataFrame({"temp_air": 15.0, "ghi": 0.0}, index=idx)),
         pd.DataFrame({"Load": 500.0}, index=idx),
         config,
         pop_size=4,
@@ -599,7 +603,7 @@ def _stubbed_search(monkeypatch, *, cached: bool):
         "battery": {"temperature": 20.0},
     }
     result = optimize_system_multi_objective(
-        pd.DataFrame({"temp_air": 15.0, "ghi": 0.0}, index=idx),
+        declare_instant_at_labels(pd.DataFrame({"temp_air": 15.0, "ghi": 0.0}, index=idx)),
         pd.DataFrame({"Load": 500.0}, index=idx),
         config,
         pop_size=8,

@@ -23,6 +23,8 @@ battery_kwh = 0
 # the weather metadata: the PVGIS fetch and the weather CSVs BREOS writes
 # (with their .metadata.json sidecar) carry it. A CSV without that metadata is
 # refused; set "interval-start" or "mid-interval" to match its timestamps.
+# The default, "auto", reads the same metadata and, when there is none, takes
+# the sun at the step labels with a warning.
 pv_module = "Suntech_STP550S_STC"
 transposition_model = "perez"
 solar_position = "weather"

@@ -9,6 +9,7 @@ import pytest
 from breos import App
 from breos.load_profiles import load_profile
 from breos.runners.app import run_app_simulation
+from tests.conftest import INSTANT_AT_LABELS
 
 _BERLIN = {
     "location": "berlin",
@@ -28,6 +29,7 @@ def _fetch_spelled_in(tz, synthetic_weather):
         weather.index = weather.index.tz_convert(tz)
         weather.attrs["breos_weather_metadata"] = {
             "source": "synthetic",
+            **INSTANT_AT_LABELS,
             "horizon": {"status": "not_applied", "provider": "pvgis", "profile": None},
         }
         return weather, {"inputs": {"location": {"latitude": 52.52, "longitude": 13.405, "elevation": 0}}}

@@ -23,6 +23,7 @@ from breos.montecarlo import (
 )
 from breos.projection import build_pv_only_battery_config
 from breos.result_schema import RESULT_SCHEMA_VERSION
+from tests.conftest import write_instant_at_labels_sidecar
 
 
 def _base_config():
@@ -191,6 +192,7 @@ def test_run_montecarlo_fills_the_leap_day_of_a_leap_target_year(
     frame = pd.read_csv(weather)
     frame["date"] = frame["date"] + utc_offset
     frame.to_csv(weather, index=False)
+    write_instant_at_labels_sidecar(weather)
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=1, target_year=2028)
     captured = {}
     align_years = montecarlo_module._align_years

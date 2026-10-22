@@ -19,7 +19,15 @@ from breos.app import App
 from breos.montecarlo import _index_weather
 from breos.runners.app import run_app_simulation
 
-_BASE = {"n_modules": 6, "annual_consumption_kwh": 3000, "projection_years": 1, "start_date": "2025-01-01"}
+# Some cases read cached weather CSVs without a metadata sidecar, so the sun
+# position is pinned at the step labels rather than left to "auto".
+_BASE = {
+    "n_modules": 6,
+    "annual_consumption_kwh": 3000,
+    "projection_years": 1,
+    "start_date": "2025-01-01",
+    "solar_position": "interval-start",
+}
 
 
 def _result_index(config):

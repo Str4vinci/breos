@@ -15,6 +15,7 @@ from breos.app_inputs import AppRuntimeDependencies, load_weather_for_simulation
 from breos.load_profiles import load_profile
 from breos.runners.app import run_app_simulation
 from breos.weather import fetch_tmy_weather_data, fill_leap_day, load_weather, resample_to_15min
+from tests.conftest import INSTANT_AT_LABELS
 
 
 def _tmy(year: int, tz: str = "UTC") -> pd.DataFrame:
@@ -380,7 +381,7 @@ def test_app_remaps_weather_instants_but_uses_target_civil_time_for_load_and_tar
     source = Location(41.15, -8.61).get_clearsky(_civil_year(zone, source_freq, 2021))
     source["temp_air"] = np.arange(len(source), dtype=float) / 10000.0
     source["wind_speed"] = 2.0
-    source.attrs["breos_weather_metadata"] = {"source": "injected"}
+    source.attrs["breos_weather_metadata"] = {"source": "injected", **INSTANT_AT_LABELS}
     (tmp_path / "weather").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("breos.app.load_weather", lambda **kwargs: source.copy())

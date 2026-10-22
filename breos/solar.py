@@ -36,6 +36,7 @@ from breos.pv.model_options import (
     resolve_solar_position_method,
     solar_position_at_labels,
     solar_position_time_offset,
+    solar_position_warning_scope,
 )
 from breos.pv.model_options import (
     DIFFUSE_IAM_METHODS as DIFFUSE_IAM_METHODS,
@@ -1083,9 +1084,13 @@ def calculate_pv_production_dc(
         model_perez: Perez coefficient set (one of ``PEREZ_MODELS``); only
             used when ``transposition_model`` is ``"perez"``.
         solar_position: Where within each timestep the sun position is
-            evaluated (one of ``SOLAR_POSITION_METHODS``). ``"mid-interval"``
-            matches PVWatts/SAM for interval-averaged irradiance; the default
-            ``"interval-start"`` reproduces prior behaviour bit-for-bit.
+            evaluated (one of ``SOLAR_POSITION_METHODS``). The default
+            ``"auto"`` reads the time basis from the weather metadata, as
+            ``"weather"`` does, and takes the sun at the labels, with a
+            warning, when the metadata does not state one.
+            ``"mid-interval"`` matches PVWatts/SAM for interval-averaged
+            irradiance; ``"interval-start"`` reproduces the results of
+            BREOS before 0.8.0 bit-for-bit.
         diffuse_iam: Whether IAM is also applied to the diffuse POA
             components (one of ``DIFFUSE_IAM_METHODS``). ``"marion"``
             weighs sky- and ground-diffuse with the view-factor-integrated
@@ -1517,6 +1522,7 @@ def _breakdowns_on_one_grid(
     return [_array_breakdown(grid, model, **aging) for model in models]
 
 
+@solar_position_warning_scope()
 def calculate_array_breakdowns(
     weather_data: pd.DataFrame,
     location: Location,

@@ -11,6 +11,7 @@ import pytest
 
 from breos import App
 from breos.app_inputs import remap_tmy_year, require_full_year_weather
+from tests.conftest import INSTANT_AT_LABELS
 
 _PORTO = {
     "location": "porto",
@@ -34,6 +35,7 @@ def _patch_fetch(monkeypatch, weather: pd.DataFrame) -> None:
         frame = weather.copy()
         frame.attrs["breos_weather_metadata"] = {
             "source": "PVGIS_TMY",
+            **INSTANT_AT_LABELS,
             "horizon": {"status": "not_applied", "provider": "pvgis", "profile": None},
         }
         return frame, {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}

@@ -127,10 +127,10 @@ YEARLY_PLANNER = {"target_levels": 3, "soc_states": 3}
 @contextmanager
 def _synthetic_tmy():
     """Offline TMY weather for whole project years, outside the per-test weather fixture."""
-    from tests.conftest import _build_synthetic_weather
+    from tests.conftest import INSTANT_AT_LABELS, _build_synthetic_weather
 
     weather = _build_synthetic_weather()
-    weather.attrs["breos_weather_metadata"] = {"source": "PVGIS_TMY"}
+    weather.attrs["breos_weather_metadata"] = {"source": "PVGIS_TMY", **INSTANT_AT_LABELS}
     tmy = {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr("breos.app.fetch_tmy_weather_data", lambda *args, **kwargs: (weather.copy(), tmy))

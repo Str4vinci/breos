@@ -7,6 +7,7 @@ from breos.cli import _load_options
 from breos.optimization import SolarDesignProblem
 from breos.plotting import _currency, plot_breakeven_comparison
 from breos.result_schema import RESULT_SCHEMA_VERSION
+from tests.conftest import declare_instant_at_labels
 from tests.offline_app import offline_weather
 from tools.generate_app_golden import SCENARIOS
 
@@ -117,7 +118,7 @@ def test_replacement_npv_discounts_each_outlay_from_its_swap_instant(replacement
 
 def test_optimizer_rejects_the_removed_budget_key():
     idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
-    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    tmy_data = declare_instant_at_labels(pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx))
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},

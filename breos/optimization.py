@@ -42,7 +42,13 @@ from breos.optimization_config import (
     resolve_run_settings,
 )
 from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years
-from breos.pv.model_options import configured_pv_model_kwargs
+from breos.pv.model_options import (
+    DEFAULT_SOLAR_POSITION,
+    configured_pv_model_kwargs,
+    solar_position_record,
+    solar_position_warning_scope,
+    warn_solar_position_fallback,
+)
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import resolve_instructions, smart_charging_provenance
 from breos.solar import (
@@ -749,8 +755,10 @@ class _DesignStudy:
     temperature_series: pd.Series
     battery_replacement_treatment: Dict[str, Any]
     execution_backend: str
+    solar_position: Dict[str, Any]
 
     @classmethod
+    @solar_position_warning_scope()
     def resolve(
         cls,
         tmy_data: pd.DataFrame,
@@ -761,6 +769,7 @@ class _DesignStudy:
         battery_key: str = "battery_kwh",
         execution_backend: str,
         weather_by_year: Optional[Sequence[pd.DataFrame]] = None,
+        resolve_solar_position: bool = False,
     ) -> "_DesignStudy":
         """Prepare a study from a resolved config.
 
@@ -786,6 +795,17 @@ class _DesignStudy:
 
             pv_params = get_module(pv_cfg["module"])
         battery = config["battery"]
+        model_options = configured_pv_model_kwargs(config)
+        solar_position = solar_position_record(
+            model_options.get("solar_position", DEFAULT_SOLAR_POSITION),
+            frames[0] if frames else weather,
+            config["simulation"]["resolution"],
+        )
+        warn_solar_position_fallback(solar_position["requested"], solar_position["resolved"])
+        # Searches share one weather frame. Resolve before sending candidates
+        # to workers; a fixed design's sequence still resolves on each year.
+        if resolve_solar_position:
+            model_options["solar_position"] = solar_position["resolved"]
         return cls(
             config=config,
             location=location,
@@ -798,7 +818,8 @@ class _DesignStudy:
             pricing=pricing,
             pv_params=pv_params,
             module_area_m2=_module_area_from_dimensions(_dimensions_from_section(pv_cfg)),
-            model_options=configured_pv_model_kwargs(config),
+            model_options=model_options,
+            solar_position=solar_position,
             # The inverter each design pays for is the one that clips its
             # output: nameplate = DC peak / dc_ac_ratio, as App sizes it.
             dc_ac_ratio=cost_params_from_config(config["costs"], config["financials"]).dc_ac_ratio,
@@ -900,12 +921,16 @@ class _DesignStudy:
             "economics": projection_rates_record(_projection_rates(config["financials"])),
             "simulation": dict(config["simulation"]),
             "weather": weather_metadata(self.weather),
+            "solar_position": dict(self.solar_position),
             **({"weather_by_year": [weather_metadata(frame) for frame in frames]} if frames is not None else {}),
             **extra,
             "battery_replacement_treatment": dict(self.battery_replacement_treatment),
         }
 
 
+# Each weather frame computes the sun position, and an "auto" fallback warns
+# once for the design, not once per frame or array.
+@solar_position_warning_scope()
 def evaluate_projected_design(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -1084,6 +1109,7 @@ try:
                 config,
                 battery_kwh=float(constraints["max_battery_kwh"]),
                 battery_key="constraints.max_battery_kwh",
+                resolve_solar_position=True,
                 execution_backend=backend,
             )
             # Candidates are scored over the project lifetime only; the
@@ -1143,6 +1169,14 @@ try:
             # times the search asked for it.
             self.scored: Dict[Tuple[float, ...], Dict[str, Any]] = {}
             self.score_requests: Dict[Tuple[float, ...], int] = {}
+
+        @property
+        def solar_position(self) -> Dict[str, Any]:
+            return self.study.solar_position
+
+        @property
+        def model_options(self) -> Mapping[str, Any]:
+            return self.study.model_options
 
         @property
         def pricing(self) -> _OptimizationTariff:

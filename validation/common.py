@@ -88,6 +88,12 @@ MODEL_CONFIGS = {
     },
 }
 
+# The baseline and REPORT.md put the sun at the step labels, and the
+# validation weather files carry no metadata sidecar, so every model without
+# its own solar_position pins "interval-start" rather than following the
+# solar_position default.
+MODEL_CONFIGS = {name: {"solar_position": "interval-start", **overrides} for name, overrides in MODEL_CONFIGS.items()}
+
 
 def load_spec():
     """Return (system_spec, locations) from validation/locations.json."""

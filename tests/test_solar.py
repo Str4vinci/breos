@@ -26,6 +26,7 @@ from breos.solar import (
     default_azimuth,
     estimate_optimal_tilt,
 )
+from tests.conftest import declare_instant_at_labels
 
 
 def _spy_on_faiman(monkeypatch):
@@ -510,6 +511,7 @@ def test_night_weather_produces_no_dc_power(porto_location, pv_params, tracking)
         {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 10.0, "wind_speed": 3.0},
         index=idx,
     )
+    declare_instant_at_labels(weather)
     common = dict(weather_data=weather, location=porto_location, n_modules=1, pv_params=pv_params, freq="h")
     if tracking == "fixed":
         dc = calculate_pv_production_dc(**common, tilt=35, surface_azimuth=180)

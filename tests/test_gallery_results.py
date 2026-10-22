@@ -7,6 +7,7 @@ under ``docs/examples/_results``. These checks need no simulation, except the
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -48,6 +49,26 @@ def _tool():
 
 
 TOOL = _tool()
+
+
+@pytest.mark.parametrize("with_sidecar", [True, False])
+def test_mc_history_copies_local_weather_and_optional_sidecar(tmp_path, with_sidecar):
+    source = tmp_path / "history.csv"
+    source.write_text("time,ghi\n2023-01-01 00:00:00,0\n", encoding="utf-8")
+    sidecar = source.with_name(source.name + ".metadata.json")
+    if with_sidecar:
+        sidecar.write_text(json.dumps({"radiation_time_basis": "interval-mean"}), encoding="utf-8")
+    ctx = TOOL.Context(tmp_path / "work", argparse.Namespace(mc_weather=source))
+
+    target = TOOL._mc_history(ctx)
+
+    assert target == ctx.work / "weather" / source.name
+    assert target.read_bytes() == source.read_bytes()
+    staged_sidecar = target.with_name(sidecar.name)
+    if with_sidecar:
+        assert staged_sidecar.read_bytes() == sidecar.read_bytes()
+    else:
+        assert not staged_sidecar.exists()
 
 
 @pytest.mark.parametrize("name", list(TOOL.CASES))

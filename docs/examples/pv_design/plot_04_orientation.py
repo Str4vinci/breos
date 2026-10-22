@@ -4,12 +4,15 @@ Array tilt and azimuth: annual yield and NPV
 
 The annual usable energy and the NPV savings of the PV-only example over
 tilt and azimuth, under two sky and optics models. The first is BREOS's
-compatible default: isotropic sky transposition, the ASHRAE incidence-angle
-modifier on beam irradiance only and the sun position at the start of each
-interval. The second is the PV-model starting point recommended in
-:doc:`/getting-started/configuration`: the Perez sky model, the physical
-incidence-angle modifier, Marion's diffuse modifier and the sun position the
-weather file's timing metadata gives.
+default: isotropic sky transposition and the ASHRAE incidence-angle modifier
+on beam irradiance only. The second is the PV-model starting point
+recommended in :doc:`/getting-started/configuration`: the Perez sky model,
+the physical incidence-angle modifier and Marion's diffuse modifier.
+
+The models differ only in sky transposition and optics. Both take the sun
+position from the Porto weather file's timing metadata: the first through
+the ``solar_position = "auto"`` default, the second through an explicit
+``solar_position = "weather"``.
 
 .. literalinclude:: /../configs/examples/pv-only.toml
    :language: toml

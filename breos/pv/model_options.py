@@ -10,10 +10,14 @@ already-resolved :class:`PVModelOptions` and do no validation of their own.
 from __future__ import annotations
 
 import math
+import os
+import warnings
 from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 import numpy as np
 import pandas as pd
@@ -21,7 +25,7 @@ from pvlib.albedo import SURFACE_ALBEDOS
 from pvlib.location import Location
 
 from breos.utils import get_hours_per_step
-from breos.weather import weather_representative_time_offset
+from breos.weather import weather_metadata, weather_representative_time_offset
 
 # Sky-diffusion (transposition) models for projecting GHI/DHI/DNI onto the
 # plane of array, as supported by pvlib.irradiance.get_total_irradiance.
@@ -61,15 +65,16 @@ DEFAULT_PEREZ_MODEL = "allsitescomposite1990"
 SURFACE_TYPES = tuple(sorted(SURFACE_ALBEDOS))
 
 # Where within each timestep the solar position is evaluated.
-# ``interval-start`` evaluates at the timestamp itself (the default, and the
-# only prior behaviour). ``mid-interval`` evaluates half a step later, which
-# is the PVWatts/SAM convention for interval-averaged irradiance: an hourly
-# value labelled 07:00 that represents the 07:00-08:00 average pairs with the
-# 07:30 sun position. Use it when the weather source reports interval
-# averages (e.g. ERA5); keep the default for instantaneous samples.
-# ``weather`` reads the provider convention from content-bound weather
-# metadata. It supports instantaneous samples with an explicit provider
-# offset and interval means with either left or right labels.
+# ``interval-start`` evaluates at the timestamp itself (the only behaviour
+# before 0.8.0). ``mid-interval`` evaluates half a step later, which is the
+# PVWatts/SAM convention for interval-averaged irradiance: an hourly value
+# labelled 07:00 that represents the 07:00-08:00 average pairs with the 07:30
+# sun position. ``weather`` reads the provider convention from content-bound
+# weather metadata. It supports instantaneous samples with an explicit
+# provider offset and interval means with either left or right labels, and
+# raises when the metadata does not state its radiation time basis.
+# ``auto`` (the default) is ``weather`` when the metadata states its radiation
+# time basis and ``interval-start`` when it does not, with one warning per run.
 #
 # Resolved by solar_position_at_labels, which both transposition
 # (breos.solar._prepare_solarpos_and_weather) and terrain shading
@@ -77,11 +82,12 @@ SURFACE_TYPES = tuple(sorted(SURFACE_ALBEDOS))
 # It depends on the weather, so it is resolved separately from
 # PVModelOptions rather than carried on it.
 SOLAR_POSITION_METHODS = (
+    "auto",
     "interval-start",
     "mid-interval",
     "weather",
 )
-DEFAULT_SOLAR_POSITION = "interval-start"
+DEFAULT_SOLAR_POSITION = "auto"
 
 # Beam incidence-angle modifier. ``ashrae`` is BREOS's historical model and
 # remains the default. The alternatives expose pvlib's physical optics and
@@ -279,14 +285,89 @@ def resolve_solar_position_method(method: str) -> str:
     return _resolve_choice(method, SOLAR_POSITION_METHODS, "solar position method")
 
 
+def resolve_solar_position_for_weather(method: str, weather: pd.DataFrame) -> str:
+    """Return the solar-position method ``method`` applies to ``weather``.
+
+    ``auto`` resolves to ``weather`` when the weather metadata states its
+    ``radiation_time_basis`` and to ``interval-start`` when it does not; the
+    other methods resolve to themselves. Nothing is checked or warned here:
+    malformed metadata raises when the ``weather`` offset is computed.
+    """
+    method = resolve_solar_position_method(method)
+    if method != "auto":
+        return method
+    return "weather" if weather_metadata(weather).get("radiation_time_basis") is not None else "interval-start"
+
+
+@dataclass
+class _WarningScope:
+    """An open ``auto`` fallback warning scope: the process that opened it, and whether it has warned."""
+
+    pid: int
+    warned: bool = False
+
+
+# The fallback warning scope of ``solar_position = "auto"``: None outside a
+# scope, where every fallback warns. A scope belongs to the process that
+# opened it: a process forked inside one inherits the variable, and treats
+# the inherited scope as absent, so its own runs warn as their own.
+_AUTO_FALLBACK_SCOPE: ContextVar[_WarningScope | None] = ContextVar("solar_position_auto_fallback_scope", default=None)
+
+AUTO_FALLBACK_WARNING = (
+    "solar_position = 'auto': the weather does not state its time basis (no 'radiation_time_basis' in its "
+    "metadata), so the sun position is taken at the step labels, as with 'interval-start'. To silence this "
+    "warning, set solar_position explicitly ('interval-start', 'mid-interval' or 'weather'), or give the "
+    "weather file a metadata sidecar that states its radiation_time_basis."
+)
+
+
+def _open_scope() -> _WarningScope | None:
+    """The scope this process has open, or None."""
+    scope = _AUTO_FALLBACK_SCOPE.get()
+    return scope if scope is not None and scope.pid == os.getpid() else None
+
+
+@contextmanager
+def solar_position_warning_scope() -> Iterator[None]:
+    """Warn at most once about an ``auto`` fallback inside the block.
+
+    A run computes the sun position several times: for each PV array, for
+    terrain shading, for each Monte Carlo weather year and forecast file.
+    The App, Monte Carlo and optimizer wrap a run in this scope so that the
+    fallback warning appears once per run. A scope opened inside another
+    of the same process is part of it. Also usable as a decorator.
+    """
+    if _open_scope() is not None:
+        yield
+        return
+    token = _AUTO_FALLBACK_SCOPE.set(_WarningScope(os.getpid()))
+    try:
+        yield
+    finally:
+        _AUTO_FALLBACK_SCOPE.reset(token)
+
+
+def warn_solar_position_fallback(requested: str, resolved: str) -> None:
+    """Warn that ``auto`` fell back to the step labels, once per warning scope."""
+    if normalise_model_name(requested) != "auto" or resolved != "interval-start":
+        return
+    scope = _open_scope()
+    if scope is not None:
+        if scope.warned:
+            return
+        scope.warned = True
+    warnings.warn(AUTO_FALLBACK_WARNING, UserWarning, stacklevel=3)
+
+
 def solar_position_time_offset(method: str, weather: pd.DataFrame, freq: str) -> pd.Timedelta:
     """Return how far after each weather label the sun position is evaluated.
 
     ``interval-start`` gives zero and ``mid-interval`` half a step. ``weather``
     reads the offset from the weather metadata and raises when the metadata
-    does not state its radiation time basis.
+    does not state its radiation time basis. ``auto`` gives the offset of the
+    method it resolves to (:func:`resolve_solar_position_for_weather`).
     """
-    method = resolve_solar_position_method(method)
+    method = resolve_solar_position_for_weather(method, weather)
     if method == "mid-interval":
         return pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
     if method == "weather":
@@ -325,6 +406,18 @@ def _solar_position_key(location: Any, times: pd.DatetimeIndex, offset: pd.Timed
     )
 
 
+def solar_position_record(method: str, weather: pd.DataFrame, freq: str) -> dict[str, Any]:
+    """The solar-position method asked for, the one ``weather`` resolves it to, and its offset.
+
+    The provenance record of a run: ``requested`` and ``resolved`` method
+    names, and ``offset_minutes`` after each label. It does not warn.
+    """
+    requested = resolve_solar_position_method(method)
+    resolved = resolve_solar_position_for_weather(requested, weather)
+    offset = solar_position_time_offset(resolved, weather, freq)
+    return {"requested": requested, "resolved": resolved, "offset_minutes": offset.total_seconds() / 60.0}
+
+
 def solar_position_at_labels(
     location: Any, times: pd.DatetimeIndex, weather: pd.DataFrame, freq: str, solar_position: str
 ) -> tuple[pd.DataFrame, str]:
@@ -333,9 +426,11 @@ def solar_position_at_labels(
     The sun is evaluated :func:`solar_position_time_offset` after each label,
     and the result is indexed at the labels. The last positions computed are
     kept, so a repeated request returns a copy of the same frame.
+    An ``auto`` that falls back to the labels warns (:func:`warn_solar_position_fallback`).
     """
-    method = resolve_solar_position_method(solar_position)
+    method = resolve_solar_position_for_weather(solar_position, weather)
     offset = solar_position_time_offset(method, weather, freq)
+    warn_solar_position_fallback(solar_position, method)
     key = _solar_position_key(location, times, offset)
     if key is not None and key in _SOLAR_POSITIONS:
         _SOLAR_POSITIONS.move_to_end(key)

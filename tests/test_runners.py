@@ -11,6 +11,7 @@ from breos.app_inputs import PreparedSimulationInputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.runners import app as app_runner
 from breos.solar import PVProductionBreakdown
+from tests.conftest import declare_instant_at_labels
 
 
 def _empty_projection() -> pd.DataFrame:
@@ -45,7 +46,7 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
     one_day_load = pd.DataFrame({"Load": 0.0}, index=idx)
     one_day_temperature = pd.Series(25.0, index=idx)
     inputs = PreparedSimulationInputs(
-        weather=pd.DataFrame(index=idx),
+        weather=declare_instant_at_labels(pd.DataFrame(index=idx)),
         dc_system_base=one_day_pv,
         load_data=one_day_load,
         temperature_series=one_day_temperature,

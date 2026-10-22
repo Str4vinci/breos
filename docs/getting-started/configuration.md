@@ -444,14 +444,15 @@ percentage after applying any `pv_loss_overrides`.
 
 ## Recommended PV-model starting point
 
-BREOS keeps historical defaults stable so existing studies remain reproducible.
-For a new hourly study using interval-averaged weather, the explicit profile in
+BREOS keeps most historical defaults stable so existing studies remain
+reproducible; the solar-position default changed in 0.8.0. For a new hourly
+study using interval-averaged weather, the explicit profile in
 `configs/examples/recommended-pv.toml` is a stronger starting point:
 
-| Choice | Compatible default | Recommended starting point |
+| Choice | Default | Recommended starting point |
 |---|---|---|
 | Sky transposition | `isotropic` | `perez` |
-| Solar position | `interval-start` | `weather` when the input has content-bound timing metadata; otherwise choose a label-aware explicit method |
+| Solar position | `auto` (see [Solar position](#solar-position)) | `weather` when the input has content-bound timing metadata; otherwise choose a label-aware explicit method |
 | Beam IAM | `ashrae` | `physical` |
 | Diffuse IAM | `none` | `marion` |
 | Cell temperature | `faiman` open rack | A mount-appropriate PVsyst or SAPM preset |
@@ -463,6 +464,46 @@ interval start. Match the temperature preset to the physical construction.
 The example uses a close rooftop mount and a catalog module with sourced
 efficiency; a free-standing array should select a free-standing/open-rack
 thermal model instead.
+
+## Solar position
+
+`solar_position` (CLI: `--solar-position`) sets where within each timestep
+the sun position is evaluated, for transposition, tracking and terrain
+shading alike. Weather timestamps follow different conventions: PVGIS TMY
+values are instantaneous samples taken a provider offset after the label
+(about 10 minutes for PVGIS-SARAH3, 30 minutes for PVGIS-ERA5), Open-Meteo
+radiation is the mean of the hour that ends at the label, and EPW radiation
+is the mean of the hour that starts at it.
+
+- `"auto"` (default) reads the time basis from the weather metadata, as
+  `"weather"` does, when the metadata states a `radiation_time_basis`. When
+  it does not, the sun is taken at the step labels, as with
+  `"interval-start"`, and the run warns once.
+- `"weather"` reads the time basis from the weather metadata: the provider
+  offset of instantaneous samples, or the midpoint of left- or right-labelled
+  interval means. It raises when the metadata states no
+  `radiation_time_basis`.
+- `"interval-start"` takes the sun at the step label. It was the default
+  before 0.8.0 and reproduces those results bit for bit.
+- `"mid-interval"` takes the sun half a timestep after the label, the
+  PVWatts/SAM convention for interval means labelled at the start of their
+  interval.
+
+The PVGIS fetch, the Open-Meteo and EPW readers, and every weather CSV BREOS
+writes with its `.metadata.json` sidecar carry the metadata. A weather CSV
+of your own, or an injected weather frame, usually does not: `"auto"` then
+warns and uses the labels. To silence the warning, set `solar_position`
+explicitly to the convention of your file, or write the file a sidecar that
+states its `radiation_time_basis`. With interval means at 15-minute
+resolution, `"auto"` evaluates the sun at the middle of each quarter-hour,
+the representative time of the resampled values.
+
+`provenance.pv_model.solar_position` records the method asked for
+(`requested`), the method it resolved to on the run's weather (`resolved`)
+and the offset after each label (`offset_minutes`). Monte Carlo records the
+same in `runtime_weather` (`solar_position_requested`,
+`solar_position_method`, `solar_position_offset_minutes`), and the optimizer
+in the `solar_position` record of its provenance.
 
 ## Incidence-angle modifier (IAM)
 

@@ -23,7 +23,7 @@ import breos.projection as projection_module  # noqa: E402
 import breos.runners.app as app_runner  # noqa: E402
 from breos import App, plotting  # noqa: E402
 from breos.montecarlo import MonteCarloSettings, run_montecarlo  # noqa: E402
-from tests.conftest import _build_synthetic_weather  # noqa: E402
+from tests.conftest import _build_synthetic_weather, write_instant_at_labels_sidecar  # noqa: E402
 
 # Cheap enough that both the App run and every Monte Carlo trajectory pay back
 # inside the short projection, so the break-even plots have points to draw.
@@ -102,6 +102,7 @@ def historical_weather_file(tmp_path_factory, historical_weather):
     """The multi-year weather CSV a Monte Carlo study reads."""
     weather_file = tmp_path_factory.mktemp("weather") / "historical.csv"
     historical_weather.rename_axis("date").reset_index().to_csv(weather_file, index=False)
+    write_instant_at_labels_sidecar(weather_file)
     return weather_file
 
 

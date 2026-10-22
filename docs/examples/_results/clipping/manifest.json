@@ -2,9 +2,9 @@
  "case": "clipping",
  "title": "DC/AC ratio and clipping at 15 minutes",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-115-g2d37f1b-dirty",
- "generated_utc": "2026-10-12T12:22:12+00:00",
- "runtime_s": 33.2,
+ "git_describe": "v0.7.0-112-gded4bb6",
+ "generated_utc": "2026-10-22T07:48:52+00:00",
+ "runtime_s": 38.6,
  "cheap": false,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
@@ -40,8 +40,8 @@
  "iso_week": 27,
  "inverter_efficiency": 0.96,
  "files": {
-  "ratios.csv": "3ffe1fcbf6e164695db57733915b18b979942fddacb9ded870414735c511c291",
-  "week_summer.csv": "1022109128285e3afafd0747e9c8a3440844e22bad631f5f1db74efe65994a5c",
-  "dc_power_distribution.csv": "d213f0e6b1d635b6fb2265e764ce7f9d2b94c5d6a7d7bae851eed6ee7bf82bf9"
+  "ratios.csv": "202ee8f2d9075cbbbe8315b2f5a5c92adaf44bc9ed25ebd885ee557cc9c646d7",
+  "week_summer.csv": "0e974c90561e79d00b4767a9d0a1c53945050d13d3614e36877f31c0dacb104c",
+  "dc_power_distribution.csv": "da05be884c46b1e412ee87ac526be8f0da62867849c87784038f3722acdb032c"
  }
 }

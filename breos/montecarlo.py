@@ -72,7 +72,13 @@ from breos.projection import (
     tariff_records,
     value_projection,
 )
-from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
+from breos.pv.model_options import (
+    DEFAULT_SOLAR_POSITION,
+    resolve_solar_position_method,
+    solar_position_record,
+    solar_position_warning_scope,
+    warn_solar_position_fallback,
+)
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
 from breos.tariffs import ResolvedTariff
@@ -271,16 +277,17 @@ def _load_weather_years(
         )
         if runtime_weather is not None and not runtime_weather:
             # The same resolution the PV model applies, so a spelling such as
-            # "Mid-Interval" is recorded with the offset it actually gets.
-            method = resolve_solar_position_method(cfg.get("solar_position", DEFAULT_SOLAR_POSITION))
-            offset = solar_position_time_offset(method, weather, freq)
+            # "Mid-Interval" is recorded with the offset it actually gets, and
+            # "auto" with the method it resolves to on this weather.
+            solar_position = solar_position_record(cfg.get("solar_position", DEFAULT_SOLAR_POSITION), weather, freq)
             runtime_weather.update(
                 {
                     "representative_source_year": int(year),
                     "input_resolution": input_frequency,
                     "output_resolution": str(freq),
-                    "solar_position_method": method,
-                    "solar_position_offset_minutes": offset.total_seconds() / 60.0,
+                    "solar_position_requested": solar_position["requested"],
+                    "solar_position_method": solar_position["resolved"],
+                    "solar_position_offset_minutes": solar_position["offset_minutes"],
                     "metadata": weather_metadata(weather),
                 }
             )
@@ -291,6 +298,9 @@ def _load_weather_years(
 _PvYears = tuple[dict[int, pd.Series], dict[int, pd.Series], dict[int, InverterSteps]]
 
 
+# Every weather year computes the sun position, and an "auto" fallback warns
+# once for the study, not once per year.
+@solar_position_warning_scope()
 def _build_pv_years(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
@@ -1012,16 +1022,23 @@ def run_montecarlo(
     has_battery = config_has_battery(cfg)
     execution = backend_provenance(settings.execution_backend, pv_only=not has_battery)
 
-    if year_cache is None:
-        runtime_weather: dict[str, Any] = {}
-        dc_by_year, temp_by_year, inverter_by_year = _precompute_year_caches(
-            cfg,
-            resolved,
-            settings,
-            runtime_weather=runtime_weather,
+    # One "auto" fallback warning per study. A year cache that reuses its PV
+    # layer builds nothing that warns, so the study warns from its weather
+    # record; a study that built its PV layer and warned does not warn again.
+    with solar_position_warning_scope():
+        if year_cache is None:
+            runtime_weather: dict[str, Any] = {}
+            dc_by_year, temp_by_year, inverter_by_year = _precompute_year_caches(
+                cfg,
+                resolved,
+                settings,
+                runtime_weather=runtime_weather,
+            )
+        else:
+            dc_by_year, temp_by_year, inverter_by_year, runtime_weather = year_cache._years_for(cfg, resolved, settings)
+        warn_solar_position_fallback(
+            runtime_weather.get("solar_position_requested", ""), runtime_weather.get("solar_position_method", "")
         )
-    else:
-        dc_by_year, temp_by_year, inverter_by_year, runtime_weather = year_cache._years_for(cfg, resolved, settings)
     available_years = np.array(sorted(dc_by_year.keys()))
 
     deps = App._runtime_dependencies()
