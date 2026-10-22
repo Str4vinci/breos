@@ -23,6 +23,7 @@ from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.montecarlo import MonteCarloSettings, _simulate_trajectory
 from breos.runners import app as app_runner
 from breos.solar import PVProductionBreakdown
+from tests.conftest import declare_instant_at_labels
 
 # The rates resolve_optimization_config fills in; the private evaluator reads
 # them from the resolved financials rather than defaulting them again.
@@ -117,7 +118,7 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
     # App: its own year loop over the prepared inputs.
     app_records, app_calls = [], []
     inputs = PreparedSimulationInputs(
-        weather=pd.DataFrame(index=pv.index),
+        weather=declare_instant_at_labels(pd.DataFrame(index=pv.index)),
         dc_system_base=pv,
         load_data=load,
         temperature_series=temperature,

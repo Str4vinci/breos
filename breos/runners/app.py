@@ -38,7 +38,7 @@ from breos.projection import (
     run_projection,
     value_projection,
 )
-from breos.pv.model_options import solar_position_record, solar_position_warning_scope
+from breos.pv.model_options import solar_position_record, solar_position_warning_scope, warn_solar_position_fallback
 from breos.pv_modules import get_module
 from breos.smart_charging import (
     PLANNER_MODES,
@@ -396,6 +396,11 @@ def run_app_simulation(
         )
 
     inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=prepare_simulation_inputs)
+    # Reused inputs skip the preparation that warns about an "auto" fallback,
+    # so the run warns from its own record. Inside this run's scope, a run
+    # whose preparation warned already does not warn again.
+    solar_position = solar_position_record(cfg["solar_position"], inputs.weather, cfg["resolution"])
+    warn_solar_position_fallback(solar_position["requested"], solar_position["resolved"])
 
     # A [period] window runs once. Replayed as project years, it would carry
     # degradation over copies of one window as if each were a year.
@@ -543,7 +548,7 @@ def run_app_simulation(
         instructions=instructions if isinstance(instructions, DispatchInstructions) else None,
         period=period.record() if period is not None else None,
         **_reference_fields(resolved, reference_tariff),
-        solar_position=solar_position_record(cfg["solar_position"], inputs.weather, cfg["resolution"]),
+        solar_position=solar_position,
     )
 
 

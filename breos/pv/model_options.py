@@ -10,6 +10,7 @@ already-resolved :class:`PVModelOptions` and do no validation of their own.
 from __future__ import annotations
 
 import math
+import os
 import warnings
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -270,10 +271,19 @@ def resolve_solar_position_for_weather(method: str, weather: pd.DataFrame) -> st
     return "weather" if weather_metadata(weather).get("radiation_time_basis") is not None else "interval-start"
 
 
-# The fallback warning of ``solar_position = "auto"``: None outside a
-# warning scope, where every fallback warns, and a one-item list inside one,
-# holding whether the scope has warned yet.
-_AUTO_FALLBACK_SCOPE: ContextVar[list[bool] | None] = ContextVar("solar_position_auto_fallback_scope", default=None)
+@dataclass
+class _WarningScope:
+    """An open ``auto`` fallback warning scope: the process that opened it, and whether it has warned."""
+
+    pid: int
+    warned: bool = False
+
+
+# The fallback warning scope of ``solar_position = "auto"``: None outside a
+# scope, where every fallback warns. A scope belongs to the process that
+# opened it: a process forked inside one inherits the variable, and treats
+# the inherited scope as absent, so its own runs warn as their own.
+_AUTO_FALLBACK_SCOPE: ContextVar[_WarningScope | None] = ContextVar("solar_position_auto_fallback_scope", default=None)
 
 AUTO_FALLBACK_WARNING = (
     "solar_position = 'auto': the weather does not state its time basis (no 'radiation_time_basis' in its "
@@ -281,6 +291,12 @@ AUTO_FALLBACK_WARNING = (
     "warning, set solar_position explicitly ('interval-start', 'mid-interval' or 'weather'), or give the "
     "weather file a metadata sidecar that states its radiation_time_basis."
 )
+
+
+def _open_scope() -> _WarningScope | None:
+    """The scope this process has open, or None."""
+    scope = _AUTO_FALLBACK_SCOPE.get()
+    return scope if scope is not None and scope.pid == os.getpid() else None
 
 
 @contextmanager
@@ -291,12 +307,12 @@ def solar_position_warning_scope() -> Iterator[None]:
     terrain shading, for each Monte Carlo weather year and forecast file.
     The App, Monte Carlo and optimizer wrap a run in this scope so that the
     fallback warning appears once per run. A scope opened inside another
-    is part of it. Also usable as a decorator.
+    of the same process is part of it. Also usable as a decorator.
     """
-    if _AUTO_FALLBACK_SCOPE.get() is not None:
+    if _open_scope() is not None:
         yield
         return
-    token = _AUTO_FALLBACK_SCOPE.set([False])
+    token = _AUTO_FALLBACK_SCOPE.set(_WarningScope(os.getpid()))
     try:
         yield
     finally:
@@ -307,11 +323,11 @@ def warn_solar_position_fallback(requested: str, resolved: str) -> None:
     """Warn that ``auto`` fell back to the step labels, once per warning scope."""
     if normalise_model_name(requested) != "auto" or resolved != "interval-start":
         return
-    scope = _AUTO_FALLBACK_SCOPE.get()
+    scope = _open_scope()
     if scope is not None:
-        if scope[0]:
+        if scope.warned:
             return
-        scope[0] = True
+        scope.warned = True
     warnings.warn(AUTO_FALLBACK_WARNING, UserWarning, stacklevel=3)
 
 

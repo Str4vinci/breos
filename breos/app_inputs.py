@@ -29,7 +29,10 @@ from breos.weather import (
     WEATHER_METADATA_KEY,
     AmbiguousWeatherError,
     _normalised_horizon_metadata,
+    _weather_file_sha256,
+    _weather_metadata_sidecar_path,
     fill_leap_day,
+    parse_weather_filename,
     read_weather_csv,
     warn_if_naive_weather_timestamps,
 )
@@ -731,10 +734,12 @@ def reuse_prepared_inputs() -> Iterator[None]:
     configuration its own deep copy. It holds one preparation, the latest,
     so memory stays at one run's inputs however many configurations the
     block sees; run the Apps grouped by :func:`input_configuration_key` to
-    reuse each preparation fully. The cache lives only for the block. Files
-    are read once per preparation, so a file changed meanwhile is not re-read,
-    and a warning the input stage raises appears only for the run that
-    prepared those inputs.
+    reuse each preparation fully. The cache lives only for the block. A
+    weather file, or its metadata sidecar, changed between two runs is read
+    again; other files are read once per preparation, so a load profile
+    changed meanwhile is not re-read. A warning the input stage raises
+    appears only for the run that prepared those inputs, except the
+    ``solar_position = "auto"`` fallback warning, which every run gives.
     """
     token = _PREPARED_INPUTS_CACHE.set({})
     try:
@@ -769,6 +774,44 @@ def input_configuration_key(config: dict[str, Any]) -> str | None:
     return _input_cache_key(resolve_app_config(config).cfg)
 
 
+def _weather_files_fingerprint(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> tuple[tuple[str, ...], ...]:
+    """The weather files a preparation may read, each with its digest and its metadata sidecar's.
+
+    The sidecar carries the weather's timing, which decides where
+    ``solar_position = "auto"`` puts the sun, and it is bound to the CSV's
+    digest, so both are part of what the inputs depend on. The files are the
+    ``weather_file``, or else the cached TMY files in ``weather/`` that
+    :func:`load_weather_for_simulation` would choose from. A weather fetch
+    reads no file and adds nothing.
+    """
+    if cfg["weather_file"] is not None:
+        paths = [Path(cfg["weather_file"])]
+    else:
+        directory = Path.cwd() / "weather"
+        paths = []
+        if resolved.loc_key and directory.is_dir():
+            for path in sorted(directory.iterdir()):
+                parsed = parse_weather_filename(path.name)
+                if (
+                    parsed is not None
+                    and parsed["location"] == resolved.loc_key
+                    and parsed["type"] == "tmy"
+                    and cfg["weather_source"] in (None, parsed["source"])
+                ):
+                    paths.append(path)
+    fingerprint = []
+    for path in paths:
+        sidecar = _weather_metadata_sidecar_path(path)
+        fingerprint.append(
+            (
+                str(path.resolve()),
+                _weather_file_sha256(path) if path.is_file() else "",
+                _weather_file_sha256(sidecar) if sidecar.is_file() else "",
+            )
+        )
+    return tuple(fingerprint)
+
+
 def prepare_simulation_inputs_cached(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
@@ -788,7 +831,9 @@ def prepare_simulation_inputs_cached(
     key = _input_cache_key(cfg) if cache is not None else None
     if cache is None or key is None:
         return prepare(cfg, resolved, deps)
-    entry = (key, deps, prepare)
+    # The weather files are keyed on their contents and sidecars, so a file
+    # or sidecar changed between two runs of the block is read again.
+    entry = (key, _weather_files_fingerprint(cfg, resolved), deps, prepare)
     try:
         hit = entry in cache
     except TypeError:

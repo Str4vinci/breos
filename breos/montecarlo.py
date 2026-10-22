@@ -68,6 +68,7 @@ from breos.pv.model_options import (
     resolve_solar_position_method,
     solar_position_record,
     solar_position_warning_scope,
+    warn_solar_position_fallback,
 )
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
@@ -921,16 +922,23 @@ def run_montecarlo(
     has_battery = config_has_battery(cfg)
     execution = backend_provenance(settings.execution_backend, pv_only=not has_battery)
 
-    if year_cache is None:
-        runtime_weather: dict[str, Any] = {}
-        dc_by_year, temp_by_year = _precompute_year_caches(
-            cfg,
-            resolved,
-            settings,
-            runtime_weather=runtime_weather,
+    # One "auto" fallback warning per study. A year cache that reuses its PV
+    # layer builds nothing that warns, so the study warns from its weather
+    # record; a study that built its PV layer and warned does not warn again.
+    with solar_position_warning_scope():
+        if year_cache is None:
+            runtime_weather: dict[str, Any] = {}
+            dc_by_year, temp_by_year = _precompute_year_caches(
+                cfg,
+                resolved,
+                settings,
+                runtime_weather=runtime_weather,
+            )
+        else:
+            dc_by_year, temp_by_year, runtime_weather = year_cache._years_for(cfg, resolved, settings)
+        warn_solar_position_fallback(
+            runtime_weather.get("solar_position_requested", ""), runtime_weather.get("solar_position_method", "")
         )
-    else:
-        dc_by_year, temp_by_year, runtime_weather = year_cache._years_for(cfg, resolved, settings)
     available_years = np.array(sorted(dc_by_year.keys()))
 
     deps = App._runtime_dependencies()

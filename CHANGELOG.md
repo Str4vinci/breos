@@ -234,7 +234,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   user CSVs and injected weather frames, `"auto"` takes the sun at the step
   labels, as `"interval-start"` did, and warns once per run (a
   `UserWarning`; a Monte Carlo study or an optimizer search warns once, not
-  once per weather year or candidate). Malformed metadata raises, as under
+  once per weather year or candidate, and a run warns on inputs reused by
+  `reuse_prepared_inputs` or a year cache too). Inside
+  `reuse_prepared_inputs`, a weather file or metadata sidecar that changes
+  between runs is now read again. Malformed metadata raises, as under
   `"weather"`. Explicit `"weather"` still raises without the metadata, and
   explicit `"interval-start"` and `"mid-interval"` are unchanged. **Results
   change for weather that states its time basis.** To get the old results,

@@ -6,8 +6,11 @@ warns once per run. Explicit ``weather`` stays strict, and the explicit
 methods are unchanged.
 """
 
+import json
+import multiprocessing
 import warnings
 from contextlib import contextmanager
+from pathlib import Path
 from unittest import mock
 
 import numpy as np
@@ -16,17 +19,19 @@ import pytest
 from pvlib.location import Location
 
 from breos import App, cli
-from breos.montecarlo import MonteCarloSettings, run_montecarlo
+from breos.app_inputs import reuse_prepared_inputs
+from breos.montecarlo import MonteCarloSettings, build_year_cache, run_montecarlo
 from breos.pv.model_options import (
     DEFAULT_SOLAR_POSITION,
     SOLAR_POSITION_METHODS,
     resolve_solar_position_for_weather,
     solar_position_record,
     solar_position_warning_scope,
+    warn_solar_position_fallback,
 )
 from breos.pv_modules import get_module
 from breos.solar import calculate_multi_array_production, calculate_pv_production_dc
-from breos.weather import WEATHER_METADATA_KEY
+from breos.weather import WEATHER_METADATA_KEY, save_weather_csv
 from tests.conftest import _build_synthetic_weather
 
 AUTO_WARNING = "solar_position = 'auto'"
@@ -387,3 +392,100 @@ def test_the_cli_offers_auto():
     assert cli._build_config(parser.parse_args(["run", "--solar-position", "auto"]))["solar_position"] == "auto"
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--solar-position", "noon"])
+
+
+# ---------------------------------------------------------------------------
+# Reused inputs and forked processes
+# ---------------------------------------------------------------------------
+
+
+def _weather_file_config(tmp_path, metadata):
+    """An App config reading a weather CSV whose sidecar holds ``metadata``."""
+    weather = _weather(metadata)
+    path = tmp_path / "site_weather.csv"
+    save_weather_csv(weather, path)
+    config = {key: value for key, value in APP_BASE.items() if key not in ("pv_arrays", "horizon_profile")}
+    return {**config, "n_modules": 4, "weather_file": str(path)}, path
+
+
+def _set_sidecar_metadata(path, **metadata):
+    sidecar = Path(f"{path}.metadata.json")
+    payload = json.loads(sidecar.read_text())
+    payload[WEATHER_METADATA_KEY].update(metadata)
+    sidecar.write_text(json.dumps(payload))
+
+
+def _simulated(config):
+    app = App(config)
+    app.simulate()
+    return app
+
+
+def test_reused_inputs_are_prepared_again_when_the_weather_sidecar_changes(tmp_path):
+    config, path = _weather_file_config(tmp_path, {"source": "user_csv"})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with reuse_prepared_inputs():
+            before = _simulated(config)
+            _set_sidecar_metadata(path, radiation_time_basis="interval_mean", timestamp_label_basis="left")
+            cached = _simulated(config)
+    fresh = _simulated(config)
+
+    assert before.result()["provenance"]["pv_model"]["solar_position"]["resolved"] == "interval-start"
+    assert cached.result()["provenance"]["pv_model"]["solar_position"]["resolved"] == "weather"
+    np.testing.assert_array_equal(_series(cached), _series(fresh))
+    assert not np.array_equal(_series(cached), _series(before))
+
+
+def test_reused_inputs_are_prepared_again_when_the_weather_csv_changes(tmp_path):
+    config, path = _weather_file_config(tmp_path, {"source": "user_csv", **STATED["interval_mean_left"]})
+    with reuse_prepared_inputs():
+        before = _simulated(config)
+        dimmer = _weather({"source": "user_csv", **STATED["interval_mean_left"]})
+        dimmer[["ghi", "dni", "dhi"]] *= 0.5
+        save_weather_csv(dimmer, path)
+        cached = _simulated(config)
+    assert cached.result()["pv_dc_generation_kwh"] < before.result()["pv_dc_generation_kwh"]
+    assert cached.result()["pv_dc_generation_kwh"] == _simulated(config).result()["pv_dc_generation_kwh"]
+
+
+def test_every_app_run_warns_even_on_reused_inputs(tmp_path):
+    config, _path = _weather_file_config(tmp_path, {"source": "user_csv"})
+    with _auto_warnings() as caught:
+        with reuse_prepared_inputs():
+            _simulated(config)
+            _simulated(config)
+            _simulated({**config, "battery_kwh": 5.0})
+    assert len(caught) == 3
+
+
+def test_every_montecarlo_study_warns_even_on_a_reused_year_cache(tmp_path, write_multiyear_weather):
+    settings = _mc_weather(tmp_path, write_multiyear_weather, sidecar=False)
+    with _auto_warnings() as caught:
+        cache = build_year_cache(MC_BASE, settings)
+    assert len(caught) == 1
+    with _auto_warnings() as caught:
+        run_montecarlo(MC_BASE, settings, year_cache=cache)
+        run_montecarlo({**MC_BASE, "battery_kwh": 5.0}, settings, year_cache=cache)
+    assert len(caught) == 2
+
+
+def _two_scoped_fallbacks(_=None):
+    """Warnings from two scopes this process opens, each with one fallback."""
+    with _auto_warnings() as caught:
+        for _ in range(2):
+            with solar_position_warning_scope():
+                warn_solar_position_fallback("auto", "interval-start")
+                warn_solar_position_fallback("auto", "interval-start")
+    return len(caught)
+
+
+@pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="needs the fork start method")
+def test_a_process_forked_inside_a_scope_warns_in_its_own_scopes():
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with solar_position_warning_scope():
+            warn_solar_position_fallback("auto", "interval-start")
+            with multiprocessing.get_context("fork").Pool(1) as pool:
+                forked = pool.apply(_two_scoped_fallbacks)
+    assert forked == _two_scoped_fallbacks() == 2
