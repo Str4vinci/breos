@@ -1,10 +1,11 @@
 # 0006 — Collective self-consumption: a community entry point beside App
 
-- **Status:** Proposed, with the eleven decisions taken by the maintainer
-  on 2026-10-06 (see [Decisions](#decisions)). No code yet; implementation is
-  planned for 0.8.0, after the AC-coupled battery (#419) and vehicle-to-home
-  (#420) work (#421).
-- **Date:** 2026-10-06; decisions taken 2026-10-06
+- **Status:** Proposed, with decisions taken by the maintainer
+  on 2026-10-06 and 2026-10-22 (see [Decisions](#decisions)). No code yet;
+  implementation is planned for 0.8.0, after the AC-coupled battery (#419)
+  and vehicle-to-home (#420) work (#421).
+- **Date:** 2026-10-06; decisions taken 2026-10-06 and 2026-10-22;
+  amended 2026-10-22
 
 ## Context
 
@@ -40,7 +41,8 @@ the coefficients do not give.
   where the kernel is used.
 
 This record answers each point. It changes no code. The maintainer took
-its eleven decisions on 2026-10-06; the sections below follow them, and
+its first eleven decisions on 2026-10-06 and four further decisions on
+2026-10-22; the sections below follow them, and
 [Decisions](#decisions) lists them. Two of them changed the proposal: 0.8.0
 shares PV only, with no community battery (community storage is recorded
 for a later amendment in K10), and the work is implemented after #419 and
@@ -270,16 +272,24 @@ tariff = { ... }                      # this participant's supplier tariff
 
 - **Site keys.** Each `[[participants]]` and `[[assets]]` entry takes App's
   site keys (PV, battery, inverter, load, `tariff`, `reference_tariff`,
-  `smart_charging`, `costs`, degradation) and is resolved by
-  `resolve_app_config`, so each key means what it means in App. The keys
-  that must agree across sites (location, weather, `start_date`,
+  `smart_charging`, `costs`, degradation). Sites with PV are resolved by
+  `resolve_app_config`; Community builds assets' zero loads and households
+  without PV itself (A2, A7), keeping App's meanings for the keys it uses.
+  The keys that must agree across sites (location, weather, `start_date`,
   `resolution`, `projection_years`, `currency`, the discount rate and the
   escalators, `execution_backend`) are set once in `[community]` and refused
   in a site.
-- **Assets** take App's PV, inverter and cost keys only. A battery, a load
-  and `[smart_charging]` are refused on an asset in 0.8.0. App requires a
+- **Assets** take App's PV, inverter and cost keys, plus an explicit import
+  price (required, no default, 0 allowed) and explicit fixed charges if the
+  asset has a supply contract (likewise no default, 0 allowed). A battery,
+  a load and `[smart_charging]` are refused on an asset in 0.8.0. App requires a
   positive `annual_consumption_kwh`, so the community builds an asset's
   zero load itself rather than resolving one through App.
+- **Households without PV.** Community builds their 15-minute meter
+  import from their load, with zero export, and uses App's tariff code.
+  Shared energy is a settlement balance on metered kWh, not energy routed
+  to the household. Their alone reference bills that same load on the same
+  tariff without sharing; App's validation is unchanged (decision 14).
 - **Identities.** `id` is required, unique across participants and assets,
   and matches `^[a-z0-9][a-z0-9_-]{0,63}$`. Results, the settlement ledger,
   ownership and provenance are keyed by it. Every community-wide sum runs in
@@ -325,10 +335,11 @@ surplus    = S - sum(u_i)          # community surplus, sold at surplus_price
   (Article 29(3)). A participant that neither imports nor exports, for
   example one whose own battery covers its load, stays a receiver: its share
   is allocated to it and becomes its surplus, since only an injecting
-  site's share moves. A site never imports and exports in one step, so
-  `x_i = 0` covers every importing participant. Coefficients that sum to
-  anything but 1 are refused, rather than treating the remainder as
-  surplus: that would be a rule the regulation was not checked for.
+  site's share moves. App's meter balances are mutually exclusive after
+  the prerequisite inverter-draw fix (A6), so `x_i = 0` covers every importing
+  participant. Coefficients that sum to anything but 1 are refused, rather
+  than treating the remainder as surplus: that would be a rule the
+  regulation was not checked for.
 - **Proportional** coefficients follow each interval's metered import. With
   `S ≤ Σc` every participant uses all it is allocated; above it each
   participant's consumption is covered and the rest is surplus.
@@ -369,17 +380,18 @@ Decided 2026-10-06 (decision 4): behind the meter first. The options were:
 
 (a) is what the regimes above do: the allocation is computed afterwards on
 metered balances, so a battery behind a meter cannot see it while it runs.
-It also keeps every participant's physics identical to its App run (Q2), so
+It also keeps participants' physics identical to their App runs, or their
+load-only construction without PV (Q2), so
 the reference without the community (K8) needs no second simulation. (b)
 models a controller with live allocation data, which no regime above
 provides; it is a possible later mode.
 
 **Assets.** An asset has no load and no battery, so it takes the vectorised
-PV-only path, and all its PV AC is export: its injection is the run's
-`PV_AC_Export`. An asset's meter imports nothing. No asset is priced through
-a tariff (`_tariff_weights`), which would give it a no-system baseline it
-does not have; its money comes only from the settlement and its own costs
-(K7).
+PV-only path. Its injection is the run's `PV_AC_Export`, after the
+prerequisite App fix nets inverter draw against AC surplus (A6). Any
+remaining grid import is billed at the asset's explicit import price,
+with its explicit supply-contract fixed charges (A7). These costs follow
+ownership (K7); the asset has no no-system baseline.
 
 **Participants' own export.** Decided 2026-10-06 (decision 6): (a). Options:
 (a) pooled into `S` when `pool_participant_export = true`, the default; (b)
@@ -395,14 +407,14 @@ site, with a schema version of its own (`SETTLEMENT_SCHEMA_VERSION =
 
 | Column | Participant rows | Asset rows |
 |---|---|---|
-| `Metered_Import` | `c_i` | 0 |
+| `Metered_Import` | `c_i` | actual asset import |
 | `Metered_Export` | `x_i` | injection |
 | `Pooled_Injection` | `x_i` if pooled, else 0 | injection |
 | `Coefficient` | `k_i` (0 if not a receiver) | 0 |
 | `Shared_Allocated` | `a_i` | 0 |
 | `Shared_Used` | `u_i` | 0 |
 | `Participant_Surplus` | `s_i` | 0 |
-| `Supplier_Import` | `c_i − u_i` | 0 |
+| `Supplier_Import` | `c_i − u_i` | actual asset import |
 | `Own_Export` | `x_i` if not pooled, else 0 | 0 |
 | `Attributed_Shared_Used` | `u` attributed to this injector | the same |
 | `Attributed_Surplus` | surplus attributed to this injector | the same |
@@ -421,6 +433,8 @@ App's flows are (ADR 0003 E2, E3):
 - **Supplier.** `Supplier_Import` at the participant's own import prices,
   its own fixed charge, and its `Own_Export` at its own export prices. Its
   own tariff is resolved on the community index as App resolves one.
+  Assets' actual imports and supply-contract fixed charges are billed at
+  their explicit prices, with no invented no-system baseline (decision 13).
 - **Shared energy.** Decided 2026-10-06 (decision 7): one price per kWh,
   by period if needed. `Shared_Used × shared_energy_price` is paid to the
   injectors; `Shared_Used × shared_network_charge` is paid out of the
@@ -434,9 +448,10 @@ App's flows are (ADR 0003 E2, E3):
 - **Injection.** Each injector receives `Attributed_Shared_Used ×
   shared_energy_price + Attributed_Surplus × surplus_price`; the surplus
   price escalates at `sell_price_inflation`.
-- **Ownership.** Decided 2026-10-06 (decision 8). An asset's CAPEX, O&M and
-  revenues are split by its `ownership` table, whose shares are at least 0
-  and sum to 1 over participant ids, or by `ownership = "external"` for an
+- **Ownership.** Decided 2026-10-06 (decision 8). An asset's CAPEX, O&M,
+  import bills, fixed charges and revenues are split by its `ownership`
+  table, whose shares are at least 0 and sum to 1 over participant ids,
+  or by `ownership = "external"` for an
   asset a third party owns, whose money then leaves the community.
 - **Participants' own equipment** is priced as App prices it, in that
   participant's account.
@@ -446,6 +461,10 @@ App's flows are (ADR 0003 E2, E3):
   §42b building it is 0; under §42c the full network charges apply. One
   charge for the community is decided; one per participant, for communities
   that span voltage levels, is a small extension once a study needs it.
+- **Annual network credit.** Cap it against the household's remaining
+  supplier network charges, including the fixed part, as App does.
+  Shared-network charges do not enter the cap. Report any change caused by
+  sharing as a separate annual line (decision 15).
 
 **Money closure.** In every interval, what receivers pay for shared energy
 equals what injectors receive for it; network charges, supplier bills,
@@ -460,6 +479,8 @@ the community's boundary.
   prices, with no share of any asset. By K5(a) its energy is the community
   run's, so only the money differs. The community's reference is the sum of
   its participants' references; the assets are not built.
+  For a household without PV, this is its whole load billed on its own
+  tariff without sharing, using App's no-system billing code (decision 14).
 - **No-system baseline.** Each participant's whole load at its own
   `reference_tariff`, or at its tariff, as App's baseline (ADR 0002 A13).
 - **Per participant** the result has: energy (load, own PV, metered import
@@ -471,21 +492,25 @@ the community's boundary.
   by shared energy, the ownership split, the totals, and the money-closure
   residual.
 - **Provenance** records the community table, each site's resolved config
-  and App provenance, the ids and their order, the allocation mode and the
-  settlement schema version.
+  and App provenance (load and tariff provenance for households without PV),
+  the ids and their order, the allocation mode and the settlement schema version.
 
 ### K9. Single-site behaviour, backends and entry points
 
 - **App unchanged.** No App module, key, result field or golden changes;
   every App run is bit-identical. The tests add a guard that the App config
   registry and App goldens are untouched by the community package.
-- **Kernel.** Communities add no dispatch code. Each site runs the existing
-  projection with the community's `execution_backend`; the settlement is
+- **Kernel.** Communities add no dispatch code. Sites with PV run the existing
+  projection with the community's `execution_backend`; households without
+  PV use their load as meter import. The settlement is
   NumPy. Python and Numba agree bit for bit on every site, and so on the
   settlement, which a parity scenario checks.
 - **A participant's run equals its App run.** A participant site resolved
   as an App config, at the community's shared keys, gives the same
   per-step flows as `App` on that config, bit for bit (Q2).
+  Without PV, Q2 checks meter import against the prepared load and export
+  against zero; Q3 checks the same load billed without sharing, using App's
+  tariff code, rather than constructing an App with invalid zero PV.
 - **Input reuse.** Sites that share PV inputs reuse their preparation
   through `reuse_prepared_inputs`.
 - **Memory.** Settlement needs every site's import and export for one year
@@ -536,8 +561,8 @@ Per interval, to rounding:
 
 1. Energy for sharing: `S = Σ asset injection + Σ Pooled_Injection` of the
    participants.
-2. Allocation: `Σ a_i = S` when some participant receives, else 0; each
-   `a_i = u_i + s_i`.
+2. Allocation: `Σ a_i = S` when the receiver denominator is positive,
+   else 0; each `a_i = u_i + s_i`.
 3. Surplus: `Community_Surplus = S − Σ u_i = Σ s_i + (S − Σ a_i)`.
 4. Supply: `c_i = u_i + Supplier_Import_i`; `u_i ≤ c_i`.
 5. Attribution: `Σ Attributed_Shared_Used = Σ u_i` and
@@ -591,11 +616,14 @@ attributed 2500 to the asset, 300 to A and 200 to B.
 **Invariants**, at 15-minute steps, Python and Numba:
 
 - Q1. App runs are bit-identical to the release before.
-- Q2. Every participant's site flows equal its standalone App run bit for
-  bit.
+- Q2. A participant with PV has site flows equal to its standalone App run
+  bit for bit. Without PV, meter import equals its prepared 15-minute load
+  and export is zero.
 - Q3. A community with one participant, proportional allocation,
   `pool_participant_export = false` and no asset gives that participant's
-  App energy and money, with every shared column 0.
+  App energy and money, with every shared column 0. Without PV, the
+  comparison is the same load billed on the same tariff without sharing,
+  using App's no-system billing code; no invalid App config is constructed.
 - Q4. Reordering the participants in the configuration gives bit-identical
   results.
 - Q5. Every closure identity holds per interval and per year.
@@ -623,12 +651,19 @@ experimental PR adds dynamic allocation later. Once the work ships, this
 section is replaced by an implementation status, as in ADR 0002.
 
 **Order in 0.8.0** (decision 11). The work is implemented after the
-AC-coupled battery (#419) and vehicle-to-home (#420) work. Its code does not
-call theirs, since assets and participants run the single-site physics,
-but the order means the reference results, the example configuration and
-the docs are computed on the final PV defaults (#417, #418, which #419 also
-waits for), and a participant's site keys already include AC coupling and a
-vehicle when the community ships.
+AC-coupled battery (#419) and vehicle-to-home (#420) work. It uses that work
+through the single-site physics. The order means the reference results, the
+example configuration and the docs are computed on the final PV defaults
+(#417, #418, now implemented), and a participant's site keys include AC
+coupling and a vehicle when the community ships.
+
+**Additional prerequisite** (decision 12). A separate App change on its
+own branch must net an idle PV inverter's night draw against AC bus surplus
+before export in both PV-only and AC-battery paths. ACC depends on that
+fix before PR 3's meter-balance and Q2–Q3 checks; it adds no netting of its
+own. Several-inverter App results move by a few Wh a year in that separate
+change. ACC's unchanged-App guard is measured after the fix, and Q3 holds
+exactly without an inverter-draw exception.
 
 **Rollout gates.** No merged state exposes a community that cannot price
 itself: PR 1–3 add internal modules only, PR 4 adds money, and PR 5 is the
@@ -637,9 +672,9 @@ first that exports `breos.Community`.
 | PR | Scope | Effort | Main risk |
 |---|---|---|---|
 | 1 | `breos/community/settlement.py`: fixed and proportional allocation, receivers, participant and community surplus, attribution to injectors, the settlement frame and its version; closure helper; cases S1–S3 and S5; property tests (Q5, Q6). | 2.5 days | Floating sums that depend on order (Q4). |
-| 2 | Community configuration: `[community]`, `[[assets]]`, `[[participants]]`; ids; site keys through `resolve_app_config` with the shared keys refused; assets' battery, load and smart-charging keys refused; coefficients, ownership and prices validated; 15-minute requirement. | 2.5 days | Keys whose App meaning does not fit a site in a community. |
-| 3 | Community runner: participant sites and PV-only assets with their zero load; settlement year by year; per-site carry; Q2, Q3 and the parity scenario. | 3.5 days | Memory and time with many participants. |
-| 4 | Money: supplier bills, shared price, network charges, surplus revenue, ownership, external owners; the reference without the community and the no-system baseline; NPV per participant and for the community; money closure; case S4. | 3.5 days | Escalation and discounting kept identical to App's per participant. |
+| 2 | Community configuration: `[community]`, `[[assets]]`, `[[participants]]`; ids; App site keys with the shared keys refused; Community's no-PV household path; assets' battery, load and smart-charging keys refused; explicit asset import prices and supply-contract fixed charges; coefficients, ownership and prices validated; 15-minute requirement. | 2.5 days | Keys whose App meaning does not fit a site in a community. |
+| 3 | Community runner: participant sites, no-PV households from their load, and PV-only assets with their zero load; settlement year by year; per-site carry; Q2, Q3 and the parity scenario, after the separate App inverter-draw fix. | 3.5 days | Memory and time with many participants. |
+| 4 | Money: participant and asset supplier bills, shared price, network charges, supplier-only annual credit caps and their separate annual changes, surplus revenue, ownership, external owners; the reference without the community and the no-system baseline; NPV per participant and for the community; money closure; case S4. | 3.5 days | Escalation and discounting kept identical to App's per participant. |
 | 5 | `breos.Community` facade, `result()` and `settlement()`, provenance, an example configuration, docs (a community guide, the settlement ledger), CHANGELOG; ADR implementation status. | 2.5 days | None significant. |
 | 6 (experimental, later) | Dynamic allocation with a plain NumPy reference. | 2–3 days | Defining the rule before an implementation. |
 
@@ -653,6 +688,180 @@ Risks across the work:
   PR 3 measures it.
 - **Data.** Shared prices, network charges and surplus prices are user
   inputs.
+
+## Amendments of 2026-10-22
+
+The record was written against `567df2a`. The implementation it will build
+on is now `4a3cc04`: ADR 0004 is implemented, including M1–M8, as are the
+electrical work of ADR 0007–0009, the 0.8.0 refactors and #416–#418. The
+"Current behaviour" section remains a historical snapshot, with its line
+references at `567df2a`. Every location below is at `4a3cc04`. These notes
+qualify the body where the code has moved or its behaviour changed; the
+first eleven decisions are unchanged. The maintainer resolved the four
+questions on 2026-10-22 in decisions 12–15 below. A6's App fix is a future
+dependency, not behaviour present at `4a3cc04`. The regulatory sources have
+not been rechecked.
+
+- **A1. The single-site entry points remain.** K2 and PR 2 use
+  `resolve_app_config` (`breos/app_config.py:3302-3421`); App resolves and
+  runs one site (`breos/app.py:162-180`), through `run_app_simulation`
+  (`breos/runners/app.py:620-815`). Validation now returns `ValidatedSpecs`
+  and uses the registry's checkers (`breos/app_config.py:1961-2014`), rather
+  than requiring a second community copy of App's rules. Remove community
+  metadata before resolving a site's App payload. Apply App's recursive
+  key normalisation only to that payload: it changes hyphens in mapping
+  keys (`breos/app_config.py:1579-1609`), so applying it to `ownership`
+  would turn `apt-1` into `apt_1` and break K3's identities.
+- **A2. Community supports households without PV.** Decided 2026-10-22
+  (decision 14): Community builds their meter import from the 15-minute
+  load, with zero export, and uses App's tariff code. Shared energy changes
+  the billed balance, not physical routing. Q2 checks those load-only
+  flows; Q3 and the alone reference bill the same load on the same tariff
+  without sharing, using App's no-system billing code
+  (`breos/projection.py:379-411`, `:499-521`). App's positive-PV validation
+  stays unchanged (`breos/app_config.py:2662-2677`, `:2711-2714`).
+- **A3. Keep the whole projection clock and carry.** The shared interfaces
+  are `ProjectionYear`, `ProjectionRun` and `project_years`
+  (`breos/projection.py:744-836`, `:1026-1262`); `run_projection` and
+  `value_projection` remain the App wrappers (`:1265-1310`, `:1358-1408`).
+  Carry includes energy origins, native degradation state, controller state
+  and retirement (`:125-225`). K9's alternative of repeated
+  one-year calls with `initial_carry` alone is insufficient: each call
+  finalises rainflow, applies terminal replacement policy and calculates
+  remaining service years against its own horizon (`:1127-1147`), and
+  controller and event year numbers would restart. PR 3 must either retain
+  full-horizon `priced_flows` (available even without a tariff), or add a
+  streaming seam to the shared projection that preserves those semantics.
+  `record_priced_flows=True` needs frame years, not aligned summaries
+  (`:1157-1193`); ordinary App runs keep them only when dispatch is price
+  blind (`breos/runners/app.py:720-738`). Request them explicitly for ACC,
+  including price-aware household controllers; settlement does not steer
+  their dispatch.
+- **A4. Dispatch powers become settlement energies once.** Ledger schema
+  `"3.1"` is already present, unreleased (`breos/_dispatch.py:275-345`).
+  K4–K6's Wh mean `Import_From_Grid × 0.25` and `PV_AC_Export × 0.25`,
+  not the frame columns as stored: flows and retained `priced_flows` are
+  average W (`breos/app.py:268-290`, `breos/projection.py:829-833`). Keep
+  settlement schema `"1.0"` separate. Closure 6 uses the current conservation
+  helper, including `PV_AC_To_Battery − PV_Charge_Conversion_Loss` in the
+  charge-input split, and night draw in the load-supply identity
+  (`tests/energy_conservation.py:82-119`, `:147-202`); origins still
+  reconcile separately (`:218-254`). No new dispatch schema is needed.
+- **A5. Behind the meter still runs first, with AC night import.** The AC
+  step consumes the complete PV-only chain, serves load, charges and then
+  exports; grid charging runs only without export or discharge
+  (`breos/_dispatch.py:961-1018`, `:1046-1085`). Its import includes the PV
+  inverter's night draw even while the battery serves the load (ADR 0004
+  M3); do not subtract that draw or `Grid_AC_To_Battery` from K4's import.
+  With one PV inverter these paths still give mutually exclusive import
+  and export. The DC hybrid's night draw is instead conditional on no PV
+  and no battery flow (`:1341-1350`). K5's order, K8's reuse of participant
+  physics for the alone reference, and Q2 stand for App-valid sites of
+  either topology. Clipping and AC-cable loss have already reduced export;
+  neither is shareable energy or an extra settlement deduction.
+- **A6. Fix simultaneous inverter-draw import and export in App.** At
+  `4a3cc04`, both paths add night draw without netting against export
+  (`breos/battery.py:1415-1419`, `breos/_dispatch.py:1046-1052`). Decided
+  2026-10-22 (decision 12): a separate App change on its own branch nets an
+  idle PV inverter's draw against AC bus surplus before export, in PV-only
+  and AC-battery runs. A step then never shows both import and export
+  caused by inverter draw. ACC depends on that fix, settles App's meter
+  balances directly (K4–K6), and preserves Q3 exactly, with no exception.
+- **A7. Assets export the full PV-only result and pay for actual imports.**
+  Use App's DC and electrical preparation (`breos/app_inputs.py:474-535`,
+  `:612-726`) and all `ProjectionYear` fields with zero load and no battery
+  (`breos/runners/app.py:675-686`). Conversion includes the curve, voltage
+  row, derating, clipping, cables, output scale and per-inverter string DC
+  (`breos/battery.py:1308-1358`, `breos/inverter.py:467-533`). After A6's
+  fix, use App's export and actual import, including remaining night draw
+  (`breos/battery.py:1415-1447`). Decided 2026-10-22 (decision 13): record
+  asset imports in both K6 import columns and bill an explicit import
+  price, required with no default, 0 allowed; supply-contract fixed charges
+  are likewise explicit. Split the cost by ownership (K7), with no
+  invented no-system baseline for the asset.
+- **A8. Input reuse is by the whole preparation, not PV alone.**
+  `reuse_prepared_inputs` retains only the latest preparation and gives each
+  run a deep copy (`breos/app_inputs.py:850-872`, `:968-994`). Group runs by
+  `input_configuration_key` (`:905-927`); `INPUT_INDEPENDENT_KEYS` is now
+  derived from `AppConfigField.affects_inputs` (`:838-842`). Different load
+  profiles, annual demands or battery-temperature inputs prevent reuse even
+  when PV matches (`:538-602`). Weather CSV and metadata-sidecar contents
+  also enter the key (`:930-965`). K9 and PR 3 may use this existing cache,
+  but must not promise a shared PV/weather preparation across arbitrary
+  households or drop load keys to force a hit. Sharing those stages further
+  requires a separate implementation that preserves Q2 and provenance.
+- **A9. Money remains separate from physics.** K7 and PR 4 build on
+  `build_costs_dict` (`breos/app_config.py:3239-3258`), `price_year_rows`,
+  `value_year_rows` and `discount_cashflows` (`breos/economics.py:485-530`,
+  `:749-901`). AC coupling prices a simple PV inverter plus the required
+  separately sized battery inverter (`:257-340`); bundled replacement
+  prices are supported but terminal health credit stays pack-only
+  (`breos/projection.py:1383-1400`). Preserve those costs and replacement
+  instants in both participant accounts. Reprice supplier import and own
+  export after settlement; do not add shared receipts to the standalone
+  export revenue and sell the pooled energy twice. Shared payments and
+  receipts need separate components: they escalate at the import rate,
+  whereas surplus and unpooled export escalate at the sell rate. The
+  existing valuer has no ACC components; extend composition in the community
+  package while retaining App's year-end discounting, O&M and replacement
+  rules. Asset ownership splits costs and revenues once, without adding
+  an App no-system baseline for the asset.
+- **A10. Cap annual network credit at supplier network charges only.**
+  Decided 2026-10-22 (decision 15): use the household's remaining supplier
+  network charges, including the fixed part, following App's cap
+  (`breos/projection.py:436-449`). Shared-network charges do not enter it.
+  Keep the alone reference's credit and report any sharing-induced change
+  as a separate annual line in K7–K8 and Closure 7; economics subtracts
+  each household's credit (`breos/economics.py:749-777`, `:835-843`).
+- **A11. Use unrounded result inputs and retain the new diagnostics.**
+  `build_year_row` defines the shared annual energy schema
+  (`breos/projection.py:265-376`); `PV_Production_kWh` is delivered direct
+  PV plus PV-origin battery AC and export, not raw inverter production.
+  Public result format remains `"1"` (`breos/result_schema.py:16`), with
+  `yearly`, `monthly`, `financial`, `pv_loss_waterfall`, `electrical` and
+  provenance (`breos/app_results.py:392-478`). Those public values are
+  rounded; K4–K8 and sorted-id sums must use the underlying arrays and
+  year rows. Keep App's own-PV self-consumption separate from shared use.
+  AC charging/discharging losses and PV-to-battery AC have their own
+  waterfall blocks (`breos/runners/app.py:451-475`, `:569-600`); provenance
+  records the resolved electrical config, weather/load sources, execution,
+  tariff/reference, economics and resolved solar timing
+  (`breos/app_results.py:274-348`). Community results add settlement and
+  ownership accounts beside these site records, without changing App fields.
+- **A12. Reference arithmetic and closure.** S1–S5 depend only on K4,
+  not on BREOS PV or dispatch defaults. Rechecked with exact rational
+  arithmetic: every published number is unchanged, including S3's rounded
+  attribution and S4's 0.456 bill. Closure 2 now says the receiver
+  denominator must be positive: S5 has a receiver but no allocation. Q1
+  guards the single-site implementation ACC builds on, not the older PV
+  defaults. Q2 and Closure 6 include the electrical and AC paths described
+  above (`breos/battery.py:1308-1448`,
+  `tests/energy_conservation.py:82-202`). Extend PR 3's reference checks to
+  night import, clipping, cable loss and several inverters, including
+  decisions 12–13; S1–S5 alone do not cover those paths. K10 stays deferred:
+  its candidate A's virtual-load
+  formula is not a ready dispatch adapter, since night import and grid
+  charging can add to `Import_From_Grid` beyond unmet virtual load
+  (`breos/_dispatch.py:1046-1085`).
+- **A13. Current preparation names, defaults and rollout.** PR 2–3 use
+  `build_pv_production_breakdown(...).dc_after_losses`
+  (`breos/app_inputs.py:474-535`), not the removed `build_dc_system_base`;
+  App's arrays share one PV engine. Weather loading goes through
+  `load_weather_for_simulation` (`:334-439`) and `read_weather_csv`
+  (`breos/weather.py:419-434`), preserving source timing and the common
+  calendar. `solar_position = "auto"` is now the default
+  (`breos/pv/model_options.py:90`, `:288-300`); the runner records its
+  resolution and supplies per-step inverter fields each year
+  (`breos/runners/app.py:658-686`). PR 5's examples and Q1 baseline must use
+  these defaults. PR 2 inherits App's AC rating/efficiency/price checks
+  (`breos/app_config.py:2944-2984`, `:3332-3338`) and its refusal of a DC
+  battery or daily-target planner beside several string-level inverters
+  (`:3544-3559`), rather than adding a different ACC model. The five-PR
+  order and rollout gates stand; PR 3 must budget A3/A8 and PR 4 A7/A10.
+  #419 and #417–#418 are already implemented at this revision. #420 is
+  still a prerequisite under decision 11; this check specifies no vehicle
+  flows or carry that are not present yet, and those seams need rechecking
+  after its implementation.
 
 ## Decisions
 
@@ -687,6 +896,32 @@ Taken by the maintainer on 2026-10-06. The body sections follow them.
 11. **Release and order:** ships in 0.8.0, implemented after #419 and #420
     (see [Implementation plan and effort](#implementation-plan-and-effort)).
     Changed from the proposal, which had no order.
+
+Decided 2026-10-22:
+
+12. **Inverter-draw netting belongs in App.** A separate App change on its
+    own branch nets an idle PV inverter's night draw against AC bus surplus
+    before export in the PV-only and AC-battery paths, preventing simultaneous
+    import and export caused by inverter draw. ACC depends on that fix and
+    settles App's meter balances directly (K4–K6); Q3 holds exactly, without
+    an exception (A6).
+13. **Shared asset imports are billed.** Record actual asset imports and
+    require an explicit import price, with no default and 0 allowed;
+    supply-contract fixed charges are likewise explicit, required when the
+    asset has a supply contract, with no default and 0 allowed. Split these
+    costs by ownership like the asset's other costs and revenues (K7).
+    The asset has no invented no-system baseline (A7).
+14. **Households without PV are supported through Community.** Community
+    builds their 15-minute meter import from their load, with zero export,
+    and uses App's tariff code; sharing is a balance on metered kWh, not
+    routed energy. Their alone reference bills the same load on the same
+    tariff without sharing, as today's no-system billing does. Q2 checks
+    the load-only meter flows; Q3 checks that no-sharing bill. App's
+    validation is unchanged (A2).
+15. **Annual network-credit caps use supplier network charges only.** Cap
+    the credit against the household's remaining supplier network charges,
+    including the fixed part, as App does. Report any change caused by
+    sharing as a separate annual line (A10).
 
 ## Consequences
 
