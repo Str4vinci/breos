@@ -109,6 +109,7 @@ def test_all_away_charger_facts_are_required_even_for_free_charging(key):
         ("replacement_min_remaining_years", -1),
         ("eol_percentage", 1.1),
         ("enable_replacement", "false"),
+        ("allow_terminal_replacement", "false"),
         ("skipped_replacement_action", "sell"),
         ("mode", "v2g"),
         ("reference_mode", "v2h"),
@@ -205,20 +206,20 @@ def test_unknown_nested_keys_are_never_silently_dropped():
         checked({**VEHICLE, "away_charging": {**AWAY, "rating": 7}})
 
 
-def test_app_and_both_montecarlo_entries_refuse_before_input_preparation(monkeypatch):
+def test_app_accepts_vehicle_and_both_montecarlo_entries_refuse_before_input_preparation(monkeypatch):
     def unexpected(*args, **kwargs):
         pytest.fail("Vehicle rollout refusal must happen before inputs are read")
 
     monkeypatch.setattr("breos.montecarlo._weather_years", unexpected)
     monkeypatch.setattr("breos.app_inputs.load_consumption_profile", unexpected)
     config = {**BASE, "vehicle": VEHICLE}
+    assert breos.App(config)._resolved.vehicle is not None
     settings = breos.MonteCarloSettings(weather_file="nonexistent.csv", n_runs=1)
     for call in (
-        lambda: breos.App(config),
         lambda: breos.run_montecarlo(config, settings),
         lambda: breos.build_year_cache(config, settings),
     ):
-        with pytest.raises(ValueError, match="vehicle simulation is not available yet"):
+        with pytest.raises(ValueError, match="vehicle.*Monte Carlo"):
             call()
 
 
@@ -233,10 +234,10 @@ def test_vehicle_only_site_limit_preserves_the_stationary_spec():
     baseline = validate_config(merge_defaults({**BASE, "smart_charging": {"mode": "disabled"}})).smart_charging
     assert spec == baseline
     assert spec.grid_import_limit_w is None
-    with pytest.raises(ValueError, match="vehicle simulation is not available yet"):
-        resolve_app_config(
-            {**BASE, "vehicle": VEHICLE, "smart_charging": {"mode": "disabled", "grid_import_limit_w": 7400}}
-        )
+    resolved = resolve_app_config(
+        {**BASE, "vehicle": VEHICLE, "smart_charging": {"mode": "disabled", "grid_import_limit_w": 7400}}
+    )
+    assert resolved.cfg["smart_charging"]["grid_import_limit_w"] == 7400
     # Without a vehicle the existing disabled-mode restriction remains.
     with pytest.raises(ValueError, match="takes no other keys"):
         resolve_app_config({**BASE, "smart_charging": {"mode": "disabled", "grid_import_limit_w": 7400}})

@@ -104,7 +104,7 @@ is a `breos run` option that overrides the config file.
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
 | `tracking` | `"fixed"` | — | Tracking mode. One of `"fixed"`, `"single_axis"`, `"dual_axis"` |
 | `transposition_model` | `"isotropic"` | `--transposition-model`, `--sky-model` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model). One of `"isotropic"`, `"klucher"`, `"haydavies"`, `"reindl"`, `"king"`, `"perez"`, `"perez-driesse"` |
-| `vehicle` | *unset* | — | Vehicle equipment, prices and schedule; validated, but vehicle simulation is not available yet. See [vehicle](#vehicle) |
+| `vehicle` | *unset* | — | Vehicle equipment, prices and schedule for App; Monte Carlo support is not available yet. See [vehicle](#vehicle) |
 | `weather_file` | `None` | `--weather-file` | One-year weather CSV (or gzip-compressed `.csv.gz`) to simulate, in the layout of the cached `weather/` files, instead of the `weather/` cache or a PVGIS fetch. Any filename and any location work. A relative path is taken from the working directory. The file's path and SHA-256 digest are recorded under `provenance.weather`; see [Run offline with cached weather](../how-to/offline-weather.md#name-the-weather-file) |
 | `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Run offline with cached weather](../how-to/offline-weather.md) |
 
@@ -332,7 +332,7 @@ Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart cha
 
 ## vehicle
 
-Vehicle inputs are validated, but simulation is not available yet (ADR 0005, PR 1). All prices use the run currency; equipment facts and the pack price have no defaults. `daily_persistence` is refused with a vehicle. Without this table, existing behavior is unchanged.
+App simulates the no-system, reference and study households (ADR 0005). Monte Carlo support is not available yet. All prices use the run currency; equipment facts and the pack price have no defaults. `daily_persistence` is refused with a vehicle. Without this table, existing behavior is unchanged.
 
 | Key | Required | Description |
 |---|---|---|
@@ -342,8 +342,9 @@ Vehicle inputs are validated, but simulation is not available yet (ADR 0005, PR 
 | `charger_cost` | `mode = "v2h"` | Installed charger premium in run currency; required with v2h, no default; otherwise default 0 |
 | `charger_efficiency` | yes | Charger nominal efficiency in (0, 1]; no default |
 | `departure_soc` | yes | Required SOC at each departure, within the SOC window; no default |
-| `mode` | yes | Required study mode: "uncontrolled", "v1g" or "v2h"; no default; simulation is not available yet |
+| `mode` | yes | Required study mode: "uncontrolled", "v1g" or "v2h"; no default |
 | `schedule` | yes | Required weekday/weekend rules or trip-segment CSV; see vehicle.schedule |
+| `allow_terminal_replacement` |  | Allow a swap at the project's last day close; default true |
 | `away_charging` |  | Optional away charging equipment and price; all four nested keys required |
 | `battery_replacement_cost` |  | Optional price of one swap, including installation; terminal credit remains pack-only |
 | `battery_temperature` |  | "weather" (default), fixed °C or timestamped CSV; no indoor model |

@@ -25,6 +25,7 @@ from breos.economics import default_amount_cost_keys
 from breos.pv import model_options
 from breos.pv_modules import MODULES
 from tests.offline_app import offline_weather
+from tests.test_vehicle_config import VEHICLE
 from tools.generate_app_golden import _fake_fetch
 
 BASE = {
@@ -55,6 +56,7 @@ FIXED_TARGET = {
 # One change per input-independent key, with the companions some need. The
 # companions are input-independent keys too.
 CHANGES = {
+    "vehicle": {"vehicle": VEHICLE},
     "battery_kwh": {"battery_kwh": 10},
     "battery_min_soc": {"battery_min_soc": 0.2},
     "battery_max_soc": {"battery_max_soc": 0.8},

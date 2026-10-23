@@ -1075,10 +1075,10 @@ capacity, health or standby state is invented. Without a vehicle the PV-only
 path remains vectorised. Ledger 3.1 includes all V11 vehicle columns, zero
 without a vehicle, plus PV/grid stored-charge and discharge-DC origin flows
 for stepwise reconciliation. States are Wh, SOC and vehicle SOH are fractions,
-and transfers are average W. Year rows and App results remain PR 4 work.
+and transfers are average W. PR 4 adds their year reductions and App results.
 
 PR 3 adds the independent vehicle lifecycle and lifts the lower-level
-replacement refusal. The App refusal remains until PR 4. The vehicle still
+replacement refusal. PR 4 lifts the App refusal. The vehicle still
 has no capacity-temperature derating, indoor temperature model, standby or
 resistance-fade model.
 PR 2(b) implements departure and arrival bookings, the ordered driving legs,
@@ -1095,8 +1095,7 @@ It is returned by `_simulate_core`, detailed runs and summary reductions, and
 passed back through `vehicle_carry`. The shared `project_years` loop accepts a
 lower-level vehicle config plus each `ProjectionYear.vehicle_schedule`, and
 carries that state independently of a stationary pack on both frame and
-aligned-summary paths. This is one household; App's R0/R1/R2, pricing and
-annual vehicle result rows remain PR 4 work. Closure checks now include
+aligned-summary paths. PR 4 uses independent copies for App's R0/R1/R2. Closure checks now include
 identities 5–10 across home/away transitions, with Wh/W scaling, ordered
 withdrawals, parked-time power limits and a full site balance excluding away
 flows. VH4/VH5 and full-trip Q4/Q5 run hourly and at 15 minutes on both backends,
@@ -1131,6 +1130,92 @@ tracking. Direct daily-target controllers/planners remain refused with a
 vehicle, regardless of forecast or decision boundary. VH6 and Q7 cover home
 and away swaps; VH1–VH5 retain their specified full-health fixture, with
 separate native/BLAST ageing, parity and stationary-bit-identity tests.
+
+PR 4 exposes the complete vehicle in App. The runner resolves its schedule
+and raw vehicle temperature once, then runs independent R0/R1/R2 projections
+with independent lifecycles and carry. R0 uses a zero-capacity stationary
+configuration without PV equipment, conversion overrides or inverter night
+draw. R1 is omitted when the reference mode is none. Static stationary
+instructions run directly through the core with a vehicle; the existing
+fixed-target controller produces the same instructions, but its daily-target
+controller seam remains refused with a vehicle. Monte Carlo and the optimizer
+remain explicitly refused until their respective rollout gates.
+
+Each projection retains first-year ledger rows, each year's priced exchange
+flows and all vehicle end-of-life events with individual booking instants.
+R0's actual import and network-credit cap replace the house-only baseline on
+flat, tariff and reference-tariff paths, including revalue. Vehicle year rows
+report home energy, driving, away purchases, missed departures, health and
+swaps. The vehicle result block contains the three household trajectories,
+outlays P, pack credits H, wear and both comparisons. Top-level
+`npv_savings_household_adjusted` and `v2h_benefit_npv` repeat the labelled
+comparison values beside the existing system NPV, with comparable flags.
+Away purchases enter avoided emissions in each household; the R2 emissions
+caller now uses R0's site and away purchases. PV-origin vehicle AC delivered
+to the house joins yearly/monthly self-consumption and the loss waterfall.
+
+`provenance.vehicle` is null without a vehicle; otherwise it records the typed
+configuration, resolved schedule hash, rounding and household definitions.
+The six existing App goldens gain only that null provenance key. Revalue
+accepts vehicle money changes only and restates every nonzero vehicle price
+on a currency change. It reuses the three households' flows when dispatch
+cannot change; a vehicle period-control schedule change, or changed stationary
+instructions, runs the households again. A changed reference tariff is pricing
+only. General user documentation and Monte Carlo remain PR 6 and PR 5 work.
+
+Implementation interpretations and money conventions for PR 4:
+
+- Replacement keys mirror the stationary policy: `vehicle.allow_terminal_replacement`
+  is a bool, default true, and is used by all three households. A lower-level
+  explicit override still takes precedence. Earlier project-year boundaries
+  permit swaps; the configured terminal rule applies at the final close.
+- The vehicle and its initial pack are already owned by every household.
+  Only the stated installed charger premium joins system CAPEX at commissioning;
+  it is subtracted once in the R2/R1 comparison too. There is no extra vehicle
+  purchase, charger O&M, charger replacement or terminal onboard-energy credit.
+- System NPV uses R0's actual home bill, with its reference tariff when set,
+  and R2's import, export and existing system cash flows. It includes the
+  charger premium once, and excludes vehicle invoices, credits, away purchases
+  and unserved-driving penalties. Household-adjusted NPV starts from that
+  ordinary NPV, independently of the optional stationary terminal-value sensitivity.
+- R0's home purchases, fixed charge and network credit use the reference
+  tariff's escalation when supplied; otherwise they use the system import
+  escalation. R1 and R2 use system prices. Away purchases and outside-charging
+  penalties use their stated common year-1 prices and the system import-price
+  escalation in every household, even when R0 has a separate home tariff.
+  These annual operating amounts are discounted at year end, as home bills are.
+  The outside price is a money penalty only: it restores neither driving energy
+  nor emissions, and it does not change dispatch.
+- Every vehicle swap invoice is escalated by general inflation and replacement
+  learning from t = 0 and discounted at its own simulated swap instant; multiple
+  swaps are never collapsed to a mean booking time. Booking is at step end,
+  year_idx + (step + 1) / n_steps, with the closing sample's date reported,
+  following the stationary convention. Kept/retired events have
+  zero outlay. A stated invoice may include installation; absent one, only
+  nominal kWh times the required pack price is used. Replacement inventory
+  additions/removals get no separate electricity charge or revenue. No equipment-price default
+  or currency conversion is introduced; explicit zero prices remain valid.
+- H uses the nominal pack-only price, never installation or the swap invoice,
+  and is clipped individually before differences are formed. A retired pack
+  has no terminal credit. The permitted edge policy h* = 1 has no health above
+  its threshold and earns zero credit. Credits are valuation terms only:
+  they do not enable terminal_value or enter ordinary system NPV. W and the
+  discounted outlays-only differences are signed and are never clipped.
+- R2/R1 operating savings include home import, fixed charges, network credits,
+  export revenue, away purchases and priced unserved driving. Their configured
+  system CAPEX, O&M and stationary replacements are identical and cancel; no
+  second PV or stationary-pack cost is charged to V2H.
+- Comparability tests total gross unserved driving over the projection, with
+  a 1e-9 kWh numerical tolerance. Only more unserved driving by R2 makes a
+  comparison non-comparable when no outside price is stated. A stated penalty,
+  including explicit zero, makes it priced and comparable. Departure misses
+  remain reported and do not independently invalidate a comparison. Missing
+  R1 gives a null V2H benefit and null top-level benefit flags.
+- A period window keeps energy and year-1-price bills and invoices, with no
+  lifetime comparison, P/H NPV, nominal escalated invoice or discounted invoice.
+  Replacement history still reports its t = 0 invoice. Vehicle monetary
+  components retain full precision internally and in the detailed block;
+  headline NPVs use the existing two-decimal result convention.
 
 Implementation interpretations for PR 2(a):
 
@@ -1167,8 +1252,8 @@ Implementation interpretations for PR 2(b):
 
 Implementation interpretations for PR 3:
 
-- VehicleConfig has no terminal-swap key. Direct `_simulate_core` calls use
-  `vehicle_allow_terminal_replacement` (default true, as for the stationary
+- PR 3 had no VehicleConfig terminal-swap key. Direct `_simulate_core` calls
+  used `vehicle_allow_terminal_replacement` (default true, as for the stationary
   pack) and `vehicle_replacement_years_after_span`; `project_years` supplies
   the remaining horizon and allows earlier year-end swaps. The vehicle's
   existing minimum-remaining-years key uses the same span/year convention
@@ -1231,6 +1316,51 @@ instead. These samples show no measurable no-vehicle regression.
 | Hourly App year, PV-only | 0.037863 s | 0.037595 s |
 | Cold Numba first kernel call | 2.503 s | 2.512 s |
 | Warm-cache Numba first kernel call | 0.169 s | 0.168 s |
+
+PR 4 performance measured on 2026-10-23 against unchanged `01b9ba7`,
+Python 3.12, offline synthetic weather, hourly steps, one project year.
+The same `tools.generate_app_golden.run_scenario` wrapper (including JSON
+serialization and flattening), one warm-up and five timed repetitions were
+used before and after; figures are medians. Vehicle runs add the 60 kWh V2H
+vehicle from the config tests, its default V1G reference and uncontrolled
+R0, with native ageing. Cold/warm calls use the same isolated-cache
+`tools.benchmark_montecarlo.measure_compilation` probe as earlier PRs.
+No tests ran concurrently with the timed samples. The no-vehicle sample
+ranges overlap; there is no material no-vehicle regression in these samples.
+
+| Hourly App-year measurement | Before PR 4, no vehicle | After PR 4, no vehicle | After PR 4, vehicle |
+|---|---:|---:|---:|
+| 5 kWh stationary battery | 0.123759 s | 0.124328 s | 0.441431 s |
+| PV-only system | 0.038057 s | 0.037877 s | 0.250728 s |
+
+| Numba probe | Before PR 4 | After PR 4 |
+|---|---:|---:|
+| Cold first kernel call | 2.582 s | 2.474 s |
+| Warm-cache first kernel call | 0.169 s | 0.164 s |
+
+Three households cost 3.55 times the battery App-year sample and 6.62 times
+the PV-only sample. In addition to two configured-system dispatches, there
+are three vehicle lifecycles; a no-vehicle PV-only run keeps its vectorised
+path. These measured costs replace the rough runtime estimate in V8 for
+this implementation and environment.
+
+Memory measured separately on fresh App simulations after import/timing
+warm-ups, using `tracemalloc` for process-local allocations. Retained arrays
+sum each first-year DataFrame's deep memory usage and every distinct retained
+priced-flow array once; this excludes Python objects and model snapshots.
+The three projections retain one complete first-year ledger each; later
+years retain priced exchange arrays, year reductions and lifecycle carry.
+
+| Hourly projection memory | One household, no vehicle | R0/R1/R2 with vehicle |
+|---|---:|---:|
+| One year: retained frame/flow arrays | 6.49 MiB | 19.47 MiB |
+| One year: traced peak | 27.45 MiB | 41.14 MiB |
+| Twenty years: retained frame/flow arrays | 9.03 MiB | 25.82 MiB |
+| Twenty years: traced peak | 42.70 MiB | 60.43 MiB |
+
+At twenty years, R0 retains 7.76 MiB of arrays, R1 and R2 9.03 MiB each.
+Traced live allocations after the run were 9.32 MiB without a vehicle and
+26.94 MiB with one. Memory tracing was not used for the runtime figures.
 
 ## Implementation plan and effort
 

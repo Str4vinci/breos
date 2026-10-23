@@ -1045,7 +1045,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.smart_charging",
     ),
     "vehicle": AppConfigField(
-        doc="Vehicle equipment, prices and schedule; validated, but vehicle simulation is not available yet. See [vehicle](#vehicle)",
+        doc="Vehicle equipment, prices and schedule for App; Monte Carlo support is not available yet. See [vehicle](#vehicle)",
+        affects_inputs=False,
+        revalue=True,
         default_doc="*unset*",
     ),
     "weather_file": AppConfigField(
@@ -3271,7 +3273,11 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
     capacity (ADR 0003 E4), the price the optimizer uses too, unless
     ``battery_replacement_cost`` states the price of one (ADR 0004 C9).
     """
-    return calculate_costs(
+    if resolved.vehicle is not None:
+        from breos.vehicle.economics import require_vehicle_prices
+
+        require_vehicle_prices(resolved.vehicle)
+    costs = calculate_costs(
         n_modules=cfg["n_modules"],
         module_power_w=resolved.avg_module_power_w,
         battery_capacity_wh=cfg["battery_kwh"] * 1000,
@@ -3284,6 +3290,11 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
         battery_coupling=cfg.get("battery_coupling", "dc"),
         battery_inverter_ac_capacity_w=resolved.battery_inverter_ac_capacity_w,
     )
+
+    if resolved.vehicle is not None:
+        costs["vehicle_charger_cost"] = float(resolved.vehicle.charger_cost or 0.0)
+        costs["total_initial_cost"] += costs["vehicle_charger_cost"]
+    return costs
 
 
 def resolve_period(cfg: dict[str, Any], timezone: str) -> SimulationPeriod | None:
@@ -3339,8 +3350,6 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         cfg["inverter_loading_ratio"] = None
     _normalise_config_values(cfg)
     specs = validate_config(cfg)
-    if specs.vehicle is not None:
-        raise ValueError("[vehicle] is validated, but vehicle simulation is not available yet")
     tariff = specs.tariff
     if cfg.get("pv_arrays"):
         # The result echoes the tables as plain floats, whatever numbers they came as.

@@ -54,6 +54,7 @@ from breos.inverter import InverterUnits
 from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
 from breos.utils import get_hours_per_step
 from breos.vehicle import VehicleCarry, VehicleConfig, VehicleSchedule
+from breos.vehicle.results import VEHICLE_ENERGY_FIELDS, vehicle_year_fields
 
 
 def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, initial_soh: float) -> BatteryConfig:
@@ -847,6 +848,7 @@ class ProjectionRun:
     # Each end-of-life crossing, in project order, as end_of_life_record
     # reports it (ADR 0003 E11).
     end_of_life_events: tuple[dict[str, Any], ...] = ()
+    vehicle_end_of_life_events: tuple[dict[str, Any], ...] = ()
 
 
 def end_of_life_record(event: EndOfLifeEvent, year_idx: int, n_steps: int) -> dict[str, Any]:
@@ -908,6 +910,8 @@ class _YearOutcome:
     # Per-step years only: the year's frame, the sets a year planner returned
     # and the instructions a daily controller executed.
     results_df: pd.DataFrame | None = None
+    vehicle_events: Sequence[EndOfLifeEvent] = ()
+    vehicle_short_departures: int = 0
     planned: tuple[DispatchInstructions, ...] = ()
     executed: DispatchInstructions | None = None
 
@@ -930,6 +934,10 @@ def _run_summary_year(
     batt_cfg: BatteryConfig = common["battery_config"]
     return _YearOutcome(
         carry=carry.after_summary(summary, has_battery=has_battery, resistance_fade=batt_cfg.enable_resistance_fade),
+        vehicle_events=summary.vehicle_end_of_life_events if common.get("vehicle_config") is not None else (),
+        vehicle_short_departures=int(np.count_nonzero(core.buffers.columns["Vehicle_Departure_Shortfall"]))
+        if common.get("vehicle_config") is not None
+        else 0,
         sums_w=summary.column_sums,
         weighted_w=summary.weighted_sums,
         n_replacements=summary.n_replacements,
@@ -1019,7 +1027,12 @@ def _run_frame_year(
     last_served = retiring_step(span_events)
     return _YearOutcome(
         carry=carry,
-        sums_w={column: float(results_df[column].sum()) for column in _ROW_SUM_COLUMNS},
+        sums_w={
+            column: float(results_df[column].sum())
+            for column in dict.fromkeys(
+                (*_ROW_SUM_COLUMNS, *(VEHICLE_ENERGY_FIELDS.values() if vehicle_config is not None else ()))
+            )
+        },
         weighted_w=weighted_column_sums(
             {column: results_df[column].to_numpy() for column, _ in (weights or {}).values()}, weights
         ),
@@ -1039,6 +1052,12 @@ def _run_frame_year(
             float(np.sum(results_df["T_cell"].to_numpy()[: last_served + 1])) if last_served is not None else None
         ),
         results_df=results_df,
+        vehicle_events=tuple(
+            EndOfLifeEvent.from_record(record) for record in results_df.attrs.get("vehicle_end_of_life_events", ())
+        ),
+        vehicle_short_departures=int(np.count_nonzero(results_df["Vehicle_Departure_Shortfall"]))
+        if vehicle_config is not None
+        else 0,
         planned=tuple(planned),
         executed=executed,
     )
@@ -1076,7 +1095,7 @@ def project_years(
     record_priced_flows: bool = False,
     vehicle_config: VehicleConfig | None = None,
     grid_import_limit_w: float = math.inf,
-    vehicle_allow_terminal_replacement: bool = True,
+    vehicle_allow_terminal_replacement: bool | None = None,
 ) -> ProjectionRun:
     """Simulate ``years`` project years, carrying both stores from one to the next.
 
@@ -1084,8 +1103,8 @@ def project_years(
     Direct callers may pass a ``vehicle_config`` with its own lifecycle
     and a ``ProjectionYear.vehicle_schedule`` on each year's calendar.
     On-board energy, origins and the last plug state carry independently of
-    a stationary battery on both frame and aligned-summary paths. App's
-    vehicle rollout refusal remains in place until PR 4.
+    a stationary battery on both frame and aligned-summary paths.
+    App runs these projections independently for R0, R1 and R2.
     ``year_inputs(year_idx)`` supplies each year, and ``battery_config(soh)``
     builds the battery at the carried SOH. The rainflow residue is counted
     once, at the end of the last year. ``observe_jit_per_year`` records the
@@ -1141,6 +1160,10 @@ def project_years(
     """
     if initial_carry is not None and initial_carry.vehicle is not None and vehicle_config is None:
         raise ValueError("a carried vehicle needs vehicle_config and a resolved schedule in each projection year")
+    if vehicle_allow_terminal_replacement is None:
+        vehicle_allow_terminal_replacement = (
+            True if vehicle_config is None else vehicle_config.allow_terminal_replacement
+        )
     instructions_for_year = _instructions_by_year(instructions, years)
     if day_controller is not None:
         if instructions is not None:
@@ -1165,6 +1188,7 @@ def project_years(
     dispatched: list[DispatchInstructions] = []
     priced_flows: list[dict[str, np.ndarray]] = []
     end_of_life_events: list[dict[str, Any]] = []
+    vehicle_events: list[dict[str, Any]] = []
 
     for year_idx in range(years):
         year = year_inputs(year_idx)
@@ -1299,6 +1323,26 @@ def project_years(
                 ),
             )
         )
+        if vehicle_config is not None:
+            assert carry.vehicle is not None
+            vehicle_events.extend(
+                end_of_life_record(event, year_idx, outcome.n_steps) for event in outcome.vehicle_events
+            )
+            rows[-1].update(
+                vehicle_year_fields(
+                    outcome.sums_w,
+                    hours_per_step,
+                    carry.vehicle,
+                    outcome.vehicle_events,
+                    outcome.vehicle_short_departures,
+                    outcome.n_steps,
+                    year_idx,
+                    vehicle_config,
+                )
+            )
+            vehicle_pv = _step_total(outcome.sums_w["PV_Origin_Vehicle_AC_To_Load"], hours_per_step)
+            rows[-1]["Self_Consumption_kWh"] += vehicle_pv
+            rows[-1]["PV_Production_kWh"] += vehicle_pv
         if record_period_energy:
             period_rows.append({name: _step_total(outcome.weighted_w[name], hours_per_step) for name in period_weights})
 
@@ -1315,6 +1359,7 @@ def project_years(
         year_instructions=tuple(dispatched) if instructions is not None else None,
         priced_flows=tuple(priced_flows) if record_priced_flows else None,
         end_of_life_events=tuple(end_of_life_events),
+        vehicle_end_of_life_events=tuple(vehicle_events),
     )
 
 
@@ -1334,6 +1379,8 @@ def run_projection(
     replay_seam: bool = True,
     reference_tariff: ResolvedTariff | None = None,
     record_priced_flows: bool = False,
+    vehicle_config: VehicleConfig | None = None,
+    grid_import_limit_w: float = math.inf,
 ) -> ProjectionRun:
     """Run :func:`project_years` for an App configuration.
 
@@ -1363,6 +1410,8 @@ def run_projection(
         replay_seam=replay_seam,
         reference_tariff=reference_tariff,
         record_priced_flows=record_priced_flows,
+        vehicle_config=vehicle_config,
+        grid_import_limit_w=grid_import_limit_w,
     )
 
 

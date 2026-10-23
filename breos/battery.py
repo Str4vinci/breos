@@ -1972,7 +1972,7 @@ def _simulate_core(
     initial_vehicle_grid_origin_energy_wh: Optional[float] = None,
     vehicle_carry: Optional[VehicleCarry] = None,
     vehicle_temperature_series: Optional[pd.Series] = None,
-    vehicle_allow_terminal_replacement: bool = True,
+    vehicle_allow_terminal_replacement: Optional[bool] = None,
     vehicle_replacement_years_after_span: int = 0,
 ) -> "_CoreRun":
     """
@@ -2118,6 +2118,10 @@ def _simulate_core(
         initial_vehicle_energy_wh = vehicle_carry.energy_wh
         initial_vehicle_pv_origin_energy_wh = vehicle_carry.pv_origin_energy_wh
         initial_vehicle_grid_origin_energy_wh = vehicle_carry.grid_origin_energy_wh
+    if vehicle_allow_terminal_replacement is None:
+        vehicle_allow_terminal_replacement = (
+            True if vehicle_config is None else vehicle_config.allow_terminal_replacement
+        )
     if not isinstance(vehicle_allow_terminal_replacement, (bool, np.bool_)):
         raise ValueError("vehicle_allow_terminal_replacement must be a bool")
     if (

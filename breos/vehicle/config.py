@@ -105,6 +105,7 @@ VEHICLE_TABLE = TableSpec(
         "outside_charging_price": _NON_NEGATIVE,
         "eol_percentage": _SOC,
         "enable_replacement": boolean,
+        "allow_terminal_replacement": boolean,
         "replacement_min_remaining_years": _NON_NEGATIVE,
         "skipped_replacement_action": choice(SKIPPED_REPLACEMENT_ACTIONS),
         "battery_replacement_cost": _NON_NEGATIVE,
@@ -127,7 +128,7 @@ VEHICLE_TABLE = TableSpec(
         }
     ),
     docs={
-        "mode": 'Required study mode: "uncontrolled", "v1g" or "v2h"; no default; simulation is not available yet',
+        "mode": 'Required study mode: "uncontrolled", "v1g" or "v2h"; no default',
         "battery_kwh": "Nominal pack capacity in kWh; greater than 0, no default",
         "min_soc": f"Minimum SOC; default {DEFAULT_MIN_SOC:g}",
         "max_soc": "Maximum SOC; default 1",
@@ -145,6 +146,7 @@ VEHICLE_TABLE = TableSpec(
         "outside_charging_price": "Optional penalty per kWh of unserved driving; restores no energy; no default",
         "eol_percentage": f"Pack replacement health threshold; default {DEFAULT_EOL_PERCENTAGE:g}",
         "enable_replacement": "Replace the pack at its health threshold; default true",
+        "allow_terminal_replacement": "Allow a swap at the project's last day close; default true",
         "replacement_min_remaining_years": "Minimum project years remaining for a replacement; default 0",
         "skipped_replacement_action": '"keep" (default) or "retire" the old pack when replacement is skipped',
         "battery_replacement_cost": "Optional price of one swap, including installation; terminal credit remains pack-only",
@@ -227,6 +229,7 @@ class VehicleConfig:
     outside_charging_price: float | None = None
     eol_percentage: float = DEFAULT_EOL_PERCENTAGE
     enable_replacement: bool = True
+    allow_terminal_replacement: bool = True
     replacement_min_remaining_years: float = 0.0
     skipped_replacement_action: str = "keep"
     battery_replacement_cost: float | None = None

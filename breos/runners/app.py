@@ -59,7 +59,14 @@ from breos.smart_charging import (
 from breos.solar import PVProductionBreakdown
 from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
-from breos.weather import WEATHER_METADATA_KEY
+from breos.vehicle import resolve_vehicle_schedule
+from breos.vehicle.households import (
+    VehicleHouseholds,
+    household_configs,
+    run_vehicle_baseline,
+    value_vehicle_households,
+)
+from breos.weather import WEATHER_METADATA_KEY, build_battery_temperature_series
 
 
 @dataclass(frozen=True)
@@ -106,6 +113,8 @@ class SimulationArtifacts:
     # The solar-position method asked for, the one it resolved to on the
     # run's weather, and the offset after each label it applied.
     solar_position: dict[str, Any] | None = None
+    vehicle_households: VehicleHouseholds | None = None
+    vehicle: dict[str, Any] | None = None
 
 
 # The avoided-CO2 columns a result reports for its first year, or its window.
@@ -292,6 +301,8 @@ def _inverter_model_fields(
             delivered = delivered + np.minimum(
                 surplus.to_numpy(dtype=float), first_year_results_df["Inverter_Night_Consumption"].to_numpy(dtype=float)
             )
+        if resolved.vehicle is not None:
+            delivered += first_year_results_df["PV_AC_To_Vehicle"].to_numpy(dtype=float)
         root = np.sqrt(np.clip(1.0 - 4.0 * k * delivered, 0.0, None))
         gross = 2.0 * delivered / (1.0 + root)
         loss = pd.Series(gross - delivered, index=first_year_results_df.index)
@@ -466,6 +477,10 @@ def _build_pv_loss_waterfall(
     export_ac = e("PV_AC_Export")
     battery_ac = e("Battery_AC_To_Load")
     pv_origin_battery_ac = e("PV_Origin_Battery_AC_To_Load")
+    pv_origin_vehicle_ac = e("PV_Origin_Vehicle_AC_To_Load") if resolved.vehicle is not None else 0.0
+    usable_system_production = direct_pv_ac + pv_origin_battery_ac + export_ac
+    if resolved.vehicle is not None:
+        usable_system_production += pv_origin_vehicle_ac
     inverter_conversion = e("Inverter_Loss")
     direct_pv_conversion = e("PV_Direct_Inverter_Loss")
     battery_discharge_conversion = e("Battery_Inverter_Loss")
@@ -607,7 +622,15 @@ def _build_pv_loss_waterfall(
                 "pv_origin_battery_to_load_kwh": _rounded(pv_origin_battery_ac),
                 "battery_to_load_all_origins_kwh": _rounded(battery_ac),
                 "export_kwh": _rounded(export_ac),
-                "usable_system_production_kwh": _rounded(direct_pv_ac + pv_origin_battery_ac + export_ac),
+                "usable_system_production_kwh": _rounded(usable_system_production),
+                **(
+                    {
+                        "pv_origin_vehicle_to_load_kwh": _rounded(pv_origin_vehicle_ac),
+                        "pv_to_vehicle_kwh": _rounded(e("PV_AC_To_Vehicle")),
+                    }
+                    if resolved.vehicle is not None
+                    else {}
+                ),
                 **({} if battery_inverter is None else {"pv_to_battery_kwh": _rounded(e("PV_AC_To_Battery"))}),
             },
             "battery_stored_energy": {
@@ -653,7 +676,7 @@ def run_app_simulation(
     # Asked the way the dispatch asks it, so the run and its provenance agree
     # on what counts as PV-only.
     has_battery = config_has_battery(cfg)
-    execution = backend_provenance(execution_backend, pv_only=not has_battery)
+    execution = backend_provenance(execution_backend, pv_only=not has_battery and resolved.vehicle is None)
     spec = resolved.smart_charging
     planned = instructions is None and spec is not None and spec.mode in PLANNER_MODES and has_battery
     if planned and execution_backend == "python" and cfg["resolution"] == "15min":
@@ -683,6 +706,27 @@ def run_app_simulation(
     # 25 hours but is one day of the tariff.
     extra = {"Billed_Days": float(period.days)} if period is not None else {}
 
+    vehicle = resolved.vehicle
+    schedule = (
+        None
+        if vehicle is None
+        else resolve_vehicle_schedule(
+            vehicle, pd.DatetimeIndex(inputs.dc_system_base.index), timezone=resolved.timezone
+        )
+    )
+    vehicle_temperature = (
+        None
+        if vehicle is None
+        else build_battery_temperature_series(
+            vehicle.battery_temperature,
+            pd.DatetimeIndex(inputs.dc_system_base.index),
+            weather_df=inputs.weather,
+            indoor_model={"enabled": False},
+        )
+    )
+    limit = (cfg.get("smart_charging") or {}).get("grid_import_limit_w")
+    grid_limit = np.inf if limit is None else float(limit)
+
     def year_inputs(year_idx: int) -> ProjectionYear:
         pv_degradation_factor = (1 - degradation_rate) ** year_idx
         return ProjectionYear(
@@ -694,6 +738,8 @@ def run_app_simulation(
             inverter_ac_derate=inputs.inverter_ac_derate,
             inverter_curve_row=inputs.inverter_curve_row,
             inverter_units=inputs.inverter_units,
+            vehicle_schedule=schedule,
+            vehicle_temperature_series=vehicle_temperature,
         )
 
     # Every project year replays the start-year calendar (ADR 0002 A2), so the
@@ -726,7 +772,7 @@ def run_app_simulation(
         instructions = resolve_instructions(spec, tariff) if spec is not None and has_battery else None
         # The configured table runs through the civil-day controller seam
         # (ADR 0002 A11); a replayed schedule stays on the static path.
-        if instructions is not None:
+        if instructions is not None and vehicle is None:
             day_controller = FixedTargetDayController(instructions)
     projection = run_projection(
         cfg,
@@ -745,7 +791,9 @@ def run_app_simulation(
         # calendar, so a civil day cut by a year's end continues next year.
         replay_seam=period is None,
         reference_tariff=reference_tariff,
-        record_priced_flows=_price_blind(instructions, day_controller),
+        record_priced_flows=vehicle is not None or _price_blind(instructions, day_controller),
+        vehicle_config=vehicle,
+        grid_import_limit_w=grid_limit,
     )
     first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
     current_soh = projection.carry.soh_pct
@@ -755,7 +803,41 @@ def run_app_simulation(
     degradation_engine = cfg["degradation_engine"]
     blast_model = cfg["blast_model"]
 
-    economics = _economics_fields(value_projection(cfg, resolved, projection), period)
+    vehicle_households = None
+    vehicle_result = None
+    if vehicle is None:
+        value = value_projection(cfg, resolved, projection)
+    else:
+        assert schedule is not None
+        configs = household_configs(vehicle)
+        runs = {
+            "R0": run_vehicle_baseline(
+                projection_years,
+                year_inputs,
+                configs["R0"],
+                freq=cfg["resolution"],
+                execution_backend=execution_backend,
+                grid_import_limit_w=grid_limit,
+            ),
+            "R2": projection,
+        }
+        if "R1" in configs:
+            runs["R1"] = run_projection(
+                cfg,
+                resolved,
+                projection_years,
+                year_inputs,
+                has_battery=has_battery,
+                execution_backend=execution_backend,
+                tariff=tariff,
+                instructions=instructions,
+                record_priced_flows=True,
+                vehicle_config=configs["R1"],
+                grid_import_limit_w=grid_limit,
+            )
+        vehicle_households = VehicleHouseholds(runs, schedule)
+        value, vehicle_result = value_vehicle_households(cfg, resolved, vehicle_households, tariff, reference_tariff)
+    economics = _economics_fields(value, period)
     yearly_df = economics["yearly_df"]
 
     replacement_events = [
@@ -823,6 +905,8 @@ def run_app_simulation(
         period=period.record() if period is not None else None,
         **_tariff_fields(resolved, tariff, reference_tariff),
         solar_position=solar_position,
+        vehicle_households=vehicle_households,
+        vehicle=vehicle_result,
     )
 
 
@@ -912,6 +996,38 @@ def revalue_app_simulation(
         if resolved.tariff
         else None
     )
+    if resolved.vehicle is not None:
+        assert artifacts.vehicle_households is not None
+        configs = household_configs(resolved.vehicle)
+        period_controls = any(config.charge_periods or config.discharge_periods for config in configs.values())
+        if period_controls and (
+            tariff is None or old_tariff is None or tariff.schedule_hash != old_tariff.schedule_hash
+        ):
+            return run_app_simulation(resolved, deps), "resimulated"
+        if artifacts.instructions is not None and resolved.smart_charging is not None:
+            new_instructions = resolve_instructions(resolved.smart_charging, tariff)
+            if (
+                new_instructions is None
+                or new_instructions.instruction_hash() != artifacts.instructions.instruction_hash()
+            ):
+                return run_app_simulation(resolved, deps), "resimulated"
+        reference = (
+            resolved.reference_tariff.resolve(_simulated_index(artifacts), resolved.timezone)
+            if resolved.reference_tariff
+            else None
+        )
+        value, vehicle_result = value_vehicle_households(cfg, resolved, artifacts.vehicle_households, tariff, reference)
+        updated = replace(
+            artifacts,
+            **_economics_fields(value, resolved.period),
+            vehicle=vehicle_result,
+            **_tariff_fields(resolved, tariff, reference),
+        )
+        changed_schedule = tariff is not None and (
+            old_tariff is None or tariff.schedule_hash != old_tariff.schedule_hash
+        )
+        return updated, "repriced_by_step" if changed_schedule else "repriced"
+
     # A new schedule, or a first one, gives the stored energy by period no
     # meaning; only a run whose dispatch never read a tariff can be priced
     # on it, step by step.

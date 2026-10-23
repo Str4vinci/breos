@@ -565,6 +565,8 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
         run without it.
     """
     resolved = resolve_app_config(config)
+    if resolved.vehicle is not None:
+        raise ValueError("[vehicle] simulation is not available with Monte Carlo yet; use App")
     cfg = resolved.cfg
     _reject_period(cfg)
     _reject_weather_file(cfg)
@@ -1000,6 +1002,8 @@ def run_montecarlo(
         A :class:`MonteCarloResult` with one row per run and summary statistics.
     """
     resolved = resolve_app_config(config)
+    if resolved.vehicle is not None:
+        raise ValueError("[vehicle] simulation is not available with Monte Carlo yet; use App")
     cfg = resolved.cfg
     _reject_planned_smart_charging(resolved)
     _reject_several_string_inverters(resolved)

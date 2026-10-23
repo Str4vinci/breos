@@ -20,9 +20,12 @@ from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.runners.app import SimulationArtifacts, first_year_co2
 from breos.smart_charging import PLANNER_MODES
 from breos.utils import get_hours_per_step, local_datetime_index, package_version
+from breos.vehicle.results import vehicle_year_record
 
 
-def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None = None) -> list[dict[str, Any]]:
+def monthly_to_dicts(
+    results_df: pd.DataFrame, freq: str, timezone: str | None = None, *, vehicle: bool = False
+) -> list[dict[str, Any]]:
     """Convert first-year timestep results into monthly energy rows.
 
     Months follow the wall clock of the results, unless ``timezone`` names
@@ -48,6 +51,8 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None =
         "PV_AC_Export",
         "PV_DC_Curtailed",
     ]
+    if vehicle:
+        columns.append("PV_Origin_Vehicle_AC_To_Load")
     monthly = df[columns].resample("ME").sum()
     monthly = monthly * hours_per_step / 1000
 
@@ -56,11 +61,16 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None =
         pv_dc = float(row["PV_DC"])
         direct = float(row["PV_AC_To_Load"])
         battery = float(row["PV_Origin_Battery_AC_To_Load"])
+        vehicle_pv = float(row["PV_Origin_Vehicle_AC_To_Load"]) if vehicle else 0.0
         usable_pv = direct + battery + float(row["PV_AC_Export"])
+        if vehicle:
+            usable_pv += vehicle_pv
         consumption = float(row["Houseload"])
         export = float(row["PV_AC_Export"])
         imported = float(row["Import_From_Grid"])
         self_consumption = direct + battery
+        if vehicle:
+            self_consumption += vehicle_pv
         rows.append(
             {
                 "month": cast(pd.Timestamp, idx).strftime("%b"),
@@ -256,6 +266,8 @@ def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = Non
         }
         if row["Battery_SOH_%"] is not None:
             item["soh_pct"] = round(float(row["Battery_SOH_%"]), 2)
+        if "Vehicle_SOH" in row:
+            item["vehicle"] = vehicle_year_record(row.to_dict())
         rows.append(item)
     return rows
 
@@ -318,6 +330,9 @@ def _provenance(
         # benchmarks. Same keys as the Monte Carlo block, from the same code.
         "execution": deepcopy(artifacts.execution),
         "economics": projection_rates_record(cfg),
+        "vehicle": artifacts.vehicle_households.provenance(resolved.vehicle)
+        if artifacts.vehicle_households is not None and resolved.vehicle is not None
+        else None,
     }
     # Only runs given repair reports carry the key, so existing results are
     # unchanged. An empty list is recorded as given.
@@ -448,6 +463,7 @@ def build_result(
             artifacts.first_year_results_df,
             cfg["resolution"],
             timezone=resolved.timezone if artifacts.period is not None else None,
+            vehicle=resolved.vehicle is not None,
         ),
         "financial": financial_to_dicts(cost_projection, total_initial) if cost_projection is not None else None,
         # Copied, so editing a result cannot reach the stored run that
@@ -457,6 +473,14 @@ def build_result(
         "provenance": _provenance(resolved, artifacts, input_repairs),
         "degradation": deepcopy(artifacts.degradation_summary),
     }
+    if artifacts.vehicle is not None:
+        result["vehicle"] = deepcopy(artifacts.vehicle)
+        adjusted = artifacts.vehicle["household_adjusted_npv"]
+        benefit = artifacts.vehicle["v2h_benefit"]
+        result["npv_savings_household_adjusted"] = round(adjusted["npv"], 2) if adjusted is not None else None
+        result["household_adjusted_comparable"] = adjusted["comparable"] if adjusted is not None else None
+        result["v2h_benefit_npv"] = round(benefit["npv"], 2) if benefit is not None else None
+        result["v2h_benefit_comparable"] = benefit["comparable"] if benefit is not None else None
     # One copy, as provenance and the top level have always shared it.
     result["provenance"]["degradation"] = result["degradation"]
 
