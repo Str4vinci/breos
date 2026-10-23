@@ -902,7 +902,7 @@ def _on_index_clock(value, index: pd.Index) -> pd.Timestamp:
     stamp = pd.Timestamp(value)
     zone = getattr(index, "tz", None)
     if zone is not None and stamp.tz is None:
-        return stamp.tz_localize(zone)
+        return stamp.tz_localize(zone, nonexistent="shift_forward", ambiguous=True)
     if zone is None and stamp.tz is not None:
         return stamp.tz_localize(None)
     return stamp

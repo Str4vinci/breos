@@ -727,6 +727,13 @@ removed in 0.9.0.
   load, before AC battery charging or export; only the uncovered draw is
   imported (ADR 0004 M9). Several-inverter runs change by the netted draw,
   typically a few Wh a year; single-inverter runs are unchanged.
+- Tariffs no longer crash in timezones whose DST change skips or repeats
+  local midnight, such as `Atlantic/Azores` and `America/Santiago`. Civil
+  day boundaries follow each step's local date, without constructing a
+  timezone-aware midnight. This also fixes App runs with a flat
+  `[tariff]` or `[reference_tariff]`. Weather year boundaries, the PVGIS
+  New Year offset lookup and battery plot date filters now handle missing
+  or repeated midnights too. Results in unaffected timezones are unchanged.
 - Monte Carlo and optimizer workers no longer oversubscribe the CPU at
   15-minute resolution (#382). Each worker process limits its BLAS and
   OpenMP pools to one thread; the parent process keeps its own. On a

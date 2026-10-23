@@ -8,8 +8,10 @@ from breos.tariffs import (
     TariffPrices,
     TariffSchedule,
     available_tariff_schedules,
+    civil_day_starts,
     classify_tariff_periods,
     get_tariff_schedule,
+    parse_schedule_definition,
     resolve_flat_tariff,
     resolve_named_tariff,
     resolve_tariff,
@@ -242,6 +244,76 @@ def test_day_starts_follow_civil_days_across_dst(freq, per_hour):
         local = index[start].tz_convert(LISBON)
         assert (local.hour, local.minute) == (0, 0)
     assert resolved.timezone == LISBON
+
+
+@pytest.mark.parametrize(("freq", "per_hour"), [("h", 1), ("15min", 4)])
+@pytest.mark.parametrize(
+    ("timezone", "short_day", "long_day"),
+    [
+        ("Atlantic/Azores", date(2026, 3, 29), date(2026, 10, 25)),
+        ("America/Santiago", date(2026, 9, 6), date(2026, 4, 4)),
+    ],
+)
+def test_day_starts_with_midnight_dst_transitions(timezone, short_day, long_day, freq, per_hour):
+    index = pd.date_range("2026-01-01", "2027-01-01", freq=freq, tz=timezone, inclusive="left")
+    starts = civil_day_starts(index.tz_convert("UTC"), timezone)
+    days = index.date
+    expected = (0, *(position for position in range(1, len(days)) if days[position] != days[position - 1]))
+
+    assert starts == (*expected, len(index))
+    assert len(starts) - 1 == len(set(days)) == 365
+    lengths = {days[start]: end - start for start, end in zip(starts, starts[1:])}
+    assert lengths[short_day] == 23 * per_hour
+    assert lengths[long_day] == 25 * per_hour
+    assert set(lengths.values()) == {23 * per_hour, 24 * per_hour, 25 * per_hour}
+    short_start = starts[list(lengths).index(short_day)]
+    assert (index[short_start].hour, index[short_start].minute) == (1, 0)
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_lisbon_day_starts_match_previous_normalization(freq):
+    index = pd.date_range("2026-01-01", "2027-01-01", freq=freq, tz="UTC", inclusive="left")
+    local_days = index.tz_convert(LISBON).normalize().tz_localize(None).as_unit("ns").asi8
+    previous = (
+        0,
+        *(position for position in range(1, len(index)) if local_days[position] != local_days[position - 1]),
+        len(index),
+    )
+
+    assert civil_day_starts(index, LISBON) == previous
+
+
+def test_time_of_use_tariff_resolves_across_missing_azores_midnight():
+    timezone = "Atlantic/Azores"
+    schedule = parse_schedule_definition(
+        "azores_daily",
+        {
+            "version": "1",
+            "timezone": timezone,
+            "cycle": "daily",
+            "periods": ["off_peak", "peak"],
+            "rules": [
+                {
+                    "days": "all",
+                    "season": "all",
+                    "intervals": {"off_peak": [["00:00", "08:00"], ["22:00", "24:00"]], "peak": [["08:00", "22:00"]]},
+                }
+            ],
+        },
+    )
+    index = pd.date_range("2026-03-28", "2026-03-31", freq="15min", tz=timezone, inclusive="left")
+    prices = TariffPrices(currency="EUR", import_prices={"off_peak": 0.1, "peak": 0.3}, export_prices={"all": 0})
+
+    resolved = resolve_named_tariff(index.tz_convert("UTC"), schedule, prices, timezone=timezone)
+
+    expected = tuple("peak" if 8 <= stamp.hour < 22 else "off_peak" for stamp in index)
+    assert resolved.period_labels == expected
+    assert resolved.import_price_per_kwh == tuple(0.3 if label == "peak" else 0.1 for label in expected)
+    assert resolved.day_starts == (0, 96, 188, 284)
+    # Saturday 23:45 is followed by Sunday 01:00; 00:00 is absent.
+    assert index[95].isoformat() == "2026-03-28T23:45:00-01:00"
+    assert index[96].isoformat() == "2026-03-29T01:00:00+00:00"
+    assert resolved.period_labels[95:97] == ("off_peak", "off_peak")
 
 
 def test_a_schedule_is_not_moved_to_another_zone():
