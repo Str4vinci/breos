@@ -2,15 +2,16 @@
 
 - **Status:** Proposed, with the decisions taken by the maintainer
   on 2026-10-06, 2026-10-07 and 2026-10-22 (see [Decisions](#decisions)).
-  Implementation is in progress for 0.8.0, after the AC-coupled battery work
-  (#419). Tracked in #420.
+  Implemented for 0.8.0 after the AC-coupled battery work (#419), pending
+  maintainer acceptance. Tracked in #420.
 - **Date:** 2026-10-06; decisions taken 2026-10-06, 2026-10-07 and
   2026-10-22; amended 2026-10-22
 
 ## Context
 
-BREOS has no electric vehicle model. A household with a vehicle charges it at
-home, and its charging demand is often larger than the rest of the house's
+When this record was proposed, BREOS had no electric vehicle model. A
+household with a vehicle charges it at home, and its charging demand is
+often larger than the rest of the house's
 consumption. With a bidirectional charger the vehicle's battery can also
 serve the house while it is plugged in: vehicle-to-home (V2H). It charges
 from PV or the grid, and discharges to the house load through the charger.
@@ -1066,6 +1067,24 @@ exact landings exactly, as ADR 0004's AC7 does.
 
 ## Implementation status
 
+PRs 1–6 are implemented. App and paired Monte Carlo run complete vehicle
+households; the optimizer, `daily_persistence` with a vehicle, and BLAST or
+several PV inverters with Monte Carlo remain refused as specified. The plan
+table below records the implementation commits; PR 6 is this uncommitted
+documentation changeset. This section is the final implementation account,
+with the original plan retained as history. The ADR remains **Proposed**:
+implementation does not substitute for the maintainer's acceptance.
+
+PR 6 adds the configuration guide, site/on-board ledger documentation and
+results interpretation, including the model-validity and user-data limits.
+The `vehicle_to_home` gallery case stores R0/R1/R2 for a three-year hourly
+Porto study, using only the committed TMY and bundled H0 load and bi-hourly
+schedule. Its charger premium, efficiencies, pack price and energy prices
+are explicitly illustrative user inputs. The page reads stored files only;
+the offline case regenerates in 2.1 seconds. CHANGELOG describes the complete
+feature. The guide treats threshold replacement as study policy and states
+the charging-curve, thermal, driving-template and cell-ageing assumptions.
+
 PR 1 implements configuration, schedule resolution and the App rollout refusal.
 PR 2(a) implements home dispatch in `_simulate_core` and the shared Python/Numba
 day loop: stationary first, then the vehicle on the AC residual, including
@@ -1161,7 +1180,7 @@ accepts vehicle money changes only and restates every nonzero vehicle price
 on a currency change. It reuses the three households' flows when dispatch
 cannot change; a vehicle period-control schedule change, or changed stationary
 instructions, runs the households again. A changed reference tariff is pricing
-only. General user documentation remains PR 6 work.
+only. PR 6 documents this behaviour and the remaining entry-point limits.
 
 PR 5 pairs independent R0/R1/R2 projections inside each Monte Carlo trajectory.
 The existing weather-year and house-load sampling callback is materialised
@@ -1454,8 +1473,8 @@ platform CI runs each kernel change needs; the decisions of 2026-10-07
 (driving legs, away charging, vehicle pack replacement and the
 replacement-aware wear valuation) added about 4 to the draft's 18. The
 2026-10-22 decision to support several PV inverters adds about 0.5 day to
-PR 2. Once the work ships, this section is replaced by an implementation status, as in
-ADR 0002.
+PR 2. These were planning estimates. The table is retained as history;
+[Implementation status](#implementation-status) is the final account.
 
 **Dependency on ADR 0004 (#419).** At `4a3cc04`, #419 is implemented,
 including its amendments M1–M8 and App exposure; #417 and #418 have also
@@ -1466,7 +1485,7 @@ and rollout gates, with the amendments decided on 2026-10-22, including
 ledger 3.1 (see A2). VH1–VH7 have been recomputed on this base and are
 unchanged; App goldens and invariants must use the current PV defaults.
 ADR 0006 remains planned after this work. See the amendments for the current
-edit locations and the no-stationary-pack routing PR 2 must add.
+edit locations. PR 2 added the no-stationary-pack routing described above.
 
 **Rollout gates.** No merged state runs a vehicle half-built:
 
@@ -1479,14 +1498,14 @@ edit locations and the no-stationary-pack routing PR 2 must add.
 - PR 4 is the first PR that exposes `[vehicle]` in App, with R0, R1, R2 and
   every required price.
 
-| PR | Scope | Effort | Main risk |
-|---|---|---|---|
-| 1 | `VehicleConfig` and `[vehicle]` validation, with `[vehicle.away_charging]` and the replacement keys; accept `[smart_charging].grid_import_limit_w` without a stationary battery when a vehicle is configured, leaving stationary instructions unchanged (A12); schedule resolution to per-step arrays (civil time, rounding, year seam, the leg template, the trip file's drive and park segments, charging windows), its hash; simulation refused. No behaviour change. | 3 days | Civil-time edge cases (DST, year seam) and multi-day absences. |
-| 2 | `_dispatch_vehicle_step` with the deadline guard and exact landings; departure, driving legs, away charging and arrival; vehicle rows in ledger schema 3.1 (see A2); on-board and site balances; origins; the day-loop branch and its arguments in `_day_arguments`; Numba registration; closure helper; reference cases VH1–VH5 and invariants Q1–Q5, with Q1–Q4 also on the several-PV-inverter path (A6); parity scenarios. | 6.5 days | Stationary bit identity (Q2), and the kernel's compile time and memory with more rows. |
-| 3 | The vehicle's degradation lifecycle between day windows, its temperature, capacity-window loss, replacement with the stationary rules and explicit replacement energy, plugged in or away, its carry between years; VH6 and Q7; refusal of `daily_persistence` with a vehicle. | 3.5 days | A second lifecycle and a second swap path in the day-close code without moving the stationary one. |
-| 4 | App: R0 as a vehicle-only projection (invariant Q6), R1 and R2; the baseline with R0's charging; away purchases; `P_r`, `H_r` and the wear `W`; the household-adjusted NPV, the V2H benefit and the `comparable` flags; `outside_charging_price`; `charger_cost` and `battery_cost_per_kwh` required and refused when missing; emissions with away purchases; year rows, the `vehicle` result block, provenance, regenerated config docs and golden provenance; VH7. | 5.5 days | A path that reaches economics before a price is checked, and three projections' memory. |
-| 5 | Monte Carlo: R0, R1 and R2 paired per trajectory, load scale on the house only; optimizer refusal. | 2 days | Memory and run time of three households per trajectory. |
-| 6 | Docs: configuration guide (`[vehicle]`, the leg template and its approximation, away charging, replacement as a study policy, the assumptions in V5 and V9), energy-balance and results pages, a gallery case, CHANGELOG; ADR implementation status. | 2 days | None significant. |
+| PR | Implementation | Scope | Original effort | Main risk |
+|---|---|---|---|---|
+| 1 | Done: `c977927` | `VehicleConfig` and `[vehicle]` validation, with `[vehicle.away_charging]` and the replacement keys; accept `[smart_charging].grid_import_limit_w` without a stationary battery when a vehicle is configured, leaving stationary instructions unchanged (A12); schedule resolution to per-step arrays (civil time, rounding, year seam, the leg template, the trip file's drive and park segments, charging windows), its hash; simulation refused. No behaviour change. | 3 days | Civil-time edge cases (DST, year seam) and multi-day absences. |
+| 2 | Done: home `a680092`, trips `04275e2` | `_dispatch_vehicle_step` with the deadline guard and exact landings; departure, driving legs, away charging and arrival; vehicle rows in ledger schema 3.1 (see A2); on-board and site balances; origins; the day-loop branch and its arguments in `_day_arguments`; Numba registration; closure helper; reference cases VH1–VH5 and invariants Q1–Q5, with Q1–Q4 also on the several-PV-inverter path (A6); parity scenarios. | 6.5 days | Stationary bit identity (Q2), and the kernel's compile time and memory with more rows. |
+| 3 | Done: `01b9ba7` | The vehicle's degradation lifecycle between day windows, its temperature, capacity-window loss, replacement with the stationary rules and explicit replacement energy, plugged in or away, its carry between years; VH6 and Q7; refusal of `daily_persistence` with a vehicle. | 3.5 days | A second lifecycle and a second swap path in the day-close code without moving the stationary one. |
+| 4 | Done: `5c52ba5`; golden gallery `fa6f8f8` | App: R0 as a vehicle-only projection (invariant Q6), R1 and R2; the baseline with R0's charging; away purchases; `P_r`, `H_r` and the wear `W`; the household-adjusted NPV, the V2H benefit and the `comparable` flags; `outside_charging_price`; `charger_cost` and `battery_cost_per_kwh` required and refused when missing; emissions with away purchases; year rows, the `vehicle` result block, provenance, regenerated config docs and golden provenance; VH7. | 5.5 days | A path that reaches economics before a price is checked, and three projections' memory. |
+| 5 | Done: `9ae659b` | Monte Carlo: R0, R1 and R2 paired per trajectory, load scale on the house only; optimizer refusal. | 2 days | Memory and run time of three households per trajectory. |
+| 6 | Done: this changeset (uncommitted; no commit yet) | Docs: configuration guide (`[vehicle]`, the leg template and its approximation, away charging, replacement as a study policy, the assumptions in V5 and V9), energy-balance and results pages, a gallery case, CHANGELOG; ADR implementation status. | 2 days | None significant. |
 
 Risks across the work:
 

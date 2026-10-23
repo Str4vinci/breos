@@ -18,8 +18,8 @@ flag. For the step-by-step flows of the first year, use
 | `direct_pv_ac_load_kwh` | Direct PV AC delivered to load |
 | `pv_origin_battery_ac_load_kwh` | PV-origin AC delivered from storage to load |
 | `curtailment_dc_kwh` | PV DC that could not serve load, charge storage, or export |
-| `consumption_kwh` | Year 1 load |
-| `self_consumption_kwh` | Direct PV AC plus PV-origin battery AC delivered to load |
+| `consumption_kwh` | Year 1 house load, excluding vehicle charging and driving |
+| `self_consumption_kwh` | Direct PV AC plus PV-origin stationary/vehicle AC delivered to the house |
 | `grid_import_kwh` | Year 1 energy bought from the grid |
 | `grid_export_kwh` | Year 1 energy sold to the grid |
 | `grid_independence_pct` | Year 1 grid independence ratio |
@@ -27,6 +27,9 @@ flag. For the step-by-step flows of the first year, use
 | `total_investment` | Total CAPEX |
 | `payback_year` | Sustained discounted payback within the simulated period, as a whole year: the year from which cumulative NPV savings are zero or above and stay so to the horizon (`None` if not reached) |
 | `npv_savings` | Cumulative NPV savings over the projection horizon |
+| `vehicle` | Present with `[vehicle]`: the three households, trips, pack wear and comparisons; see [Vehicle results](#vehicle-results) |
+| `npv_savings_household_adjusted`, `household_adjusted_comparable` | With a vehicle: R2/R0 NPV including vehicle wear and away/unserved cost differences, and its comparison flag |
+| `v2h_benefit_npv`, `v2h_benefit_comparable` | With a vehicle and R1: R2/R1 benefit and its comparison flag; null when R1 is omitted |
 | `terminal_health_credit` | Optional nominal credit at the end of year T; null when disabled or on a partial period |
 | `terminal_health_credit_npv` | Present value of that credit |
 | `npv_savings_terminal_adjusted` | Unadjusted NPV plus credit present value, before rounding |
@@ -58,7 +61,7 @@ no-system keys use the reference's prices instead.
 | `grid_export_revenue_year1_prices` | Revenue from the year-1 grid export, `grid_export_kwh` |
 | `fixed_charge_year1_prices` | The fixed charge for the simulated duration of year 1: the daily charge times the simulated hours / 24 |
 | `grid_charge_cost_year1_prices` | Present only with smart charging (`smart_charging.mode = "fixed_target"`, `"daily_persistence"` or `"discharge_only"`): the part of `grid_import_cost_year1_prices` bought to charge the battery. Always 0 with `discharge_only`, which never charges from the grid |
-| `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; the fixed charge is `no_system_fixed_charge_year1_prices` |
+| `no_system_import_cost_year1_prices` | Import cost without a system: house demand alone, or R0's actual house and vehicle purchases with `[vehicle]`. The fixed charge is separate |
 | `no_system_fixed_charge_year1_prices` | The fixed charge of the household without a system for year 1: `fixed_charge_year1_prices`, or the reference tariff's fixed charge for the same days when a `[reference_tariff]` is set |
 
 With an [annual network credit](configuration.md#annual-network-credit),
@@ -69,7 +72,7 @@ cap basis, and its credit:
 |---|---|
 | `network_charge_year1_prices` | The system household's eligible network charges for year 1: its grid import at the network prices, plus the network fixed amount |
 | `network_credit_year1_prices` | The system household's credit for year 1: the annual amount, capped at `network_charge_year1_prices` |
-| `no_system_network_charge_year1_prices` | The eligible network charges of the household without a system, on its whole year-1 load |
+| `no_system_network_charge_year1_prices` | Eligible network charges without a system, on house demand or R0's actual purchases with `[vehicle]` |
 | `no_system_network_credit_year1_prices` | The credit of the household without a system, capped at `no_system_network_charge_year1_prices` |
 
 The eligible network charges are part of the import cost and the fixed
@@ -91,6 +94,129 @@ Year 1 is not escalated, so these values match the `cost_import`,
 the two no-system keys match its `no_system_cost_import` and
 `no_system_cost_fixed_charge`; the later rows escalate. `breos sweep` copies every top-level scalar key into its
 CSV, so the sweep CSV carries these columns too.
+
+## Vehicle results
+
+With `[vehicle]`, `vehicle` contains separate results for R0, R1 and R2.
+R0 has no PV or stationary storage and charges the vehicle uncontrolled.
+R1 has the configured system and the reference vehicle mode, usually V1G.
+R2 has the configured system and study vehicle mode. R1 is absent with
+`reference_mode = "none"`. All households serve the same scheduled trips
+but can leave different amounts unserved. See
+[Vehicle-to-home](configuration.md#vehicle-to-home) for the configuration
+and model assumptions.
+
+| Path within `vehicle` | Contents |
+|---|---|
+| `mode`, `reference_mode`, `currency` | Study mode, reference mode and run currency |
+| `households.R0`, `.R1`, `.R2` | Each household's mode, yearly rows, projection totals and pack valuation |
+| `households.R2.yearly` | Home charging and discharge, driving served/unserved, away purchases, departure misses, health and swaps for each project year |
+| `households.R2.totals` | Summed energy, missed-departure and replacement counts, replaced capacity, and avoided emissions when configured |
+| `households.R2.final_soh_fraction`, `.retired` | Final pack health as a fraction and retirement state |
+| `households.R2.replacement_history` | End-of-life events, actions, dates, booking times and individual replacement invoices |
+| `households.R2.replacement_outlays_npv` | Discounted replacement invoices P₂ |
+| `households.R2.terminal_pack_credit_npv` | Discounted remaining pack value H₂ |
+| `households.R2.home_bill_npv`, `.export_revenue_npv` | Home purchases including fixed charges and credits; export income is separate |
+| `households.R2.away_purchases_npv`, `.unserved_driving_cost_npv` | Away purchases and optional outside-charging penalty |
+| `households.R2.operating_cost_npv` | Home bill minus exports, plus away purchases and unserved-driving penalty |
+| `household_adjusted_npv` | R2/R0 comparison, with NPV, wear, cost differences and `comparable` |
+| `v2h_benefit` | R2/R1 comparison, with NPV, operating savings, charger premium, wear and `comparable`; null without R1 |
+
+The R0 and R1 records use the same fields as R2. Energy reductions are kWh;
+`onboard_energy_end_wh` is Wh. Health is a fraction, not percent. Money uses
+the run's currency. Detailed vehicle amounts retain full precision;
+top-level headline NPVs follow the usual two-decimal convention. Partial
+`[period]` runs report energy and year-1-price costs, without lifetime NPVs
+or terminal pack credits.
+
+Home AC energy is `pv_ac_charge_kwh`, `grid_ac_charge_kwh` and
+`ac_to_load_kwh`. Origin fields distinguish PV and grid energy delivered to
+the house. `drive_served_kwh` is gross withdrawal from the pack, not wheel
+energy. `drive_unserved_kwh` is requested driving the pack could not supply.
+`departure_shortfall_kwh` and `departures_short` report missed home targets.
+An away charge can make a trip possible without curing its departure miss.
+`away_purchased_kwh` is energy bought away, before away-charging losses.
+
+### The two vehicle comparisons
+
+`npv_savings` remains the system NPV. Its no-system home bill includes R0's
+actual vehicle charging, on the reference tariff when supplied. It counts
+the installed charger premium once in system CAPEX. It excludes vehicle pack
+invoices, credits, away purchases and unserved-driving penalties.
+
+Household-adjusted NPV starts from that system NPV, subtracts R2 minus R0
+away and unserved-driving costs, and subtracts their vehicle wear W₂₋₀.
+It answers whether the configured household system helps against R0 after
+vehicle costs are included.
+
+V2H benefit compares R2 with R1 on the same PV/storage system. It takes R1
+minus R2 operating costs, subtracts the installed charger premium once,
+and subtracts W₂₋₁. It separates V2H from the benefit of having PV or a
+stationary battery. A negative benefit means V2H costs more under the stated
+inputs. The system's existing terminal-value sensitivity remains separate.
+
+Wear is replacement-aware:
+
+```text
+W₂₋₁ = P₂ − P₁ + H₁ − H₂
+```
+
+P is the sum of invoices, escalated and discounted at each actual swap
+instant. H is a terminal pack-only credit. Its health fraction is
+`clip((final health − eol_percentage) / (1 − eol_percentage), 0, 1)`;
+the pack price is escalated and discounted from the project end. Each
+credit is clipped before differences are formed. A threshold of 1 gives
+zero credit. Installation charges in a swap invoice
+do not enter H. Retired packs earn no credit. W can be negative. The
+`replacement_outlays_difference_npv` beside `wear_npv` reports the outlays-only
+difference P₂ − P₁. No extra throughput wear charge is added.
+
+### Comparability and emissions
+
+`comparable = false` means R2 leaves more gross driving unserved than its
+comparator and `outside_charging_price` is unset. The comparison is still
+reported, with a `reason`, but its savings include reduced transport service.
+A stated outside price, including explicit zero, makes that difference
+priced and the comparison comparable. It restores no driving energy.
+Departure misses alone do not change this flag. Without R1, the V2H benefit
+and its top-level flag are null.
+
+Away purchases enter household money and grid emissions but never
+`grid_import_kwh` at home. Avoided emissions compare R2 with R0 including
+both households' away purchases. PV-origin energy used for driving is
+reported separately; it is not house self-consumption. PV-origin vehicle
+AC delivered to the house does join house self-consumption. Home imports
+include vehicle charging, so grid independence should be read alongside
+the vehicle energy and driving totals.
+
+`provenance.vehicle` is null without a vehicle. With one it records the
+configuration, resolved schedule hash, rounding policy and household modes.
+`App.revalue` keeps all households for repricing. A tariff-period change that
+alters stationary or vehicle dispatch triggers simulation again.
+
+### Monte Carlo vehicle columns
+
+Each trajectory shares its weather, house-load scale and persistent PV factor
+across R0/R1/R2. Load scaling affects the house only. The `runs` table keeps
+`npv_savings` and adds these columns:
+
+| Column or family | Meaning |
+|---|---|
+| `npv_savings_household_adjusted`, `household_adjusted_comparable` | R2/R0 comparison and flag |
+| `v2h_benefit_npv`, `v2h_benefit_comparable` | R2/R1 comparison and flag |
+| `vehicle_wear_r2_r0_npv`, `vehicle_wear_r2_r1_npv` | Replacement-aware wear W |
+| `vehicle_replacement_outlays_difference_r2_r0_npv`, `vehicle_replacement_outlays_difference_r2_r1_npv` | Outlays-only differences |
+| `vehicle_household_adjusted_…` | Away and unserved cost differences |
+| `vehicle_v2h_…` | Operating/home-bill/export/away/unserved savings and charger premium |
+| `vehicle_r0_…`, `vehicle_r1_…`, `vehicle_r2_…` | Household energy totals, misses, swaps, health, retirement, home imports/exports, P/H, operating costs and emissions |
+
+For example, `vehicle_r2_departures_short`, `vehicle_r2_drive_unserved_kwh`,
+`vehicle_r2_away_purchased_kwh` and `vehicle_r2_replacements` describe service
+and purchases for the study vehicle over the whole trajectory. Finite new
+columns get the usual summary statistics and quantiles. Boolean means are
+fractions comparable or retired. Without R1 its family is absent and V2H
+comparison values are NaN/null; all-missing columns have no summary.
+Without a vehicle these new columns are absent.
 
 ## Battery-specific keys
 

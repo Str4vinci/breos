@@ -69,8 +69,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete list.
     results and ship with one upgrade note, before the AC-coupled reference
     cases are computed.
   - AC-coupled batteries as accepted in ADR 0004 (#419).
-  - Vehicle-to-home (V2H), on top of the AC-coupled model (#420). An ADR
-    comes first.
+  - Vehicle-to-home (V2H), on top of the AC-coupled model (#420), implemented
+    for App and paired Monte Carlo. ADR 0005 remains Proposed pending acceptance.
   - Collective self-consumption (ACC): several households sharing generation,
     with a community entry point beside App (#421). An ADR comes first.
   - An optimizer cache of scored designs that returns every evaluated
