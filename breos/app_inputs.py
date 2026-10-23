@@ -184,8 +184,9 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
     shortfalls = []
     clocks = {str(clock): clock for clock in (index.tz, "UTC", timezone)}
     for clock in clocks.values():
-        year_start = pd.Timestamp(f"{year}-01-01", tz=clock)
-        year_end = pd.Timestamp(f"{year + 1}-01-01", tz=clock)
+        # Start each civil year at its first real instant, even if midnight is skipped or repeated.
+        year_start = pd.Timestamp(f"{year}-01-01").tz_localize(clock, nonexistent="shift_forward", ambiguous=True)
+        year_end = pd.Timestamp(f"{year + 1}-01-01").tz_localize(clock, nonexistent="shift_forward", ambiguous=True)
         leading = max(first - year_start, pd.Timedelta(0))
         trailing = max(year_end - (last + step), pd.Timedelta(0))
         if leading < step and trailing < step:

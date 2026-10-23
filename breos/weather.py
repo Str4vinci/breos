@@ -562,7 +562,12 @@ def fetch_tmy_weather_data(
             tf = TimezoneFinder()
             timezone = tf.timezone_at(lat=latitude, lng=longitude)
 
-        utc_offset = pd.Timestamp(f"{sample_year}-01-01", tz=timezone).utcoffset()
+        # Use the year's first real instant when local New Year midnight is skipped or repeated.
+        utc_offset = (
+            pd.Timestamp(f"{sample_year}-01-01")
+            .tz_localize(timezone, nonexistent="shift_forward", ambiguous=True)
+            .utcoffset()
+        )
         offset_hours = utc_offset.total_seconds() / 3600
         if not float(offset_hours).is_integer():
             raise ValueError(

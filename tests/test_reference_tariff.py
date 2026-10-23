@@ -193,6 +193,27 @@ def test_a_flat_reference_prices_the_whole_load_and_its_own_fixed_charge(flat_ru
     assert "export_prices" not in run.reference_tariff
 
 
+def test_azores_app_reference_tariff_prices_the_whole_load_across_missing_midnight():
+    app = _simulated(
+        {
+            "location": {"latitude": 37.74, "longitude": -25.67, "timezone": "Atlantic/Azores"},
+            "start_date": "2026-01-01",
+            "resolution": "15min",
+            "projection_years": 1,
+            "n_modules": 8,
+            "annual_consumption_kwh": 3500,
+            "reference_tariff": {"currency": "EUR", "import_prices": {"all": 0.2}, "fixed_charge_per_day": 0.0},
+        }
+    )
+    run = app._artifacts
+    load_kwh = run.first_year_results_df["Houseload"].sum() * 0.25 / 1000
+
+    assert load_kwh == pytest.approx(3500)
+    assert run.yearly_df.iloc[0]["Baseline_Import_Cost"] == pytest.approx(load_kwh * 0.2, rel=1e-12)
+    assert app.result()["no_system_import_cost_year1_prices"] == pytest.approx(load_kwh * 0.2)
+    assert app.result()["no_system_fixed_charge_year1_prices"] == 0
+
+
 def test_a_scheduled_reference_reconciles_with_the_step_ledger(flat_run):
     run = _artifacts({**BASE, "reference_tariff": TOU_REFERENCE})
     frame = run.first_year_results_df

@@ -759,6 +759,22 @@ def test_fetch_tmy_without_sample_year_keeps_original_index(monkeypatch):
     assert weather.index[0] == tmy.index[0]
 
 
+def test_fetch_tmy_with_missing_new_year_midnight(monkeypatch):
+    captured = {}
+
+    def fake_get_pvgis_tmy(*args, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame({"ghi": [0.0]}, index=pd.DatetimeIndex(["1990-01-01T05:00Z"])), {}
+
+    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
+
+    weather, _metadata = fetch_tmy_weather_data(-12.05, -77.04, sample_year=1990, timezone="America/Lima")
+
+    assert captured["roll_utc_offset"] == -4
+    assert captured["coerce_year"] == 1990
+    assert weather.index[0] == pd.Timestamp("1990-01-01T05:00Z")
+
+
 def test_fetch_tmy_rejects_fractional_hour_timezone_before_request(monkeypatch):
     requested = False
 

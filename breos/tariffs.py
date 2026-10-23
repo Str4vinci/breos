@@ -1205,7 +1205,8 @@ def civil_day_starts(index: pd.DatetimeIndex, timezone: str) -> tuple[int, ...]:
     """Positions where the civil date changes in ``timezone``, plus ``len(index)``."""
     if len(index) == 0:
         return (0,)
-    local_days = cast(Any, index.tz_convert(timezone).normalize().tz_localize(None).as_unit("ns")).asi8
+    # Civil dates are labels: local midnight can be missing or repeated at DST.
+    local_days = cast(Any, index.tz_convert(timezone).tz_localize(None).normalize().as_unit("ns")).asi8
     changes = [
         0,
         *(position for position in range(1, len(local_days)) if local_days[position] != local_days[position - 1]),
