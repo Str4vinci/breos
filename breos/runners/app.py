@@ -711,7 +711,10 @@ def run_app_simulation(
         None
         if vehicle is None
         else resolve_vehicle_schedule(
-            vehicle, pd.DatetimeIndex(inputs.dc_system_base.index), timezone=resolved.timezone
+            vehicle,
+            pd.DatetimeIndex(inputs.dc_system_base.index),
+            timezone=resolved.timezone,
+            reference_year=int(cfg["start_date"][:4]),
         )
     )
     vehicle_temperature = (

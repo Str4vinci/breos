@@ -1224,7 +1224,10 @@ def run_montecarlo(
             for year, weather in weather_by_year.items()
         }
         vehicle_schedule = resolve_vehicle_schedule(
-            resolved.vehicle, _study_calendar(aligned_by_year), timezone=resolved.timezone
+            resolved.vehicle,
+            _study_calendar(aligned_by_year),
+            timezone=resolved.timezone,
+            reference_year=settings.target_year,
         )
     pv_chains = _prepare_pv_chains(cfg, resolved, aligned_by_year, settings, years_per_run)
     tariff = _resolve_study_tariff(resolved, aligned_by_year)

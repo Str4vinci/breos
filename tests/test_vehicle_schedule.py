@@ -22,7 +22,7 @@ def day_index(day, *, timezone="Europe/Lisbon", freq="h"):
 def csv_schedule(tmp_path, rows, index, *, timezone="Europe/Lisbon"):
     path = tmp_path / "trips.csv"
     path.write_text("start,end,kind,energy_kwh,away_charging\n" + rows)
-    return resolve_vehicle_schedule({"file": str(path)}, index, timezone=timezone)
+    return resolve_vehicle_schedule({"file": str(path)}, index, timezone=timezone, reference_year=index[0].year)
 
 
 @pytest.mark.parametrize(
@@ -36,7 +36,7 @@ def test_departure_civil_day_selects_weekday_or_weekend(date, depart, arrive, en
     schedule = rules()
     schedule["weekend"] = {"depart": "10:00", "arrive": "14:00", "trip_kwh": 12}
     index = day_index(date)
-    resolved = resolve_vehicle_schedule(schedule, index, timezone="Europe/Lisbon")
+    resolved = resolve_vehicle_schedule(schedule, index, timezone="Europe/Lisbon", reference_year=2026)
     np.testing.assert_array_equal(resolved.plugged, (index.hour < depart) | (index.hour >= arrive))
     assert resolved.drive_first_wh[depart] == resolved.drive_second_wh[arrive - 1] == energy / 2
     assert (resolved.drive_first_wh + resolved.drive_second_wh).sum() == energy
@@ -49,22 +49,24 @@ def test_departure_civil_day_selects_weekday_or_weekend(date, depart, arrive, en
 @pytest.mark.parametrize("freq", ["h", "15min"])
 def test_spring_and_autumn_use_elapsed_hours_in_the_configured_zone(zone, date, hours, away_hours, freq):
     index = day_index(date, timezone=zone, freq=freq)
-    resolved = resolve_vehicle_schedule(rules("00:00", "04:00"), index, timezone=zone)
+    resolved = resolve_vehicle_schedule(rules("00:00", "04:00"), index, timezone=zone, reference_year=2026)
     step_hours = 1 if freq == "h" else 0.25
     assert len(index) * step_hours == hours
     assert (~resolved.plugged).sum() * step_hours == away_hours
     assert resolved.park_hours.sum() == away_hours - 2 * step_hours
     assert (resolved.drive_first_wh + resolved.drive_second_wh).sum() == 10000
     # Changing only the index display zone changes none of the calendar.
-    other = resolve_vehicle_schedule(rules("00:00", "04:00"), index.tz_convert(zone), timezone=zone)
+    other = resolve_vehicle_schedule(
+        rules("00:00", "04:00"), index.tz_convert(zone), timezone=zone, reference_year=2026
+    )
     assert resolved.schedule_hash() == other.schedule_hash()
 
 
 @pytest.mark.parametrize(("zone", "repeated"), [("Europe/Lisbon", "01:30"), ("Europe/Berlin", "02:30")])
 def test_repeated_departure_uses_first_occurrence_and_arrival_uses_last(zone, repeated):
     index = day_index("2026-10-25", timezone=zone, freq="15min")
-    departing = resolve_vehicle_schedule(rules(repeated, "05:00"), index, timezone=zone)
-    arriving = resolve_vehicle_schedule(rules("00:00", repeated), index, timezone=zone)
+    departing = resolve_vehicle_schedule(rules(repeated, "05:00"), index, timezone=zone, reference_year=2026)
+    arriving = resolve_vehicle_schedule(rules("00:00", repeated), index, timezone=zone, reference_year=2026)
     first = pd.Timestamp(f"2026-10-25 {repeated}").tz_localize(zone, ambiguous=True)
     last = pd.Timestamp(f"2026-10-25 {repeated}").tz_localize(zone, ambiguous=False)
     assert not departing.plugged[index.get_loc(first)]
@@ -82,7 +84,7 @@ def test_repeated_departure_uses_first_occurrence_and_arrival_uses_last(zone, re
 )
 def test_nonexistent_template_time_meets_the_spring_transition(zone, missing, transition):
     index = day_index("2026-03-29", timezone=zone, freq="15min")
-    resolved = resolve_vehicle_schedule(rules(missing, "05:00"), index, timezone=zone)
+    resolved = resolve_vehicle_schedule(rules(missing, "05:00"), index, timezone=zone, reference_year=2026)
     boundary = pd.Timestamp(f"2026-03-29 {transition}", tz=zone)
     pos = index.get_loc(boundary)
     assert resolved.plugged[pos - 1] and not resolved.plugged[pos]
@@ -98,7 +100,7 @@ def test_nonexistent_template_time_meets_the_spring_transition(zone, missing, tr
 )
 def test_template_conservatively_rounds_partial_steps(freq, first, last, parked):
     index = day_index("2026-01-05", freq=freq)
-    resolved = resolve_vehicle_schedule(rules("07:50", "18:35"), index, timezone="Europe/Lisbon")
+    resolved = resolve_vehicle_schedule(rules("07:50", "18:35"), index, timezone="Europe/Lisbon", reference_year=2026)
     positions = np.flatnonzero(~resolved.plugged)
     assert index[positions[0]].strftime("%H:%M") == first
     assert index[positions[-1]].strftime("%H:%M") == last
@@ -110,7 +112,7 @@ def test_template_conservatively_rounds_partial_steps(freq, first, last, parked)
 @pytest.mark.parametrize("freq", ["h", "15min"])
 def test_one_away_step_combines_both_legs_and_never_charges(freq):
     index = day_index("2026-01-05", freq=freq)
-    resolved = resolve_vehicle_schedule(rules("08:01", "08:10"), index, timezone="Europe/Lisbon")
+    resolved = resolve_vehicle_schedule(rules("08:01", "08:10"), index, timezone="Europe/Lisbon", reference_year=2026)
     pos = np.flatnonzero(~resolved.plugged)
     assert len(pos) == 1
     assert resolved.drive_first_wh[pos[0]] == resolved.drive_second_wh[pos[0]] == 5000
@@ -119,8 +121,10 @@ def test_one_away_step_combines_both_legs_and_never_charges(freq):
 
 def test_day_rule_can_disable_away_charging_without_changing_gross_driving():
     index = day_index("2026-01-05")
-    enabled = resolve_vehicle_schedule(rules(), index, timezone="Europe/Lisbon")
-    disabled = resolve_vehicle_schedule(rules(away_charging=False), index, timezone="Europe/Lisbon")
+    enabled = resolve_vehicle_schedule(rules(), index, timezone="Europe/Lisbon", reference_year=2026)
+    disabled = resolve_vehicle_schedule(
+        rules(away_charging=False), index, timezone="Europe/Lisbon", reference_year=2026
+    )
     assert disabled.park_hours.sum() == 0 and enabled.park_hours.sum() == 8
     np.testing.assert_array_equal(enabled.drive_first_wh, disabled.drive_first_wh)
     np.testing.assert_array_equal(enabled.drive_second_wh, disabled.drive_second_wh)
@@ -128,7 +132,7 @@ def test_day_rule_can_disable_away_charging_without_changing_gross_driving():
 
 def test_period_end_uses_next_departure_beyond_the_window():
     index = pd.date_range("2026-01-05 20:00", periods=2, freq="h", tz="UTC")
-    resolved = resolve_vehicle_schedule(rules(), index, timezone="Europe/Lisbon")
+    resolved = resolve_vehicle_schedule(rules(), index, timezone="Europe/Lisbon", reference_year=2026)
     np.testing.assert_array_equal(resolved.steps_to_departure, [12, 11])
 
 
@@ -137,7 +141,7 @@ def test_calendar_seam_repeats_its_own_day_types_and_carries_overnight_legs(freq
     index = pd.date_range("2023-01-01", "2024-01-01", inclusive="left", freq=freq, tz="UTC")
     spec = rules("22:00", "02:00")
     spec["weekend"] = {"depart": "21:00", "arrive": "03:00", "trip_kwh": 20}
-    resolved = resolve_vehicle_schedule(spec, index, timezone="Europe/Lisbon")
+    resolved = resolve_vehicle_schedule(spec, index, timezone="Europe/Lisbon", reference_year=2023)
     assert not resolved.plugged[0] and not resolved.plugged[-1]
     assert (
         resolved.drive_second_wh[index.get_loc("2023-01-01 02:45" if freq == "15min" else "2023-01-01 02:00")] == 10000
@@ -148,7 +152,7 @@ def test_calendar_seam_repeats_its_own_day_types_and_carries_overnight_legs(freq
     # next departure uses Sunday's 10:00, not Monday's 08:00.
     daytime = rules()
     daytime["weekend"] = {"depart": "10:00", "arrive": "14:00", "trip_kwh": 12}
-    day = resolve_vehicle_schedule(daytime, index, timezone="Europe/Lisbon")
+    day = resolve_vehicle_schedule(daytime, index, timezone="Europe/Lisbon", reference_year=2023)
     assert day.steps_to_departure[-1] == (10 * (4 if freq == "15min" else 1)) + 1
 
 
@@ -286,10 +290,11 @@ def test_empty_file_means_home_with_no_departure(tmp_path):
 def test_hash_is_stable_content_based_and_sensitive_to_every_resolved_array(tmp_path):
     index = day_index("2026-01-05")
     spec = VehicleScheduleSpec(**rules())
-    baseline = resolve_vehicle_schedule(spec, index, timezone="Europe/Lisbon")
+    baseline = resolve_vehicle_schedule(spec, index, timezone="Europe/Lisbon", reference_year=2026)
     assert len(baseline.schedule_hash()) == 64
     assert (
-        baseline.schedule_hash() == resolve_vehicle_schedule(rules(), index, timezone="Europe/Lisbon").schedule_hash()
+        baseline.schedule_hash()
+        == resolve_vehicle_schedule(rules(), index, timezone="Europe/Lisbon", reference_year=2026).schedule_hash()
     )
     # Independent copies and pandas timestamp units have the same hash.
     assert replace(baseline, index=index.as_unit("us")).schedule_hash() == baseline.schedule_hash()
@@ -320,4 +325,4 @@ def test_hash_is_stable_content_based_and_sensitive_to_every_resolved_array(tmp_
 )
 def test_schedule_refuses_an_invalid_simulation_index(index):
     with pytest.raises(ValueError, match="simulation index"):
-        resolve_vehicle_schedule(rules(), index, timezone="Europe/Lisbon")
+        resolve_vehicle_schedule(rules(), index, timezone="Europe/Lisbon", reference_year=2026)

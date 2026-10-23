@@ -188,7 +188,7 @@ def test_q1_q2_q3_q4_stationary_and_unplugged_bit_identity(backend, freq, kind):
     assert LEDGER_SCHEMA_VERSION == "3.1"
     assert (before[list(VEHICLE_COLUMNS)] == 0.0).all().all()
     cfg_v = vehicle()
-    resolved = resolve_vehicle_schedule(cfg_v, pv.index, timezone="UTC")
+    resolved = resolve_vehicle_schedule(cfg_v, pv.index, timezone="UTC", reference_year=2025)
     with_vehicle = _simulate_core(
         **kwargs,
         vehicle_config=cfg_v,

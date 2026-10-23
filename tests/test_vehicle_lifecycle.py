@@ -182,7 +182,7 @@ def test_kept_pack_retires_at_zero_health_and_cannot_revive(scripted):
     scripted[0][:] = [0.7, 0.0, 0.0]
     pv, load, temp = inputs("h")
     cfg = vehicle(enable_replacement=False, away_charging=AWAY)
-    resolved = resolve_vehicle_schedule(cfg, pv.index, timezone="UTC")
+    resolved = resolve_vehicle_schedule(cfg, pv.index, timezone="UTC", reference_year=2025)
     core, frame = run(cfg, resolved, "python", pv=pv, load=load, temp=temp)
     assert [event.reason for event in core.vehicle_end_of_life_events] == ["replacement_disabled", "zero_health"]
     assert core.vehicle_carry.retired
@@ -230,7 +230,7 @@ def test_real_onboard_lifecycle_and_backend_parity(backend, freq, engine):
         blast_model="nmc_gr_50ah_b1" if engine == "blast" else None,
         away_charging=AWAY,
     )
-    resolved = resolve_vehicle_schedule(cfg, pv.index, timezone="UTC")
+    resolved = resolve_vehicle_schedule(cfg, pv.index, timezone="UTC", reference_year=2025)
     core, frame = run(cfg, resolved, backend, pv=pv, load=load, temp=temp)
     assert 0.0 < core.vehicle_carry.soh_fraction < 1.0
     assert core.vehicle_carry.fec_all_packs > 0.0
@@ -255,7 +255,7 @@ def test_year_seam_carries_lifecycle_endpoints_and_rainflow(backend, freq, engin
         blast_model="nmc_gr_50ah_b1" if engine == "blast" else None,
         away_charging=AWAY,
     )
-    resolved = resolve_vehicle_schedule(cfg, pv.index, timezone="UTC")
+    resolved = resolve_vehicle_schedule(cfg, pv.index, timezone="UTC", reference_year=2025)
     continuous, frame = run(cfg, resolved, backend, pv=pv, load=load, temp=temp)
     n = len(pv) // 2
 
@@ -357,7 +357,7 @@ def test_q2_actual_vehicle_ageing_leaves_stationary_state_and_instructions_ident
         kwargs["inverter_units"] = units
     baseline = _simulate_core(**kwargs)
     cfg = vehicle(enable_replacement=True, eol_percentage=0.99999)
-    resolved = resolve_vehicle_schedule(cfg, pv.index, timezone="UTC")
+    resolved = resolve_vehicle_schedule(cfg, pv.index, timezone="UTC", reference_year=2025)
     with_vehicle = _simulate_core(**kwargs, vehicle_config=cfg, vehicle_schedule=resolved)
     left, right = baseline.buffers.to_frame(baseline.rng), with_vehicle.buffers.to_frame(with_vehicle.rng)
     columns = [
@@ -452,7 +452,7 @@ def test_project_years_preserves_real_lifecycle_in_frame_and_summary_paths(backe
         blast_model="nmc_gr_50ah_b1" if engine == "blast" else None,
         away_charging=AWAY,
     )
-    resolved = resolve_vehicle_schedule(cfg, pv.index, timezone="UTC")
+    resolved = resolve_vehicle_schedule(cfg, pv.index, timezone="UTC", reference_year=2025)
     continuous, _ = run(cfg, resolved, backend, pv=pv, load=load, temp=temp)
     count = len(pv) // 2
 

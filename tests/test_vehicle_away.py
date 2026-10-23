@@ -173,7 +173,7 @@ def test_departure_shortfall_tolerance_before_away_charging(backend, freq, fract
 def test_q4_q5_complete_trips_and_backend_parity(backend, freq, mode):
     index = pd.date_range("2025-06-01", periods=120 if freq == "h" else 480, freq=freq, tz="UTC")
     cfg = vehicle(mode, away_charging=AWAY)
-    resolved = resolve_vehicle_schedule(cfg, index, timezone="UTC")
+    resolved = resolve_vehicle_schedule(cfg, index, timezone="UTC", reference_year=2025)
     carry = VehicleCarry(32000.0, 8000.0, 4000.0)
     pv = 5000.0 * np.clip(np.sin((index.hour.to_numpy() - 6) * np.pi / 12), 0.0, None)
     _, frame = run(resolved, cfg, backend, carry=carry, pv_w=pv, load_w=1500.0)
@@ -199,7 +199,7 @@ def test_multiday_absence_crosses_day_windows_once(tmp_path, backend, freq, stat
         "2026-01-02T01:00Z,2026-01-02T03:00Z,drive,4.5,\n"
     )
     cfg = vehicle(schedule={"file": str(path)}, away_charging=AWAY)
-    resolved = resolve_vehicle_schedule(cfg, index, timezone="UTC")
+    resolved = resolve_vehicle_schedule(cfg, index, timezone="UTC", reference_year=2025)
     battery = BatteryConfig(nominal_energy_wh=5000.0 if stationary else 0.0, enable_replacement=False)
     _, frame = run(resolved, cfg, backend, battery=battery, carry=VehicleCarry(32000.0, 16000.0, 8000.0))
     hours = resolved.hours_per_step
@@ -227,7 +227,7 @@ def test_project_years_carries_absence_across_the_year_end(tmp_path, backend, fr
         "2026-01-02T01:00Z,2026-01-02T03:00Z,drive,4.5,\n"
     )
     cfg = vehicle("v1g", schedule={"file": str(path)}, away_charging=AWAY)
-    resolved = resolve_vehicle_schedule(cfg, index, timezone="UTC")
+    resolved = resolve_vehicle_schedule(cfg, index, timezone="UTC", reference_year=2025)
     pv, load, temp = pd.Series(0.0, index=index), pd.DataFrame({"Load": 0.0}, index=index), pd.Series(25.0, index=index)
     aligned = align_simulation_inputs(pv, load, freq=freq, temperature_series=temp)
     year = (

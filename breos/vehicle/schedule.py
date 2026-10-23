@@ -152,7 +152,11 @@ def _file_absences(path: str, timezone: str, year: int) -> list[list[_Segment]]:
     year_end = pd.Timestamp(f"{year + 1}-01-01", tz=timezone)
     if segments and not any(s.start < year_end and s.end > year_start for s in segments):
         raise ValueError(f"Vehicle trip CSV timestamps must use the simulation's reference calendar year ({year})")
-    period = year_end - year_start
+    return _replay_absences(segments, year_end - year_start)
+
+
+def _replay_absences(segments: list[_Segment], period: pd.Timedelta) -> list[list[_Segment]]:
+    """Replay complete resolved absences, including their legs and DST durations."""
     replayed = [
         _Segment(s.start + period * repeat, s.end + period * repeat, s.kind, s.energy_wh, s.charging)
         for repeat in (-1, 0, 1)
@@ -163,34 +167,33 @@ def _file_absences(path: str, timezone: str, year: int) -> list[list[_Segment]]:
     for segment in replayed:
         if absences and segment.start < absences[-1][-1].end:
             raise ValueError("Vehicle trip calendar overlaps when replayed across the year seam")
-        if absences and segment.start == absences[-1][-1].end:
+        if absences and segment.start == absences[-1][-1].end and segment.kind != "template":
             absences[-1].append(segment)
         else:
             absences.append([segment])
     return absences
 
 
-def _template_absences(spec: VehicleScheduleSpec, local: pd.DatetimeIndex, timezone: str) -> list[list[_Segment]]:
-    first_year, last_year = local[0].year, local[-1].year
-    absences: list[list[_Segment]] = []
-    for day in pd.date_range(f"{first_year - 1}-12-30", f"{last_year + 1}-01-02", freq="D"):
-        # Outside the simulated calendar, repeat its own December/January
-        # day types rather than next year's different weekdays.
-        source = day
-        if day.year < first_year:
-            source = day + pd.DateOffset(years=1)
-        elif day.year > last_year:
-            source = day - pd.DateOffset(years=1)
-        rule = spec.weekday if source.weekday() < 5 else spec.weekend
+def _template_absences(spec: VehicleScheduleSpec, timezone: str, year: int) -> list[list[_Segment]]:
+    year_start = pd.Timestamp(f"{year}-01-01", tz=timezone)
+    year_end = pd.Timestamp(f"{year + 1}-01-01", tz=timezone)
+    segments: list[_Segment] = []
+    # Iterate civil dates before localizing, so an overnight trip advances
+    # one date even on the 25-hour autumn transition day.
+    for day in pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D"):
+        rule = spec.weekday if day.weekday() < 5 else spec.weekend
         assert isinstance(rule, VehicleDaySchedule)
         start = _civil(day, rule.depart, timezone, departure=True)
         arrival_day = day + timedelta(days=rule.arrive <= rule.depart)
         end = _civil(arrival_day, rule.arrive, timezone, departure=False)
-        if end <= start or (absences and start < absences[-1][-1].end):
+        if end <= start or (segments and start < segments[-1].end):
             raise ValueError("Vehicle day rules produce overlapping or non-positive absences")
         # The actual driving legs are placed on the rounded away steps below.
-        absences.append([_Segment(start, end, "template", rule.trip_kwh * 1000, rule.away_charging)])
-    return absences
+        segments.append(_Segment(start, end, "template", rule.trip_kwh * 1000, rule.away_charging))
+    # Both legs belong to the departure's reference-calendar rule. Rebuilding
+    # a halo from adjacent civil years can pick a different weekday, or infer
+    # the wrong reference year when a UTC index straddles local New Year.
+    return _replay_absences(segments, year_end - year_start)
 
 
 def resolve_vehicle_schedule(
@@ -198,14 +201,16 @@ def resolve_vehicle_schedule(
     index: pd.DatetimeIndex,
     *,
     timezone: str,
+    reference_year: int,
 ) -> VehicleSchedule:
     """Resolve a schedule on an aware, regular interval-start simulation index.
 
     ``config`` may be a VehicleConfig, a schedule spec, or the schedule table
     itself. The configured zone determines day types regardless of the
-    index's display zone. A file uses the simulation's reference calendar
-    year; its resolved timeline replays at the seam. An empty CSV means
-    always home with no departure target.
+    index's display zone. ``reference_year`` is the App's start-date year or
+    Monte Carlo's target year, even when the index starts in a different
+    local year. Templates and files replay that calendar at the seam. An
+    empty CSV means always home with no departure target.
     """
     ZoneInfo(timezone)
     if not isinstance(index, pd.DatetimeIndex) or index.tz is None or index.empty or index.hasnans:
@@ -222,9 +227,10 @@ def resolve_vehicle_schedule(
     if isinstance(config, VehicleConfig):
         config = config.schedule
     spec = config if isinstance(config, VehicleScheduleSpec) else VehicleScheduleSpec(**config)
-    local = index.tz_convert(timezone)
     absences = (
-        _file_absences(spec.file, timezone, local[0].year) if spec.file else _template_absences(spec, local, timezone)
+        _file_absences(spec.file, timezone, reference_year)
+        if spec.file
+        else _template_absences(spec, timezone, reference_year)
     )
     n = len(index)
     plugged = np.ones(n, dtype=np.bool_)
