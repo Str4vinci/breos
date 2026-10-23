@@ -1308,7 +1308,8 @@ def _vehicle_drive(
     served = min(requested, max(0.0, energy - floor))
     pv_used = served * (pv_origin / energy) if energy > 0.0 else 0.0
     grid_used = served * (grid_origin / energy) if energy > 0.0 else 0.0
-    end = max(floor, energy - served)
+    # A reserve is a withdrawal limit, never a source of energy.
+    end = energy - served
     return end, max(0.0, pv_origin - pv_used), max(0.0, grid_origin - grid_used), served, pv_used, grid_used
 
 
@@ -1432,6 +1433,8 @@ def _dispatch_day(
     vehicle_away_target: float,
     vehicle_away_power_w: float,
     vehicle_away_efficiency: float,
+    vehicle_soh_fraction: float,
+    vehicle_retired: bool,
 ) -> None:
     """Dispatch timesteps ``[lo, hi)`` at fixed health, writing rows of *matrix*.
 
@@ -1752,7 +1755,14 @@ def _dispatch_day(
                     matrix[L_VEHICLE_DEPARTURE_SHORTFALL, i] = shortfall / hours_per_step
             elif not vehicle_was_plugged and plugged:
                 matrix[L_VEHICLE_ARRIVAL_ENERGY, i] = vehicle_energy / hours_per_step
-            if plugged:
+            if vehicle_retired:
+                # A retired pack serves no trips and accepts no energy at
+                # home or away. Availability still books site boundaries.
+                if not plugged:
+                    matrix[L_VEHICLE_DRIVE_UNSERVED, i] = (
+                        vehicle_drive_first[i] + vehicle_drive_second[i]
+                    ) / hours_per_step
+            elif plugged:
                 before = vehicle_energy
                 pv_fraction = vehicle_pv_origin / before if before > 0.0 else 0.0
                 grid_fraction = vehicle_grid_origin / before if before > 0.0 else 0.0
@@ -1854,8 +1864,8 @@ def _dispatch_day(
             matrix[R_VEHICLE_PLUGGED, i] = 1.0 if plugged else 0.0
             matrix[R_VEHICLE_ENERGY, i] = vehicle_energy if plugged else 0.0
             matrix[R_VEHICLE_ENERGY_ONBOARD, i] = vehicle_energy
-            matrix[R_VEHICLE_SOC_ABSOLUTE, i] = vehicle_energy / vehicle_capacity
-            matrix[R_VEHICLE_SOH, i] = 1.0
+            matrix[R_VEHICLE_SOC_ABSOLUTE, i] = vehicle_energy / vehicle_capacity if vehicle_capacity > 0.0 else 0.0
+            matrix[R_VEHICLE_SOH, i] = vehicle_soh_fraction
             matrix[R_VEHICLE_PV_ORIGIN_ENERGY_END, i] = vehicle_pv_origin
             matrix[R_VEHICLE_GRID_ORIGIN_ENERGY_END, i] = vehicle_grid_origin
 
@@ -1895,6 +1905,8 @@ def _day_arguments(
     vehicle_discharge_period: Optional[np.ndarray] = None,
     grid_import_limit_w: float = math.inf,
     vehicle_was_plugged: bool = True,
+    vehicle_soh_fraction: float = 1.0,
+    vehicle_retired: bool = False,
 ) -> Tuple[Any, ...]:
     """Pack one day's state into the positional arguments of :func:`_dispatch_day`.
 
@@ -1961,7 +1973,9 @@ def _day_arguments(
     if curve_rows is None:
         curve_rows = np.full(len(pv_dc_vals), curve_row)
     away = cast("Optional[AwayChargingConfig]", None if vehicle_config is None else vehicle_config.away_charging)
-    vehicle_capacity_wh = 1.0 if vehicle_config is None else float(vehicle_config.battery_kwh * 1000.0)
+    vehicle_capacity_wh = (
+        1.0 if vehicle_config is None else float(vehicle_config.battery_kwh * 1000.0 * vehicle_soh_fraction)
+    )
     return (
         out.matrix,
         pv_dc_vals,
@@ -2009,14 +2023,12 @@ def _day_arguments(
         float(vehicle_pv_origin_wh),
         float(vehicle_grid_origin_wh),
         0 if vehicle_config is None else {"uncontrolled": 0, "v1g": 1, "v2h": 2}[vehicle_config.mode],
-        1.0 if vehicle_config is None else float(vehicle_config.battery_kwh * 1000.0),
-        0.0 if vehicle_config is None else float(vehicle_config.departure_soc * vehicle_config.battery_kwh * 1000.0),
-        0.0 if vehicle_config is None else float(vehicle_config.max_soc * vehicle_config.battery_kwh * 1000.0),
+        float(vehicle_capacity_wh),
+        0.0 if vehicle_config is None else float(vehicle_config.departure_soc * vehicle_capacity_wh),
+        0.0 if vehicle_config is None else float(vehicle_config.max_soc * vehicle_capacity_wh),
         0.0
         if vehicle_config is None
-        else float(
-            max(vehicle_config.min_soc, vehicle_config.v2h_min_soc or 0.0) * vehicle_config.battery_kwh * 1000.0
-        ),
+        else float(max(vehicle_config.min_soc, vehicle_config.v2h_min_soc or 0.0) * vehicle_capacity_wh),
         1.0 if vehicle_config is None else float(vehicle_config.charger_ac_rating_kw * 1000.0 * hours_per_step),
         1.0 if vehicle_config is None else float(vehicle_config.charger_efficiency),
         1.0 if vehicle_config is None else float(vehicle_config.charge_efficiency),
@@ -2027,13 +2039,15 @@ def _day_arguments(
         _EMPTY_VEHICLE_MASK if vehicle_charge_period is None else vehicle_charge_period,
         _EMPTY_VEHICLE_MASK if vehicle_discharge_period is None else vehicle_discharge_period,
         bool(vehicle_was_plugged),
-        0.0 if vehicle_config is None else float(vehicle_config.min_soc * vehicle_config.battery_kwh * 1000.0),
+        0.0 if vehicle_config is None else float(vehicle_config.min_soc * vehicle_capacity_wh),
         _EMPTY_VEHICLE_FLOAT if vehicle_schedule is None else vehicle_schedule.drive_first_wh,
         _EMPTY_VEHICLE_FLOAT if vehicle_schedule is None else vehicle_schedule.park_hours,
         _EMPTY_VEHICLE_FLOAT if vehicle_schedule is None else vehicle_schedule.drive_second_wh,
         0.0 if away is None else float(away.target_soc * vehicle_capacity_wh),
         0.0 if away is None else float(away.power_kw * 1000.0),
         1.0 if away is None else float(away.efficiency),
+        float(vehicle_soh_fraction),
+        bool(vehicle_retired),
     )
 
 

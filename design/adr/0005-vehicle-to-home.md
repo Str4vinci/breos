@@ -1077,9 +1077,10 @@ without a vehicle, plus PV/grid stored-charge and discharge-DC origin flows
 for stepwise reconciliation. States are Wh, SOC and vehicle SOH are fractions,
 and transfers are average W. Year rows and App results remain PR 4 work.
 
-Vehicle capacity is fixed at nominal in PR 2: **no vehicle ageing**,
-capacity-temperature derating, standby or replacement. Direct calls must set
-`vehicle.enable_replacement = false`; the App refusal remains until PR 4.
+PR 3 adds the independent vehicle lifecycle and lifts the lower-level
+replacement refusal. The App refusal remains until PR 4. The vehicle still
+has no capacity-temperature derating, indoor temperature model, standby or
+resistance-fade model.
 PR 2(b) implements departure and arrival bookings, the ordered driving legs,
 and parked away charging in the shared Python/Numba loop. A departure books
 the pre-driving on-board energy and a shortfall only above `1e-9 × cap_v`;
@@ -1100,6 +1101,36 @@ identities 5–10 across home/away transitions, with Wh/W scaling, ordered
 withdrawals, parked-time power limits and a full site balance excluding away
 flows. VH4/VH5 and full-trip Q4/Q5 run hourly and at 15 minutes on both backends,
 including multi-day, day-window and year seams.
+
+PR 3 advances a second `DegradationLifecycle` through `DegradationDay` at
+positional day closes, on real on-board SOC at home and away. Native LFP
+ageing is the default; a configured BLAST cell model uses its own snapshot.
+`breos.weather.build_battery_temperature_series` resolves weather, fixed and
+CSV inputs with the indoor model disabled. An independently prepared
+`vehicle_temperature_series` can supply vehicle temperatures alongside the
+stationary input; projection years carry it on both execution paths.
+
+Health changes the next day's capacity, targets and floors. Day close books
+excess energy as `Vehicle_Capacity_Window_Loss`, with proportional origins.
+A same-SOC swap explicitly removes the outgoing energy and origins and adds
+the successor's energy unattributed, at home or away. Replacement uses the
+shared stationary horizon guards, while a skipped swap keeps or retires the
+vehicle pack. A kept pack at zero health retires too. Retirement removes its
+remaining energy explicitly and disables home/away charging and discharge;
+subsequent scheduled driving is unserved.
+
+`VehicleCarry` now includes health, lifecycle/SOC/temperature endpoints,
+unresolved native rainflow state, retirement state, lifetime FEC and the
+project's swap history. Pending half cycles are finalized only at project
+end or when a pack leaves service. The year loop preserves this state on
+frame and aligned-summary paths. A run's `vehicle_end_of_life_events` uses
+local step positions (also JSON records in frame attrs); carried history
+uses cumulative project step positions. Core, detailed and summary results
+retain the vehicle's degradation tracking separately from the stationary
+tracking. Direct daily-target controllers/planners remain refused with a
+vehicle, regardless of forecast or decision boundary. VH6 and Q7 cover home
+and away swaps; VH1–VH5 retain their specified full-health fixture, with
+separate native/BLAST ageing, parity and stationary-bit-identity tests.
 
 Implementation interpretations for PR 2(a):
 
@@ -1134,6 +1165,27 @@ Implementation interpretations for PR 2(b):
   target on its first leg and then charge. Away charging does not revise
   the departure shortfall already booked at the start of the absence.
 
+Implementation interpretations for PR 3:
+
+- VehicleConfig has no terminal-swap key. Direct `_simulate_core` calls use
+  `vehicle_allow_terminal_replacement` (default true, as for the stationary
+  pack) and `vehicle_replacement_years_after_span`; `project_years` supplies
+  the remaining horizon and allows earlier year-end swaps. The vehicle's
+  existing minimum-remaining-years key uses the same span/year convention
+  as the stationary policy. No App configuration keys are added here.
+- Outgoing unresolved cycles are settled before inventory changes. Any
+  energy above the outgoing pack's faded maximum is clipped and booked
+  first; its remaining SOC determines the new pack's energy.
+- At exactly zero outgoing capacity, SOC is undefined. An enabled swap uses
+  the last measured SOC bounded to the configured vehicle window, and books
+  all successor energy as replacement-added energy. A skipped kept pack at
+  zero health retires instead.
+- Closing ledger rows show the updated health, SOC and inventory. Lifecycle
+  endpoints retain the actual pre-close samples consumed by the engine;
+  the following sample sees the new capacity. Rewriting an ingested
+  rainflow endpoint would break continuation and is not done. A replacement
+  resets the lifecycle and starts it at the successor's same SOC.
+
 PR 2(a) performance measured on 2026-10-23, against unchanged `2443c37`,
 using the same Python 3.12 environment and offline synthetic weather.
 `tools.generate_app_golden.run_scenario` ran `native_h_battery` (5 kWh)
@@ -1163,6 +1215,22 @@ checks. Numba first calls use an isolated temporary cache.
 | Hourly App year, PV-only | 0.037053 s | 0.036862 s |
 | Cold Numba first kernel call | 2.383 s | 2.528 s |
 | Warm-cache Numba first kernel call | 0.170 s | 0.166 s |
+
+PR 3 performance measured on 2026-10-23 against unchanged `04275e2`,
+using the same offline, hourly Python App-year scenarios as above. Three
+alternating before/after batches each warmed once and timed five runs;
+the App figures are medians of those 15 observations. Three alternating
+fresh-cache compilation probes per tree supply the Numba medians. No tests
+ran concurrently. Earlier isolated batches varied together by about 30 ms
+per App run, including PV-only, so the paired measurements below are used
+instead. These samples show no measurable no-vehicle regression.
+
+| No-vehicle measurement | Before PR 3 | After PR 3 |
+|---|---:|---:|
+| Hourly App year, stationary battery | 0.124205 s | 0.123454 s |
+| Hourly App year, PV-only | 0.037863 s | 0.037595 s |
+| Cold Numba first kernel call | 2.503 s | 2.512 s |
+| Warm-cache Numba first kernel call | 0.169 s | 0.168 s |
 
 ## Implementation plan and effort
 

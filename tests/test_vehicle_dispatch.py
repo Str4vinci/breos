@@ -24,6 +24,8 @@ from tests.energy_conservation import (
 )
 from tests.test_ac_several_inverters import _inputs
 
+pytestmark = pytest.mark.usefixtures("vehicle_full_health")
+
 VEHICLE_COLUMNS = (*_VEHICLE_STATE_COLUMNS, *_VEHICLE_LEDGER_COLUMNS)
 
 
@@ -337,8 +339,8 @@ def test_rollout_and_schedule_validation():
     kwargs = dict(pv_dc=pd.Series(0.0, index=index), houseload=pd.DataFrame({"Load": 0.0}, index=index))
     cfg = vehicle()
     resolved = schedule(index, 1.0)
-    with pytest.raises(ValueError, match="PR 3"):
-        _simulate_core(**kwargs, vehicle_config=replace(cfg, enable_replacement=True), vehicle_schedule=resolved)
+    allowed = _simulate_core(**kwargs, vehicle_config=replace(cfg, enable_replacement=True), vehicle_schedule=resolved)
+    assert allowed.vehicle_carry is not None
     with pytest.raises(ValueError, match="together"):
         _simulate_core(**kwargs, vehicle_config=cfg)
     with pytest.raises(ValueError, match="simulation index"):

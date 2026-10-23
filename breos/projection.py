@@ -777,6 +777,7 @@ class ProjectionYear:
     inverter_units: InverterUnits | None = None
     # Resolved on this year's calendar; legs already include any year seam.
     vehicle_schedule: VehicleSchedule | None = None
+    vehicle_temperature_series: pd.Series | None = None
 
 
 @dataclass(frozen=True)
@@ -964,6 +965,12 @@ def _run_frame_year(
         "inverter_curve_row": year.inverter_curve_row,
         "inverter_units": year.inverter_units,
     }
+    vehicle_config = common.get("vehicle_config")
+    if vehicle_config is not None:
+        vehicle_temperature = year.vehicle_temperature_series
+        if vehicle_temperature is None and vehicle_config.battery_temperature == "weather":
+            vehicle_temperature = year.temperature_series
+        step_inputs["vehicle_temperature_series"] = vehicle_temperature
     planned: list[DispatchInstructions] = []
     executed = None
     if planner is None and day_controller is None and common.get("vehicle_config") is None:
@@ -1069,11 +1076,12 @@ def project_years(
     record_priced_flows: bool = False,
     vehicle_config: VehicleConfig | None = None,
     grid_import_limit_w: float = math.inf,
+    vehicle_allow_terminal_replacement: bool = True,
 ) -> ProjectionRun:
     """Simulate ``years`` project years, carrying both stores from one to the next.
 
     App, Monte Carlo and the projected optimizer all run this loop.
-    Direct callers may pass a ``vehicle_config`` with replacement disabled
+    Direct callers may pass a ``vehicle_config`` with its own lifecycle
     and a ``ProjectionYear.vehicle_schedule`` on each year's calendar.
     On-board energy, origins and the last plug state carry independently of
     a stationary battery on both frame and aligned-summary paths. App's
@@ -1133,8 +1141,6 @@ def project_years(
     """
     if initial_carry is not None and initial_carry.vehicle is not None and vehicle_config is None:
         raise ValueError("a carried vehicle needs vehicle_config and a resolved schedule in each projection year")
-    if vehicle_config is not None and vehicle_config.enable_replacement:
-        raise ValueError("vehicle enable_replacement must be False: vehicle ageing and replacement arrive in PR 3")
     instructions_for_year = _instructions_by_year(instructions, years)
     if day_controller is not None:
         if instructions is not None:
@@ -1191,6 +1197,8 @@ def project_years(
                 vehicle_schedule=year.vehicle_schedule,
                 vehicle_tariff=tariff,
                 grid_import_limit_w=grid_import_limit_w,
+                vehicle_allow_terminal_replacement=year_idx < years - 1 or vehicle_allow_terminal_replacement,
+                vehicle_replacement_years_after_span=years - 1 - year_idx,
             )
 
         if observe_jit_per_year:
@@ -1210,6 +1218,8 @@ def project_years(
             for priced in (tariff, reference_tariff):
                 if priced is not None:
                     _check_tariff_calendar(priced, year.aligned.index)
+            if vehicle_config is not None:
+                common["vehicle_temperature_series"] = year.vehicle_temperature_series
             outcome = _run_summary_year(year.aligned, common, carry, has_battery=has_battery, weights=weights)
         else:
             if year.pv_dc is None or year.houseload is None:

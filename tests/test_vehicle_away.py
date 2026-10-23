@@ -13,6 +13,8 @@ from tests.backend_parity import BACKENDS, assert_frames_bit_equal
 from tests.energy_conservation import assert_energy_conservation, assert_vehicle_conservation
 from tests.test_vehicle_dispatch import vehicle
 
+pytestmark = pytest.mark.usefixtures("vehicle_full_health")
+
 AWAY = dict(target_soc=0.7, power_kw=3.7, efficiency=0.9, price=0.0)
 
 

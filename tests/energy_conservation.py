@@ -320,7 +320,16 @@ def assert_vehicle_conservation(
         initial_pv_origin_wh = initial_carry.pv_origin_energy_wh
         initial_grid_origin_wh = initial_carry.grid_origin_energy_wh
         initial_plugged = initial_carry.plugged
-    initial = capacity * vehicle_config.departure_soc if initial_energy_wh is None else initial_energy_wh
+    initial_soh = 1.0 if initial_carry is None else initial_carry.soh_fraction
+    capacity_end = capacity * col("Vehicle_SOH")
+    capacity_before = capacity_end.shift(1, fill_value=capacity * initial_soh)
+    retired_before = pd.Series(False if initial_carry is None else initial_carry.retired, index=results.index)
+    retired_after = retired_before.copy()
+    for event in results.attrs.get("vehicle_end_of_life_events", ()):
+        if event["action"] == "retired":
+            retired_before.iloc[event["step"] + 1 :] = True
+            retired_after.iloc[event["step"] :] = True
+    initial = capacity * initial_soh * vehicle_config.departure_soc if initial_energy_wh is None else initial_energy_wh
     onboard = col("Vehicle_Energy_Onboard")
     begin = onboard.shift(1, fill_value=initial)
     plugged = col("Vehicle_Plugged").astype(bool)
@@ -334,15 +343,17 @@ def assert_vehicle_conservation(
     _assert_balanced(
         col("Vehicle_Arrival_Energy") * hours_per_step, np.where(arrival, begin, 0.0), atol, "vehicle arrival"
     )
-    shortfall = (capacity * vehicle_config.departure_soc - begin).clip(lower=0.0)
+    shortfall = (capacity_before * vehicle_config.departure_soc - begin).clip(lower=0.0)
     _assert_balanced(
         col("Vehicle_Departure_Shortfall") * hours_per_step,
-        np.where(departure & (shortfall > 1e-9 * capacity), shortfall, 0.0),
+        np.where(departure & (shortfall > 1e-9 * capacity_before), shortfall, 0.0),
         atol,
         "departure target shortfall",
     )
-    _assert_balanced(col("Vehicle_SOC_Absolute"), onboard / capacity, atol, "vehicle SOC")
-    _assert_balanced(col("Vehicle_SOH"), 1.0, 0.0, "fixed vehicle health")
+    _assert_balanced(
+        col("Vehicle_SOC_Absolute"), (onboard / capacity_end.replace(0.0, np.nan)).fillna(0.0), atol, "vehicle SOC"
+    )
+    assert col("Vehicle_SOH").between(0.0, 1.0).all(), "invalid vehicle health"
     ac_in = col("PV_AC_To_Vehicle") + col("Grid_AC_To_Vehicle")
     stored = col("Vehicle_Charge_Input") - col("Vehicle_Charge_Loss")
     draw = col("Vehicle_Discharge_DC")
@@ -422,8 +433,10 @@ def assert_vehicle_conservation(
     residual = (col("Houseload") - col("PV_AC_To_Load") - col("Battery_AC_To_Load")).clip(lower=0.0)
     assert (col("Vehicle_AC_To_Load") <= residual + atol).all(), "vehicle exports or supplies another store"
     assert (col("Import_From_Grid") >= -atol).all(), "vehicle exports to the grid"
-    assert (onboard >= vehicle_config.min_soc * capacity - atol).all(), "vehicle below minimum SOC"
-    assert (onboard <= vehicle_config.max_soc * capacity + atol).all(), "vehicle above maximum SOC"
+    assert (onboard >= np.where(retired_after, 0.0, vehicle_config.min_soc * capacity_end) - atol).all(), (
+        "vehicle below minimum SOC"
+    )
+    assert (onboard <= vehicle_config.max_soc * capacity_end + atol).all(), "vehicle above maximum SOC"
     away_columns = (
         "Vehicle_Drive_Energy",
         "Vehicle_Drive_Unserved",
@@ -437,7 +450,9 @@ def assert_vehicle_conservation(
         assert (col(name) >= -atol).all(), f"negative {name}"
         if name in away_columns:
             _assert_balanced(col(name)[plugged], 0.0, 0.0, f"home away flow {name}")
-        elif name not in boundaries:
+        elif name not in boundaries and not any(
+            part in name for part in ("Capacity_Window_Loss", "Replacement_Energy")
+        ):
             _assert_balanced(col(name)[~plugged], 0.0, 0.0, f"away home flow {name}")
 
     expected_first = None
@@ -445,8 +460,9 @@ def assert_vehicle_conservation(
         np.testing.assert_array_equal(plugged, schedule.plugged)
         first = np.where(plugged, 0.0, schedule.drive_first_wh)
         second = np.where(plugged, 0.0, schedule.drive_second_wh)
-        minimum = vehicle_config.min_soc * capacity
+        minimum = vehicle_config.min_soc * capacity_before
         expected_first = np.minimum(first, (begin - minimum).clip(lower=0.0))
+        expected_first = pd.Series(np.where(retired_before, 0.0, expected_first), index=results.index)
         after_first = begin - expected_first
         away = vehicle_config.away_charging
         if away is None:
@@ -454,10 +470,11 @@ def assert_vehicle_conservation(
         else:
             expected_away = np.minimum(
                 away.power_kw * 1000.0 * schedule.park_hours * away.efficiency,
-                (away.target_soc * capacity - after_first).clip(lower=0.0),
+                (away.target_soc * capacity_before - after_first).clip(lower=0.0),
             )
-        expected_away = np.where(plugged, 0.0, expected_away)
+        expected_away = np.where(plugged | retired_before, 0.0, expected_away)
         expected_second = np.minimum(second, (after_first + expected_away - minimum).clip(lower=0.0))
+        expected_second = np.where(retired_before, 0.0, expected_second)
         _assert_balanced(drive * hours_per_step, expected_first + expected_second, atol, "ordered driving withdrawals")
         _assert_balanced(
             (drive + col("Vehicle_Drive_Unserved")) * hours_per_step, first + second, atol, "scheduled driving"
@@ -514,6 +531,36 @@ def assert_vehicle_conservation(
                     atol,
                     f"vehicle {origin} driving share",
                 )
+        if origin == "Unattributed":
+            removal = (
+                col("Vehicle_Capacity_Window_Loss")
+                + col("Vehicle_Replacement_Energy_Removed")
+                - col("PV_Origin_Vehicle_Capacity_Window_Loss")
+                - col("Grid_Origin_Vehicle_Capacity_Window_Loss")
+                - col("PV_Origin_Vehicle_Replacement_Energy_Removed")
+                - col("Grid_Origin_Vehicle_Replacement_Energy_Removed")
+            )
+        else:
+            window_loss = col(f"{origin}_Origin_Vehicle_Capacity_Window_Loss")
+            removed = col(f"{origin}_Origin_Vehicle_Replacement_Energy_Removed")
+            removal = window_loss + removed
+            origin_preclose = (
+                start + (charged - discharged - driven + (away_stored if origin == "Grid" else 0.0)) * hours_per_step
+            )
+            energy_preclose = begin + (stored - draw - drive + away_stored) * hours_per_step
+            share = (origin_preclose / energy_preclose.replace(0.0, np.nan)).fillna(0.0)
+            _assert_balanced(
+                window_loss, col("Vehicle_Capacity_Window_Loss") * share, atol, f"vehicle {origin} capacity loss"
+            )
+            remaining_energy = energy_preclose - col("Vehicle_Capacity_Window_Loss") * hours_per_step
+            remaining_origin = origin_preclose - window_loss * hours_per_step
+            removal_share = (remaining_origin / remaining_energy.replace(0.0, np.nan)).fillna(0.0)
+            _assert_balanced(
+                removed,
+                col("Vehicle_Replacement_Energy_Removed") * removal_share,
+                atol,
+                f"vehicle {origin} pack removal",
+            )
         added = (
             away_stored
             if origin == "Grid"
@@ -522,7 +569,7 @@ def assert_vehicle_conservation(
         assert (end >= -atol).all(), f"negative vehicle {origin} origin"
         _assert_balanced(
             end,
-            start + (charged + added - discharged - driven) * hours_per_step,
+            start + (charged + added - discharged - driven - removal) * hours_per_step,
             atol,
             f"vehicle {origin} origin balance",
         )
