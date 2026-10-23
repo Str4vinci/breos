@@ -1,9 +1,10 @@
 # 0006 — Collective self-consumption: a community entry point beside App
 
-- **Status:** Proposed, with decisions taken by the maintainer
-  on 2026-10-06 and 2026-10-22 (see [Decisions](#decisions)). No code yet;
-  implementation is planned for 0.8.0, after the AC-coupled battery (#419)
-  and vehicle-to-home (#420) work (#421).
+- **Status:** Implementation in progress for 0.8.0 (#421), following the
+  maintainer's decisions of 2026-10-06 and 2026-10-22. PRs 1–3 implement
+  internal settlement, configuration and the runner; PR 4 adds internal
+  money accounts. The public facade and documentation remain PR 5 work.
+  See [PR 4 implementation interpretations](#pr-4-implementation-interpretations).
 - **Date:** 2026-10-06; decisions taken 2026-10-06 and 2026-10-22;
   amended 2026-10-22
 
@@ -40,7 +41,7 @@ the coefficients do not give.
 - energy and money closed per interval and per year; Python and Numba agree
   where the kernel is used.
 
-This record answers each point. It changes no code. The maintainer took
+This record answers each point. The maintainer took
 its first eleven decisions on 2026-10-06 and four further decisions on
 2026-10-22; the sections below follow them, and
 [Decisions](#decisions) lists them. Two of them changed the proposal: 0.8.0
@@ -643,6 +644,95 @@ attributed 2500 to the asset, 300 to A and 200 to B.
 - **Hierarchical sharing.** Deferred: its detailed Portuguese rules follow a
   pilot, and it needs groups in the configuration.
 - **A community battery in 0.8.0.** Deferred by decision 5 (K10).
+
+## PR 4 implementation interpretations
+
+Recorded 2026-10-23 for maintainer review. These choices describe the internal
+implementation; they do not introduce an App key, public facade or regulatory
+assumption beyond the explicit study prices.
+
+1. **Retention (maintainer's PR 4 instruction).** Interpret K9's memory note
+   as keeping the full first-year settlement and every year's per-site and
+   community energy totals by default. `run_community` can explicitly keep
+   every year's settlement frame. `price_community` can independently retain
+   every year's settlement, money ledger and interval residuals; by default
+   it retains only year 1, plus all annual accounts and closure maxima.
+   Later settlement frames are rebuilt one year at a time from the retained
+   unrounded meter arrays, priced and released. The money result does not
+   retain the physics run. A3's full-horizon projection, battery carry and
+   event clocks remain unchanged. This replaces PR 3's retention of every
+   settlement frame (about 410 MiB for 50 participants over two years).
+2. **Price basis and signs.** Interval ledgers and priced yearly site rows
+   use year-1 currency/kWh prices; positive costs are outflows and positive
+   receipts are inflows. Cashflows and community yearly totals are nominal
+   for that project year. Fixed supplier charges, annual credits, equipment
+   and replacements are annual entries, not apportioned to intervals.
+   Fixed charges use App's simulated duration in days. No additional taxes,
+   demand charges or community administration costs are inferred.
+3. **Exact App arithmetic.** Supplier bills use App's tariff/reference
+   pricing functions and valuation/discounting helpers. Annual flat prices
+   preserve App's sum/divide/multiply order; tariff prices preserve its
+   weighted-power reduction. Meter Wh are converted back to average W for
+   those pricing helpers only. This is not a second dispatch conversion.
+   Load-only supplier bills use App's no-system order of summing import and
+   fixed charges before escalation. They have zero equipment CAPEX, O&M,
+   replacement and terminal value, even if a cost preset contains such keys.
+4. **Escalation and time.** Shared payments, shared receipts and the single
+   shared-network charge escalate at the common import rate; `None` inherits
+   inflation as in App. Own unpooled export and attributed surplus escalate
+   at the sell rate. O&M uses its own rate. CAPEX is at t=0, annual cashflows
+   at year end, and pack replacements at App's actual swap instants, with
+   inflation and cost learning. AC coupling retains both inverter costs.
+5. **References and terminal credit.** The alone reference reuses the same
+   physical projection, owns no asset shares and sells all its own export.
+   Its no-system baseline uses its reference tariff, or its supplier tariff
+   or flat prices. All escalation rates remain community-wide as validated
+   by PR 2, including refusal of per-site reference escalation. Optional
+   terminal health credit remains App's separate pack-only sensitivity;
+   unadjusted NPV determines community benefit. Identical physical terminal
+   credit in the alone and community accounts cancels from that benefit.
+6. **Ownership and external owners.** Whole-asset accounts expose costs and
+   net present cost, with no no-system baseline or savings NPV. Participant
+   accounts take the configured fraction of each asset's initial investment,
+   O&M, actual imports, fixed charges, credits and injection income once.
+   Community totals sum participant accounts with those shares included;
+   adding the separately reported whole-asset accounts would double count.
+   External assets' expenses and CAPEX stay outside participant accounts;
+   their gross injection receipts leave the community boundary. Their net
+   present cost is reported separately, not added to the community's NPV.
+7. **Energy sales and benefit parts.** Pooled export has zero own supplier
+   export revenue; only attributed shared-use and surplus receipts replace
+   it. Unpooled export retains its own price. Per-participant annual and NPV
+   benefit components are supplier import savings, own export revenue change,
+   shared payments, shared-network fees, direct shared receipts, surplus
+   receipts, the credit change, and asset ownership. The ownership NPV part
+   includes initial investment as well as annual net costs.
+8. **Annual credits.** Recompute the cap using remaining supplier imports
+   and the supplier's fixed network part only; shared-network charges never
+   increase it. Keep the alone and no-system credits unchanged. The signed
+   sharing line is after-sharing credit minus alone credit, escalated at the
+   import rate; a negative number reduces the participant's benefit. PR 2
+   also accepts an explicit credit in an asset tariff: the implementation
+   honors App's supplier cap on that asset's actual imports and splits it by
+   ownership. **Question:** should producer-only contracts instead refuse
+   annual credits? No eligibility rule is inferred from a household example.
+9. **Closure and precision.** Shared payments close against receipts to all
+   injectors. The interval boundary includes supplier energy bills, shared
+   network charges, surplus sales and external-owner receipts; the annual
+   boundary additionally includes supplier fixed charges/credits, equipment
+   O&M and replacement outlays. Initial investment is in NPV, outside annual
+   operating closure. Prices and accounts remain unrounded; sums use sorted
+   ids. Residuals expose floating-point roundoff rather than reallocating or
+   rounding cash between participants.
+10. **Coverage denominator.** K8's “consumption covered” is reported both as
+    shared use divided by gross household load and divided by metered import,
+    with zero for a zero denominator. Own PV self-consumption stays separate.
+    **Question:** which coverage ratio should PR 5 present by default?
+
+The earlier conservative refusal of `[vehicle]` remains: its ACC semantics
+need maintainer review after #420. No further money policy is needed to run
+the internal accounts; the two questions above concern future validation
+and presentation.
 
 ## Implementation plan and effort
 

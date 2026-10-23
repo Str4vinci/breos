@@ -126,7 +126,7 @@ def assert_same_projection(actual, expected, year_frames=None):
 
 def test_q2_standalone_identity_closure_and_asset_physics(community_case, offline_deps, monkeypatch):
     parsed = parse_community_config(community_case)
-    run = run_community(parsed, deps=offline_deps, retain_site_frames=True)
+    run = run_community(parsed, deps=offline_deps, retain_site_frames=True, retain_settlement_frames=True)
     assert not hasattr(breos, "Community")
     assert tuple(run.sites) == ("ac", "dc", "load", "multi", "multi-ac", "roof")
     assert tuple(run.settlements) == (1, 2)
@@ -238,7 +238,7 @@ def test_q3_single_site_no_sharing_is_exactly_alone(kind, offline_deps):
         "participants": [participant],
     }
     parsed = parse_community_config(raw)
-    run = run_community(parsed, deps=offline_deps, retain_site_frames=True)
+    run = run_community(parsed, deps=offline_deps, retain_site_frames=True, retain_settlement_frames=True)
     for year_idx, frame in run.settlements.items():
         rows = frame.xs("participant", level="site_type")
         assert_bits(rows["Supplier_Import"], run.sites["alone"].meters[year_idx - 1].import_wh)
@@ -287,9 +287,19 @@ def test_q4_reordering_preserves_all_bits_and_hashes(community_case, offline_dep
 
 def test_python_numba_parity_for_the_mixed_community(community_case, offline_deps):
     pytest.importorskip("numba")
-    python = run_community(parse_community_config(community_case), deps=offline_deps, retain_site_frames=True)
+    python = run_community(
+        parse_community_config(community_case),
+        deps=offline_deps,
+        retain_site_frames=True,
+        retain_settlement_frames=True,
+    )
     community_case["community"]["execution_backend"] = "numba"
-    numba = run_community(parse_community_config(community_case), deps=offline_deps, retain_site_frames=True)
+    numba = run_community(
+        parse_community_config(community_case),
+        deps=offline_deps,
+        retain_site_frames=True,
+        retain_settlement_frames=True,
+    )
     for site_id, left in python.sites.items():
         right = numba.sites[site_id]
         if left.projection is not None:
@@ -370,7 +380,7 @@ def test_full_horizon_owns_replacement_clock_and_finalisation(offline_deps, monk
 
     monkeypatch.setattr(projection_module, "project_years", record)
     parsed = parse_community_config(raw)
-    run = run_community(parsed, deps=offline_deps, retain_site_frames=True)
+    run = run_community(parsed, deps=offline_deps, retain_site_frames=True, retain_settlement_frames=True)
     assert calls == [(2, True)]
     app = App(
         {**parsed.community.shared.app_payload(), **{k: v for k, v in raw["participants"][0].items() if k != "id"}}
@@ -415,7 +425,7 @@ def test_daily_planner_keeps_all_years_meter_flows(offline_deps):
         "participants": [participant],
     }
     parsed = parse_community_config(raw)
-    run = run_community(parsed, deps=offline_deps, retain_site_frames=True)
+    run = run_community(parsed, deps=offline_deps, retain_site_frames=True, retain_settlement_frames=True)
     projection = run.sites["planner"].projection
     app = App({**parsed.community.shared.app_payload(), **{k: v for k, v in participant.items() if k != "id"}})
     app.simulate()
@@ -459,7 +469,7 @@ def test_weather_clock_and_leap_year_match_app_without_cropping(offline_deps, mo
         ],
     }
     parsed = parse_community_config(raw)
-    run = run_community(parsed, deps=deps, retain_site_frames=True)
+    run = run_community(parsed, deps=deps, retain_site_frames=True, retain_settlement_frames=True)
     app = App({**parsed.community.shared.app_payload(), "n_modules": 8, "annual_consumption_kwh": 3500})
     app.simulate()
     assert_same_projection(run.sites["pv"].projection, app._artifacts.projection)

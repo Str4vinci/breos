@@ -6,8 +6,9 @@ shared PV asset is added. Weather is a synthetic full year at 15 minutes.
 Each worker warms all site types for one project year before timing the run.
 Reported peak RSS includes imports and warm-up; timing includes input loading,
 PV preparation, full-horizon physics and settlement, but excludes parsing and
-warm-up. All yearly settlements and pricing flows remain retained, with full
-dispatch-frame retention disabled (the runner default).
+warm-up. The first settlement frame and all annual totals remain retained,
+alongside full-horizon pricing flows; full dispatch-frame retention is disabled
+(the runner defaults). This measures physics and settlement, without money.
 """
 
 from __future__ import annotations

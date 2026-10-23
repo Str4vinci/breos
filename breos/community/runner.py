@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -75,7 +75,33 @@ class CommunityRun:
     config: CommunityConfig
     sites: Mapping[str, SiteRun]
     settlements: Mapping[int, pd.DataFrame]
+    settlement_totals: Mapping[int, pd.DataFrame]
     provenance: Mapping[str, Any]
+
+
+def iter_settlements(run: CommunityRun) -> Iterator[tuple[int, pd.DataFrame]]:
+    """Yield each project year's settlement, rebuilding unretained frames.
+
+    Later frames are temporary unless the caller retains them. Meter arrays
+    and full-horizon projection carry remain unchanged.
+    """
+    config = run.config
+    index = pd.DatetimeIndex(run.settlements[1].index.get_level_values("interval").unique())
+    for year in range(1, config.community.shared.projection_years + 1):
+        if year in run.settlements:
+            yield year, run.settlements[year]
+            continue
+        frame = settle_meter_balances(
+            {site.id: run.sites[site.id].meters[year - 1] for site in config.participants},
+            {asset.id: run.sites[asset.id].meters[year - 1] for asset in config.assets},
+            index=index,
+            allocation=config.community.allocation,
+            coefficients=config.community.coefficients,
+            pool_participant_export=config.community.pool_participant_export,
+        )
+        frame.attrs["project_year"] = year
+        yield year, frame
+        del frame
 
 
 def _dependencies() -> AppRuntimeDependencies:
@@ -241,6 +267,7 @@ def run_community(
     *,
     deps: AppRuntimeDependencies | None = None,
     retain_site_frames: bool = False,
+    retain_settlement_frames: bool = False,
 ) -> CommunityRun:
     """Run standalone sites for the whole horizon, then settle each year.
 
@@ -262,8 +289,10 @@ def run_community(
     to it with App's alignment helper. Without PV the civil load calendar is
     used, with no weather fetch. No UTC weather year is cropped to civil dates.
     Each settlement replays the commissioning calendar; ``project_year`` in
-    frame attrs identifies its position in the horizon. Memory retains all
-    yearly settlements and meter/pricing arrays, plus optional dispatch frames.
+    frame attrs identifies its position in the horizon. The full first-year
+    settlement and every year's energy totals are retained by default; set
+    ``retain_settlement_frames`` to retain every frame. Later frames can be
+    rebuilt lazily with ``iter_settlements`` from the meter arrays.
     """
     deps = deps or _dependencies()
     asset_deps = replace(deps, load_profile=_zero_load_profile)
@@ -309,6 +338,7 @@ def run_community(
         except ValueError as exc:
             raise ValueError(f"site '{site_id}': {exc}") from exc
     settlements = {}
+    settlement_totals = {}
     for year_idx in range(shared.projection_years):
         frame = settle_meter_balances(
             {site.id: sites[site.id].meters[year_idx] for site in config.participants},
@@ -319,11 +349,17 @@ def run_community(
             pool_participant_export=config.community.pool_participant_export,
         )
         frame.attrs["project_year"] = year_idx + 1
-        settlements[year_idx + 1] = frame
+        settlement_totals[year_idx + 1] = (
+            frame.drop(columns="Coefficient").groupby(level=["site_type", "site_id"], sort=True).sum()
+        )
+        if year_idx == 0 or retain_settlement_frames:
+            settlements[year_idx + 1] = frame
+        del frame
     return CommunityRun(
         config,
         MappingProxyType(sites),
         MappingProxyType(settlements),
+        MappingProxyType(settlement_totals),
         {
             "settlement_schema_version": SETTLEMENT_SCHEMA_VERSION,
             "site_ids": list(sites),
