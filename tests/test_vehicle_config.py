@@ -206,13 +206,13 @@ def test_unknown_nested_keys_are_never_silently_dropped():
         checked({**VEHICLE, "away_charging": {**AWAY, "rating": 7}})
 
 
-def test_app_accepts_vehicle_and_both_montecarlo_entries_refuse_before_input_preparation(monkeypatch):
+def test_app_accepts_blast_vehicle_and_both_montecarlo_entries_refuse_before_input_preparation(monkeypatch):
     def unexpected(*args, **kwargs):
         pytest.fail("Vehicle rollout refusal must happen before inputs are read")
 
     monkeypatch.setattr("breos.montecarlo._weather_years", unexpected)
     monkeypatch.setattr("breos.app_inputs.load_consumption_profile", unexpected)
-    config = {**BASE, "vehicle": VEHICLE}
+    config = {**BASE, "vehicle": {**VEHICLE, "degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1"}}
     assert breos.App(config)._resolved.vehicle is not None
     settings = breos.MonteCarloSettings(weather_file="nonexistent.csv", n_runs=1)
     for call in (

@@ -1045,7 +1045,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.smart_charging",
     ),
     "vehicle": AppConfigField(
-        doc="Vehicle equipment, prices and schedule for App; Monte Carlo support is not available yet. See [vehicle](#vehicle)",
+        doc="Vehicle equipment, prices and schedule for App and paired Monte Carlo households. See [vehicle](#vehicle)",
         affects_inputs=False,
         revalue=True,
         default_doc="*unset*",

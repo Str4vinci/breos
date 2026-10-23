@@ -54,15 +54,20 @@ class VehicleHouseholds:
     schedule: VehicleSchedule
 
     def provenance(self, config: VehicleConfig) -> dict[str, Any]:
-        configs = household_configs(config)
-        return {
-            "config": asdict(config),
-            "schedule_hash": self.schedule.schedule_hash(),
-            "rounding": {"departure": "floor", "arrival": "ceil", "timezone": "configured civil time"},
-            "households": {
-                key: {"system": "none" if key == "R0" else "configured", "mode": configs[key].mode} for key in self.runs
-            },
-        }
+        return vehicle_provenance(config, self.schedule)
+
+
+def vehicle_provenance(config: VehicleConfig, schedule: VehicleSchedule) -> dict[str, Any]:
+    """The physical household definitions shared by App and Monte Carlo."""
+    configs = household_configs(config)
+    return {
+        "config": asdict(config),
+        "schedule_hash": schedule.schedule_hash(),
+        "rounding": {"departure": "floor", "arrival": "ceil", "timezone": "configured civil time"},
+        "households": {
+            key: {"system": "none" if key == "R0" else "configured", "mode": configs[key].mode} for key in configs
+        },
+    }
 
 
 def run_vehicle_baseline(

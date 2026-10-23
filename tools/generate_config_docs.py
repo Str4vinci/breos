@@ -167,7 +167,7 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
     (
         "vehicle",
         app_config.VEHICLE_TABLE,
-        "App simulates the no-system, reference and study households (ADR 0005). Monte Carlo support is not available yet. "
+        "App and Monte Carlo simulate the no-system, reference and study households (ADR 0005); Monte Carlo pairs their sampled inputs and requires native vehicle ageing. "
         "All prices use the run currency; equipment facts and the pack price have no defaults. "
         "`daily_persistence` is refused with a vehicle. Without this table, existing behavior is unchanged.",
     ),

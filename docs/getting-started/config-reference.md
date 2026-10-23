@@ -104,7 +104,7 @@ is a `breos run` option that overrides the config file.
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
 | `tracking` | `"fixed"` | — | Tracking mode. One of `"fixed"`, `"single_axis"`, `"dual_axis"` |
 | `transposition_model` | `"isotropic"` | `--transposition-model`, `--sky-model` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model). One of `"isotropic"`, `"klucher"`, `"haydavies"`, `"reindl"`, `"king"`, `"perez"`, `"perez-driesse"` |
-| `vehicle` | *unset* | — | Vehicle equipment, prices and schedule for App; Monte Carlo support is not available yet. See [vehicle](#vehicle) |
+| `vehicle` | *unset* | — | Vehicle equipment, prices and schedule for App and paired Monte Carlo households. See [vehicle](#vehicle) |
 | `weather_file` | `None` | `--weather-file` | One-year weather CSV (or gzip-compressed `.csv.gz`) to simulate, in the layout of the cached `weather/` files, instead of the `weather/` cache or a PVGIS fetch. Any filename and any location work. A relative path is taken from the working directory. The file's path and SHA-256 digest are recorded under `provenance.weather`; see [Run offline with cached weather](../how-to/offline-weather.md#name-the-weather-file) |
 | `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Run offline with cached weather](../how-to/offline-weather.md) |
 
@@ -332,7 +332,7 @@ Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart cha
 
 ## vehicle
 
-App simulates the no-system, reference and study households (ADR 0005). Monte Carlo support is not available yet. All prices use the run currency; equipment facts and the pack price have no defaults. `daily_persistence` is refused with a vehicle. Without this table, existing behavior is unchanged.
+App and Monte Carlo simulate the no-system, reference and study households (ADR 0005); Monte Carlo pairs their sampled inputs and requires native vehicle ageing. All prices use the run currency; equipment facts and the pack price have no defaults. `daily_persistence` is refused with a vehicle. Without this table, existing behavior is unchanged.
 
 | Key | Required | Description |
 |---|---|---|

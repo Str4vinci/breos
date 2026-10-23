@@ -1138,8 +1138,8 @@ configuration without PV equipment, conversion overrides or inverter night
 draw. R1 is omitted when the reference mode is none. Static stationary
 instructions run directly through the core with a vehicle; the existing
 fixed-target controller produces the same instructions, but its daily-target
-controller seam remains refused with a vehicle. Monte Carlo and the optimizer
-remain explicitly refused until their respective rollout gates.
+controller seam remains refused with a vehicle. PR 5 lifts the native-vehicle
+Monte Carlo gate; the optimizer remains explicitly refused.
 
 Each projection retains first-year ledger rows, each year's priced exchange
 flows and all vehicle end-of-life events with individual booking instants.
@@ -1161,7 +1161,59 @@ accepts vehicle money changes only and restates every nonzero vehicle price
 on a currency change. It reuses the three households' flows when dispatch
 cannot change; a vehicle period-control schedule change, or changed stationary
 instructions, runs the households again. A changed reference tariff is pricing
-only. General user documentation and Monte Carlo remain PR 6 and PR 5 work.
+only. General user documentation remains PR 6 work.
+
+PR 5 pairs independent R0/R1/R2 projections inside each Monte Carlo trajectory.
+The existing weather-year and house-load sampling callback is materialised
+exactly once per project year. Every household reads those same inputs, and
+the trajectory's existing persistent PV model factor is shared too. R0
+removes PV equipment and its night draw; load scaling changes house demand
+only. Each sampled weather year supplies the vehicle's own temperature,
+independently of stationary battery temperatures. All households keep their
+own vehicle lifecycle and carry across project years. BLAST and several PV
+inverters remain refused before weather is read.
+
+Monte Carlo uses the same retained-flow household valuation as App, including
+reference tariffs, annual network credits, replacement booking instants,
+pack-only credits, away purchases, outside-charging penalties and comparable
+flags. The runs table retains ordinary system `npv_savings` and adds
+`npv_savings_household_adjusted`, `household_adjusted_comparable`,
+`v2h_benefit_npv` and `v2h_benefit_comparable`. New `vehicle_` columns contain
+R2/R0 and R2/R1 wear and outlays-only differences, adjusted away/unserved cost
+differences, and the V2H operating/home/export/away/unserved savings and charger
+premium. Each `vehicle_r0_`, `vehicle_r1_` and `vehicle_r2_` family includes
+App's energy totals (home charge and discharge with origins, driving served
+and unserved, away purchases, departure shortfalls, capacity-window loss,
+replacement transfers), missed-departure and swap counts, replaced capacity,
+final health and retirement, home imports/exports, avoided emissions where
+configured, and discounted bills, exports, away purchases, unserved-driving
+penalties, operating costs, replacement outlays P and terminal pack credits H.
+Every finite new column gets the existing summary statistics and quantiles.
+Vehicle provenance records the configuration, schedule hash, households and
+pairing rule. No-vehicle runs keep their columns, provenance and aligned
+summary execution path.
+
+Implementation interpretations for PR 5:
+
+- The PV uncertainty factor keeps its existing persistent per-trajectory
+  child stream; it is not redrawn per household or year. Materialising the
+  year callback adds no random draws. Adjacent-seed tests compare weather,
+  load scale, PV output and stationary lifecycle quantities with and without
+  a vehicle.
+- Vehicle trajectories use the frame path so the common App valuation can
+  price actual exchanges. They bypass the PV-only conversion memo; they do
+  not cache or share dispatch-dependent results. Only one trajectory's three
+  households are retained per worker, then released after valuation. Sampled
+  year inputs are retained for that trajectory so the callback cannot resample.
+- R1 is omitted when `reference_mode = "none"`. Its column family and V2H
+  components are omitted, while V2H comparison scalars are NaN and the benefit
+  comparable flag is null. All-missing columns have no summary. Boolean
+  summaries use 0/1, so their means report the fraction comparable or retired.
+- All PR 4 money conventions above apply unchanged. There is no new pricing
+  rule or house-only fallback for Monte Carlo. Exact no-noise tests compare
+  App's entire unrounded vehicle block and ordinary NPV with one trajectory,
+  for flat and time-of-use prices, both backends, hourly and 15-minute steps,
+  and no, DC or AC stationary storage.
 
 Implementation interpretations and money conventions for PR 4:
 
@@ -1361,6 +1413,39 @@ years retain priced exchange arrays, year reductions and lifecycle carry.
 At twenty years, R0 retains 7.76 MiB of arrays, R1 and R2 9.03 MiB each.
 Traced live allocations after the run were 9.32 MiB without a vehicle and
 26.94 MiB with one. Memory tracing was not used for the runtime figures.
+
+PR 5 performance measured on 2026-10-23, Python 3.12/native ageing, Python
+dispatch, 100 trajectories of three hourly project years, seed 42, two offline
+synthetic weather years, 5% house-load uncertainty and 5% persistent PV model
+uncertainty. The system has eight modules, a 5 kWh stationary battery and
+4,000 kWh/year house demand. Vehicle runs add the config tests' 60 kWh V2H
+vehicle, uncontrolled R0 and V1G R1. Yearly tables are not collected. Each
+fresh process builds a reusable year cache and warms one serial trajectory
+before timing. No tests or other measurements ran concurrently with timings.
+
+The worker count is the machine's multiprocessing default CPU count, 20,
+selected explicitly with `n_procs = os.cpu_count()`; the public settings/CLI
+default remains one worker. Existing pool initialization caps native BLAS and
+OpenMP pools to one thread per worker (`breos.execution.limit_worker_threads`,
+covered by `tests/test_worker_threads.py`), avoiding nested thread pools.
+
+| 100 trajectories, three years each | No vehicle | R0/R1/R2 with vehicle |
+|---|---:|---:|
+| Timed study, excluding year-cache build | 3.869 s | 15.391 s |
+| Separate year-cache build | 0.081 s | 0.080 s |
+| Parent peak RSS during timing | 178.97 MiB | 230.40 MiB |
+| Largest worker peak RSS during timing | 144.01 MiB | 182.11 MiB |
+| Separate sampled process-tree peak PSS | 517.31 MiB | 1,269.17 MiB |
+| One serial trajectory, traced allocation peak | 7.40 MiB | 54.19 MiB |
+| One serial trajectory, traced live after return | 0.62 MiB | 1.33 MiB |
+
+RSS uses `resource.getrusage` in fresh processes; worker RSS is the maximum
+child high-water mark, not the sum. PSS is sampled separately every 50 ms
+from `/proc/*/smaps_rollup` for the parent and its worker descendants, so
+shared fork pages count once. Per-trajectory peaks use `tracemalloc` after
+warm-up, include study setup and valuation, and exclude imports and the
+prepared year cache. Tracing and PSS sampling are absent from timed runs.
+These are single-machine samples, not a platform performance guarantee.
 
 ## Implementation plan and effort
 
