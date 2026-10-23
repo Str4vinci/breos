@@ -1106,7 +1106,8 @@
    "replacement_cost_learning": 0.0,
    "discount_rate": 0.03,
    "real_discount_rate": 0.009803921568627416
-  }
+  },
+  "vehicle": null
  },
  "degradation": {
   "engine": "native",
