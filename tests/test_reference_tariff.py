@@ -131,7 +131,7 @@ def test_a_flat_reference_prices_the_whole_load_and_its_own_fixed_charge(flat_ru
 
 
 def test_azores_app_reference_tariff_prices_the_whole_load_across_missing_midnight():
-    app = _simulated(
+    app = simulate_offline(
         {
             "location": {"latitude": 37.74, "longitude": -25.67, "timezone": "Atlantic/Azores"},
             "start_date": "2026-01-01",
