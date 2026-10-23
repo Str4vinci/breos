@@ -218,6 +218,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   adds the budget violation, in money, to the area and ZEB violations
   unscaled, so infeasible candidates can rank differently. Runs that set no
   `currency` are bit-identical, and the result format stays `"1"`.
+- `breos.equipment.InverterSpec` stores a specified inverter's validated AC
+  nameplate and optional datasheet limits. Each MPPT input is a
+  `breos.equipment.MpptSpec` with its own current and string limits, so
+  asymmetric inputs keep their published values, and
+  `isc_comparison_factor` records the manufacturer's Isc comparison rule.
+  `None` marks an unknown value, while `math.inf` for an upper limit or 0 for
+  a lower limit marks a limit the inverter does not have.
+  `InverterSpec.as_app_config()` supplies the rating and known efficiency to
+  App, keeping catalog identity, prices and certification outside BREOS.
+  DC/MPPT limits are metadata, not string-aware validation or simulation.
 
 ### Changed
 
