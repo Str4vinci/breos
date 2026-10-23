@@ -1,1 +1,5 @@
-"""Internal collective self-consumption modules; no public facade yet."""
+"""Collective self-consumption: PV sharing beside single-site App runs."""
+
+from breos.community.facade import Community
+
+__all__ = ["Community"]

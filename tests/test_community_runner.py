@@ -127,7 +127,7 @@ def assert_same_projection(actual, expected, year_frames=None):
 def test_q2_standalone_identity_closure_and_asset_physics(community_case, offline_deps, monkeypatch):
     parsed = parse_community_config(community_case)
     run = run_community(parsed, deps=offline_deps, retain_site_frames=True, retain_settlement_frames=True)
-    assert not hasattr(breos, "Community")
+    assert "Community" in breos.__all__
     assert tuple(run.sites) == ("ac", "dc", "load", "multi", "multi-ac", "roof")
     assert tuple(run.settlements) == (1, 2)
     assert run.provenance["settlement_schema_version"] == "1.0"

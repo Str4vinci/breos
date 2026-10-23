@@ -63,7 +63,7 @@ def test_valid_community_and_standalone_app_equivalence(config):
     parsed = parse_community_config(config)
     assert config == original
     assert DEFAULTS == defaults and ALLOWED_CONFIG_KEYS == allowed
-    assert not hasattr(breos, "Community")
+    assert "Community" in breos.__all__
     assert [p.id for p in parsed.participants] == ["apt-1", "apt_1"]
     assert [a.id for a in parsed.assets] == ["external-roof", "school-roof"]
     assert parsed.community.coefficients == {"apt-1": 0.5, "apt_1": 0.5}

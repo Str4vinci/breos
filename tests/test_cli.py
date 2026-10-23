@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -355,6 +356,18 @@ def test_example_configs_are_discovered():
 
 @pytest.mark.parametrize("config_path", EXAMPLE_CONFIGS, ids=lambda path: path.name)
 def test_shipped_example_configs_validate(config_path, capsys, caplog, recwarn):
+    with config_path.open("rb") as stream:
+        config = tomllib.load(stream)
+    if "community" in config:
+        # Community examples belong to the Python facade, not App's CLI.
+        # Their offline simulation/closure is covered in test_community.py.
+        from breos import Community
+
+        Community(config)
+        assert capsys.readouterr().err == ""
+        assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+        assert [str(warning.message) for warning in recwarn] == []
+        return
     exit_code = cli.main(["validate-config", str(config_path)])
 
     assert exit_code == 0

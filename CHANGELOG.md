@@ -6,6 +6,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- Collective self-consumption (#421): `breos.Community` shares PV between
+  separately metered households at 15-minute steps, with fixed or
+  proportional allocation, home batteries behind each meter, and PV-only
+  assets. Participant and asset accounts report ownership, supplier bills,
+  shared payments, surplus income, NPVs against the no-system baseline and
+  benefit against each household alone. A settlement ledger, provenance,
+  Porto example and community guide explain the balances and assumptions.
 - Vehicle-to-home (#420): `[vehicle]` adds uncontrolled, V1G and V2H modes,
   weekday/weekend schedules or trip files, away charging, pack ageing and
   replacement policy. App and paired Monte Carlo compare three households

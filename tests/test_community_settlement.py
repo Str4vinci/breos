@@ -136,7 +136,7 @@ def test_no_receiver_or_only_zero_coefficient_receivers(allocation):
     assert community["Community_Surplus"].iloc[1] == (300 if allocation == "fixed" else 200)
 
 
-def test_schema_units_asset_imports_and_no_root_export():
+def test_schema_units_asset_imports_and_public_export():
     imports = np.array([10.0, 0.0])
     frame = settle_meter_balances(
         {"a": MeterBalances([80, 80], [0, 0])},
@@ -153,7 +153,7 @@ def test_schema_units_asset_imports_and_no_root_export():
     np.testing.assert_array_equal(frame.xs("roof", level="site_id")["Supplier_Import"], imports)
     np.testing.assert_array_equal(frame.xs("a", level="site_id")["Shared_Used"], [0, 40])
     np.testing.assert_array_equal(imports, [10, 0])
-    assert not hasattr(breos, "Community")
+    assert "Community" in breos.__all__
 
 
 @pytest.mark.parametrize("allocation", ["fixed", "proportional"])

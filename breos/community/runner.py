@@ -14,12 +14,12 @@ from collections.abc import Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 
-from breos._daily_persistence import DailyPersistenceController
+from breos._daily_persistence import DailyPersistenceController, daily_persistence_provenance
 from breos.app_config import ResolvedAppConfig, resolve_location
 from breos.app_inputs import (
     AppRuntimeDependencies,
@@ -33,11 +33,19 @@ from breos.app_inputs import (
 from breos.battery import align_simulation_inputs
 from breos.community.config import CommunityConfig, HouseholdConfig, _thaw
 from breos.community.settlement import SETTLEMENT_SCHEMA_VERSION, MeterBalances, settle_meter_balances
+from breos.degradation.results import DegradationEngineName, build_degradation_summary_from_state
 from breos.execution import aggregate_jit_cache_states, backend_provenance, config_has_battery
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY, load_profile
 from breos.projection import ProjectionRun, ProjectionYear, run_projection
 from breos.pv.model_options import solar_position_record, solar_position_warning_scope, warn_solar_position_fallback
-from breos.smart_charging import PLANNER_MODES, FixedTargetDayController, resolve_instructions
+from breos.runners.app import _bifacial_summary, _series_energy_kwh
+from breos.smart_charging import (
+    PLANNER_MODES,
+    FixedTargetDayController,
+    resolve_instructions,
+    smart_charging_provenance,
+    stored_energy_by_origin,
+)
 from breos.tariffs import ResolvedTariff
 from breos.utils import local_datetime_index
 from breos.weather import (
@@ -194,6 +202,7 @@ def _run_pv_site(site: ResolvedAppConfig, deps: AppRuntimeDependencies, *, retai
     tariff = site.tariff.resolve(index, site.timezone) if site.tariff else None
     reference = site.reference_tariff.resolve(index, site.timezone) if site.reference_tariff else None
     spec = site.smart_charging
+    instructions = None
     controller: DailyPersistenceController | FixedTargetDayController | None = None
     if spec is not None and spec.mode in PLANNER_MODES and has_battery:
         assert tariff is not None
@@ -238,6 +247,53 @@ def _run_pv_site(site: ResolvedAppConfig, deps: AppRuntimeDependencies, *, retai
     load_w = first_frame["Houseload"].copy()
     load_w.index = index
     meters = tuple(_meter_balances(year["Import_From_Grid"], year["PV_AC_Export"]) for year in projection.priced_flows)
+    # Capture the same small provenance blocks as App while preparation and
+    # first-year state are available; retain no weather/PV/dispatch arrays.
+    extra_provenance: dict[str, Any] = {
+        "pv_model": {
+            "bifacial": _bifacial_summary(
+                site,
+                _series_energy_kwh(inputs.pv_breakdown.front_effective_irradiance_dc, cfg["resolution"]),
+                _series_energy_kwh(inputs.pv_breakdown.rear_gain_dc, cfg["resolution"]),
+            ),
+            "solar_position": solar_position,
+        },
+        "degradation": build_degradation_summary_from_state(
+            engine=cast(DegradationEngineName, cfg["degradation_engine"]),
+            model_key=cfg["blast_model"] if cfg["degradation_engine"] == "blast" else cfg["calendar_model"],
+            final_soh_pct=projection.carry.soh_pct,
+            replacement_events=[
+                {"year": int(year), "count": int(count)}
+                for year, count in zip(projection.yearly_df["Year"], projection.yearly_df["Replacements"], strict=True)
+                if count
+            ],
+            state=projection.carry.degradation_state,
+        ),
+    }
+    if spec is not None and tariff is not None and controller is not None:
+        if isinstance(controller, DailyPersistenceController):
+            executed = projection.controller_instructions
+            assert executed is not None
+            first, carry = first_frame.iloc[0], projection.carry
+            extra_provenance["smart_charging"] = daily_persistence_provenance(
+                spec,
+                tariff,
+                executed,
+                initial_stored_energy=stored_energy_by_origin(
+                    first["Battery_Energy_Beginning"],
+                    first["Battery_PV_Origin_Energy_Beginning"],
+                    first["Battery_Grid_Origin_Energy_Beginning"],
+                ),
+                final_stored_energy=stored_energy_by_origin(
+                    carry.energy_wh or 0.0,
+                    carry.pv_origin_energy_wh or 0.0,
+                    carry.grid_origin_energy_wh or 0.0,
+                ),
+                forecast=controller.forecast,
+            )
+        else:
+            assert instructions is not None
+            extra_provenance["smart_charging"] = smart_charging_provenance(spec, instructions, tariff)
     if not retain_site_frames:
         projection = replace(projection, first_year_results_df=None)
     if cfg["execution_backend"] == "numba":
@@ -258,6 +314,7 @@ def _run_pv_site(site: ResolvedAppConfig, deps: AppRuntimeDependencies, *, retai
             ),
             "solar_position": solar_position,
             "execution": execution,
+            **extra_provenance,
         },
     )
 

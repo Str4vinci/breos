@@ -1,12 +1,11 @@
 # 0006 — Collective self-consumption: a community entry point beside App
 
-- **Status:** Implementation in progress for 0.8.0 (#421), following the
-  maintainer's decisions of 2026-10-06 and 2026-10-22. PRs 1–3 implement
-  internal settlement, configuration and the runner; PR 4 adds internal
-  money accounts. The public facade and documentation remain PR 5 work.
-  See [PR 4 implementation interpretations](#pr-4-implementation-interpretations).
+- **Status:** Proposed, with the maintainer's decisions of 2026-10-06 and
+  2026-10-22; PRs 1–5 implemented for 0.8.0 (#421), pending maintainer
+  acceptance. `breos.Community` is exported with priced results, settlement,
+  provenance, example and documentation. See [Implementation status](#implementation-status).
 - **Date:** 2026-10-06; decisions taken 2026-10-06 and 2026-10-22;
-  amended 2026-10-22
+  amended 2026-10-22; implementation status recorded 2026-10-23
 
 ## Context
 
@@ -645,10 +644,41 @@ attributed 2500 to the asset, 300 to A and 200 to B.
   pilot, and it needs groups in the configuration.
 - **A community battery in 0.8.0.** Deferred by decision 5 (K10).
 
-## PR 4 implementation interpretations
+## Implementation status
+
+PRs 1–5 are implemented. This section replaces the effort plan with the
+implementation account, as ADR 0005 does. PR 5 is the first state that
+exports `breos.Community`; it is this uncommitted changeset. The ADR remains
+**Proposed**: implementing the decisions does not substitute for maintainer
+acceptance. Dynamic allocation remains a later experimental PR.
+
+| PR | Implemented scope | Commit |
+|---|---|---|
+| 1 | NumPy settlement, stable ids, schema 1.0, closure, S1–S3/S5 and Q4–Q6. | `2e7301e` |
+| 2 | Community, participant and asset configuration; PV/load-only paths; explicit agreements and validation. | `170bdc7` |
+| 3 | Whole-horizon standalone physics and carry, input reuse, annual settlement, Q2/Q3 and backend parity. | `24c28fd` |
+| 4 | Supplier bills, transfers, ownership, references, NPVs and S4/money closure; first-year retention. | `2f97686` |
+| 5 | Public facade, typed result, provenance, Porto example, guide, ledger/API reference and CHANGELOG. | This changeset |
+
+ACC follows #419 and #420 and uses the final PV defaults, including
+`solar_position = "auto"`. The separate App inverter-draw fix (decision 12,
+ADR 0004 M9, `d5a9897`) is in the history before the Q2/Q3 checks. ACC adds
+no meter netting and changes no App module, registry, result or golden.
+Contrary to the original plan's expectation that vehicle site keys would
+be usable immediately, `[vehicle]` remains conservatively refused pending
+review of community semantics after #420.
+
+The full Porto example uses twenty years, shared roof ownership and three
+households, including a load-only household and a home battery. Its prices
+are labelled study assumptions. Tests load that file with a shortened horizon
+and offline weather, check energy and money closure and compare per-site
+provenance with App. The regulatory context remains the dated 2026-10-06
+record above; it was not refreshed for this implementation.
+
+### PR 4 implementation interpretations
 
 Recorded 2026-10-23 for maintainer review. These choices describe the internal
-implementation; they do not introduce an App key, public facade or regulatory
+money implementation; they do not introduce an App key or regulatory
 assumption beyond the explicit study prices.
 
 1. **Retention (maintainer's PR 4 instruction).** Interpret K9's memory note
@@ -727,57 +757,48 @@ assumption beyond the explicit study prices.
 10. **Coverage denominator.** K8's “consumption covered” is reported both as
     shared use divided by gross household load and divided by metered import,
     with zero for a zero denominator. Own PV self-consumption stays separate.
-    **Question:** which coverage ratio should PR 5 present by default?
+    **Question:** which coverage ratio should future presentation choose by
+    default? PR 5 exposes both explicit names, with no default selection.
 
 The earlier conservative refusal of `[vehicle]` remains: its ACC semantics
 need maintainer review after #420. No further money policy is needed to run
 the internal accounts; the two questions above concern future validation
 and presentation.
 
-## Implementation plan and effort
+### PR 5 implementation interpretations
 
-Five PRs, about 14.5 working days for one developer, plus review. A sixth,
-experimental PR adds dynamic allocation later. Once the work ships, this
-section is replaced by an implementation status, as in ADR 0002.
-
-**Order in 0.8.0** (decision 11). The work is implemented after the
-AC-coupled battery (#419) and vehicle-to-home (#420) work. It uses that work
-through the single-site physics. The order means the reference results, the
-example configuration and the docs are computed on the final PV defaults
-(#417, #418, now implemented), and a participant's site keys include AC
-coupling and a vehicle when the community ships.
-
-**Additional prerequisite** (decision 12). A separate App change on its
-own branch must net an idle PV inverter's night draw against AC bus surplus
-before export in both PV-only and AC-battery paths. ACC depends on that
-fix before PR 3's meter-balance and Q2–Q3 checks; it adds no netting of its
-own. Several-inverter App results move by a few Wh a year in that separate
-change. ACC's unchanged-App guard is measured after the fix, and Q3 holds
-exactly without an inverter-draw exception.
-
-**Rollout gates.** No merged state exposes a community that cannot price
-itself: PR 1–3 add internal modules only, PR 4 adds money, and PR 5 is the
-first that exports `breos.Community`.
-
-| PR | Scope | Effort | Main risk |
-|---|---|---|---|
-| 1 | `breos/community/settlement.py`: fixed and proportional allocation, receivers, participant and community surplus, attribution to injectors, the settlement frame and its version; closure helper; cases S1–S3 and S5; property tests (Q5, Q6). | 2.5 days | Floating sums that depend on order (Q4). |
-| 2 | Community configuration: `[community]`, `[[assets]]`, `[[participants]]`; ids; App site keys with the shared keys refused; Community's no-PV household path; assets' battery, load and smart-charging keys refused; explicit asset import prices and supply-contract fixed charges; coefficients, ownership and prices validated; 15-minute requirement. | 2.5 days | Keys whose App meaning does not fit a site in a community. |
-| 3 | Community runner: participant sites, no-PV households from their load, and PV-only assets with their zero load; settlement year by year; per-site carry; Q2, Q3 and the parity scenario, after the separate App inverter-draw fix. | 3.5 days | Memory and time with many participants. |
-| 4 | Money: participant and asset supplier bills, shared price, network charges, supplier-only annual credit caps and their separate annual changes, surplus revenue, ownership, external owners; the reference without the community and the no-system baseline; NPV per participant and for the community; money closure; case S4. | 3.5 days | Escalation and discounting kept identical to App's per participant. |
-| 5 | `breos.Community` facade, `result()` and `settlement()`, provenance, an example configuration, docs (a community guide, the settlement ledger), CHANGELOG; ADR implementation status. | 2.5 days | None significant. |
-| 6 (experimental, later) | Dynamic allocation with a plain NumPy reference. | 2–3 days | Defining the rule before an implementation. |
-
-Risks across the work:
-
-- **Regulatory drift.** Portugal amended Decreto-Lei n.º 15/2022 in 2024 and
-  twice in 2026, and §42c is new. The docs date the rules they cite, and
-  the settlement keeps the mode names generic.
-- **Scale.** A community of 50 participants runs 50 sites; those with a
-  battery run the day loop. The input cache and the Numba backend help;
-  PR 3 measures it.
-- **Data.** Shared prices, network charges and surplus prices are user
-  inputs.
+- **Constructor and result shape.** App's Python constructor accepts a
+  mapping, not a file path, so Community does the same; the guide uses
+  `tomllib.load`. The public result is a frozen `CommunityResult` wrapper
+  around PR 4's existing account objects. As App has no exported result
+  class or `summary()`/`to_dict()` method, no new root result export or such
+  method is invented. Pandas tables and the provenance dict remain mutable,
+  as App's result dict is. `settlement()` returns a deep copy, following
+  App's `timeseries()` convention. A successful rerun replaces the result;
+  a failed rerun leaves the previous successful result, as App does.
+- **Retention and coverage.** The facade uses PR 4's first-year frames and
+  all-year totals default and releases the physical run after provenance
+  capture. The public fields `shared_coverage_of_load` and
+  `shared_coverage_of_import` are yearly Series of the existing ratios;
+  there is no unqualified `coverage` field. **Open maintainer question:**
+  a default ratio for future presentation remains undecided.
+- **Provenance.** Site source records come from the actual community run,
+  never from a second App simulation. Existing App helpers build PV,
+  degradation, tariff, smart-charging and economic metadata. Resolved site
+  configurations follow App's JSON-safe scalar convention (`"inf"` for
+  unlimited bounds); load-only households record load and billing without
+  invented weather/PV dispatch. The community records resolved settings,
+  full price-schedule definitions, ids/order, coefficients, ownership,
+  schema versions, calendar policy and units.
+- **Remaining policy questions.** The PR 4 question about explicit annual
+  credits on producer-only asset tariffs is still open; configured credits
+  continue to follow App's supplier cap. `[vehicle]` remains refused until
+  community semantics are reviewed. No regulatory eligibility or updated
+  tariff is inferred; the guide preserves the ADR's dated source limits.
+- **Documentation boundary.** The generated App key/option references
+  remain App-specific. The community guide documents the separate tables
+  and links to reused App site keys. There is no new gallery case, CLI
+  community runner, optimizer, Monte Carlo or revaluation surface.
 
 ## Amendments of 2026-10-22
 
@@ -984,7 +1005,7 @@ Taken by the maintainer on 2026-10-06. The body sections follow them.
 10. **Out of 0.8.0:** Monte Carlo, the optimizer, hierarchical sharing and
     `revalue` for communities (K1, K9).
 11. **Release and order:** ships in 0.8.0, implemented after #419 and #420
-    (see [Implementation plan and effort](#implementation-plan-and-effort)).
+    (see [Implementation status](#implementation-status)).
     Changed from the proposal, which had no order.
 
 Decided 2026-10-22:
