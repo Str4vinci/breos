@@ -16,7 +16,8 @@ from breos.app_config import ALLOWED_CONFIG_KEYS, DEFAULTS
 from breos.community import facade
 from breos.community.results import CommunityResult
 from tests.community_conservation import assert_settlement_closure
-from tests.offline_app import FLAT_REFERENCE, TOU, offline
+from tests.offline_app import FLAT_REFERENCE, TOU, offline, simulate_offline
+from tests.test_community_runner import assert_bits
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "configs/examples/community-portugal.toml"
 
@@ -194,3 +195,105 @@ def test_rerun_replaces_results_and_input_mutation_does_not_change_run(config, m
         community.simulate()
     assert community.result() is last
     pd.testing.assert_frame_equal(ledger, community.settlement(), check_exact=True)
+
+
+def test_azores_missing_midnight_settlement_and_no_sharing_app_parity():
+    raw = {
+        "community": {
+            "location": {"latitude": 37.74, "longitude": -25.67, "timezone": "Atlantic/Azores"},
+            "start_date": "2026-01-01",
+            "resolution": "15min",
+            "projection_years": 1,
+            "allocation": "proportional",
+            "shared_energy_price": 0.10,
+            "shared_network_charge": 0.02,
+            "surplus_price": 0.04,
+        },
+        "participants": [
+            {
+                "id": "pv-home",
+                "n_modules": 8,
+                "annual_consumption_kwh": 3500,
+                "tariff": {
+                    "currency": "EUR",
+                    "custom_schedule": {
+                        "identifier": "azores_daily",
+                        "version": "1",
+                        "timezone": "Atlantic/Azores",
+                        "cycle": "daily",
+                        "periods": ["off_peak", "peak"],
+                        "rules": [
+                            {
+                                "days": "all",
+                                "season": "all",
+                                "intervals": {
+                                    "off_peak": [["00:00", "08:00"], ["22:00", "24:00"]],
+                                    "peak": [["08:00", "22:00"]],
+                                },
+                            }
+                        ],
+                    },
+                    "import_prices": {"off_peak": 0.11, "peak": 0.28},
+                    "export_prices": {"all": 0.05},
+                    "fixed_charge_per_day": 0.25,
+                },
+            },
+            {
+                "id": "load-home",
+                "annual_consumption_kwh": 2500,
+                "costs": {"electricity_cost": 0.20, "daily_power_cost": 0.25},
+            },
+        ],
+        "assets": [
+            {
+                "id": "roof",
+                "n_modules": 12,
+                "ownership": "external",
+                "costs": {"electricity_cost": 0.20, "daily_power_cost": 0},
+            }
+        ],
+    }
+    community = simulate(raw)  # Uses tests.offline_app.offline for every site.
+    ledger, result = community.settlement(), community.result()
+    assert_settlement_closure(ledger)
+    instants = ledger.index.get_level_values("interval").unique()
+    # The offline weather covers the UTC year (Azores local 2025-12-31 23:00
+    # onwards), which App accepts; local 29 March jumps from 00:00 to 01:00.
+    assert len(instants) == 365 * 96
+    assert ledger.index.is_unique
+    assert len(ledger) == len(instants) * 4  # Three sites plus the community row.
+    np.testing.assert_array_equal(ledger.groupby(level=["site_type", "site_id"]).size(), len(instants))
+    assert (instants[1:] - instants[:-1] == pd.Timedelta(minutes=15)).all()
+    local = instants.tz_convert("Atlantic/Azores")
+    spring_day = local[(local.month == 3) & (local.day == 29)]
+    assert len(spring_day) == 23 * 4 and spring_day[0].hour == 1
+    assert result.yearly["Shared_Used_Total_Wh"].iloc[0] > 0
+    np.testing.assert_allclose(result.interval_closure, 0, rtol=0, atol=1e-9)
+    np.testing.assert_allclose(
+        result.yearly[
+            ["Shared_Residual", "Boundary_Residual", "Max_Interval_Shared_Residual", "Max_Interval_Boundary_Residual"]
+        ],
+        0,
+        rtol=0,
+        atol=1e-9,
+    )
+
+    no_sharing = deepcopy(raw)
+    no_sharing["community"]["pool_participant_export"] = False
+    no_sharing["assets"] = []
+    alone = simulate(no_sharing)
+    pv = raw["participants"][0]
+    app = simulate_offline(
+        {
+            **alone._resolved.community.shared.app_payload(),
+            **{key: value for key, value in pv.items() if key != "id"},
+        }
+    )
+    meter = alone.settlement().xs("pv-home", level="site_id")
+    assert_bits(meter["Supplier_Import"], app.timeseries()["Import_From_Grid"] * 0.25)
+    assert_bits(meter["Own_Export"], app.timeseries()["PV_AC_Export"] * 0.25)
+    account, expected = alone.result().participants["pv-home"], app._artifacts.cost_projection
+    assert account.npv_savings == expected.attrs["final_npv_savings"]
+    assert account.community_benefit == 0
+    for column in ("Cost_System_Annual", "Cost_No_Sys_Annual", "Savings_Cumulative_NPV"):
+        assert_bits(account.cashflows[column], expected[column])
