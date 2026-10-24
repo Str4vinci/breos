@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import replace
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from breos.app import _revalued_config
@@ -12,6 +13,7 @@ from breos.app_config import build_costs_dict, resolve_app_config
 from breos.projection import build_battery_config, build_pv_only_battery_config
 from breos.vehicle import VehicleConfig
 from breos.vehicle.economics import vehicle_pack_value, vehicle_wear
+from breos.vehicle.households import VehicleHouseholds, _absence_unserved, value_vehicle_households
 from tests.backend_parity import BACKENDS
 from tests.energy_conservation import assert_energy_conservation, assert_vehicle_conservation
 from tests.offline_app import (
@@ -31,6 +33,66 @@ from tests.test_multi_inverter import TWO_INVERTERS
 from tests.test_vehicle_config import AWAY, VEHICLE
 
 CONFIG = {**BASE, "projection_years": 2, "vehicle": VEHICLE}
+
+
+@pytest.mark.parametrize(
+    "study_unserved,reference_unserved,unpriced_comparable",
+    [(1.0, 1.0, False), (1.0, 2.0, False), (0.5e-9, 0.0, True), (1.1e-9, 0.0, False)],
+)
+@pytest.mark.parametrize("penalty", [None, 0.0, 0.6])
+def test_comparability_cannot_offset_a_worse_absence_with_a_better_one(
+    app, study_unserved, reference_unserved, unpriced_comparable, penalty
+):
+    households = app._artifacts.vehicle_households
+    schedule = households.schedule
+    departures = np.flatnonzero(~schedule.plugged & np.r_[True, schedule.plugged[:-1]])
+    runs = {}
+    for key, run in households.runs.items():
+        flows = [dict(year) for year in run.priced_flows]
+        for year in flows:
+            year["Vehicle_Drive_Unserved"] = np.zeros(len(schedule.index))
+        pos, amount = (departures[0], study_unserved) if key == "R2" else (departures[1], reference_unserved)
+        flows[0]["Vehicle_Drive_Unserved"][pos] = amount * 1000 / schedule.hours_per_step
+        rows = run.yearly_df.copy()
+        rows["Vehicle_Drive_Unserved_kWh"] = [amount, 0.0]
+        runs[key] = replace(run, priced_flows=tuple(flows), yearly_df=rows)
+    vehicle = {**VEHICLE}
+    if penalty is not None:
+        vehicle["outside_charging_price"] = penalty
+    resolved = resolve_app_config({**CONFIG, "vehicle": vehicle})
+    _, result = value_vehicle_households(resolved.cfg, resolved, VehicleHouseholds(runs, schedule), None, None)
+    for name in ("household_adjusted_npv", "vehicle_benefit"):
+        assert result[name]["comparable"] == (penalty is not None or unpriced_comparable)
+        if penalty is None and not unpriced_comparable:
+            assert schedule.index[departures[0]].isoformat() in result[name]["reason"]
+
+
+@pytest.mark.parametrize("freq,hours", [("h", 1.0), ("15min", 0.25)])
+def test_absence_comparison_joins_year_tail_and_head_and_labels_initial_partial_trip(app, freq, hours):
+    original = app._artifacts.vehicle_households
+    schedule = replace(
+        original.schedule,
+        index=pd.date_range(original.schedule.index[0], periods=8, freq=freq),
+        hours_per_step=hours,
+        plugged=[False, False, True, False, False, True, False, False],
+        steps_to_departure=np.zeros(8),
+        drive_first_wh=np.zeros(8),
+        park_hours=np.zeros(8),
+        drive_second_wh=np.zeros(8),
+        initial_absence_departure=original.schedule.index[0] - pd.Timedelta(hours=12),
+    )
+    runs = {}
+    for key, run in original.runs.items():
+        flows = [{"Vehicle_Drive_Unserved": np.zeros(8)} for _ in range(2)]
+        first, second = (0.6, 0.4) if key == "R2" else (0.3, 0.7)
+        flows[0]["Vehicle_Drive_Unserved"][-1] = first * 1000 / hours
+        flows[1]["Vehicle_Drive_Unserved"][0] = second * 1000 / hours
+        runs[key] = replace(run, priced_flows=tuple(flows))
+    labels, totals = _absence_unserved(VehicleHouseholds(runs, schedule))
+    assert schedule.initial_absence_departure.isoformat() in labels[0]
+    assert len(labels) == 5
+    for amounts in totals.values():
+        np.testing.assert_allclose(amounts, [0, 0, 1, 0, 0], rtol=0, atol=1e-12)
 
 
 @pytest.fixture(scope="module")
@@ -106,7 +168,7 @@ def test_full_app_three_households_schema_and_energy_closure(trina, backend, fre
         "currency",
         "households",
         "household_adjusted_npv",
-        "v2h_benefit",
+        "vehicle_benefit",
     }
     assert result["provenance"]["vehicle"]["schedule_hash"] == households.schedule.schedule_hash()
     assert result["provenance"]["vehicle"]["config"]["allow_terminal_replacement"] is True
@@ -187,12 +249,12 @@ def test_charger_premium_counted_once_and_wear_does_not_change_system_npv(app):
     original = app.result()
     assert free["total_investment"] == original["total_investment"] - VEHICLE["charger_cost"]
     assert free["npv_savings"] == original["npv_savings"] + VEHICLE["charger_cost"]
-    for name in ["v2h_benefit", "household_adjusted_npv"]:
+    for name in ["vehicle_benefit", "household_adjusted_npv"]:
         assert free["vehicle"][name]["npv"] == pytest.approx(original["vehicle"][name]["npv"] + VEHICLE["charger_cost"])
     repriced = revalue_offline(app, {"vehicle": {"battery_cost_per_kwh": 240}})
     assert repriced["npv_savings"] == original["npv_savings"]
-    assert repriced["vehicle"]["v2h_benefit"]["wear_npv"] == pytest.approx(
-        2 * original["vehicle"]["v2h_benefit"]["wear_npv"]
+    assert repriced["vehicle"]["vehicle_benefit"]["wear_npv"] == pytest.approx(
+        2 * original["vehicle"]["vehicle_benefit"]["wear_npv"]
     )
 
 
@@ -262,7 +324,12 @@ def test_optional_reference_household(mode, reference):
     )
     result = app.result()["vehicle"]
     assert ("R1" in result["households"]) == (reference != "none")
-    assert (result["v2h_benefit"] is None) == (reference == "none")
+    assert (result["vehicle_benefit"] is None) == (reference == "none")
+    assert "v2h_benefit" not in result
+    if reference != "none":
+        assert result["vehicle_benefit"]["study_mode"] == mode
+        assert result["vehicle_benefit"]["reference_mode"] == reference
+    assert "v2h_benefit_npv" not in app.result()
 
 
 SMART = {
@@ -293,13 +360,13 @@ def test_comparability_and_priced_unserved_driving_in_every_household(penalty):
         unserved = household["totals"]["drive_unserved_kwh"]
         assert unserved > 0.0
         assert household["unserved_driving_cost_npv"] == pytest.approx(unserved * (penalty or 0.0) / 1.03)
-    for comparison in ["household_adjusted_npv", "v2h_benefit"]:
+    for comparison in ["household_adjusted_npv", "vehicle_benefit"]:
         assert result[comparison]["comparable"] == (penalty is not None)
         assert (result[comparison]["reason"] is None) == (penalty is not None)
     if penalty is None:
         priced = revalue_offline(app, {"vehicle": {"outside_charging_price": 0.6}})
         assert priced["vehicle"]["household_adjusted_npv"]["comparable"] is True
-        assert priced["vehicle"]["v2h_benefit"]["comparable"] is True
+        assert priced["vehicle"]["vehicle_benefit"]["comparable"] is True
         assert priced["npv_savings"] == app.result()["npv_savings"]
         assert priced["vehicle"]["households"]["R2"]["totals"] == result["households"]["R2"]["totals"]
     adjusted = result["household_adjusted_npv"]
@@ -389,8 +456,8 @@ def test_currency_restatement_includes_every_vehicle_amount():
     revalued = revalue_offline(app, changes)
     fresh = simulate_offline(_revalued_config(config, changes)).result()
     assert_fields_close(result_fields(revalued), result_fields(fresh))
-    assert revalued["vehicle"]["v2h_benefit"]["npv"] == pytest.approx(
-        app.result()["vehicle"]["v2h_benefit"]["npv"] * 1.1
+    assert revalued["vehicle"]["vehicle_benefit"]["npv"] == pytest.approx(
+        app.result()["vehicle"]["vehicle_benefit"]["npv"] * 1.1
     )
     for physical in [{"battery_kwh": 70}, {"allow_terminal_replacement": False}]:
         with pytest.raises(ValueError, match="vehicle prices only"):
@@ -437,7 +504,7 @@ def test_period_reports_vehicle_energy_without_lifetime_comparisons():
     result = app.result()
     assert result["npv_savings"] is None
     assert result["vehicle"]["household_adjusted_npv"] is None
-    assert result["vehicle"]["v2h_benefit"] is None
+    assert result["vehicle"]["vehicle_benefit"] is None
     assert result["vehicle"]["households"]["R2"]["totals"]["drive_served_kwh"] > 0
     for household in result["vehicle"]["households"].values():
         assert household["replacement_history"]

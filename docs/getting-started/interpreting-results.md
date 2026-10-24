@@ -29,7 +29,7 @@ flag. For the step-by-step flows of the first year, use
 | `npv_savings` | Cumulative NPV savings over the projection horizon |
 | `vehicle` | Present with `[vehicle]`: the three households, trips, pack wear and comparisons; see [Vehicle results](#vehicle-results) |
 | `npv_savings_household_adjusted`, `household_adjusted_comparable` | With a vehicle: R2/R0 NPV including vehicle wear and away/unserved cost differences, and its comparison flag |
-| `v2h_benefit_npv`, `v2h_benefit_comparable` | With a vehicle and R1: R2/R1 benefit and its comparison flag; null when R1 is omitted |
+| `vehicle_benefit_npv`, `vehicle_benefit_comparable` | With a vehicle and R1: R2/R1 benefit and its comparison flag; null when R1 is omitted |
 | `terminal_health_credit` | Optional nominal credit at the end of year T; null when disabled or on a partial period |
 | `terminal_health_credit_npv` | Present value of that credit |
 | `npv_savings_terminal_adjusted` | Unadjusted NPV plus credit present value, before rounding |
@@ -120,7 +120,7 @@ and model assumptions.
 | `households.R2.away_purchases_npv`, `.unserved_driving_cost_npv` | Away purchases and optional outside-charging penalty |
 | `households.R2.operating_cost_npv` | Home bill minus exports, plus away purchases and unserved-driving penalty |
 | `household_adjusted_npv` | R2/R0 comparison, with NPV, wear, cost differences and `comparable` |
-| `v2h_benefit` | R2/R1 comparison, with NPV, operating savings, charger premium, wear and `comparable`; null without R1 |
+| `vehicle_benefit` | R2/R1 comparison, with NPV, operating savings, charger premium, wear, `study_mode`, `reference_mode` and `comparable`; null without R1 |
 
 The R0 and R1 records use the same fields as R2. Energy reductions are kWh;
 `onboard_energy_end_wh` is Wh. Health is a fraction, not percent. Money uses
@@ -149,11 +149,14 @@ away and unserved-driving costs, and subtracts their vehicle wear W₂₋₀.
 It answers whether the configured household system helps against R0 after
 vehicle costs are included.
 
-V2H benefit compares R2 with R1 on the same PV/storage system. It takes R1
+Vehicle benefit compares R2 with R1 on the same PV/storage system. It takes R1
 minus R2 operating costs, subtracts the installed charger premium once,
-and subtracts W₂₋₁. It separates V2H from the benefit of having PV or a
-stationary battery. A negative benefit means V2H costs more under the stated
-inputs. The system's existing terminal-value sensitivity remains separate.
+and subtracts W₂₋₁. It separates the vehicle control change from the benefit
+of having PV or a stationary battery. For V2H against V1G it measures V2H;
+for V1G against uncontrolled it measures smart charging. `study_mode` and
+`reference_mode` name that comparison. A negative benefit means the study
+mode costs more under the stated inputs. The system's existing terminal-value
+sensitivity remains separate.
 
 Wear is replacement-aware:
 
@@ -173,12 +176,17 @@ difference P₂ − P₁. No extra throughput wear charge is added.
 
 ### Comparability and emissions
 
-`comparable = false` means R2 leaves more gross driving unserved than its
-comparator and `outside_charging_price` is unset. The comparison is still
-reported, with a `reason`, but its savings include reduced transport service.
+`comparable = false` means R2 leaves more gross driving unserved on any
+absence than its comparator, by more than 1e-9 kWh, and
+`outside_charging_price` is unset. Totals over the horizon cannot offset a
+worse trip with a better one. Resolved continuous away intervals define the
+absences, including continuations across project years; partial boundary
+absences compare the driving inside the project. The comparison is still
+reported, with a `reason` naming the first failing departure and project year,
+but its savings include reduced transport service.
 A stated outside price, including explicit zero, makes that difference
 priced and the comparison comparable. It restores no driving energy.
-Departure misses alone do not change this flag. Without R1, the V2H benefit
+Departure misses alone do not change this flag. Without R1, the vehicle benefit
 and its top-level flag are null.
 
 Away purchases enter household money and grid emissions but never
@@ -203,11 +211,11 @@ across R0/R1/R2. Load scaling affects the house only. The `runs` table keeps
 | Column or family | Meaning |
 |---|---|
 | `npv_savings_household_adjusted`, `household_adjusted_comparable` | R2/R0 comparison and flag |
-| `v2h_benefit_npv`, `v2h_benefit_comparable` | R2/R1 comparison and flag |
+| `vehicle_benefit_npv`, `vehicle_benefit_comparable` | R2/R1 comparison and flag |
 | `vehicle_wear_r2_r0_npv`, `vehicle_wear_r2_r1_npv` | Replacement-aware wear W |
 | `vehicle_replacement_outlays_difference_r2_r0_npv`, `vehicle_replacement_outlays_difference_r2_r1_npv` | Outlays-only differences |
 | `vehicle_household_adjusted_…` | Away and unserved cost differences |
-| `vehicle_v2h_…` | Operating/home-bill/export/away/unserved savings and charger premium |
+| `vehicle_benefit_…` | Operating/home-bill/export/away/unserved savings and charger premium |
 | `vehicle_r0_…`, `vehicle_r1_…`, `vehicle_r2_…` | Household energy totals, misses, swaps, health, retirement, home imports/exports, P/H, operating costs and emissions |
 
 For example, `vehicle_r2_departures_short`, `vehicle_r2_drive_unserved_kwh`,

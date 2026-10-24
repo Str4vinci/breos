@@ -844,6 +844,7 @@ class ProjectionRun:
     # (W), by frame column, so the run can be priced on another schedule
     # without re-simulating. A flow equal to the year before's is that
     # array, kept once: the load, and the zero grid charge of a greedy run.
+    # Vehicle runs also retain Vehicle_Drive_Unserved for per-absence comparisons.
     priced_flows: tuple[dict[str, np.ndarray], ...] | None = None
     # Each end-of-life crossing, in project order, as end_of_life_record
     # reports it (ADR 0003 E11).
@@ -1063,10 +1064,12 @@ def _run_frame_year(
     )
 
 
-def _step_flows(results_df: pd.DataFrame, previous: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
+def _step_flows(
+    results_df: pd.DataFrame, previous: Mapping[str, np.ndarray], *, vehicle: bool = False
+) -> dict[str, np.ndarray]:
     """A year's per-step priced flows; a flow equal to the year before's is that array, kept once."""
     flows: dict[str, np.ndarray] = {}
-    for column in _PRICED_FLOW_COLUMNS:
+    for column in (*_PRICED_FLOW_COLUMNS, *(("Vehicle_Drive_Unserved",) if vehicle else ())):
         # A copy, so the year's frame is not kept alive by a view.
         values = results_df[column].to_numpy(dtype=float, copy=True)
         same = previous.get(column)
@@ -1270,7 +1273,11 @@ def project_years(
                 first_year_results_df = outcome.results_df
             if record_priced_flows:
                 assert outcome.results_df is not None
-                priced_flows.append(_step_flows(outcome.results_df, priced_flows[-1] if priced_flows else {}))
+                priced_flows.append(
+                    _step_flows(
+                        outcome.results_df, priced_flows[-1] if priced_flows else {}, vehicle=vehicle_config is not None
+                    )
+                )
         carry = outcome.carry
         dispatched.extend(outcome.planned)
         if outcome.executed is not None:

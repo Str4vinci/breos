@@ -1594,7 +1594,7 @@ uncontrolled study defaults to no R1. Set `reference_mode = "none"` to omit
 R1 explicitly. R0's charging is independent of the configured PV/storage.
 System NPV uses R0's actual home bill. Household-adjusted NPV compares R2
 with R0 and includes vehicle wear and differences in away and unserved-driving
-costs. V2H benefit compares R2 with R1 on the same system. Charger premium
+costs. Vehicle benefit compares R2 with R1 on the same system. Charger premium
 is counted once per comparison. See [Vehicle results](interpreting-results.md#vehicle-results)
 for replacement-aware wear, credits and `comparable`.
 

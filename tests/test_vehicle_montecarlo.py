@@ -77,6 +77,7 @@ def test_no_noise_trajectory_matches_all_app_households(weather, monkeypatch, ba
         if pack == "dc":
             cfg["smart_charging"]["grid_charge_efficiency"] = 0.95
     cfg["vehicle"].update(charge_periods=["off_peak"], discharge_periods=["peak"])
+    del cfg["vehicle"]["outside_charging_price"]  # Exercise per-absence comparability in both entry points.
     if pack == "flat":
         del cfg["tariff"], cfg["reference_tariff"]
         del cfg["vehicle"]["charge_periods"], cfg["vehicle"]["discharge_periods"]
@@ -99,7 +100,7 @@ def test_no_noise_trajectory_matches_all_app_households(weather, monkeypatch, ba
     row = result.runs.iloc[0]
     assert row["npv_savings"] == app._artifacts.cost_projection.attrs["final_npv_savings"]
     assert row["npv_savings_household_adjusted"] == captured[0]["household_adjusted_npv"]["npv"]
-    assert row["v2h_benefit_npv"] == captured[0]["v2h_benefit"]["npv"]
+    assert row["vehicle_benefit_npv"] == captured[0]["vehicle_benefit"]["npv"]
     for key, household in captured[0]["households"].items():
         prefix = f"vehicle_{key.lower()}_"
         for name, amount in household["totals"].items():
@@ -217,8 +218,8 @@ def test_summary_metrics_and_optional_reference(weather, reference):
     required = {
         "npv_savings_household_adjusted",
         "household_adjusted_comparable",
-        "v2h_benefit_npv",
-        "v2h_benefit_comparable",
+        "vehicle_benefit_npv",
+        "vehicle_benefit_comparable",
         "vehicle_r0_departures_short",
         "vehicle_r2_drive_unserved_kwh",
         "vehicle_r2_away_purchased_kwh",
@@ -226,6 +227,8 @@ def test_summary_metrics_and_optional_reference(weather, reference):
         "vehicle_wear_r2_r0_npv",
     }
     assert required <= set(result.runs)
+    assert "v2h_benefit_npv" not in result.runs
+    assert not any(column.startswith("vehicle_v2h_") for column in result.runs)
     for column in result.runs:
         if column.startswith("vehicle_") or column in required:
             if pd.isna(result.runs.iloc[0][column]):
@@ -234,17 +237,17 @@ def test_summary_metrics_and_optional_reference(weather, reference):
                 assert result.summary[column]["count"] == 1
                 assert result.summary[column]["mean"] == result.runs.iloc[0][column]
     if reference == "none":
-        assert pd.isna(result.runs.iloc[0]["v2h_benefit_npv"])
-        assert result.runs.iloc[0]["v2h_benefit_comparable"] is None
+        assert pd.isna(result.runs.iloc[0]["vehicle_benefit_npv"])
+        assert result.runs.iloc[0]["vehicle_benefit_comparable"] is None
 
 
 def test_flag_summary_mean_is_probability():
     result = mc._summarize(
-        pd.DataFrame({"household_adjusted_comparable": [True, False], "v2h_benefit_comparable": [None, None]})
+        pd.DataFrame({"household_adjusted_comparable": [True, False], "vehicle_benefit_comparable": [None, None]})
     )
     assert result["household_adjusted_comparable"]["mean"] == 0.5
     assert result["household_adjusted_comparable"]["count"] == 2
-    assert "v2h_benefit_comparable" not in result
+    assert "vehicle_benefit_comparable" not in result
 
 
 @pytest.mark.parametrize("entry", [mc.run_montecarlo, mc.build_year_cache])

@@ -126,6 +126,43 @@ def _price_run(run: ProjectionRun, tariff: ResolvedTariff | None, costs: dict[st
     return price_year_rows(rows, costs)
 
 
+def _absence_unserved(households: VehicleHouseholds) -> tuple[list[str], dict[str, np.ndarray]]:
+    """Reduce the existing ledger flow on common resolved away intervals.
+
+    A tail and the next year's head are one absence. Initial/final partial
+    absences compare only the driving inside the project, in every household.
+    """
+    schedule = households.schedule
+    away = ~schedule.plugged
+    starts = np.flatnonzero(away & np.r_[True, ~away[:-1]])
+    ends = np.flatnonzero(away & np.r_[~away[1:], True]) + 1
+    labels: list[str] = []
+    pieces: list[tuple[int, int, int, int]] = []
+    years = len(households.runs["R2"].yearly_df)
+    for year in range(years):
+        for raw_start, raw_end in zip(starts, ends, strict=True):
+            start, end = int(raw_start), int(raw_end)
+            continued = year > 0 and start == 0 and away[-1]
+            if not continued:
+                departure = (
+                    schedule.initial_absence_departure
+                    if year == 0 and start == 0 and schedule.initial_absence_departure is not None
+                    else schedule.index[start]
+                )
+                labels.append(f"{departure.isoformat()} (project year {year + 1})")
+            pieces.append((year, start, end, len(labels) - 1))
+    totals = {}
+    for key, run in households.runs.items():
+        assert run.priced_flows is not None and len(run.priced_flows) == years
+        amounts = np.zeros(len(labels))
+        for year, start, end, absence in pieces:
+            flow = run.priced_flows[year]["Vehicle_Drive_Unserved"]
+            assert len(flow) == len(schedule.index)
+            amounts[absence] += float(np.sum(flow[start:end])) * schedule.hours_per_step / 1000
+        totals[key] = amounts
+    return labels, totals
+
+
 def value_vehicle_households(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
@@ -227,17 +264,25 @@ def value_vehicle_households(
         }
     value = value_projection(cfg, resolved, replace(households.runs["R2"], yearly_df=rows["R2"]))
     system_npv = float(value.cost_projection.attrs["final_npv_savings"])
+    departures, unserved_absences = _absence_unserved(households) if config.outside_charging_price is None else ([], {})
 
     def comparison(reference_key: str) -> dict[str, Any]:
         study, ref = valued["R2"], valued[reference_key]
-        comparable = (
-            config.outside_charging_price is not None
-            or study["totals"]["drive_unserved_kwh"] <= ref["totals"]["drive_unserved_kwh"] + 1e-9
+        failures = (
+            np.flatnonzero(unserved_absences["R2"] > unserved_absences[reference_key] + 1e-9)
+            if config.outside_charging_price is None
+            else np.array([], dtype=int)
         )
+        comparable = not len(failures)
         return {
             **vehicle_wear(study, ref),
+            "study_mode": study["mode"],
+            "reference_mode": ref["mode"],
             "comparable": comparable,
-            "reason": None if comparable else "R2 leaves more driving unserved; outside_charging_price is unset",
+            "reason": None
+            if comparable
+            else f"R2 leaves more driving unserved on absence departing {departures[failures[0]]}; "
+            "outside_charging_price is unset",
         }
 
     adjusted = comparison("R0")
@@ -281,5 +326,5 @@ def value_vehicle_households(
         "currency": resolved.currency,
         "households": valued,
         "household_adjusted_npv": adjusted if resolved.period is None else None,
-        "v2h_benefit": benefit,
+        "vehicle_benefit": benefit,
     }
