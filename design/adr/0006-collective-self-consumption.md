@@ -1,11 +1,12 @@
 # 0006 — Collective self-consumption: a community entry point beside App
 
-- **Status:** Proposed, with the maintainer's decisions of 2026-10-06 and
-  2026-10-22; PRs 1–5 implemented for 0.8.0 (#421), pending maintainer
-  acceptance. `breos.Community` is exported with priced results, settlement,
+- **Status:** Accepted 2026-10-24
+- **Implementation:** PRs 1–5 are implemented for 0.8.0 (#421).
+  `breos.Community` is exported with priced results, settlement,
   provenance, example and documentation. See [Implementation status](#implementation-status).
-- **Date:** 2026-10-06; decisions taken 2026-10-06 and 2026-10-22;
-  amended 2026-10-22; implementation status recorded 2026-10-23
+- **Date:** 2026-10-06; decisions taken 2026-10-06, 2026-10-22 and 2026-10-24;
+  amended 2026-10-22; implementation status recorded 2026-10-23;
+  accepted 2026-10-24
 
 ## Context
 
@@ -648,9 +649,10 @@ attributed 2500 to the asset, 300 to A and 200 to B.
 
 PRs 1–5 are implemented. This section replaces the effort plan with the
 implementation account, as ADR 0005 does. PR 5 is the first state that
-exports `breos.Community`; it is this uncommitted changeset. The ADR remains
-**Proposed**: implementing the decisions does not substitute for maintainer
-acceptance. Dynamic allocation remains a later experimental PR.
+exports `breos.Community` (`510a2a0`). The maintainer accepted this ADR on
+2026-10-24, including PR 4's money interpretations 1–10 and the retained
+first-year frame default. Decisions 16–20 below record the remaining policy
+choices. Dynamic allocation remains a later experimental PR.
 
 | PR | Implemented scope | Commit |
 |---|---|---|
@@ -658,15 +660,15 @@ acceptance. Dynamic allocation remains a later experimental PR.
 | 2 | Community, participant and asset configuration; PV/load-only paths; explicit agreements and validation. | `170bdc7` |
 | 3 | Whole-horizon standalone physics and carry, input reuse, annual settlement, Q2/Q3 and backend parity. | `24c28fd` |
 | 4 | Supplier bills, transfers, ownership, references, NPVs and S4/money closure; first-year retention. | `2f97686` |
-| 5 | Public facade, typed result, provenance, Porto example, guide, ledger/API reference and CHANGELOG. | This changeset |
+| 5 | Public facade, typed result, provenance, Porto example, guide, ledger/API reference and CHANGELOG. | `510a2a0` |
 
 ACC follows #419 and #420 and uses the final PV defaults, including
 `solar_position = "auto"`. The separate App inverter-draw fix (decision 12,
 ADR 0004 M9, `d5a9897`) is in the history before the Q2/Q3 checks. ACC adds
 no meter netting and changes no App module, registry, result or golden.
 Contrary to the original plan's expectation that vehicle site keys would
-be usable immediately, `[vehicle]` remains conservatively refused pending
-review of community semantics after #420.
+be usable immediately, `[vehicle]` in a community site and households with
+a battery but no PV are deferred to 0.9 (issues to be filed).
 
 The full Porto example uses twenty years, shared roof ownership and three
 households, including a load-only household and a home battery. Its prices
@@ -677,7 +679,8 @@ record above; it was not refreshed for this implementation.
 
 ### PR 4 implementation interpretations
 
-Recorded 2026-10-23 for maintainer review. These choices describe the internal
+Recorded 2026-10-23 and accepted by the maintainer on 2026-10-24, with
+interpretations 8 and 10 resolved below. These choices describe the internal
 money implementation; they do not introduce an App key or regulatory
 assumption beyond the explicit study prices.
 
@@ -744,8 +747,11 @@ assumption beyond the explicit study prices.
    import rate; a negative number reduces the participant's benefit. PR 2
    also accepts an explicit credit in an asset tariff: the implementation
    honors App's supplier cap on that asset's actual imports and splits it by
-   ownership. **Question:** should producer-only contracts instead refuse
-   annual credits? No eligibility rule is inferred from a household example.
+   ownership. **Decided 2026-10-24:** keep accepting producer-only asset
+   credits and emit one `UserWarning` at configuration time per such asset,
+   naming its id: a producer-only connection rarely qualifies for a network
+   credit and BREOS does not judge eligibility. Participants receive no such
+   warning. No eligibility rule is inferred from a household example.
 9. **Closure and precision.** Shared payments close against receipts to all
    injectors. The interval boundary includes supplier energy bills, shared
    network charges, surplus sales and external-owner receipts; the annual
@@ -754,16 +760,19 @@ assumption beyond the explicit study prices.
    operating closure. Prices and accounts remain unrounded; sums use sorted
    ids. Residuals expose floating-point roundoff rather than reallocating or
    rounding cash between participants.
-10. **Coverage denominator.** K8's “consumption covered” is reported both as
-    shared use divided by gross household load and divided by metered import,
-    with zero for a zero denominator. Own PV self-consumption stays separate.
-    **Question:** which coverage ratio should future presentation choose by
-    default? PR 5 exposes both explicit names, with no default selection.
+10. **Coverage denominator.** **Decided 2026-10-24:** present
+    `shared_coverage_of_import` first: shared use divided by metered import,
+    coverage of a household's grid purchases bounded by 100%.
+    `shared_coverage_of_load` remains shared use divided by gross household
+    load and can exceed 100% when metered import includes battery grid
+    charging. Shared use offsets metered import, including grid charging and
+    inverter draw, and is capped at that import rather than gross load.
+    Both fields remain, with zero for a zero denominator and no unqualified
+    `coverage` field. Own PV self-consumption stays separate.
 
-The earlier conservative refusal of `[vehicle]` remains: its ACC semantics
-need maintainer review after #420. No further money policy is needed to run
-the internal accounts; the two questions above concern future validation
-and presentation.
+The maintainer deferred `[vehicle]` in a community site and households with
+a battery but no PV to 0.9 on 2026-10-24; issues are to be filed. The prior
+producer-credit and coverage questions are resolved by decisions 18–19.
 
 ### PR 5 implementation interpretations
 
@@ -778,10 +787,14 @@ and presentation.
   a failed rerun leaves the previous successful result, as App does.
 - **Retention and coverage.** The facade uses PR 4's first-year frames and
   all-year totals default and releases the physical run after provenance
-  capture. The public fields `shared_coverage_of_load` and
-  `shared_coverage_of_import` are yearly Series of the existing ratios;
-  there is no unqualified `coverage` field. **Open maintainer question:**
-  a default ratio for future presentation remains undecided.
+  capture. The public fields are yearly Series: present
+  `shared_coverage_of_import` first as coverage of household grid purchases,
+  bounded by 100%; retain `shared_coverage_of_load`, which can exceed 100%
+  with battery grid charging. Shared use is capped at metered import, which
+  includes grid charging and inverter draw, rather than gross household
+  load. Both ratios are zero for a zero denominator and there is no
+  unqualified `coverage` field. The maintainer accepted retention unchanged
+  and resolved coverage presentation on 2026-10-24.
 - **Provenance.** Site source records come from the actual community run,
   never from a second App simulation. Existing App helpers build PV,
   degradation, tariff, smart-charging and economic metadata. Resolved site
@@ -790,10 +803,12 @@ and presentation.
   invented weather/PV dispatch. The community records resolved settings,
   full price-schedule definitions, ids/order, coefficients, ownership,
   schema versions, calendar policy and units.
-- **Remaining policy questions.** The PR 4 question about explicit annual
-  credits on producer-only asset tariffs is still open; configured credits
-  continue to follow App's supplier cap. `[vehicle]` remains refused until
-  community semantics are reviewed. No regulatory eligibility or updated
+- **Policy decisions of 2026-10-24.** Explicit annual credits on producer-only
+  asset tariffs remain accepted, with one eligibility warning naming each
+  such asset at configuration time; the supplier cap and ownership split
+  are unchanged. No participant warning is added. `[vehicle]` in a community
+  site and households with a battery but no PV remain refused and are
+  deferred to 0.9 (issues to be filed). No regulatory eligibility or updated
   tariff is inferred; the guide preserves the ADR's dated source limits.
 - **Documentation boundary.** The generated App key/option references
   remain App-specific. The community guide documents the separate tables
@@ -1033,6 +1048,30 @@ Decided 2026-10-22:
     the credit against the household's remaining supplier network charges,
     including the fixed part, as App does. Report any change caused by
     sharing as a separate annual line (A10).
+
+Decided 2026-10-24; this ADR is accepted on that date:
+
+16. **Retention default kept.** Keep full first-year settlement, money and
+    residual frames plus every year's totals by default. Retain the internal
+    all-year frame option; release later temporary frames after pricing.
+17. **Money interpretations accepted.** PR 4 implementation interpretations
+    1–10 are accepted, with the producer-credit and coverage choices below.
+18. **Producer-only asset credits accepted with a warning.** Keep accepting
+    explicit `annual_network_credit` on an asset tariff, cap it against the
+    asset's own eligible supplier network charges and split by ownership.
+    Emit one `UserWarning` per such asset at configuration time, naming its
+    id and stating that producer-only connections rarely qualify for a
+    network credit and BREOS does not judge eligibility. No warning is
+    emitted for participants.
+19. **Metered-import coverage presented first.** Keep both named fields.
+    Present `shared_coverage_of_import` first, as coverage of household grid
+    purchases bounded by 100%. `shared_coverage_of_load` divides by gross
+    load and can exceed 100% because shared use offsets metered import,
+    including battery grid charging and inverter draw. Both ratios are zero
+    for a zero denominator; no unqualified `coverage` field is added.
+20. **Community extensions deferred to 0.9.** `[vehicle]` in a community site
+    and a household with a battery but no PV are deferred to 0.9. Issues
+    are to be filed for both; their current refusals remain in place.
 
 ## Consequences
 

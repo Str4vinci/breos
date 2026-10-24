@@ -1,6 +1,7 @@
 """ACC configuration contracts without dispatch, money calculations or network."""
 
 import tomllib
+import warnings
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, fields
 from itertools import permutations
@@ -10,6 +11,7 @@ import pytest
 import breos
 from breos.app_config import ALLOWED_CONFIG_KEYS, DEFAULTS, ResolvedAppConfig, resolve_app_config
 from breos.community.config import SHARED_APP_KEYS, HouseholdConfig, SharedSettings, parse_community_config
+from tests.offline_app import CREDIT, TOU
 
 EXAMPLE = """
 [community]
@@ -114,6 +116,31 @@ def test_frozen_records_and_identity_maps(config):
     ):
         with pytest.raises(TypeError):
             mapping["apt-1"] = 1
+
+
+@pytest.mark.parametrize("asset_ids", [(), ("school-roof",), ("external-roof",), ("school-roof", "external-roof")])
+def test_producer_credit_warns_once_per_asset_and_never_for_participants(config, asset_ids, recwarn):
+    warnings.simplefilter("always")
+    for participant in config["participants"]:
+        participant["tariff"] = {**deepcopy(TOU), "annual_network_credit": deepcopy(CREDIT)}
+    for asset in config["assets"]:
+        asset.pop("costs")
+        asset["tariff"] = deepcopy(TOU)
+        if asset["id"] in asset_ids:
+            asset["tariff"]["annual_network_credit"] = deepcopy(CREDIT)
+    parsed = parse_community_config(config)
+    assert len(recwarn) == len(asset_ids)
+    for warning, asset_id in zip(recwarn, sorted(asset_ids), strict=True):
+        assert warning.category is UserWarning
+        assert str(warning.message) == (
+            f"asset '{asset_id}': a producer-only connection rarely qualifies for an annual network credit; "
+            "BREOS does not judge eligibility."
+        )
+    for asset in parsed.assets:
+        credit = asset.site.tariff.prices.annual_network_credit
+        assert (credit is not None) == (asset.id in asset_ids)
+        if credit is not None:
+            assert credit.record()["amount_per_year"] == CREDIT["amount_per_year"]
 
 
 def test_reordering_and_hyphen_normalisation_preserve_ids(config):

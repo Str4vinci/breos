@@ -82,11 +82,14 @@ freezes field assignment, not DataFrames or the provenance dict.
 | `interval_money` | First-year money ledger, indexed by interval/type/id, with site rows only. |
 | `interval_closure` | First-year shared-payment and boundary residuals, indexed by interval. |
 | `provenance` | JSON-safe community settings, source and per-site records described below. |
-| `shared_coverage_of_load` | Yearly shared use / gross participant load, as a Series; zero for zero load. |
-| `shared_coverage_of_import` | Yearly shared use / metered participant import, as a Series; zero for zero import. |
+| `shared_coverage_of_import` | Presented first: yearly shared use / metered participant import, coverage of household grid purchases bounded by 100%; zero for zero import. |
+| `shared_coverage_of_load` | Yearly shared use / gross participant load, as a Series; can exceed 100% with battery grid charging; zero for zero load. |
 
 There is no unqualified `coverage` field. Both ratios describe shared use,
-not own-PV self-consumption.
+not own-PV self-consumption. Settlement caps use at metered import, which
+includes battery grid charging and inverter draw. This bounds import
+coverage by 100%; gross-load coverage can exceed 100% when shared use also
+offsets battery grid charging. Both properties return yearly Series.
 
 ### Participant and asset accounts
 
@@ -131,7 +134,7 @@ Community `yearly` includes `Cost_System_Annual`, `Cost_Alone_Annual`,
 `External_Owner_Receipts`, `Supplier_Net_Cost`, `Equipment_Operation_Cost`,
 `Replacement_Cost`, `Network_Credit_Change`, `Boundary_Cost`, residuals,
 `Energy_For_Sharing_Wh`, `Shared_Used_Total_Wh`, `Community_Surplus_Wh`,
-`Shared_Coverage_Of_Load` and `Shared_Coverage_Of_Metered_Import`.
+`Shared_Coverage_Of_Metered_Import` and `Shared_Coverage_Of_Load`.
 
 `totals` keys are `npv_savings`, `npv_alone`, `community_benefit`,
 `initial_investment`, `no_system_cost_npv`, `alone_cost_npv`,
@@ -166,6 +169,12 @@ participant boundary. Annual boundary costs additionally include fixed
 supplier charges, supplier-only network credits, O&M and replacement
 outlays. Initial investment is in NPV, outside annual operating closure.
 The signed `Network_Credit_Change` is after-sharing minus alone credit.
+
+An explicit annual network credit on a producer-only asset is accepted,
+capped against that asset's eligible supplier network charges and split by
+ownership as before. Configuration emits one `UserWarning` per such asset,
+naming its id: producer-only connections rarely qualify for a network credit
+and BREOS does not judge eligibility. Participants do not receive this warning.
 
 Per-participant annual cost savings close against the `Benefit_*` parts
 through `Benefit_Residual`; their NPVs plus owned initial investment close

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import re
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from datetime import date
@@ -417,6 +418,13 @@ def parse_community_config(config: Mapping[str, Any]) -> CommunityConfig:
             payload = _site_payload(row, asset=True)
             site = resolve_app_config({**shared.app_payload(), **payload, "annual_consumption_kwh": 1.0})
             site = replace(site, cfg={**site.cfg, "annual_consumption_kwh": 0.0, "load_profile": None})
+            if site.tariff is not None and site.tariff.prices.annual_network_credit is not None:
+                warnings.warn(
+                    f"asset '{site_id}': a producer-only connection rarely qualifies for an annual network credit; "
+                    "BREOS does not judge eligibility.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             assets.append(AssetConfig(site_id, ownership, site))
         except (TypeError, ValueError, OSError) as exc:
             raise type(exc)(f"asset '{site_id}': {exc}") from exc

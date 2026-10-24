@@ -27,8 +27,8 @@ ledger = community.settlement()
 
 home = result.participants["apt-1"]
 print(home.npv_savings, home.npv_alone, home.community_benefit)
-print(result.shared_coverage_of_load)
 print(result.shared_coverage_of_import)
+print(result.shared_coverage_of_load)
 print(result.provenance["settlement_schema_version"])
 ```
 
@@ -99,7 +99,7 @@ have `[participants.reference_tariff]`, own PV, a home battery, inverter
 details, costs and supported smart charging using App's site keys. A household
 without PV omits PV keys and supplies `annual_consumption_kwh` plus supported
 load-profile and billing keys; its metered import is its prepared load and
-its export is zero. A battery-only household without PV is not supported.
+its export is zero. A household with a battery but no PV is deferred to 0.9.
 App's [key reference](config-reference.md) describes the reused site keys;
 it does not describe community tables.
 
@@ -156,22 +156,28 @@ An annual network credit is capped against each participant's remaining
 supplier network charges, including their fixed part. Shared-network charges
 do not increase that cap. The sharing-induced credit change is a separate
 annual line; alone and no-system credits remain unchanged. An explicit
-asset-tariff credit currently follows the same supplier cap, pending
-maintainer review of producer-only contract eligibility.
+asset-tariff credit follows the same supplier cap and ownership split.
+Configuration emits one `UserWarning` per such asset, naming its id:
+producer-only connections rarely qualify for a network credit, and BREOS
+does not judge eligibility. Participants do not receive this warning.
 
-Both `shared_coverage_of_load` (shared use / gross household load) and
-`shared_coverage_of_import` (shared use / metered participant import) are
-reported, with zero for a zero denominator. There is no unqualified coverage
-field and no default choice between them.
+`shared_coverage_of_import` is presented first: shared use / metered
+participant import, the coverage of a household's grid purchases, bounded
+by 100%. `shared_coverage_of_load` divides shared use by gross household
+load and can exceed 100% when metered import includes battery grid charging.
+Shared use offsets metered import, which includes grid charging and inverter
+draw; it is capped at that import, not at gross household load. Both ratios
+remain available and are zero for a zero denominator. There is no unqualified
+coverage field.
 
 ## Boundaries and regulatory context
 
 This release shares PV only. It has no community storage, hierarchical or
 dynamic allocation, time-varying fixed coefficients, peer-to-peer trading,
-community `revalue`, Monte Carlo or optimizer. `[vehicle]` is refused in
-every community site pending review of ACC semantics after V2H. Assets
-refuse battery, load, smart-charging and reference-tariff keys. Shared keys
-inside sites are refused rather than silently overridden.
+community `revalue`, Monte Carlo or optimizer. `[vehicle]` in a community
+site and households with a battery but no PV are deferred to 0.9 (issues
+to be filed). Assets refuse battery, load, smart-charging and reference-tariff
+keys. Shared keys inside sites are refused rather than silently overridden.
 
 Regulatory context is dated **2026-10-06**, following ADR 0006; it has not
 been refreshed for this implementation. Portugal's Decreto-Lei n.º 15/2022,

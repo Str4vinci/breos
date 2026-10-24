@@ -74,7 +74,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete list.
   - Collective self-consumption (ACC): several households sharing generation,
     implemented for 0.8.0 as `breos.Community` beside App (#421): fixed and
     proportional PV sharing, settlement and participant/asset accounts.
-    ADR 0006 remains Proposed pending maintainer acceptance.
+    ADR 0006 accepted 2026-10-24.
   - An optimizer cache of scored designs that returns every evaluated
     candidate (#416), and refetched PVWatts references so the PVWatts band
     test runs again (#422).

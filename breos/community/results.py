@@ -33,6 +33,12 @@ class CommunityResult:
     Whole-asset accounts are already split into participant accounts: do not
     add them to ``totals`` a second time. External assets remain separate.
 
+    ``shared_coverage_of_import`` is coverage of household grid purchases,
+    bounded by 100%. ``shared_coverage_of_load`` divides by gross household
+    load and can exceed 100% when metered import includes battery grid
+    charging. Sharing offsets metered import, including grid charging and
+    inverter draw. Both ratios are zero for a zero denominator.
+
     First-year interval money and residual frames accompany the settlement
     returned by :meth:`breos.Community.settlement`. Every year's energy totals
     and maximum absolute interval residuals remain available. DataFrames and
@@ -53,14 +59,14 @@ class CommunityResult:
     provenance: dict[str, Any]
 
     @property
-    def shared_coverage_of_load(self) -> pd.Series:
-        """Yearly shared use / gross household load; zero for zero load."""
-        return self.yearly["Shared_Coverage_Of_Load"].copy()
+    def shared_coverage_of_import(self) -> pd.Series:
+        """Yearly grid-purchase coverage, at most 100%; zero for zero import."""
+        return self.yearly["Shared_Coverage_Of_Metered_Import"].copy()
 
     @property
-    def shared_coverage_of_import(self) -> pd.Series:
-        """Yearly shared use / metered participant import; zero for zero import."""
-        return self.yearly["Shared_Coverage_Of_Metered_Import"].copy()
+    def shared_coverage_of_load(self) -> pd.Series:
+        """Yearly shared use / gross load; can exceed 100%; zero for zero load."""
+        return self.yearly["Shared_Coverage_Of_Load"].copy()
 
 
 def _json_record(value: Any) -> Any:

@@ -115,6 +115,43 @@ def test_example_offline_closure_and_result_fields(config, monkeypatch):
     assert community.settlement().attrs["project_year"] == 1
 
 
+def test_asset_credit_warning_preserves_settlement_cap_and_owned_money(config):
+    config["community"]["projection_years"] = 1
+    asset = config["assets"][0]
+    asset.pop("costs")
+    asset["tariff"] = deepcopy(TOU)
+    baseline = simulate(config)
+    asset["tariff"]["annual_network_credit"] = {
+        "amount_per_year": 100,
+        "network_fixed_per_year": 20,
+        "network_import_prices": {"peak": 0.05, "off_peak": 0.02},
+    }
+    with pytest.warns(
+        UserWarning, match="shared-roof.*producer-only.*rarely qualifies.*BREOS does not judge eligibility"
+    ) as caught:
+        credited = simulate(config)
+    assert len(caught) == 1
+    pd.testing.assert_frame_equal(credited.settlement(), baseline.settlement(), check_exact=True)
+    before, after = baseline.result(), credited.result()
+    roof = after.assets["shared-roof"]
+    assert roof.energy["Metered_Import"].iloc[0] == 0
+    assert roof.yearly["Network_Credit"].iloc[0] == roof.yearly["Network_Charge"].iloc[0] == 20
+    for column in ("Cost_Import", "Cost_Daily", "Cost_Operation", "Revenue_Shared_Energy", "Revenue_Surplus"):
+        pd.testing.assert_series_equal(
+            roof.cashflows[column], before.assets["shared-roof"].cashflows[column], check_exact=True
+        )
+    for participant_id, share in after.ownership["shared-roof"].items():
+        old, new = before.participants[participant_id], after.participants[participant_id]
+        assert new.cashflows["Asset_Cost_Network_Credit"].iloc[0] == share * 20
+        assert old.cashflows["Cost_System_Annual"].iloc[0] - new.cashflows["Cost_System_Annual"].iloc[
+            0
+        ] == pytest.approx(share * 20)
+        discount_rate = credited._resolved.community.shared.discount_rate
+        assert new.npv_savings - old.npv_savings == pytest.approx(share * 20 / (1 + discount_rate))
+    np.testing.assert_allclose(after.interval_closure, 0, rtol=0, atol=1e-9)
+    np.testing.assert_allclose(after.yearly[["Shared_Residual", "Boundary_Residual"]], 0, rtol=0, atol=1e-9)
+
+
 @pytest.mark.parametrize("billing", ["flat", "tariff", "fixed_target", "daily_persistence"])
 def test_provenance_matches_app_and_is_sorted_json_safe(config, billing):
     config["participants"][0]["reference_tariff"] = deepcopy(FLAT_REFERENCE)

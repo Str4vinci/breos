@@ -15,6 +15,25 @@ COEFFICIENTS = {"a": 0.5, "b": 0.3, "c": 0.2}
 INDEX = pd.date_range("2026-01-01", periods=1, freq="15min", tz="Europe/Lisbon")
 
 
+def test_grid_charging_can_cover_more_than_gross_load_but_not_more_than_import():
+    load_wh, grid_charge_wh = 250.0, 750.0
+    metered_import_wh = load_wh + grid_charge_wh
+    frame = settle_meter_balances(
+        {"battery-home": MeterBalances([metered_import_wh], [0])},
+        {"roof": MeterBalances([0], [metered_import_wh])},
+        index=INDEX,
+        allocation="proportional",
+    )
+    assert_settlement_closure(frame)
+    home = frame.xs("battery-home", level="site_id").iloc[0]
+    # K4 caps use at the meter balance, which includes battery grid charging.
+    assert home["Shared_Used"] == metered_import_wh
+    shared_coverage_of_import = home["Shared_Used"] / home["Metered_Import"]
+    shared_coverage_of_load = home["Shared_Used"] / load_wh
+    assert shared_coverage_of_import == 1
+    assert shared_coverage_of_load == 4
+
+
 def reference(imports, *, exports=(0, 0, 0), injection=6000, allocation="proportional", pool=True):
     participants = {key: MeterBalances([c], [x]) for key, c, x in zip(COEFFICIENTS, imports, exports)}
     coefficients = COEFFICIENTS if allocation == "fixed" else None
