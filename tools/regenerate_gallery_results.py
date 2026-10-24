@@ -702,7 +702,7 @@ def vehicle_to_home(ctx: Context) -> Output:
     comparisons = {
         "system_npv": result["npv_savings"],
         "household_adjusted_npv": vehicle["household_adjusted_npv"],
-        "v2h_benefit": vehicle["v2h_benefit"],
+        "vehicle_benefit": vehicle["vehicle_benefit"],
     }
     return Output(
         {"households.csv": pd.DataFrame(rows).sort_values("household"), "comparisons.json": comparisons},

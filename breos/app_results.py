@@ -476,11 +476,11 @@ def build_result(
     if artifacts.vehicle is not None:
         result["vehicle"] = deepcopy(artifacts.vehicle)
         adjusted = artifacts.vehicle["household_adjusted_npv"]
-        benefit = artifacts.vehicle["v2h_benefit"]
+        benefit = artifacts.vehicle["vehicle_benefit"]
         result["npv_savings_household_adjusted"] = round(adjusted["npv"], 2) if adjusted is not None else None
         result["household_adjusted_comparable"] = adjusted["comparable"] if adjusted is not None else None
-        result["v2h_benefit_npv"] = round(benefit["npv"], 2) if benefit is not None else None
-        result["v2h_benefit_comparable"] = benefit["comparable"] if benefit is not None else None
+        result["vehicle_benefit_npv"] = round(benefit["npv"], 2) if benefit is not None else None
+        result["vehicle_benefit_comparable"] = benefit["comparable"] if benefit is not None else None
     # One copy, as provenance and the top level have always shared it.
     result["provenance"]["degradation"] = result["degradation"]
 

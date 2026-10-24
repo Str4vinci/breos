@@ -120,8 +120,8 @@ _PAYBACK_METRICS = ("payback_year", "payback_year_interpolated")
 _VEHICLE_COMPARISON_METRICS = (
     "npv_savings_household_adjusted",
     "household_adjusted_comparable",
-    "v2h_benefit_npv",
-    "v2h_benefit_comparable",
+    "vehicle_benefit_npv",
+    "vehicle_benefit_comparable",
 )
 
 
@@ -767,12 +767,12 @@ def _vehicle_frame_year(year: ProjectionYear, schedule: VehicleSchedule, tempera
 
 def _vehicle_run_metrics(block: dict[str, Any]) -> dict[str, Any]:
     """Flatten App's numeric household results for runs tables and statistics."""
-    adjusted, benefit = block["household_adjusted_npv"], block["v2h_benefit"]
+    adjusted, benefit = block["household_adjusted_npv"], block["vehicle_benefit"]
     metrics = {
         "npv_savings_household_adjusted": adjusted["npv"],
         "household_adjusted_comparable": adjusted["comparable"],
-        "v2h_benefit_npv": math.nan if benefit is None else benefit["npv"],
-        "v2h_benefit_comparable": None if benefit is None else benefit["comparable"],
+        "vehicle_benefit_npv": math.nan if benefit is None else benefit["npv"],
+        "vehicle_benefit_comparable": None if benefit is None else benefit["comparable"],
     }
     for label, comparison in (("r2_r0", adjusted), ("r2_r1", benefit)):
         for output, source in (
@@ -791,7 +791,7 @@ def _vehicle_run_metrics(block: dict[str, Any]) -> dict[str, Any]:
             "unserved_savings_npv",
             "charger_premium",
         ):
-            metrics[f"vehicle_v2h_{name}"] = benefit[name]
+            metrics[f"vehicle_benefit_{name}"] = benefit[name]
     for key, household in block["households"].items():
         prefix = f"vehicle_{key.lower()}_"
         metrics.update({prefix + name: value for name, value in household["totals"].items()})

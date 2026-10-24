@@ -41,6 +41,8 @@ class VehicleSchedule:
     drive_first_wh: np.ndarray
     park_hours: np.ndarray
     drive_second_wh: np.ndarray
+    # Departure before a window that starts away, for comparison diagnostics.
+    initial_absence_departure: pd.Timestamp | None = None
 
     def __post_init__(self) -> None:
         for name, dtype in (
@@ -140,6 +142,10 @@ def _read_segments(path: str, timezone: str) -> list[_Segment]:
     return segments
 
 
+def _year_start(year: int, timezone: str) -> pd.Timestamp:
+    return pd.Timestamp(f"{year}-01-01").tz_localize(timezone, nonexistent="shift_forward", ambiguous=True)
+
+
 def _file_absences(path: str, timezone: str, year: int) -> list[list[_Segment]]:
     segments = _read_segments(path, timezone)
     # A file is an annual calendar. Its halo carries trips across the seam
@@ -148,10 +154,13 @@ def _file_absences(path: str, timezone: str, year: int) -> list[list[_Segment]]:
     # as the per-step arrays replay in project_years. Relocalizing each row
     # in an adjacent year could collapse a drive within the repeated hour
     # to zero duration when that date is no longer a DST transition.
-    year_start = pd.Timestamp(f"{year}-01-01", tz=timezone)
-    year_end = pd.Timestamp(f"{year + 1}-01-01", tz=timezone)
-    if segments and not any(s.start < year_end and s.end > year_start for s in segments):
-        raise ValueError(f"Vehicle trip CSV timestamps must use the simulation's reference calendar year ({year})")
+    year_start, year_end = _year_start(year, timezone), _year_start(year + 1, timezone)
+    for absence in _group_absences(segments):
+        if not (absence[0].start < year_end and absence[-1].end > year_start):
+            raise ValueError(
+                f"Vehicle absence starting {absence[0].start.isoformat()} does not overlap "
+                f"the reference calendar year ({year})"
+            )
     return _replay_absences(segments, year_end - year_start)
 
 
@@ -163,8 +172,12 @@ def _replay_absences(segments: list[_Segment], period: pd.Timedelta) -> list[lis
         for s in segments
     ]
     replayed.sort(key=lambda segment: segment.start)
+    return _group_absences(replayed)
+
+
+def _group_absences(segments: list[_Segment]) -> list[list[_Segment]]:
     absences: list[list[_Segment]] = []
-    for segment in replayed:
+    for segment in segments:
         if absences and segment.start < absences[-1][-1].end:
             raise ValueError("Vehicle trip calendar overlaps when replayed across the year seam")
         if absences and segment.start == absences[-1][-1].end and segment.kind != "template":
@@ -175,8 +188,7 @@ def _replay_absences(segments: list[_Segment], period: pd.Timedelta) -> list[lis
 
 
 def _template_absences(spec: VehicleScheduleSpec, timezone: str, year: int) -> list[list[_Segment]]:
-    year_start = pd.Timestamp(f"{year}-01-01", tz=timezone)
-    year_end = pd.Timestamp(f"{year + 1}-01-01", tz=timezone)
+    year_start, year_end = _year_start(year, timezone), _year_start(year + 1, timezone)
     segments: list[_Segment] = []
     # Iterate civil dates before localizing, so an overnight trip advances
     # one date even on the 25-hour autumn transition day.
@@ -241,6 +253,7 @@ def resolve_vehicle_schedule(
     drives: list[_Segment] = []
     departures: list[int] = []
     origin = int(times[0])
+    initial_departure = None
     for segments in absences:
         start, end = segments[0].start.value, segments[-1].end.value
         left = (start - origin) // step
@@ -249,6 +262,8 @@ def resolve_vehicle_schedule(
         lo, hi = max(0, left), min(n, right)
         if lo >= hi:
             continue
+        if lo == 0 and initial_departure is None:
+            initial_departure = segments[0].start
         plugged[lo:hi] = False
         if segments[0].kind == "template":
             segment = segments[0]
@@ -291,4 +306,4 @@ def resolve_vehicle_schedule(
         next_pos = np.searchsorted(starts, positions, side="right")
         valid = plugged & (next_pos < len(starts))
         counts[valid] = starts[next_pos[valid]] - positions[valid]
-    return VehicleSchedule(index, step / _HOUR_NS, plugged, counts, first, parked, second)
+    return VehicleSchedule(index, step / _HOUR_NS, plugged, counts, first, parked, second, initial_departure)

@@ -1,11 +1,10 @@
 # 0005 — Vehicle-to-home: the vehicle as a second, part-time AC-coupled store
 
-- **Status:** Proposed, with the decisions taken by the maintainer
+- **Status:** Accepted 2026-10-24, with the decisions taken by the maintainer
   on 2026-10-06, 2026-10-07 and 2026-10-22 (see [Decisions](#decisions)).
-  Implemented for 0.8.0 after the AC-coupled battery work (#419), pending
-  maintainer acceptance. Tracked in #420.
+  Implemented for 0.8.0 after the AC-coupled battery work (#419). Tracked in #420.
 - **Date:** 2026-10-06; decisions taken 2026-10-06, 2026-10-07 and
-  2026-10-22; amended 2026-10-22
+  2026-10-22; accepted and amended 2026-10-24
 
 ## Context
 
@@ -584,7 +583,7 @@ replacement policy:
 | Household | System | Vehicle charging at home | Used for |
 |---|---|---|---|
 | R0, no system | none | `"uncontrolled"`, from the grid | NPV baseline, emissions baseline, household-adjusted NPV |
-| R1, reference | the configured PV and battery | `reference_mode` | V2H benefit |
+| R1, reference | the configured PV and battery | `reference_mode` | Vehicle benefit |
 | R2, study | the configured PV and battery | `mode` | every reported result |
 
 - **R0** extends today's no-system household: it buys the house load and the
@@ -596,7 +595,7 @@ replacement policy:
 - **R1** is a second projection of the configured system with
   `vehicle.mode = reference_mode`. `reference_mode` defaults to `"v1g"` for
   `"v2h"` and to `"uncontrolled"` for `"v1g"`; `"none"` skips R1 and the
-  V2H benefit. A `reference_mode` equal to `mode` is refused, and
+  vehicle benefit. A `reference_mode` equal to `mode` is refused, and
   `"uncontrolled"` has no R1.
 - **Run time.** A V2H run is three household trajectories: R0, a light
   vehicle-only run, and R1 and R2, full system runs. Each has its own
@@ -611,7 +610,7 @@ replacement policy:
   the vehicle wear `W_{2−0}` (V10), less R2's priced unserved driving over
   R0's when `outside_charging_price` is set. It answers what the household
   gains from the system once its vehicle is counted.
-- **V2H benefit**, R2 against R1: operating savings (R1's home electricity
+- **Vehicle benefit**, R2 against R1: operating savings (R1's home electricity
   bill, export revenue, away purchases and priced unserved driving, less
   R2's), less `charger_cost` (V10), less the vehicle wear `W_{2−1}`. It is
   reported with its parts.
@@ -619,8 +618,9 @@ replacement policy:
   drive the same trips. Each household reports its unserved driving and
   departure shortfalls. With `outside_charging_price` set, unserved driving
   is a cost in each household (V5). Without it, a comparison in which R2
-  leaves more driving unserved than its comparator is reported with
-  `comparable = false`, and the docs say why.
+  leaves more driving unserved on any absence than its comparator is reported
+  with `comparable = false`, within 1e-9 kWh per absence. The reason identifies
+  the first failing departure. Horizon totals cannot offset a worse trip.
 
 The other options for `reference_mode` were always `"uncontrolled"`, which
 would mix the value of smart charging into the value of V2H, and always
@@ -697,7 +697,7 @@ Decided 2026-10-07 (decision 11).
 - **Charger.** `vehicle.charger_cost` is the installed premium of the
   configured charger over the reference charger, which R0 and R1 own and
   which is assumed to support V1G. It joins the system's CAPEX, so the
-  system NPV (R2 against R0) counts it once, and the V2H benefit (R2
+  system NPV (R2 against R0) counts it once, and the vehicle benefit (R2
   against R1) subtracts it once; no comparison counts it twice. A study of
   V1G against uncontrolled charging sets it to the smart charger's premium;
   a study on hardware already owned sets it to 0 explicitly. It is required
@@ -736,7 +736,7 @@ Decided 2026-10-07 (decision 11).
   ```
 
   The difference is not clipped. Positive means `a` costs the vehicle more;
-  negative means it saves vehicle value. The V2H benefit uses `W_{2−1}`,
+  negative means it saves vehicle value. The Vehicle benefit uses `W_{2−1}`,
   the household-adjusted NPV `W_{2−0}`. The outlays-only difference
   `P_a − P_b` is reported beside it: the cash the household actually pays,
   which a swap just before the horizon swings strongly.
@@ -821,7 +821,7 @@ the household's away purchases as inputs.
 totals for R0, R1 and R2; each household's replacement history (dates,
 reasons, outlays) and final pack health; `P_r`, `H_r`, the wear `W_{2−1}`
 and `W_{2−0}` and the outlays-only differences; the household-adjusted NPV;
-the V2H benefit with its parts; and the `comparable` flags.
+the vehicle benefit with its parts; and the `comparable` flags.
 `provenance.vehicle` records the resolved table, the schedule hash and its
 rounding.
 
@@ -1070,10 +1070,33 @@ exact landings exactly, as ADR 0004's AC7 does.
 PRs 1–6 are implemented. App and paired Monte Carlo run complete vehicle
 households; the optimizer, `daily_persistence` with a vehicle, and BLAST or
 several PV inverters with Monte Carlo remain refused as specified. The plan
-table below records the implementation commits; PR 6 is this uncommitted
-documentation changeset. This section is the final implementation account,
-with the original plan retained as history. The ADR remains **Proposed**:
-implementation does not substitute for the maintainer's acceptance.
+table below records the implementation commits. This section is the final
+implementation account, with the original plan retained as history. The
+maintainer accepted the implemented interpretations on 2026-10-24 (decision 19).
+
+The 2026-10-24 changes validate every source CSV absence before replay: each
+must overlap the explicit reference year, while an absence crossing either
+year edge remains valid as a whole. Invalid absences name their departure
+and the reference year. Year bounds use the first real instant when local
+1 January midnight does not exist. The `74dd805` fix continues to replay
+complete template absences from the explicit App/Monte Carlo reference year.
+
+Unpriced comparability now checks each resolved continuous away interval,
+within 1e-9 kWh per absence. It uses retained `Vehicle_Drive_Unserved` flows
+from the existing ledger, aligned by the common schedule. A year tail and
+the following head are one absence; initial/final partial absences compare
+only their in-project driving. Sub-step gaps without a complete home step
+share the existing resolved away interval, under the accepted time-step
+approximation. Failure reasons identify the first departure and project year;
+an initial away window retains its original departure for that diagnostic.
+Stating `outside_charging_price`, including zero, keeps the priced rule.
+
+R2/R1 is now `vehicle_benefit`, including its top-level fields and Monte
+Carlo column family. Comparison blocks state `study_mode` and `reference_mode`.
+There is no result alias or format-version change. The Porto gallery shows
+operating savings, wear and premium separately, with a break-even premium
+computed from stored operating savings minus wear. Stored gallery files are
+left for the maintainer to regenerate on a committed clean tree.
 
 PR 6 adds the configuration guide, site/on-board ledger documentation and
 results interpretation, including the model-validity and user-data limits.
@@ -1167,7 +1190,7 @@ flat, tariff and reference-tariff paths, including revalue. Vehicle year rows
 report home energy, driving, away purchases, missed departures, health and
 swaps. The vehicle result block contains the three household trajectories,
 outlays P, pack credits H, wear and both comparisons. Top-level
-`npv_savings_household_adjusted` and `v2h_benefit_npv` repeat the labelled
+`npv_savings_household_adjusted` and `vehicle_benefit_npv` repeat the labelled
 comparison values beside the existing system NPV, with comparable flags.
 Away purchases enter avoided emissions in each household; the R2 emissions
 caller now uses R0's site and away purchases. PV-origin vehicle AC delivered
@@ -1197,7 +1220,7 @@ reference tariffs, annual network credits, replacement booking instants,
 pack-only credits, away purchases, outside-charging penalties and comparable
 flags. The runs table retains ordinary system `npv_savings` and adds
 `npv_savings_household_adjusted`, `household_adjusted_comparable`,
-`v2h_benefit_npv` and `v2h_benefit_comparable`. New `vehicle_` columns contain
+`vehicle_benefit_npv` and `vehicle_benefit_comparable`. New `vehicle_` columns contain
 R2/R0 and R2/R1 wear and outlays-only differences, adjusted away/unserved cost
 differences, and the V2H operating/home/export/away/unserved savings and charger
 premium. Each `vehicle_r0_`, `vehicle_r1_` and `vehicle_r2_` family includes
@@ -1276,12 +1299,13 @@ Implementation interpretations and money conventions for PR 4:
   export revenue, away purchases and priced unserved driving. Their configured
   system CAPEX, O&M and stationary replacements are identical and cancel; no
   second PV or stationary-pack cost is charged to V2H.
-- Comparability tests total gross unserved driving over the projection, with
-  a 1e-9 kWh numerical tolerance. Only more unserved driving by R2 makes a
+- Comparability tests gross unserved driving on each absence, with
+  a 1e-9 kWh tolerance per absence (2026-10-24 replaces the original
+  horizon-total test). More unserved driving by R2 on any absence makes a
   comparison non-comparable when no outside price is stated. A stated penalty,
   including explicit zero, makes it priced and comparable. Departure misses
   remain reported and do not independently invalidate a comparison. Missing
-  R1 gives a null V2H benefit and null top-level benefit flags.
+  R1 gives a null vehicle benefit and null top-level benefit flags.
 - A period window keeps energy and year-1-price bills and invoices, with no
   lifetime comparison, P/H NPV, nominal escalated invoice or discounted invoice.
   Replacement history still reports its t = 0 invoice. Vehicle monetary
@@ -1503,9 +1527,9 @@ edit locations. PR 2 added the no-stationary-pack routing described above.
 | 1 | Done: `c977927` | `VehicleConfig` and `[vehicle]` validation, with `[vehicle.away_charging]` and the replacement keys; accept `[smart_charging].grid_import_limit_w` without a stationary battery when a vehicle is configured, leaving stationary instructions unchanged (A12); schedule resolution to per-step arrays (civil time, rounding, year seam, the leg template, the trip file's drive and park segments, charging windows), its hash; simulation refused. No behaviour change. | 3 days | Civil-time edge cases (DST, year seam) and multi-day absences. |
 | 2 | Done: home `a680092`, trips `04275e2` | `_dispatch_vehicle_step` with the deadline guard and exact landings; departure, driving legs, away charging and arrival; vehicle rows in ledger schema 3.1 (see A2); on-board and site balances; origins; the day-loop branch and its arguments in `_day_arguments`; Numba registration; closure helper; reference cases VH1–VH5 and invariants Q1–Q5, with Q1–Q4 also on the several-PV-inverter path (A6); parity scenarios. | 6.5 days | Stationary bit identity (Q2), and the kernel's compile time and memory with more rows. |
 | 3 | Done: `01b9ba7` | The vehicle's degradation lifecycle between day windows, its temperature, capacity-window loss, replacement with the stationary rules and explicit replacement energy, plugged in or away, its carry between years; VH6 and Q7; refusal of `daily_persistence` with a vehicle. | 3.5 days | A second lifecycle and a second swap path in the day-close code without moving the stationary one. |
-| 4 | Done: `5c52ba5`; golden gallery `fa6f8f8` | App: R0 as a vehicle-only projection (invariant Q6), R1 and R2; the baseline with R0's charging; away purchases; `P_r`, `H_r` and the wear `W`; the household-adjusted NPV, the V2H benefit and the `comparable` flags; `outside_charging_price`; `charger_cost` and `battery_cost_per_kwh` required and refused when missing; emissions with away purchases; year rows, the `vehicle` result block, provenance, regenerated config docs and golden provenance; VH7. | 5.5 days | A path that reaches economics before a price is checked, and three projections' memory. |
+| 4 | Done: `5c52ba5`; golden gallery `fa6f8f8` | App: R0 as a vehicle-only projection (invariant Q6), R1 and R2; the baseline with R0's charging; away purchases; `P_r`, `H_r` and the wear `W`; the household-adjusted NPV, the vehicle benefit and the `comparable` flags; `outside_charging_price`; `charger_cost` and `battery_cost_per_kwh` required and refused when missing; emissions with away purchases; year rows, the `vehicle` result block, provenance, regenerated config docs and golden provenance; VH7. | 5.5 days | A path that reaches economics before a price is checked, and three projections' memory. |
 | 5 | Done: `9ae659b` | Monte Carlo: R0, R1 and R2 paired per trajectory, load scale on the house only; optimizer refusal. | 2 days | Memory and run time of three households per trajectory. |
-| 6 | Done: this changeset (uncommitted; no commit yet) | Docs: configuration guide (`[vehicle]`, the leg template and its approximation, away charging, replacement as a study policy, the assumptions in V5 and V9), energy-balance and results pages, a gallery case, CHANGELOG; ADR implementation status. | 2 days | None significant. |
+| 6 | Done: `99e47ab`; stored gallery `be98612` | Docs: configuration guide (`[vehicle]`, the leg template and its approximation, away charging, replacement as a study policy, the assumptions in V5 and V9), energy-balance and results pages, a gallery case, CHANGELOG; ADR implementation status. | 2 days | None significant. |
 
 Risks across the work:
 
@@ -1760,7 +1784,7 @@ decisions 15–18 and confirmed the existing BLAST rule below.
 11. **Costs and wear** (2026-10-07, changed): one `charger_cost`, the
     installed premium over the reference charger, never counted twice; the
     system NPV unchanged, with a household-adjusted NPV (R2 against R0) and
-    the V2H benefit (R2 against R1) beside it; wear
+    the vehicle benefit (R2 against R1) beside it; wear
     `W = P_2 − P_1 + H_1 − H_2` from replacement outlays at their swap
     instants and pack-only terminal credits, each credit clipped and the
     difference not, with the outlays-only difference also reported; the
@@ -1794,6 +1818,17 @@ decisions 15–18 and confirmed the existing BLAST rule below.
     without a stationary battery when a vehicle is configured. PR 1 makes
     this validation change; stationary instructions do not change. No new
     key is added (A12).
+19. **Acceptance and final amendments** (2026-10-24): the maintainer accepted
+    the implemented interpretations: mode is required; the default reference
+    is one step down (V2H → V1G → uncontrolled → none);
+    `allow_terminal_replacement` defaults true; the schedule's rounding,
+    DST, explicit reference calendar and whole-absence year-edge rules apply;
+    the implementation-status money conventions are accepted. The maintainer
+    also decided the four changes of this date: refuse CSV absences wholly
+    outside the reference year and use real year-start instants; compare
+    unpriced driving per absence rather than by horizon totals; name R2/R1
+    `vehicle_benefit` with the compared modes; and show the Porto gallery's
+    operating/wear/premium breakdown and stored-data break-even premium.
 
 **BLAST in Monte Carlo — existing rule, confirmed 2026-10-22.** No new
 decision is needed: App refuses BLAST with Monte Carlo, so a Monte Carlo
@@ -1804,7 +1839,7 @@ substitutes an engine (A15).
 
 - A household with a vehicle can be simulated in App with uncontrolled,
   smart (V1G) or V2H charging, with driving and charging away from home,
-  and its V2H benefit is reported against the same household without V2H,
+  and its Vehicle benefit is reported against the same household without V2H,
   including the vehicle's extra wear valued through its replacements.
 - The no-system baseline buys the vehicle's charging too, so NPVs with a
   vehicle compare like with like. The system NPV keeps its meaning; a

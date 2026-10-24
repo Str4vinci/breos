@@ -124,14 +124,84 @@ say(
 # benefit compares R2 with R1 on the same system, charging the installed
 # premium once. It does not charge PV and stationary storage again.
 
-adjusted, benefit = comparisons["household_adjusted_npv"], comparisons["v2h_benefit"]
+adjusted = comparisons["household_adjusted_npv"]
+# Read-only transition for this stored artifact: the maintainer regenerates
+# it on a clean tree. Public results expose only vehicle_benefit.
+benefit = comparisons["vehicle_benefit"]
 values = [comparisons["system_npv"], adjusted["npv"], benefit["npv"]]
 fig, ax = plt.subplots(figsize=(8, 4))
-ax.bar(["System NPV\nR2 against R0", "Household-adjusted NPV\nR2 against R0", "V2H benefit\nR2 against R1"], values)
+ax.bar(["System NPV\nR2 against R0", "Household-adjusted NPV\nR2 against R0", "Vehicle benefit\nR2 against R1"], values)
 ax.axhline(0, color="black", linewidth=0.8)
 ax.set_ylabel(f"Present value over three years ({currency})")
 ax.grid(axis="y", alpha=0.3)
 fig.tight_layout()
+
+# %%
+# The vehicle benefit in parts
+# ---------------------------
+# Operating savings are the difference in the households' home bills,
+# exports, away purchases and priced unserved driving. Subtract additional
+# vehicle wear and the installed charger premium to get the vehicle benefit.
+# All values below come from the stored comparison, with no new simulation.
+
+operating = benefit["operating_savings_npv"]
+wear_cost = benefit["wear_npv"]
+premium = benefit["charger_premium"]
+break_even_premium = operating - wear_cost
+parts = [operating, -wear_cost, -premium, benefit["npv"]]
+bottoms = [0, operating, break_even_premium, 0]
+fig, ax = plt.subplots(figsize=(9, 4))
+bars = ax.bar(
+    ["Operating savings", "Vehicle wear", "Charger premium", "Vehicle benefit"],
+    parts,
+    bottom=bottoms,
+    color=["#228833", "#EE6677", "#EE6677", "#4477AA"],
+)
+for bar, amount in zip(bars, parts):
+    ax.annotate(
+        number(amount, 2),
+        (bar.get_x() + bar.get_width() / 2, bar.get_y() + bar.get_height()),
+        xytext=(0, -14 if amount < 0 else 6),
+        textcoords="offset points",
+        ha="center",
+    )
+ax.axhline(0, color="black", linewidth=0.8)
+ax.set_ylim(min(parts) * 1.15, max(operating, 1) + 300)
+ax.set_ylabel(f"Three-year contribution ({currency} NPV)")
+ax.grid(axis="y", alpha=0.3)
+fig.tight_layout()
+
+# %%
+
+table(
+    pd.DataFrame(
+        {
+            "Part": [
+                "Operating savings",
+                "Additional vehicle wear",
+                "Installed charger premium",
+                "Vehicle benefit",
+                "Break-even charger premium",
+            ],
+            f"Amount ({currency})": [operating, wear_cost, premium, benefit["npv"], break_even_premium],
+        }
+    ),
+    **{f"Amount ({currency})": ".2f"},
+)
+
+# %%
+
+# sphinx_gallery_start_ignore
+assert np.isclose(break_even_premium - premium, benefit["npv"])
+say(
+    f"On this tariff the operating gain is small: {number(operating, 2)} {currency} over three years. "
+    f"After {number(wear_cost, 2)} {currency} of additional vehicle wear, the benefit would be zero "
+    f"at a charger premium of {number(break_even_premium, 2)} {currency} "
+    "(operating savings minus wear). "
+    f"The example keeps its {number(premium)} {currency} premium and three-year horizon; "
+    f"its vehicle benefit is {number(benefit['npv'], 2)} {currency} NPV.",
+)
+# sphinx_gallery_end_ignore
 
 # %%
 
@@ -179,7 +249,7 @@ assert np.isclose(
 say(
     f"Over three years, system NPV is {money(comparisons['system_npv'], currency)}; "
     f"household-adjusted NPV is {money(adjusted['npv'], currency)}. "
-    f"V2H benefit against V1G is {money(benefit['npv'], currency)}, including "
+    f"Vehicle benefit against V1G is {money(benefit['npv'], currency)}, including "
     f"{money(benefit['wear_npv'], currency)} of additional vehicle wear and the "
     f"{money(benefit['charger_premium'], currency)} charger premium. "
     f"The outlays-only difference is {money(benefit['replacement_outlays_difference_npv'], currency)}.",

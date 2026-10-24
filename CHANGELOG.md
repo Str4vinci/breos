@@ -16,7 +16,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Vehicle-to-home (#420): `[vehicle]` adds uncontrolled, V1G and V2H modes,
   weekday/weekend schedules or trip files, away charging, pack ageing and
   replacement policy. App and paired Monte Carlo compare three households
-  with replacement-aware wear, household-adjusted NPV and V2H benefit;
+  with replacement-aware wear, household-adjusted NPV and mode-neutral
+  `vehicle_benefit` (R2/R1, with the compared modes). Unpriced comparability
+  checks every absence, so horizon totals cannot hide a worse trip;
   the optimizer refuses vehicles. Charger and pack prices are user inputs.
   `[smart_charging].grid_import_limit_w` also works without a stationary
   battery. Ledger 3.1 gains vehicle states, flows, origins and boundary

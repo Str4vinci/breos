@@ -281,6 +281,31 @@ def test_file_with_wrong_reference_year_is_refused_instead_of_ignoring_trips(tmp
         csv_schedule(tmp_path, "2025-01-05 08:00,2025-01-05 09:00,drive,1,\n", day_index("2026-01-05"))
 
 
+def test_file_refuses_an_unrelated_absence_outside_its_reference_year(tmp_path):
+    index = pd.date_range("2025-01-01", "2026-01-01", inclusive="left", freq="h", tz="UTC")
+    with pytest.raises(ValueError, match=r"2026-06-02.*reference calendar year.*2025"):
+        csv_schedule(
+            tmp_path,
+            "2025-06-02 08:00,2025-06-02 09:00,drive,3,\n2026-06-02 08:00,2026-06-02 09:00,drive,4,\n",
+            index,
+        )
+
+
+@pytest.mark.parametrize("year", [1985, 1986])
+@pytest.mark.parametrize("file", [False, True])
+def test_year_bounds_use_the_first_real_instant_when_local_midnight_is_missing(tmp_path, year, file):
+    # Lima advanced the clock at midnight on 1 January 1986. Exercise both
+    # a missing upper year bound and a missing lower bound.
+    index = pd.date_range(f"{year}-06-02", periods=24, freq="h", tz="UTC")
+    if file:
+        resolved = csv_schedule(
+            tmp_path, f"{year}-06-02 08:00,{year}-06-02 09:00,drive,3,\n", index, timezone="America/Lima"
+        )
+    else:
+        resolved = resolve_vehicle_schedule(rules(), index, timezone="America/Lima", reference_year=year)
+    assert (resolved.drive_first_wh + resolved.drive_second_wh).sum() == (3000 if file else 10000)
+
+
 def test_empty_file_means_home_with_no_departure(tmp_path):
     resolved = csv_schedule(tmp_path, "", day_index("2026-01-05"))
     assert resolved.plugged.all() and not resolved.steps_to_departure.any()
