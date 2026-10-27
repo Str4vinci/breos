@@ -56,7 +56,7 @@ def solver_location() -> dict[str, Any]:
 
 
 def _reverse_voltage(current, photo, saturation, series, shunt, diode):
-    """Brent's voltage root above open circuit, outside pvlib's default bracket."""
+    """Brent's voltage root at or above open circuit, outside pvlib's default bracket."""
     result = np.empty(np.shape(current))
     for k in range(result.size):
         il, io, rs, rsh, n = (p[k] for p in (photo, saturation, series, shunt, diode))
@@ -128,8 +128,8 @@ def _solve(kind, params, value=0.0, *, stage, steps=None, feasible=True, locatio
         if kind != "mpp":
             args = [value if selected is None else arrays[5][selected], *args]
         try:
-            if kind == "voltage" and method == "brentq" and np.any(np.asarray(args[0]) < 0):
-                reverse = np.asarray(args[0]) < 0
+            if kind == "voltage" and method == "brentq" and np.any(np.asarray(args[0]) <= 0):
+                reverse = np.asarray(args[0]) <= 0
                 result = np.empty(reverse.shape)
                 result[reverse] = _quiet(_reverse_voltage, *[p[reverse] for p in args])
                 if (~reverse).any():
