@@ -1258,8 +1258,15 @@ class _StringGroup:
         module_dc = np.asarray(self.breakdown.module_dc, dtype=float)
         dc = np.asarray(self.breakdown.dc_after_losses, dtype=float)
         in_service = _in_service(self.breakdown)
+        static_scale = math.prod(
+            1.0 - float(pct) / 100.0
+            for name, pct in self.breakdown.pvwatts_components_pct.items()
+            if name != "availability"
+        ) * (1.0 - float(self.breakdown.age_degradation_pct) / 100.0)
         with np.errstate(divide="ignore", invalid="ignore"):
-            return np.where((module_dc > 0) & (in_service > 0), dc / module_dc / in_service, 0.0)
+            # Keep the existing rounding on producing steps. A dark string
+            # still carries current, with the same static losses while running.
+            return np.where((module_dc > 0) & (in_service > 0), dc / module_dc / in_service, static_scale)
 
 
 def _in_service(breakdown: Any) -> float:
@@ -1566,7 +1573,7 @@ def _curves_power(
 
     def currents(voltage: np.ndarray, subset: np.ndarray = everywhere) -> list[np.ndarray]:
         rows = mask(subset)
-        return [source.current(voltage, rows) for source in sources]
+        return [source.current(voltage, rows, signed=True) for source in sources]
 
     def input_current(voltage: np.ndarray) -> np.ndarray:
         return sum(source.count * i for source, i in zip(sources, currents(voltage), strict=True))
@@ -1633,7 +1640,7 @@ def _curves_power(
 def _sources_open_circuit(sources: list[Any]) -> np.ndarray:
     """An input's open-circuit voltage at each step, in V: where its strings' currents cancel; 0 in the dark."""
     own = np.asarray([source.v_oc for source in sources], dtype=float)
-    lit = np.all(own > 0, axis=0)
+    lit = np.any(own > 0, axis=0)
     voltage = np.zeros(own.shape[1])
     if len(sources) == 1 or not lit.any():
         return np.where(lit, own.max(axis=0), 0.0) if len(sources) > 1 else own[0]
@@ -1653,7 +1660,7 @@ def _open_circuit_voltage(groups: list[_StringGroup]) -> np.ndarray:
     Strings in parallel settle where their currents cancel, between their own
     open-circuit voltages.
     """
-    lit = np.all([np.asarray(g.operating.photocurrent, dtype=float) > 0 for g in groups], axis=0)
+    lit = np.any([np.asarray(g.operating.photocurrent, dtype=float) > 0 for g in groups], axis=0)
     voltage = np.zeros(len(lit))
     if not lit.any():
         return voltage

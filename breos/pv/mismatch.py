@@ -28,6 +28,7 @@ grid of currents refined to its global maximum power point.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
@@ -49,6 +50,8 @@ _GOLDEN_STEPS = 30
 _BISECTION_STEPS = 40
 # Local maxima of each step's tabled curve refined on the exact curve.
 _REFINED_PEAKS = 4
+# Reverse-current samples, with a smooth interpolation in log current.
+_REVERSE_POINTS = 192
 _GOLDEN_RATIO = (5.0**0.5 - 1.0) / 2.0
 # Relative distance of the grid points either side of a part's short-circuit
 # current, on its own curve below it and on the bypass diode above it.
@@ -178,6 +181,7 @@ class ShadedStringCurve:
         self._uniform_params: tuple[np.ndarray, ...] = ()
         self._table_v = np.zeros((0, _CURVE_POINTS))
         self._table_i = np.zeros((0, _CURVE_POINTS))
+        self.dark = np.flatnonzero(~lit & (self.scale > 0))
         self._uniform_curve()
         if self.mismatched.size:
             self._substrings = self._substring_elements(shading, e_mean, e_parts, counts, limited, per_substring, cells)
@@ -472,6 +476,26 @@ class ShadedStringCurve:
         with np.errstate(divide="ignore", invalid="ignore"):
             self.v_mp[rows] = np.where(scale * current > 0, power / (scale * current), 0.0)
 
+    @cached_property
+    def _dark_params(self) -> list[np.ndarray]:
+        """Generate dark-step parameters only when their current is queried."""
+        rows = self.dark
+        params = list(self.parts.diode_parameters(self.mean_irradiance[rows], rows))
+        params[2] = params[2] + self.scale[rows] * self.cable_ohm / self.modules
+        return params
+
+    @cached_property
+    def _reverse_curve(self) -> tuple[np.ndarray, np.ndarray, tuple[np.ndarray, ...]]:
+        """Table the reverse branch on its first query, keeping the forward MPP grid."""
+        rows = self.mismatched
+        params = self.parts.diode_parameters(self.mean_irradiance[rows], rows)
+        saturation = np.asarray(params[1])
+        amps = np.r_[0.0, np.geomspace(1e-16, 1.5 * float(self.parts.pv_params.Isc), _REVERSE_POINTS)]
+        current = np.broadcast_to(-amps, (len(rows), len(amps)))
+        voltage = self._voltage(current) - (self.scale[rows] * self.cable_ohm)[:, None] * current
+        log_current = np.log1p(amps[None, :] / saturation[:, None])
+        return voltage, saturation, _interpolation_coefficients(voltage, log_current)
+
     def _terminal_voltage(self, current: np.ndarray, select: np.ndarray, cabled: bool) -> np.ndarray:
         voltage = self._voltage(current, select)
         if cabled:
@@ -711,17 +735,89 @@ class ShadedStringCurve:
             )
             out[uniform] = scale * (module if signed else np.clip(module, 0.0, None))
         mismatched = np.isin(selected, self.mismatched)
+        dark = np.isin(selected, self.dark)
+        if dark.any():
+            positions = np.searchsorted(self.dark, selected[dark])
+            shape = (-1,) + (1,) * (voltage.ndim - 1)
+            params = [p[positions].reshape(shape) for p in self._dark_params]
+            module = _solver.current(
+                voltage[dark] / self.modules,
+                *params,
+                stage="string_current",
+                steps=selected[dark],
+                location=self._solver_location,
+            )
+            scale = self.scale[selected[dark]].reshape(shape)
+            out[dark] = scale * (module if signed else np.clip(module, 0.0, None))
         if mismatched.any():
             positions = np.searchsorted(self.mismatched, selected[mismatched])
-            table_v, table_i = self._table_v[positions], self._table_i[positions]
+            table_v, table_i = self._table_v, self._table_i
+            if positions.size != len(table_v):
+                table_v, table_i = table_v[positions], table_i[positions]
             scale = self.scale[selected[mismatched]]
             target = voltage[mismatched]
             columns = target.reshape(len(positions), -1)
-            values = np.stack(
-                [_table_current(table_v, table_i, columns[:, j], signed) for j in range(columns.shape[1])], 1
-            )
+            values = np.stack([_table_current(table_v, table_i, columns[:, j]) for j in range(columns.shape[1])], 1)
+            if signed:
+                reverse = columns > self.v_oc[selected[mismatched], None]
+                if reverse.any():
+                    reverse_v, saturation, coefficients = self._reverse_curve
+                    active = reverse.any(axis=1)
+                    select = positions[active]
+                    log_current = _polynomial_interp(
+                        reverse_v,
+                        coefficients,
+                        columns[active],
+                        select,
+                    )
+                    measured = -saturation[select, None] * np.expm1(log_current)
+                    values[active] = np.where(reverse[active], measured, values[active])
+                    missing = columns > reverse_v[positions, -1:]
+                    if missing.any():
+                        r, c = np.nonzero(missing)
+                        values[r, c] = self._reverse_current(columns[r, c], positions[r], values[r, c])
             out[mismatched] = (scale[:, None] * values).reshape(target.shape)
         return out
+
+    def _reverse_current(self, voltage: np.ndarray, select: np.ndarray, initial: np.ndarray) -> np.ndarray:
+        """Invert the exact reverse branch, so its table cannot create a jump at darkness."""
+        steps = self.mismatched[select]
+        drop = self.scale[steps] * self.cable_ohm
+
+        def at(current: np.ndarray) -> np.ndarray:
+            return self._voltage(current, select) - drop * current
+
+        low = self._table_i[select, 0].copy()
+        high = np.zeros(len(select))
+        for _ in range(8):
+            expand = at(low) < voltage
+            if not expand.any():
+                break
+            low = np.where(expand, low * 2.0, low)
+        # The mean module is a close starting point when every part is dark;
+        # interpolation is closer for a lit string with uneven shading.
+        params = list(self.parts.diode_parameters(self.mean_irradiance[steps], steps))
+        params[2] = params[2] + drop / self.modules
+        mean = _solver.current(
+            voltage / self.modules, *params, stage="string_current", steps=steps, location=self._solver_location
+        )
+        current = np.clip(np.where(mean < 0, mean, initial), low, high)
+        tolerance = 1e-8 + 1e-10 * np.abs(voltage)
+        for iteration in range(60):
+            found = at(current)
+            done = np.abs(found - voltage) <= tolerance
+            if done.all():
+                break
+            low = np.where(~done & (found > voltage), current, low)
+            high = np.where(~done & (found <= voltage), current, high)
+            candidate = (low + high) / 2
+            if iteration < 6:
+                delta = np.maximum(np.abs(current) * 1e-4, 1e-14)
+                slope = (found - at(current - delta)) / delta
+                newton = current - np.divide(found - voltage, slope, out=np.zeros_like(current), where=slope != 0)
+                candidate = np.where((newton > low) & (newton < high), newton, candidate)
+            current = np.where(done, current, candidate)
+        return current
 
     def own_mean_power(self) -> np.ndarray:
         """The string's power at its maximum power point with every module at the string's mean irradiance, bare."""
@@ -781,6 +877,48 @@ def _table_current(table_v: np.ndarray, table_i: np.ndarray, voltage: np.ndarray
             # The reverse-current part of the table lies above open circuit.
             current = np.clip(np.where(above == 0, 0.0, current), 0.0, None)
     return np.where(above >= points, table_i[:, -1], current)
+
+
+def _interpolation_coefficients(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, ...]:
+    """Local six-point polynomials, with linear interpolation at repeated knots."""
+    rows, points = x.shape
+    start = np.clip(np.arange(points - 1) - 2, 0, points - 6)
+    stencil = start[:, None] + np.arange(6)
+    width = np.diff(x)
+    nodes = np.take(x, stencil, axis=1) - x[:, :-1, None]
+    np.divide(nodes, width[:, :, None], out=nodes, where=width[:, :, None] != 0)
+    coefficients = np.take(y, stencil, axis=1).copy()
+    valid = (width > 0) & np.all(np.diff(nodes, axis=2) > 0, axis=2)
+    for order in range(1, 6):
+        delta = coefficients[:, :, order:] - coefficients[:, :, order - 1 : -1]
+        span = nodes[:, :, order:] - nodes[:, :, :-order]
+        coefficients[:, :, order:] = np.divide(delta, span, out=np.zeros_like(delta), where=span != 0)
+    return nodes, coefficients, valid, y
+
+
+def _polynomial_interp(
+    x: np.ndarray, polynomial: tuple[np.ndarray, ...], query: np.ndarray, select: np.ndarray
+) -> np.ndarray:
+    """Evaluate the local polynomial, bounded by its interval's endpoint values."""
+    nodes, coefficients, valid, y = polynomial
+    x = x[select]
+    rows, points = x.shape
+    span = float(np.max(x) - np.min(x)) + 1.0
+    offset = (np.arange(rows) * 2.0 * span)[:, None]
+    clipped = np.clip(query, x[:, :1], x[:, -1:])
+    position = np.searchsorted((x + offset).ravel(), (clipped + offset).ravel(), side="left").reshape(query.shape)
+    interval = np.clip(position - 1 - (np.arange(rows) * points)[:, None], 0, points - 2)
+    row = np.arange(rows)[:, None]
+    left, right = x[row, interval], x[row, interval + 1]
+    fraction = np.divide(clipped - left, right - left, out=np.zeros_like(clipped), where=right > left)
+    source = select[:, None]
+    c, n = coefficients[source, interval], nodes[source, interval]
+    value = c[:, :, -1]
+    for order in range(4, -1, -1):
+        value = c[:, :, order] + (fraction - n[:, :, order]) * value
+    lower, upper = y[source, interval], y[source, interval + 1]
+    linear = lower + fraction * (upper - lower)
+    return np.clip(np.where(valid[source, interval], value, linear), lower, upper)
 
 
 def _rowwise_interp(x: np.ndarray, y: np.ndarray, query: np.ndarray) -> np.ndarray:
