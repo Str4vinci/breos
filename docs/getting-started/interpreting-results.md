@@ -407,7 +407,30 @@ and `tracking`, plus the resolved tracker geometry for a tracking array.
 | `fidelity` | How energy was modelled. `"aggregate"`: the array's DC output feeds one AC rating, whatever the string topology. `"string"`: each MPPT input's voltage range, current and power limits, the inverter's power limit and its start-up voltage applied (see [String-level energy](configuration.md#string-level-energy)) |
 | `status` | `"not_evaluated"` without a [string topology](configuration.md#string-topology-checks); otherwise `"fail"` on any error, `"incomplete"` on missing data, `"warning"` on any warning, else `"pass"` |
 | `findings` | One record per finding, in a stable order |
+| `solver` | Runtime single-diode recovery counts: `recovered_steps`, the number of distinct timesteps recovered anywhere in PV preparation; `by_stage`, those counts within each solve stage. A timestep recovered in several stages counts once overall. With no recoveries: `{"recovered_steps": 0, "by_stage": {}}` |
 | `dc_wiring` | Present with [DC cables](configuration.md#dc-cables): `conductor_temp_c`, the temperature the cable resistances are taken at; `conductor_temp_stated`, false when the 50 °C default was assumed; and one record per string with its `string` position, loop `resistance_ohm` and `stc_loss_pct`, the share of its STC power its cable dissipates at the STC maximum power current |
+
+Both electrical fidelities check single-diode operating points. A lit point
+with finite inputs counts as a solver failure if its result is missing or
+physically invalid. BREOS retries that point with Brent's bracketing method.
+A successful retry is recorded as a recovery. Valid primary values are kept.
+
+If the retry also fails, BREOS raises `ValueError`. Non-finite diode inputs
+raise a separate `ValueError` without a retry. Both errors name the stage,
+step, known equipment indices and diode parameters. Darkness, bypass
+conduction and an inverter with no feasible operating point do not count
+as solver failures.
+
+Counts stay with the prepared PV inputs. Cached runs and revaluation retain
+the same diagnostics. Projection years do not multiply the counts.
+
+Stage names identify module, string and cable MPPs (`module_mpp`,
+`string_mpp`, `cable_mpp`), substring short-circuit current (`substring_isc`),
+part and half-chain voltages (`part_voltage`, `half_voltage`), string and
+input limit solves (`string_current_limit`, `string_voltage_limit`,
+`input_current_limit`, `input_voltage_limit`), and string, group and parallel
+IV evaluations (`string_voc`, `string_current`, `group_voc`, `group_current`,
+`parallel_voc`, `parallel_current`, `input_voc`, `input_open_circuit`).
 
 Each finding has `code`, `severity` and `message`; `value` and `limit` in
 `unit`; `limit_field`, the datasheet value the limit came from; and the

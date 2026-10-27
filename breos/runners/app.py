@@ -115,6 +115,7 @@ class SimulationArtifacts:
     solar_position: dict[str, Any] | None = None
     vehicle_households: VehicleHouseholds | None = None
     vehicle: dict[str, Any] | None = None
+    solver_diagnostics: dict[str, Any] | None = None
 
 
 # The avoided-CO2 columns a result reports for its first year, or its window.
@@ -892,6 +893,7 @@ def run_app_simulation(
         current_soh=current_soh,
         total_replacements=total_replacements,
         end_of_life_events=projection.end_of_life_events,
+        solver_diagnostics=inputs.pv_breakdown.solver_diagnostics,
         pv_loss_waterfall=_build_pv_loss_waterfall(
             inputs.pv_breakdown, first_year_results_df, resolved, inputs.inverter_ac_derate, inputs.inverter_units
         ),

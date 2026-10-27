@@ -123,10 +123,20 @@ def test_the_check_runs_without_changing_aggregate_energy(east_west, _patch_weat
     aggregate.simulate()
 
     result, reference = specified.result(), aggregate.result()
-    assert result["electrical"] == {"fidelity": "aggregate", "status": "pass", "findings": []}
+    assert result["electrical"] == {
+        "fidelity": "aggregate",
+        "status": "pass",
+        "findings": [],
+        "solver": {"recovered_steps": 0, "by_stage": {}},
+    }
     for key in ("usable_ac_system_production_kwh", "curtailment_dc_kwh", "total_investment", "npv_savings"):
         assert result[key] == reference[key]
-    assert reference["electrical"] == {"fidelity": "aggregate", "status": "not_evaluated", "findings": []}
+    assert reference["electrical"] == {
+        "fidelity": "aggregate",
+        "status": "not_evaluated",
+        "findings": [],
+        "solver": {"recovered_steps": 0, "by_stage": {}},
+    }
 
 
 def test_a_failing_topology_still_simulates_as_a_diagnostic(east_west, _patch_weather):
