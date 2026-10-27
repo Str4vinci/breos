@@ -86,7 +86,8 @@ def test_iv_fallback_only_solves_failed_grid_points(monkeypatch, kind):
     name = "i_from_v" if kind == "current" else "v_from_i"
     original = getattr(pvlib.pvsystem, name)
     diode = [p[:, None] for p in params()]
-    query = np.zeros((3, 4))
+    # A positive current: zero and reverse currents retry on BREOS's own bracket, not pvlib's.
+    query = np.zeros((3, 4)) if kind == "current" else np.full((3, 4), 0.1)
     expected = getattr(_solver, kind)(query, *diode)
     fallback_sizes = []
 
@@ -214,7 +215,7 @@ def test_deferred_curve_failure_retains_equipment_context(monkeypatch):
 
     monkeypatch.setattr(pvlib.pvsystem, "v_from_i", failed)
     with pytest.raises(ValueError) as error:
-        curve._voltage(np.zeros(len(curve.mismatched)))
+        curve._voltage(np.full(len(curve.mismatched), 0.1))
     for text in ["part_voltage", "step 0", "inverter=1", "string=4", "array=2"]:
         assert text in str(error.value)
 
