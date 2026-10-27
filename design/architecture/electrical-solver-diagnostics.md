@@ -1,8 +1,8 @@
 # Electrical solver diagnostics
 
 Single-diode results pass through `breos.pv._solver`. The primary method stays
-Newton for MPPs and Lambert W for IV evaluations. Only invalid lit points use
-Brent's method, after which the same checks apply. Above open circuit, the
+Newton for MPPs and Lambert W for IV evaluations. Invalid lit points retry
+with Brent's method, after which the same checks apply. Above open circuit, the
 voltage fallback brackets the junction voltage explicitly: pvlib's default
 Brent bracket does not include negative currents. Its analytic upper endpoint
 is stepped outward by a factor of 1 + 1e-8 when roundoff leaves the residual
@@ -12,6 +12,46 @@ parameters. Non-finite diode parameters at lit or indeterminate-light steps
 raise a separate input `ValueError` before solving, without fallback or recovery
 counts. Non-finite parameters at known dark steps may still produce zero.
 No peak constants change.
+
+## Physical dark floor
+
+`DARK_FRACTION = 1e-9` in `breos.pv._solver` defines a shared photocurrent
+floor. `floor_photocurrent` sets only photocurrent to exactly zero when it is
+strictly below `DARK_FRACTION * I_L_ref`; equality and larger values are kept.
+The reference is the module's CEC reference photocurrent from `_get_cec_params`,
+approximately its reference short-circuit current. Both runtime
+`calcparams_cec` generation sites apply the helper: `IrradianceParts.diode_parameters`
+and `solar._module_dc_before_losses`. Substrings, chains and half-cells inherit
+the resulting zero through their existing parameter shares. They do not apply
+a second threshold to their smaller currents. Other diode parameters are kept.
+
+The floor is approximately 1e-6 W/m² equivalent irradiance. It ends numerical
+excursions at the floating-point limits of the diode equation and changes no
+realistic reported result. The originally failing 1e-13–1e-15 W/m² cases carry
+less than a nanowatt-hour per 400 W module-year. That bound concerns those
+failures, not every irradiance below the new floor: even holding a 400 W
+module just below the floor for a whole year has a conservative constant-
+efficiency energy bound of about 0.0035 Wh, a few milliwatt-hours. The App
+goldens and first_home gallery remain unchanged.
+
+Dark MPPs and open-circuit voltages are exactly zero. Dark parts retain their
+IV curve: negative current can produce positive voltage, positive current can
+produce negative voltage through the shunt, and the represented breakdown or
+bypass clamp still applies. If Lambert W gives an invalid dark reverse-current
+voltage, the ideal-diode endpoint is checked first; negligible leakage or
+infinite Rsh makes it the root. Otherwise the checked bracket solves it.
+Dark roots never count as recovered failures and never raise a solver error.
+Their retries are separate from lit retries, so an infeasible dark forward
+point cannot spoil a lit point's solution.
+
+The robustness sweep covers 434 power results: 31 irradiance scales, 1e-30
+through 1, with two steps for each of four represented layouts, a single array,
+parallel arrays and parallel shaded strings. Every result is finite and
+non-negative. The worst decrease as irradiance increases is zero watts;
+all steps below the floor have zero power and zero recoveries. Some lit
+points above the floor still use the checked solver fallback (up to ten
+scale-step recoveries in the parallel-string sweep). The existing 1e-16 and
+1e-18 scale regressions are now dark, with zero recoveries.
 
 The MPP check uses finite values, power consistency, analytic Voc/Isc upper
 bounds and the diode equation residual, with small roundoff tolerances. A
