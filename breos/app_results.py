@@ -453,7 +453,7 @@ def build_result(
         # Copied, so editing a result cannot reach the stored run that
         # App.revalue prices again.
         "pv_loss_waterfall": deepcopy(artifacts.pv_loss_waterfall),
-        "electrical": electrical_result(resolved.electrical),
+        "electrical": electrical_result(resolved.electrical, artifacts.solver_diagnostics),
         "provenance": _provenance(resolved, artifacts, input_repairs),
         "degradation": deepcopy(artifacts.degradation_summary),
     }
