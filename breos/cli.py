@@ -658,6 +658,7 @@ def _montecarlo(args: argparse.Namespace) -> int:
         # A statistic with no defined value is written as null.
         "summary": nonfinite_to_none(result.summary),
         "yield_exceedance": result.yield_exceedance,
+        "solver": result.solver,
     }
     # The load profile's file and hash come from the run's provenance
     # (load_profile.file, load_profile.sha256); these keys repeat them for an
@@ -682,6 +683,7 @@ def _montecarlo(args: argparse.Namespace) -> int:
             "settings": settings.__dict__,
             "summary": nonfinite_to_none(result.summary),
             "yield_exceedance": result.yield_exceedance,
+            "solver": result.solver,
             "available_years": result.available_years,
             "results_csv": str(out_path),
             "yearly_csv": str(yearly_path) if yearly_path is not None else None,

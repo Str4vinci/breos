@@ -909,7 +909,11 @@
  "electrical": {
   "fidelity": "aggregate",
   "status": "not_evaluated",
-  "findings": []
+  "findings": [],
+  "solver": {
+   "recovered_steps": 0,
+   "by_stage": {}
+  }
  },
  "provenance": {
   "breos_version": "0.7.0",

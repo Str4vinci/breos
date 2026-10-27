@@ -27,13 +27,12 @@ grid of currents refined to its global maximum power point.
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
-import pvlib
 
+from breos.pv import _solver
 from breos.pv.shading import ModuleShading
 
 if TYPE_CHECKING:
@@ -86,16 +85,6 @@ def _concentrated(
     return counts, fractions
 
 
-def _newton_mpp(*params):
-    return pvlib.pvsystem.max_power_point(*params, method="newton")
-
-
-def _quiet(function, *args):
-    with warnings.catch_warnings(), np.errstate(all="ignore"):
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-        return function(*args)
-
-
 class ShadedStringCurve:
     """One string's power and current from its modules' own shading, at each step.
 
@@ -127,6 +116,7 @@ class ShadedStringCurve:
                 f"module_shading is bound to {shading.bypass_diodes} bypass diodes of "
                 f"{shading.cell_strings_in_parallel} cell strings; the module has {diodes} of {parallel}"
             )
+        self._solver_location = _solver.solver_location()
         self.parts = parts
         # A shaded cell's breakdown voltage, or -inf: it then carries at most
         # its short-circuit current and its bypass diode takes the substring.
@@ -200,16 +190,16 @@ class ShadedStringCurve:
         if not rows.size:
             return
         params = list(self.parts.diode_parameters(self.mean_irradiance[rows], rows))
-        bare = _quiet(_newton_mpp, *params)
+        bare = _solver.mpp(*params, stage="string_mpp", steps=rows, location=self._solver_location)
         scale = self.scale[rows]
-        self.mpp_bare[rows] = self.modules * scale * np.nan_to_num(np.asarray(bare["p_mp"], dtype=float))
+        self.mpp_bare[rows] = self.modules * scale * np.asarray(bare["p_mp"], dtype=float)
         # The cable as each module's share of series resistance, as for an unshaded string.
         params[2] = params[2] + scale * self.cable_ohm / self.modules
-        cabled = _quiet(_newton_mpp, *params)
-        self.mpp[rows] = self.modules * scale * np.nan_to_num(np.asarray(cabled["p_mp"], dtype=float))
-        self.v_mp[rows] = self.modules * np.nan_to_num(np.asarray(cabled["v_mp"], dtype=float))
-        self.i_mp[rows] = scale * np.nan_to_num(np.asarray(cabled["i_mp"], dtype=float))
-        self.v_oc[rows] = self.modules * np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.v_from_i, 0.0, *params)))
+        cabled = _solver.mpp(*params, stage="string_mpp", steps=rows, location=self._solver_location)
+        self.mpp[rows] = self.modules * scale * np.asarray(cabled["p_mp"], dtype=float)
+        self.v_mp[rows] = self.modules * np.asarray(cabled["v_mp"], dtype=float)
+        self.i_mp[rows] = scale * np.asarray(cabled["i_mp"], dtype=float)
+        self.v_oc[rows] = self.modules * np.asarray(_solver.voltage(0.0, *params, stage="string_voc", steps=rows))
         self._uniform_params = tuple(params)
 
     # -- mismatched steps: the string's curve from its substrings ------------------------------
@@ -245,7 +235,8 @@ class ShadedStringCurve:
             # A dark part's can come out a roundoff below 0, which would break it
             # down at open circuit.
             short_circuit = np.maximum(
-                np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.i_from_v, 0.0, *params), dtype=float)), 0.0
+                np.asarray(_solver.current(0.0, *params, stage="substring_isc", steps=rows), dtype=float),
+                0.0,
             )
             return params + (short_circuit, np.broadcast_to(share * cells * self.breakdown_v, rows.shape))
 
@@ -368,7 +359,8 @@ class ShadedStringCurve:
                 diode * share,
             )
             short_circuit = np.maximum(
-                np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.i_from_v, 0.0, *params), dtype=float)), 0.0
+                np.asarray(_solver.current(0.0, *params, stage="substring_isc", steps=rows), dtype=float),
+                0.0,
             )
             return params + (short_circuit, np.broadcast_to(count * self.breakdown_v, rows.shape))
 
@@ -387,7 +379,7 @@ class ShadedStringCurve:
                 )
             else:
                 chains.append([element(e_half_mean[m, k, h, rows], per_substring)])
-        return _HalfSection(chains, self.bypass_v, float(self.parts.pv_params.Isc) / strings)
+        return _HalfSection(chains, self.bypass_v, float(self.parts.pv_params.Isc) / strings, rows)
 
     def _part_irradiance(self, m: int, rows: np.ndarray, shaded: np.ndarray) -> np.ndarray:
         """A cell of module ``m`` on the steps ``rows``: its irradiance at the beam ``shaded`` fraction."""
@@ -400,7 +392,12 @@ class ShadedStringCurve:
         shape = (-1,) + (1,) * (current.ndim - 1)
         voltage = np.zeros(current.shape)
         for params in parts:
-            voltage += _part_voltage(current, [p[rows].reshape(shape) for p in params])
+            voltage += _part_voltage(
+                current,
+                [p[rows].reshape(shape) for p in params],
+                self.mismatched[rows] if self.mismatched.size else rows,
+                self._solver_location,
+            )
         return np.maximum(voltage, -self.bypass_v)
 
     def _voltage(self, current: np.ndarray, select: np.ndarray | None = None) -> np.ndarray:
@@ -644,12 +641,27 @@ class ShadedStringCurve:
         at_limit = np.zeros(int(bound.sum()))
         binding = np.isfinite(module_limit) & (module_limit < p[0])
         if binding.any():
-            at_limit[binding] = self.modules * np.nan_to_num(
-                _quiet(pvlib.pvsystem.v_from_i, module_limit[binding], *[x[binding] for x in p])
+            at_limit[binding] = self.modules * _solver.voltage(
+                module_limit[binding],
+                *[x[binding] for x in p],
+                stage="string_current_limit",
+                location=self._solver_location,
+                steps=steps[bound][binding],
             ).clip(min=0.0)
         lower = np.maximum(v_min, at_limit)
         voltage = np.clip(v_mp[bound], lower, v_max)
-        current = s * np.clip(np.nan_to_num(_quiet(pvlib.pvsystem.i_from_v, voltage / self.modules, *p)), 0.0, None)
+        current = s * np.clip(
+            _solver.current(
+                voltage / self.modules,
+                *p,
+                stage="string_voltage_limit",
+                feasible=lower <= v_max,
+                steps=steps[bound],
+                location=self._solver_location,
+            ),
+            0.0,
+            None,
+        )
         result[bound] = np.where(lower > v_max, 0.0, np.minimum(voltage * current, result[bound]))
         operating_v[bound] = np.where(result[bound] > 0, voltage, 0.0)
         return result, operating_v
@@ -671,8 +683,15 @@ class ShadedStringCurve:
             shape = (-1,) + (1,) * (voltage.ndim - 1)
             params = [p[positions].reshape(shape) for p in self._uniform_params]
             scale = self.scale[selected[uniform]].reshape(shape)
-            module = np.nan_to_num(
-                np.asarray(_quiet(pvlib.pvsystem.i_from_v, voltage[uniform] / self.modules, *params), dtype=float)
+            module = np.asarray(
+                _solver.current(
+                    voltage[uniform] / self.modules,
+                    *params,
+                    stage="string_current",
+                    steps=selected[uniform],
+                    location=self._solver_location,
+                ),
+                dtype=float,
             )
             out[uniform] = scale * (module if signed else np.clip(module, 0.0, None))
         mismatched = np.isin(selected, self.mismatched)
@@ -695,12 +714,14 @@ class ShadedStringCurve:
         rows = np.flatnonzero((self.mean_irradiance > 0) & (self.scale > 0))
         if rows.size:
             params = self.parts.diode_parameters(self.mean_irradiance[rows], rows)
-            mpp = _quiet(_newton_mpp, *params)
-            power[rows] = self.modules * self.scale[rows] * np.nan_to_num(np.asarray(mpp["p_mp"], dtype=float))
+            mpp = _solver.mpp(*params, stage="string_mpp", steps=rows, location=self._solver_location)
+            power[rows] = self.modules * self.scale[rows] * np.asarray(mpp["p_mp"], dtype=float)
         return power
 
 
-def _part_voltage(current: np.ndarray, params: Sequence[np.ndarray]) -> np.ndarray:
+def _part_voltage(
+    current: np.ndarray, params: Sequence[np.ndarray], steps: Any = None, location: Any = None
+) -> np.ndarray:
     """A part's voltage at ``current``: its forward curve up to its short-circuit current, its breakdown beyond.
 
     ``params`` are its single-diode parameters, its short-circuit current and
@@ -709,8 +730,10 @@ def _part_voltage(current: np.ndarray, params: Sequence[np.ndarray]) -> np.ndarr
     short-circuit current.
     """
     *diode, short_circuit, breakdown = params
-    part = _quiet(pvlib.pvsystem.v_from_i, current, *diode)
-    part = np.nan_to_num(np.asarray(part, dtype=float), nan=-np.inf, posinf=np.inf, neginf=-np.inf)
+    part = _solver.voltage(
+        current, *diode, stage="part_voltage", steps=steps, feasible=current <= short_circuit, location=location
+    )
+    part = np.asarray(part, dtype=float)
     return np.where(current > short_circuit, breakdown, part)
 
 
@@ -793,7 +816,9 @@ class _HalfSection:
     forward voltage once their sum falls short of the string's current.
     """
 
-    def __init__(self, chains: list[list[tuple[np.ndarray, ...]]], bypass_v: float, chain_isc: float) -> None:
+    def __init__(
+        self, chains: list[list[tuple[np.ndarray, ...]]], bypass_v: float, chain_isc: float, steps: Any = None
+    ) -> None:
         self.bypass_v = bypass_v
         rows = chains[0][0][0].shape[0]
         unit = np.unique(
@@ -831,14 +856,16 @@ class _HalfSection:
             if not breaks:
                 for params in parts:
                     diode = [p[:, None] for p in params[:5]]
-                    voltage += np.nan_to_num(np.asarray(_quiet(pvlib.pvsystem.v_from_i, current, *diode), dtype=float))
+                    voltage += np.asarray(
+                        _solver.voltage(current, *diode, stage="half_voltage", steps=steps), dtype=float
+                    )
             else:
                 for params in parts:
-                    voltage += _part_voltage(current, [p[:, None] for p in params])
+                    voltage += _part_voltage(current, [p[:, None] for p in params], steps)
                 # The voltages on both sides of each jump, for the substring's voltage grid.
                 for part_cap in part_caps:
                     for edge in (part_cap * (1.0 - _EDGE), part_cap * (1.0 + _EDGE) + _ABSOLUTE_EDGE):
-                        at = sum(_part_voltage(edge[:, None], [p[:, None] for p in q])[:, 0] for q in parts)
+                        at = sum(_part_voltage(edge[:, None], [p[:, None] for p in q], steps)[:, 0] for q in parts)
                         corners.append(at)
             # The voltage falls as the current rises: tabled against falling voltage, it rises.
             tables.append((-voltage, current))

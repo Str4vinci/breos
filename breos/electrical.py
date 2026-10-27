@@ -32,9 +32,9 @@ voltage to the production of the wired strings.
 
 import dataclasses
 import math
-import warnings
 from collections import defaultdict
 from collections.abc import Callable, Sequence
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from functools import cached_property, partial
 from numbers import Integral, Real
@@ -42,9 +42,9 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-import pvlib
 
 from breos.equipment import InverterSpec
+from breos.pv import _solver
 from breos.pv.mismatch import DEFAULT_BYPASS_DIODE_VOLTAGE_V, ShadedStringCurve
 from breos.pv.shading import ModuleShading
 from breos.pv_modules import PVModuleParams
@@ -817,17 +817,25 @@ def cable_summary(
     }
 
 
-def electrical_result(setup: ElectricalSetup | None) -> dict[str, Any]:
+def electrical_result(setup: ElectricalSetup | None, solver: dict[str, Any] | None = None) -> dict[str, Any]:
     """The ``electrical`` block of an App result.
 
     ``fidelity`` says how energy was modelled: ``"aggregate"`` for the system
     as a whole, or ``"string"`` when the inputs' and the inverter's limits
     applied (:func:`string_limited_dc`). Without a topology, ``status`` is ``"not_evaluated"``.
+    ``solver`` counts distinct recovered preparation steps overall and by
+    solve stage; it is zero when none failed, including design-only calls.
     """
     if setup is None:
-        return {"fidelity": "aggregate", "status": "not_evaluated", "findings": []}
+        return {
+            "fidelity": "aggregate",
+            "status": "not_evaluated",
+            "findings": [],
+            "solver": deepcopy(solver) if solver is not None else _solver.SolverDiagnostics().result(),
+        }
     result: dict[str, Any] = {
         "fidelity": setup.fidelity,
+        "solver": deepcopy(solver) if solver is not None else _solver.SolverDiagnostics().result(),
         "status": setup.check.status,
         "findings": [asdict(finding) for finding in setup.check.findings],
     }
@@ -1013,73 +1021,85 @@ def string_limited_dc(setup: ElectricalSetup, arrays: Sequence[Any]) -> StringEn
         for string in fed:
             by_input[string.mppt].append(string)
         for mppt_index, members in sorted(by_input.items()):
-            spec = inverter.mppts[mppt_index]
-            assert spec.max_input_current_a is not None
-            string_limit = math.inf if spec.max_string_input_current_a is None else spec.max_string_input_current_a
-            resistance = {id(s): s.cable_resistance_ohm(conductor_c) for s in members}
-            plain = [s for s in members if s.module_shading is None]
-            shaded = [s for s in members if s.module_shading is not None]
-            # Strings of one array with one cable resistance are identical.
-            groups = [
-                _StringGroup(
-                    arrays[array],
-                    sum(s.parallel for s in plain if (s.array, resistance[id(s)]) == (array, ohm)),
-                    ohm,
-                    members[0].modules,
-                )
-                for array, ohm in sorted({(s.array, resistance[id(s)]) for s in plain})
-            ]
-            for group in groups:
-                if group.cable_ohm > 0:
-                    wiring += np.clip(group.power_at_mpp(group.bare) - group.power_at_mpp(group.operating), 0.0, None)
-            if shaded:
-                curves = []
-                for string in shaded:
-                    assert string.module_shading is not None
-                    breakdown = arrays[string.array]
-                    if breakdown.irradiance_parts is None:
-                        raise ValueError("A string with module_shading needs its array's irradiance parts")
-                    curve = ShadedStringCurve(
-                        string.module_shading,
-                        breakdown.irradiance_parts,
-                        _StringGroup(breakdown, 1).string_scale,
-                        string.modules,
-                        resistance[id(string)],
-                        setup.environment.bypass_diode_v,
+            with _solver.solver_scope(inverter=number, mppt=mppt_index):
+                spec = inverter.mppts[mppt_index]
+                assert spec.max_input_current_a is not None
+                string_limit = math.inf if spec.max_string_input_current_a is None else spec.max_string_input_current_a
+                resistance = {id(s): s.cable_resistance_ohm(conductor_c) for s in members}
+                plain = [s for s in members if s.module_shading is None]
+                shaded = [s for s in members if s.module_shading is not None]
+                # Strings of one array with one cable resistance are identical.
+                groups = [
+                    _StringGroup(
+                        arrays[array],
+                        sum(s.parallel for s in plain if (s.array, resistance[id(s)]) == (array, ohm)),
+                        ohm,
+                        members[0].modules,
+                        {
+                            "array": array,
+                            "string": tuple(
+                                position[id(s)] for s in plain if (s.array, resistance[id(s)]) == (array, ohm)
+                            ),
+                        },
                     )
-                    reference = _StringGroup(breakdown, 1, 0.0, string.modules).power_at_mpp(breakdown.module_operating)
-                    mismatch += reference - curve.mpp_bare
-                    wiring += np.clip(curve.mpp_bare - curve.mpp, 0.0, None)
-                    string_mismatch[position[id(string)]] = curve.own_mean_power() - curve.mpp_bare
-                    curves.append(curve)
-                sources: list[Any] = [_GroupSource(group) for group in groups] + [_CurveSource(c) for c in curves]
-                solve: Callable[..., tuple[np.ndarray, np.ndarray, np.ndarray]] = partial(_curves_power, sources)
-                input_open_circuit = _sources_open_circuit(sources)
-            else:
-                solve = partial(_input_power, groups, members[0].modules)
-                input_open_circuit = None
-            unconstrained, limited, input_voltage = solve(
-                inverter.min_mppt_voltage_v, inverter.max_mppt_voltage_v, spec.max_input_current_a, string_limit
-            )
-            lost = np.clip(unconstrained - limited, 0.0, None)
-            if len(groups) + len(shaded) > 1:
-                # Strings on different curves share the input's voltage. What that
-                # costs before any limit is the parallel mismatch; the limits cost
-                # the rest, so the two add up to the input's whole loss.
-                _, shared, _ = solve(0.0, math.inf, math.inf, math.inf)
-                key = (number, mppt_index)
-                input_parallel[key] = np.minimum(np.clip(unconstrained - shared, 0.0, None), lost)
-                lost = lost - input_parallel[key]
-            cost += lost
-            if spec.max_usable_dc_power_w is not None:
-                cost += _excess(limited, spec.max_usable_dc_power_w)
-                limited = np.minimum(limited, spec.max_usable_dc_power_w)
-            delivered += limited
-            voltage_power += limited * input_voltage
-            if inverter.startup_voltage_v > 0:
-                if input_open_circuit is None:
-                    input_open_circuit = members[0].modules * _open_circuit_voltage(groups)
-                open_circuit = np.maximum(open_circuit, input_open_circuit)
+                    for array, ohm in sorted({(s.array, resistance[id(s)]) for s in plain})
+                ]
+                for group in groups:
+                    if group.cable_ohm > 0:
+                        wiring += np.clip(
+                            group.power_at_mpp(group.bare) - group.power_at_mpp(group.operating), 0.0, None
+                        )
+                if shaded:
+                    curves = []
+                    for string in shaded:
+                        assert string.module_shading is not None
+                        breakdown = arrays[string.array]
+                        if breakdown.irradiance_parts is None:
+                            raise ValueError("A string with module_shading needs its array's irradiance parts")
+                        with _solver.solver_scope(string=position[id(string)], array=string.array):
+                            curve = ShadedStringCurve(
+                                string.module_shading,
+                                breakdown.irradiance_parts,
+                                _StringGroup(breakdown, 1).string_scale,
+                                string.modules,
+                                resistance[id(string)],
+                                setup.environment.bypass_diode_v,
+                            )
+                        reference = _StringGroup(breakdown, 1, 0.0, string.modules).power_at_mpp(
+                            breakdown.module_operating
+                        )
+                        mismatch += reference - curve.mpp_bare
+                        wiring += np.clip(curve.mpp_bare - curve.mpp, 0.0, None)
+                        string_mismatch[position[id(string)]] = curve.own_mean_power() - curve.mpp_bare
+                        curves.append(curve)
+                    sources: list[Any] = [_GroupSource(group) for group in groups] + [_CurveSource(c) for c in curves]
+                    solve: Callable[..., tuple[np.ndarray, np.ndarray, np.ndarray]] = partial(_curves_power, sources)
+                    input_open_circuit = _sources_open_circuit(sources)
+                else:
+                    solve = partial(_input_power, groups, members[0].modules)
+                    input_open_circuit = None
+                unconstrained, limited, input_voltage = solve(
+                    inverter.min_mppt_voltage_v, inverter.max_mppt_voltage_v, spec.max_input_current_a, string_limit
+                )
+                lost = np.clip(unconstrained - limited, 0.0, None)
+                if len(groups) + len(shaded) > 1:
+                    # Strings on different curves share the input's voltage. What that
+                    # costs before any limit is the parallel mismatch; the limits cost
+                    # the rest, so the two add up to the input's whole loss.
+                    _, shared, _ = solve(0.0, math.inf, math.inf, math.inf)
+                    key = (number, mppt_index)
+                    input_parallel[key] = np.minimum(np.clip(unconstrained - shared, 0.0, None), lost)
+                    lost = lost - input_parallel[key]
+                cost += lost
+                if spec.max_usable_dc_power_w is not None:
+                    cost += _excess(limited, spec.max_usable_dc_power_w)
+                    limited = np.minimum(limited, spec.max_usable_dc_power_w)
+                delivered += limited
+                voltage_power += limited * input_voltage
+                if inverter.startup_voltage_v > 0:
+                    if input_open_circuit is None:
+                        input_open_circuit = members[0].modules * _open_circuit_voltage(groups)
+                    open_circuit = np.maximum(open_circuit, input_open_circuit)
         # The inputs' operating voltage, weighted by what each delivers before the
         # inverter's own cap, which sheds power from all of them alike.
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -1177,7 +1197,7 @@ def string_cable_loss(setup: ElectricalSetup, arrays: Sequence[Any]) -> pd.Serie
         if ohm == 0 or string.array >= len(arrays):
             continue
         breakdown = arrays[string.array]
-        current = _StringGroup(breakdown, string.parallel).string_scale * np.nan_to_num(breakdown.module_operating.i_mp)
+        current = _StringGroup(breakdown, string.parallel).string_scale * np.asarray(breakdown.module_operating.i_mp)
         loss += string.parallel * current * current * ohm * _in_service(breakdown)
     total = np.asarray(sum((b.dc_after_losses for b in arrays[1:]), arrays[0].dc_after_losses), dtype=float)
     return pd.Series(np.minimum(loss, total), index=index, name="dc_wiring_loss_W")
@@ -1191,6 +1211,7 @@ class _StringGroup:
     parallel: int
     cable_ohm: float = 0.0
     modules: int = 1
+    location: dict[str, Any] | None = None
 
     @property
     def bare(self) -> Any:
@@ -1209,18 +1230,18 @@ class _StringGroup:
         if self.cable_ohm == 0:
             return bare
         resistance = np.asarray(bare.resistance_series, dtype=float) + self.string_scale * self.cable_ohm / self.modules
-        lit = np.nan_to_num(np.asarray(bare.photocurrent, dtype=float)) > 0
+        lit = np.asarray(bare.photocurrent, dtype=float) > 0
         v_mp = np.array(bare.v_mp, dtype=float)
         i_mp = np.array(bare.i_mp, dtype=float)
         if lit.any():
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=RuntimeWarning)
-                mpp = pvlib.pvsystem.max_power_point(
-                    *(np.asarray(p, dtype=float)[lit] for p in _diode_params(bare)[:2]),
-                    resistance[lit],
-                    *(np.asarray(p, dtype=float)[lit] for p in _diode_params(bare)[3:]),
-                    method="newton",
-                )
+            mpp = _solver.mpp(
+                *(np.asarray(p, dtype=float)[lit] for p in _diode_params(bare)[:2]),
+                resistance[lit],
+                *(np.asarray(p, dtype=float)[lit] for p in _diode_params(bare)[3:]),
+                stage="cable_mpp",
+                location=self.location,
+                steps=np.flatnonzero(lit),
+            )
             v_mp[lit] = np.asarray(mpp["v_mp"], dtype=float)
             i_mp[lit] = np.asarray(mpp["i_mp"], dtype=float)
         return replace(bare, resistance_series=resistance, v_mp=v_mp, i_mp=i_mp)
@@ -1228,11 +1249,7 @@ class _StringGroup:
     def power_at_mpp(self, operating: Any) -> np.ndarray:
         """The group's power at ``operating``'s maximum power point, before availability, in W."""
         return (
-            self.modules
-            * self.parallel
-            * self.string_scale
-            * np.nan_to_num(operating.v_mp)
-            * np.nan_to_num(operating.i_mp)
+            self.modules * self.parallel * self.string_scale * np.asarray(operating.v_mp) * np.asarray(operating.i_mp)
         )
 
     @property
@@ -1285,15 +1302,22 @@ def _input_power(
             v_min,
             v_max,
             min(current_limit, group.parallel * string_limit),
+            group.location,
         )
     return _parallel_arrays_power(groups, modules, v_min, v_max, current_limit, string_limit)
 
 
 def _single_array_power(
-    operating: Any, current_scale: np.ndarray, modules: int, v_min: float, v_max: float, current_limit: float
+    operating: Any,
+    current_scale: np.ndarray,
+    modules: int,
+    v_min: float,
+    v_max: float,
+    current_limit: float,
+    location: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    v_mp = np.nan_to_num(operating.v_mp)
-    i_mp = np.nan_to_num(operating.i_mp)
+    v_mp = np.asarray(operating.v_mp)
+    i_mp = np.asarray(operating.i_mp)
     unconstrained = modules * v_mp * current_scale * i_mp
     operating_v = np.where(unconstrained > 0, modules * v_mp, 0.0)
 
@@ -1310,12 +1334,27 @@ def _single_array_power(
     v_at_limit = np.zeros(int(limited.sum()))
     binding = np.isfinite(module_current_limit[limited]) & (module_current_limit[limited] < params[0])
     if binding.any():
-        v_at_limit[binding] = np.nan_to_num(
-            pvlib.pvsystem.v_from_i(module_current_limit[limited][binding], *[p[binding] for p in params])
+        v_at_limit[binding] = _solver.voltage(
+            module_current_limit[limited][binding],
+            *[p[binding] for p in params],
+            stage="input_current_limit",
+            location=location,
+            steps=np.flatnonzero(limited)[binding],
         ).clip(min=0.0)
     lower = np.maximum(lower_v, v_at_limit)
     voltage = np.clip(v_mp[limited], lower, upper_v)
-    current = np.clip(np.nan_to_num(pvlib.pvsystem.i_from_v(voltage, *params)), 0.0, None)
+    current = np.clip(
+        _solver.current(
+            voltage,
+            *params,
+            stage="input_voltage_limit",
+            steps=np.flatnonzero(limited),
+            location=location,
+            feasible=lower <= upper_v,
+        ),
+        0.0,
+        None,
+    )
     # No point of the curve is inside the range and under the current limit:
     # the input has no usable operating point and delivers nothing.
     current = np.where(lower > upper_v, 0.0, current)
@@ -1337,7 +1376,7 @@ def _parallel_arrays_power(
     """Strings from several arrays in parallel: the best point of their summed IV curve within the limits."""
     scales = [group.string_scale for group in groups]
     unconstrained = sum(
-        modules * group.parallel * scale * np.nan_to_num(group.operating.v_mp) * np.nan_to_num(group.operating.i_mp)
+        modules * group.parallel * scale * np.asarray(group.operating.v_mp) * np.asarray(group.operating.i_mp)
         for group, scale in zip(groups, scales, strict=False)
     )
     assert isinstance(unconstrained, np.ndarray)
@@ -1354,7 +1393,16 @@ def _parallel_arrays_power(
 
     def module_currents(v: np.ndarray, rows: np.ndarray = everywhere) -> list[np.ndarray]:
         shape = (-1,) + (1,) * (v.ndim - 1)
-        return [np.nan_to_num(pvlib.pvsystem.i_from_v(v, *[p[rows].reshape(shape) for p in group])) for group in params]
+        return [
+            _solver.current(
+                v,
+                *[p[rows].reshape(shape) for p in group],
+                stage="parallel_current",
+                steps=np.flatnonzero(steps)[rows],
+                location=source.location,
+            )
+            for group, source in zip(params, groups, strict=True)
+        ]
 
     def input_current(v: np.ndarray) -> np.ndarray:
         shape = (-1,) + (1,) * (v.ndim - 1)
@@ -1367,7 +1415,13 @@ def _parallel_arrays_power(
         return (total <= current_limit + _TOLERANCE) & (largest <= string_limit + _TOLERANCE)
 
     # Above the highest open-circuit voltage the summed curve carries no current.
-    v_oc = np.max([np.nan_to_num(pvlib.pvsystem.v_from_i(0.0, *group)) for group in params], axis=0)
+    v_oc = np.max(
+        [
+            _solver.voltage(0.0, *group, stage="parallel_voc", steps=np.flatnonzero(steps), location=source.location)
+            for group, source in zip(params, groups, strict=True)
+        ],
+        axis=0,
+    )
     lower = np.full(len(v_oc), v_min / modules)
     upper = np.minimum(v_max / modules, v_oc)
     # The currents fall with voltage, so the allowed voltages start where they meet their limits.
@@ -1410,19 +1464,27 @@ class _GroupSource:
 
     def __init__(self, group: _StringGroup) -> None:
         operating = group.operating
+        self.location = group.location
         self.count = group.parallel
         self.modules = group.modules
         self.scale = group.string_scale
         self.params = [np.asarray(p, dtype=float) for p in _diode_params(operating)]
         self.mpp = group.power_at_mpp(operating)
-        with np.errstate(all="ignore"):
-            self.v_oc = self.modules * np.nan_to_num(pvlib.pvsystem.v_from_i(0.0, *self.params))
+        self.v_oc = self.modules * _solver.voltage(0.0, *self.params, stage="group_voc", location=self.location)
 
     def current(self, voltage: np.ndarray, rows: np.ndarray, signed: bool = False) -> np.ndarray:
         shape = (-1,) + (1,) * (voltage.ndim - 1)
         params = [p[rows].reshape(shape) for p in self.params]
-        with np.errstate(all="ignore"):
-            module = np.nan_to_num(np.asarray(pvlib.pvsystem.i_from_v(voltage / self.modules, *params), dtype=float))
+        module = np.asarray(
+            _solver.current(
+                voltage / self.modules,
+                *params,
+                stage="group_current",
+                steps=np.flatnonzero(rows),
+                location=self.location,
+            ),
+            dtype=float,
+        )
         return self.scale[rows].reshape(shape) * (module if signed else np.clip(module, 0.0, None))
 
 
@@ -1571,12 +1633,15 @@ def _open_circuit_voltage(groups: list[_StringGroup]) -> np.ndarray:
     Strings in parallel settle where their currents cancel, between their own
     open-circuit voltages.
     """
-    lit = np.all([np.nan_to_num(np.asarray(g.operating.photocurrent, dtype=float)) > 0 for g in groups], axis=0)
+    lit = np.all([np.asarray(g.operating.photocurrent, dtype=float) > 0 for g in groups], axis=0)
     voltage = np.zeros(len(lit))
     if not lit.any():
         return voltage
     params = [[np.asarray(p, dtype=float)[lit] for p in _diode_params(g.operating)] for g in groups]
-    own = [np.nan_to_num(pvlib.pvsystem.v_from_i(0.0, *group)) for group in params]
+    own = [
+        _solver.voltage(0.0, *group, stage="input_voc", steps=np.flatnonzero(lit), location=source.location)
+        for group, source in zip(params, groups, strict=True)
+    ]
     if len(groups) == 1:
         voltage[lit] = own[0]
         return voltage
@@ -1585,7 +1650,11 @@ def _open_circuit_voltage(groups: list[_StringGroup]) -> np.ndarray:
     for _ in range(_BISECTION_STEPS):
         middle = 0.5 * (low + high)
         current = sum(
-            s * np.nan_to_num(pvlib.pvsystem.i_from_v(middle, *group)) for s, group in zip(scales, params, strict=False)
+            s
+            * _solver.current(
+                middle, *group, stage="input_open_circuit", steps=np.flatnonzero(lit), location=source.location
+            )
+            for s, group, source in zip(scales, params, groups, strict=True)
         )
         positive = np.asarray(current) > 0
         low, high = np.where(positive, middle, low), np.where(positive, high, middle)

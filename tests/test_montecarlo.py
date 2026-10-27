@@ -79,7 +79,9 @@ def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch)
     monkeypatch.setattr(
         mc_module,
         "build_pv_production_breakdown",
-        lambda *args, **kwargs: SimpleNamespace(dc_after_losses=pd.Series([0.0, 1.0], index=index), dc_voltage=None),
+        lambda *args, **kwargs: SimpleNamespace(
+            dc_after_losses=pd.Series([0.0, 1.0], index=index), dc_voltage=None, solver_diagnostics=None
+        ),
     )
 
     def temperature_builder(temp_config, **kwargs):
