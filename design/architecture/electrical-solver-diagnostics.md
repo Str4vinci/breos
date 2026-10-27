@@ -44,6 +44,38 @@ Dark roots never count as recovered failures and never raise a solver error.
 Their retries are separate from lit retries, so an infeasible dark forward
 point cannot spoil a lit point's solution.
 
+Parallel inputs solve their shared open-circuit voltage whenever any string
+is lit. Dark strings remain in the signed current balance, both at open
+circuit and in the power search. A shaded curve evaluates its dark steps'
+diode current using parameters cached on the first dark-step query, even
+though those steps need no MPP search. Its reverse branch is built only on
+the first signed query above its own Voc, then reused. Curves used on their
+own MPPT input build neither cache during their MPP search. The reverse table
+is separate from the forward MPP grid, with 192 negative-current samples and
+the zero-current endpoint. Local six-point polynomials interpolate `log1p(-I / I_0)`, then
+convert back to current. The transform resolves the exponential branch near
+darkness without a large table. Values stay within their interval's current
+bounds; repeated knots use linear interpolation. Only queries beyond the
+tabled reverse range use safeguarded Newton steps and bounded bisection on
+the exact represented curve. This retains continuity between exactly zero
+and near-zero irradiance without an iterative solve at every search point.
+Forward queries reuse the existing table, and reverse queries select cached
+polynomial coefficients directly instead of copying a whole step's table.
+Current scales on zero-power steps come from the static loss percentages and
+module age, excluding availability. Producing steps retain their previous arithmetic
+to preserve rounding. Cable resistance uses that same current scale; power
+weights only combine delivered voltages and losses, not the branch currents.
+
+The mixed-light sweep holds one seven-module string at 800 W/m² and sweeps
+the other from zero through 31 decades to 800 W/m², including both sides of
+the floor. It covers aggregate groups, uniform shaded curves, a mix of both,
+and an unevenly shaded string, with an 80 V start-up threshold. All four paths
+deliver about 2218.36958 W at the floor and at zero. The maximum adjacent
+decrease is 1.5e-8 W. Below the photocurrent floor, the unchanged shunt model
+still adds a tiny load as irradiance increases. The monotonic check allows
+1e-10 relative for this effect and numerical roundoff; the floor continuity
+check uses 1e-6 relative.
+
 The robustness sweep covers 434 power results: 31 irradiance scales, 1e-30
 through 1, with two steps for each of four represented layouts, a single array,
 parallel arrays and parallel shaded strings. Every result is finite and
