@@ -662,6 +662,13 @@ removed in 0.9.0.
 
 ### Fixed
 
+- String electrical limits return zero when the voltage window is above
+  open circuit, including mixed batches of feasible and infeasible steps.
+  Current limits are checked against short-circuit current before inversion.
+  IV solves check a scaled diode residual as well as bounds, so finite but
+  incorrect roots are recovered and reported. Reverse-current fallback
+  brackets expand past endpoint roundoff. Represented convergence cases now
+  demonstrate why refining several peaks is necessary.
 - `plot_breakeven` finds the year-0 investment as
   `find_payback_year_interpolated` does. A projection without
   `attrs["total_investment"]` that has NPV cumulative costs but only nominal

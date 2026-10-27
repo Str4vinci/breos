@@ -20,7 +20,7 @@ CASES = 16
 DENSE_POINTS = 8193
 
 
-def represented(seed, diodes, parallel, breakdown, cases=CASES):
+def represented(seed, diodes, parallel, breakdown, cases=CASES, step=None):
     rng = np.random.default_rng(seed)
     module = replace(
         get_module("Generic_400W"),
@@ -63,10 +63,26 @@ def represented(seed, diodes, parallel, breakdown, cases=CASES):
         for _ in range(diodes):
             substrings.append({"halves": [chain() for _ in range(parallel)]} if parallel > 1 else chain())
         modules.append({"substrings": substrings})
+    scale = rng.uniform(0.85, 1.0, cases)
+    if step is not None:
+        azimuth = azimuth[step : step + 1]
+        scale = scale[step : step + 1]
+        parts = replace(
+            parts,
+            **{
+                key: getattr(parts, key)[step : step + 1]
+                for key in ("beam", "circumsolar", "sky", "other", "temp_cell", "sun_azimuth", "sun_elevation")
+            },
+        )
+        for entry in modules:
+            for substring in entry["substrings"]:
+                for half in substring.get("halves", [substring]):
+                    for key in ("beam_shaded_fraction", "limiting_shaded_fraction"):
+                        half[key] = [[half[key][0][step]]]
     shading = ModuleShading.from_mapping(
         {"azimuth_deg": azimuth.tolist(), "elevation_deg": [50], "modules": modules}
     ).for_module(diodes, parallel)
-    return ShadedStringCurve(shading, parts, rng.uniform(0.85, 1.0, cases), len(modules), cable_ohm=0.2)
+    return ShadedStringCurve(shading, parts, scale, len(modules), cable_ohm=0.2)
 
 
 def polish(grid, power):
@@ -216,3 +232,50 @@ def test_global_peaks_at_the_voltage_edge():
     reference = parallel_reference(sources, 0.0, 1.0, np.inf, np.inf)
     np.testing.assert_allclose(production, reference, rtol=TOL, atol=1e-6)
     np.testing.assert_allclose(voltage, 1.0, atol=1e-6)
+
+
+def challenging_string():
+    # Highest sampled peak: 466.29 W; a lower-ranked bracket refines to
+    # 468.04 W. Isolating this step preserves the represented shading inputs.
+    return represented(1001, 3, 2, -3.0, cases=64, step=52)
+
+
+def challenging_parallel():
+    # The broad peak wins the 256-point ranking, but another bracket's
+    # narrower peak wins after refinement (501.75 W versus 502.26 W).
+    return [_CurveSource(represented(1003 + j, 6, 1, -15.0, cases=64, step=41)) for j in range(3)]
+
+
+def test_a_lower_ranked_string_peak_wins_after_refinement():
+    curve = challenging_string()
+    reference = string_reference(curve)
+    np.testing.assert_allclose(curve.mpp, reference, rtol=TOL, atol=1e-6)
+
+
+def test_a_lower_ranked_parallel_peak_wins_after_refinement():
+    sources = challenging_parallel()
+    reference = parallel_reference(sources, 0.0, np.inf, np.inf, np.inf)
+    production = _curves_power(sources, 0.0, np.inf, np.inf, np.inf)[1]
+    np.testing.assert_allclose(production, reference, rtol=TOL, atol=1e-6)
+
+
+def test_convergence_cases_detect_reducing_each_peak_count_to_one(monkeypatch):
+    import breos.electrical as electrical
+    import breos.pv.mismatch as mismatch
+
+    reference = string_reference(challenging_string())
+    with monkeypatch.context() as reduced:
+        reduced.setattr(mismatch, "_REFINED_PEAKS", 1)
+        production = challenging_string().mpp
+    assert np.all(production < reference * (1 - TOL))
+    with pytest.raises(AssertionError):
+        np.testing.assert_allclose(production, reference, rtol=TOL, atol=1e-6)
+
+    sources = challenging_parallel()
+    reference = parallel_reference(sources, 0.0, np.inf, np.inf, np.inf)
+    with monkeypatch.context() as reduced:
+        reduced.setattr(electrical, "_CURVE_PEAKS", 1)
+        production = _curves_power(sources, 0.0, np.inf, np.inf, np.inf)[1]
+    assert np.all(production < reference * (1 - TOL))
+    with pytest.raises(AssertionError):
+        np.testing.assert_allclose(production, reference, rtol=TOL, atol=1e-6)
