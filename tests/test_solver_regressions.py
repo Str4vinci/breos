@@ -226,3 +226,23 @@ def test_a_dark_string_has_no_feasible_power_even_when_zero_volts_is_allowed():
     power, voltage = curve.constrained_mpp(np.ones(3, dtype=bool), 0.0, 1600.0, np.inf)
     np.testing.assert_array_equal(power, 0.0)
     np.testing.assert_array_equal(voltage, 0.0)
+
+
+def test_vanishing_light_open_circuit_voltage_is_bracketed(monkeypatch):
+    # At about 1e-13 W/m2 Lambert W puts a part's Voc slightly below zero and
+    # pvlib's own bracket misses the root; the retry must still find it.
+    import tests.test_solver_convergence as convergence
+
+    original = convergence.IrradianceParts
+
+    def faint(**parts):
+        for key in ("beam", "circumsolar", "sky", "other"):
+            parts[key] = np.asarray(parts[key]) * 1e-16
+        return original(**parts)
+
+    monkeypatch.setattr(convergence, "IrradianceParts", faint)
+    diagnostics = _solver.SolverDiagnostics()
+    with _solver.solver_scope(diagnostics=diagnostics):
+        curve = convergence.represented(80621, 3, 1, None, cases=3)
+    assert np.all(np.isfinite(curve.mpp)) and np.all(curve.mpp >= 0.0)
+    assert diagnostics.result()["recovered_steps"] >= 1
