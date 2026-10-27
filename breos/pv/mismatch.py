@@ -604,7 +604,8 @@ class ShadedStringCurve:
         selected = np.flatnonzero(rows)
         out = np.zeros(selected.size)
         voltage = np.zeros(selected.size)
-        mismatched = np.isin(selected, self.mismatched)
+        feasible = (self.v_oc[selected] >= v_min) & (current_limit >= 0.0)
+        mismatched = np.isin(selected, self.mismatched) & feasible
         if mismatched.any():
             select = np.searchsorted(self.mismatched, selected[mismatched])
             scale = self.scale[selected[mismatched]]
@@ -616,7 +617,7 @@ class ShadedStringCurve:
             out[mismatched] = power
             with np.errstate(divide="ignore", invalid="ignore"):
                 voltage[mismatched] = np.where(power > 0, power / (scale * current), 0.0)
-        uniform = ~mismatched
+        uniform = feasible & np.isin(selected, self.uniform)
         if uniform.any():
             out[uniform], voltage[uniform] = self._uniform_constrained(selected[uniform], v_min, v_max, current_limit)
         return out, voltage
@@ -638,8 +639,18 @@ class ShadedStringCurve:
         s = scale[bound]
         with np.errstate(divide="ignore", invalid="ignore"):
             module_limit = np.where(s > 0, current_limit / s, np.inf)
+        feasible = (v_min <= self.v_oc[steps[bound]]) & (v_min <= v_max) & (module_limit >= 0.0)
         at_limit = np.zeros(int(bound.sum()))
-        binding = np.isfinite(module_limit) & (module_limit < p[0])
+        binding = feasible & np.isfinite(module_limit) & (module_limit < p[0])
+        if binding.any():
+            isc = _solver.current(
+                0.0,
+                *[x[binding] for x in p],
+                stage="string_isc",
+                steps=steps[bound][binding],
+                location=self._solver_location,
+            )
+            binding[binding] = module_limit[binding] < isc
         if binding.any():
             at_limit[binding] = self.modules * _solver.voltage(
                 module_limit[binding],
@@ -649,20 +660,21 @@ class ShadedStringCurve:
                 steps=steps[bound][binding],
             ).clip(min=0.0)
         lower = np.maximum(v_min, at_limit)
-        voltage = np.clip(v_mp[bound], lower, v_max)
+        feasible &= lower <= np.minimum(v_max, self.v_oc[steps[bound]])
+        voltage = np.where(feasible, np.clip(v_mp[bound], lower, v_max), 0.0)
         current = s * np.clip(
             _solver.current(
                 voltage / self.modules,
                 *p,
                 stage="string_voltage_limit",
-                feasible=lower <= v_max,
+                feasible=feasible,
                 steps=steps[bound],
                 location=self._solver_location,
             ),
             0.0,
             None,
         )
-        result[bound] = np.where(lower > v_max, 0.0, np.minimum(voltage * current, result[bound]))
+        result[bound] = np.where(feasible, np.minimum(voltage * current, result[bound]), 0.0)
         operating_v[bound] = np.where(result[bound] > 0, voltage, 0.0)
         return result, operating_v
 

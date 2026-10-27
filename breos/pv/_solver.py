@@ -66,6 +66,13 @@ def _reverse_voltage(current, photo, saturation, series, shunt, diode):
         def residual(junction):
             return il - io * np.expm1(junction / n) - junction / rsh - amps
 
+        # The analytic endpoint can round just below the root.
+        for _ in range(8):
+            if residual(upper) <= 0.0:
+                break
+            upper = np.nextafter(upper * (1.0 + 1e-8), np.inf)
+        else:
+            raise ValueError("Could not bracket reverse-current voltage")
         result[k] = brentq(residual, 0.0, upper) - amps * rs
     return result
 
@@ -145,10 +152,32 @@ def _solve(kind, params, value=0.0, *, stage, steps=None, feasible=True, locatio
         p = [np.asarray(p) for p in params] if selected is None else [p[selected] for p in diode]
         if kind != "mpp":
             query = np.asarray(value) if selected is None else arrays[5][selected]
+            volts, amps = (query, result) if kind == "current" else (result, query)
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                junction = np.asarray(volts + amps * p[2])
+                leakage = junction / p[3]
+                np.divide(junction, p[4], out=junction)
+                np.exp(junction, out=junction)
+                junction *= p[1]
+                # Scale by the equation's terms, not by the small difference
+                # left after cancellation. The floor allows 1e-8 A roundoff.
+                scale = np.asarray(np.maximum(np.maximum(np.abs(p[0]), np.abs(amps)), np.abs(junction)))
+                np.maximum(scale, np.abs(leakage), out=scale)
+                np.maximum(scale, 0.1, out=scale)
+                # Reuse the diode-current buffer for the residual.
+                junction += leakage
+                junction += amps
+                junction -= p[0]
+                junction -= p[1]
+                off_curve = ~np.isfinite(junction)
+                np.abs(junction, out=junction)
+                scale *= 1e-7
+                off_curve |= junction > scale
             tolerance = 1e-7 * np.maximum(1.0, np.abs(p[0]))
             if kind == "current":
                 return (
                     ~np.isfinite(result)
+                    | off_curve
                     | ((query >= 0) & (result > p[0] + tolerance))
                     | ((query <= 0) & (result < -tolerance))
                 )
@@ -156,6 +185,7 @@ def _solve(kind, params, value=0.0, *, stage, steps=None, feasible=True, locatio
                 upper = p[4] * np.log1p(p[0] / p[1])
             return (
                 ~np.isfinite(result)
+                | off_curve
                 | ((query <= 0) & (result < -tolerance))
                 | ((query >= 0) & (result > upper + 1e-7 * np.maximum(1.0, np.abs(upper))))
             )

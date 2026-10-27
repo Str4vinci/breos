@@ -239,7 +239,17 @@ def test_an_already_infeasible_window_does_not_require_its_unused_current(monkey
     from breos.electrical import _single_array_power
 
     operating = _breakdown(get_module("Generic_400W"), 1, [800.0], [25.0], 1.0).module_operating
-    monkeypatch.setattr(pvlib.pvsystem, "i_from_v", lambda *a, **kw: np.array([np.nan]))
+    original = pvlib.pvsystem.i_from_v
+    calls = 0
+
+    def forced(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        # Isc establishes whether the current limit binds. The following
+        # current evaluation is discarded once that limit excludes the window.
+        return np.array([np.nan]) if calls == 2 else original(*args, **kwargs)
+
+    monkeypatch.setattr(pvlib.pvsystem, "i_from_v", forced)
     diagnostics = _solver.SolverDiagnostics()
     with _solver.solver_scope(diagnostics=diagnostics):
         _, limited, voltage = _single_array_power(operating, np.ones(1), 1, 0.0, 1.0, 1.0)

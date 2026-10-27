@@ -1331,8 +1331,16 @@ def _single_array_power(
         return unconstrained, result, operating_v
 
     params = [np.asarray(p)[limited] for p in _diode_params(operating)]
+    steps = np.flatnonzero(limited)
+    voc = _solver.voltage(0.0, *params, stage="input_voc", steps=steps, location=location)
+    feasible = (lower_v <= voc) & (lower_v <= upper_v) & (module_current_limit[limited] >= 0.0)
     v_at_limit = np.zeros(int(limited.sum()))
-    binding = np.isfinite(module_current_limit[limited]) & (module_current_limit[limited] < params[0])
+    binding = feasible & np.isfinite(module_current_limit[limited]) & (module_current_limit[limited] < params[0])
+    if binding.any():
+        isc = _solver.current(
+            0.0, *[p[binding] for p in params], stage="input_isc", steps=steps[binding], location=location
+        )
+        binding[binding] = module_current_limit[limited][binding] < isc
     if binding.any():
         v_at_limit[binding] = _solver.voltage(
             module_current_limit[limited][binding],
@@ -1342,7 +1350,8 @@ def _single_array_power(
             steps=np.flatnonzero(limited)[binding],
         ).clip(min=0.0)
     lower = np.maximum(lower_v, v_at_limit)
-    voltage = np.clip(v_mp[limited], lower, upper_v)
+    feasible &= lower <= np.minimum(upper_v, voc)
+    voltage = np.where(feasible, np.clip(v_mp[limited], lower, upper_v), 0.0)
     current = np.clip(
         _solver.current(
             voltage,
@@ -1350,14 +1359,14 @@ def _single_array_power(
             stage="input_voltage_limit",
             steps=np.flatnonzero(limited),
             location=location,
-            feasible=lower <= upper_v,
+            feasible=feasible,
         ),
         0.0,
         None,
     )
     # No point of the curve is inside the range and under the current limit:
     # the input has no usable operating point and delivers nothing.
-    current = np.where(lower > upper_v, 0.0, current)
+    current = np.where(feasible, current, 0.0)
     result[limited] = np.minimum(modules * voltage * current_scale[limited] * current, unconstrained[limited])
     operating_v[limited] = np.where(result[limited] > 0, modules * voltage, 0.0)
     return unconstrained, result, operating_v
@@ -1398,6 +1407,7 @@ def _parallel_arrays_power(
                 v,
                 *[p[rows].reshape(shape) for p in group],
                 stage="parallel_current",
+                feasible=window[rows].reshape(shape),
                 steps=np.flatnonzero(steps)[rows],
                 location=source.location,
             )
@@ -1425,7 +1435,11 @@ def _parallel_arrays_power(
     lower = np.full(len(v_oc), v_min / modules)
     upper = np.minimum(v_max / modules, v_oc)
     # The currents fall with voltage, so the allowed voltages start where they meet their limits.
-    blocked = ~allowed(lower)
+    window = lower <= upper
+    if not window.any():
+        result[steps] = 0.0
+        return unconstrained, result, operating_v
+    blocked = window & ~allowed(np.minimum(lower, upper))
     if blocked.any():
         low, high = lower[blocked].copy(), upper[blocked].copy()
         for _ in range(_BISECTION_STEPS):
@@ -1434,7 +1448,8 @@ def _parallel_arrays_power(
             high = np.where(ok, middle, high)
             low = np.where(ok, low, middle)
         lower[blocked] = high
-    feasible = (lower <= upper) & allowed(np.minimum(lower, upper))
+    feasible = window & (lower <= upper) & allowed(np.minimum(lower, upper))
+    lower = np.where(feasible, lower, upper)
 
     def power(v: np.ndarray) -> np.ndarray:
         return modules * v * np.clip(input_current(v), 0.0, None)
@@ -1566,7 +1581,11 @@ def _curves_power(
     lower = np.full(index.size, float(v_min))
     upper = np.minimum(float(v_max), v_oc)
     # The currents fall with voltage, so the allowed voltages start where they meet their limits.
-    blocked = ~allowed(np.minimum(lower, upper))
+    window = lower <= upper
+    if not window.any():
+        result[index] = 0.0
+        return unconstrained, result, operating_v
+    blocked = window & ~allowed(np.minimum(lower, upper))
     if blocked.any():
         low, high = lower[blocked].copy(), upper[blocked].copy()
         for _ in range(_BISECTION_STEPS):
@@ -1575,7 +1594,8 @@ def _curves_power(
             high = np.where(ok, middle, high)
             low = np.where(ok, low, middle)
         lower[blocked] = high
-    feasible = (lower <= upper) & allowed(np.minimum(lower, upper))
+    feasible = window & (lower <= upper) & allowed(np.minimum(lower, upper))
+    lower = np.where(feasible, lower, upper)
 
     def power(voltage: np.ndarray) -> np.ndarray:
         return voltage * np.clip(input_current(voltage), 0.0, None)
