@@ -234,9 +234,11 @@ class ShadedStringCurve:
             # The most current the part carries before it breaks down or needs its bypass diode.
             # A dark part's can come out a roundoff below 0, which would break it
             # down at open circuit.
-            short_circuit = np.maximum(
+            # Isc never exceeds the photocurrent; at vanishing light rounding can say otherwise.
+            short_circuit = np.clip(
                 np.asarray(_solver.current(0.0, *params, stage="substring_isc", steps=rows), dtype=float),
                 0.0,
+                params[0],
             )
             return params + (short_circuit, np.broadcast_to(share * cells * self.breakdown_v, rows.shape))
 
@@ -358,9 +360,11 @@ class ShadedStringCurve:
                 shunt * share * strings,
                 diode * share,
             )
-            short_circuit = np.maximum(
+            # Isc never exceeds the photocurrent; at vanishing light rounding can say otherwise.
+            short_circuit = np.clip(
                 np.asarray(_solver.current(0.0, *params, stage="substring_isc", steps=rows), dtype=float),
                 0.0,
+                params[0],
             )
             return params + (short_circuit, np.broadcast_to(count * self.breakdown_v, rows.shape))
 

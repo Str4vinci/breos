@@ -228,16 +228,19 @@ def test_a_dark_string_has_no_feasible_power_even_when_zero_volts_is_allowed():
     np.testing.assert_array_equal(voltage, 0.0)
 
 
-def test_vanishing_light_open_circuit_voltage_is_bracketed(monkeypatch):
+@pytest.mark.parametrize("scale", [1e-16, 1e-18])
+def test_vanishing_light_open_circuit_voltage_is_bracketed(monkeypatch, scale):
     # At about 1e-13 W/m2 Lambert W puts a part's Voc slightly below zero and
-    # pvlib's own bracket misses the root; the retry must still find it.
+    # pvlib's own bracket misses the root; the retry must still find it. At
+    # 1e-15 W/m2 a rounded Isc above the photocurrent once sent a bypass-region
+    # current to the forward solver.
     import tests.test_solver_convergence as convergence
 
     original = convergence.IrradianceParts
 
     def faint(**parts):
         for key in ("beam", "circumsolar", "sky", "other"):
-            parts[key] = np.asarray(parts[key]) * 1e-16
+            parts[key] = np.asarray(parts[key]) * scale
         return original(**parts)
 
     monkeypatch.setattr(convergence, "IrradianceParts", faint)
