@@ -13,6 +13,14 @@ import numpy as np
 import pvlib
 from scipy.optimize import brentq
 
+DARK_FRACTION = 1e-9
+
+
+def floor_photocurrent(photocurrent, reference):
+    """Treat photocurrent below a fraction of the module's reference as dark."""
+    photo = np.asarray(photocurrent, dtype=float)
+    return np.where(photo < DARK_FRACTION * reference, 0.0, photo)
+
 
 @dataclass
 class SolverDiagnostics:
@@ -105,8 +113,8 @@ def _solve(kind, params, value=0.0, *, stage, steps=None, feasible=True, locatio
 
     IV curves may carry negative current or voltage. Their caller supplies
     ``feasible`` where a bypass clamp replaces the diode's forward curve.
-    Dark points retain the primary method's finite values (including reverse
-    current); only their non-finite values become zero.
+    Dark parts retain their IV curve, including reverse current. Their roots
+    may also need bracketing, but never count as numerical recoveries.
     """
     photo = np.asarray(params[0])
     nonfinite = ~np.isfinite(photo)
@@ -212,30 +220,56 @@ def _solve(kind, params, value=0.0, *, stage, steps=None, feasible=True, locatio
         )
 
     result = call("newton" if kind == "mpp" else "lambertw")
-    bad_primary = invalid(result)
+    if kind == "mpp":
+        result = {key: np.where(photo == 0.0, 0.0, column) for key, column in result.items()}
+    else:
+        # Both dark open circuit and dark short circuit are exactly zero.
+        result = np.where((photo == 0.0) & (np.asarray(value) == 0.0), 0.0, result)
+    bad_primary = np.asarray(invalid(result))
     if not bad_primary.any():
         return result
     shape = np.shape(result["p_mp"] if kind == "mpp" else result)
-    failed = bad_primary & (photo > 0) & np.broadcast_to(feasible, shape)
+    if kind == "voltage":
+        dark_reverse = bad_primary & (photo == 0.0) & (np.asarray(value) < 0.0)
+        if dark_reverse.any():
+            arrays = np.broadcast_arrays(*params, value)
+            diode = arrays[:5]
+            p = [p[dark_reverse] for p in diode]
+            amps = arrays[5][dark_reverse]
+            # The ideal-diode endpoint is also the root for infinite Rsh;
+            # at the dark floor its leakage is usually negligible. Check it
+            # before paying for scalar bracketing on those table points.
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                candidate = p[4] * np.log1p(-amps / p[1]) - amps * p[2]
+            result[dark_reverse] = candidate
+            bad_primary[dark_reverse] = invalid(candidate, dark_reverse)
+    active = (photo > 0) if kind == "mpp" else (photo >= 0)
+    failed = bad_primary & active & np.broadcast_to(feasible, shape)
     if failed.any():
         arrays = np.broadcast_arrays(*params, *([] if kind == "mpp" else [value]))
         diode = arrays[:5]
-        fallback = call("brentq", failed)
-        bad = invalid(fallback, failed)
-        positions = np.flatnonzero(failed)
-        if bad.any():
-            bad_points = np.zeros(shape, dtype=bool)
-            bad_points.flat[positions[np.flatnonzero(bad)]] = True
-            raise _problem("Electrical solver failed", stage, bad_points, diode, steps, location)
-        if kind == "mpp":
-            for key in result:
-                result[key][failed] = fallback[key]
-        else:
-            result[failed] = fallback
-        collector = _diagnostics.get()
-        if collector is not None:
-            context = {**_location.get(), **(location or {})}
-            collector.stages[stage].update(_step_label(flat, shape, steps, context) for flat in positions)
+        # A dark part may have no finite forward root (for example with
+        # infinite Rsh). It must not spoil a lit point's independent retry.
+        for lit in (True, False):
+            selected = failed & ((photo > 0.0) if lit else (photo == 0.0))
+            if not selected.any():
+                continue
+            fallback = call("brentq", selected)
+            bad = invalid(fallback, selected)
+            positions = np.flatnonzero(selected)
+            if lit and bad.any():
+                bad_points = np.zeros(shape, dtype=bool)
+                bad_points.flat[positions[np.flatnonzero(bad)]] = True
+                raise _problem("Electrical solver failed", stage, bad_points, diode, steps, location)
+            if kind == "mpp":
+                for key in result:
+                    result[key][selected] = fallback[key]
+            else:
+                result[selected] = fallback
+            collector = _diagnostics.get()
+            if lit and collector is not None:
+                context = {**_location.get(), **(location or {})}
+                collector.stages[stage].update(_step_label(flat, shape, steps, context) for flat in positions)
     if kind == "mpp":
         return {key: np.nan_to_num(column, copy=False, posinf=0.0, neginf=0.0) for key, column in result.items()}
     return np.nan_to_num(result, copy=False, posinf=0.0, neginf=0.0)

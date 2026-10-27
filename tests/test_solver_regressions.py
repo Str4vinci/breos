@@ -230,10 +230,8 @@ def test_a_dark_string_has_no_feasible_power_even_when_zero_volts_is_allowed():
 
 @pytest.mark.parametrize("scale", [1e-16, 1e-18])
 def test_vanishing_light_open_circuit_voltage_is_bracketed(monkeypatch, scale):
-    # At about 1e-13 W/m2 Lambert W puts a part's Voc slightly below zero and
-    # pvlib's own bracket misses the root; the retry must still find it. At
-    # 1e-15 W/m2 a rounded Isc above the photocurrent once sent a bypass-region
-    # current to the forward solver.
+    # These 1e-13 and 1e-15 W/m2 cases once needed numerical retries.
+    # The module photocurrent floor now makes them exactly dark.
     import tests.test_solver_convergence as convergence
 
     original = convergence.IrradianceParts
@@ -248,4 +246,6 @@ def test_vanishing_light_open_circuit_voltage_is_bracketed(monkeypatch, scale):
     with _solver.solver_scope(diagnostics=diagnostics):
         curve = convergence.represented(80621, 3, 1, None, cases=3)
     assert np.all(np.isfinite(curve.mpp)) and np.all(curve.mpp >= 0.0)
-    assert diagnostics.result()["recovered_steps"] >= 1
+    np.testing.assert_array_equal(curve.mpp, 0.0)
+    np.testing.assert_array_equal(curve.v_oc, 0.0)
+    assert diagnostics.result() == {"recovered_steps": 0, "by_stage": {}}
