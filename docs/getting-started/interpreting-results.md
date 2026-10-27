@@ -425,7 +425,8 @@ Counts stay with the prepared PV inputs. Cached runs and revaluation retain
 the same diagnostics. Projection years do not multiply the counts.
 
 Stage names identify module, string and cable MPPs (`module_mpp`,
-`string_mpp`, `cable_mpp`), substring short-circuit current (`substring_isc`),
+`string_mpp`, `cable_mpp`), short-circuit currents (`substring_isc`,
+`string_isc`, `input_isc`),
 part and half-chain voltages (`part_voltage`, `half_voltage`), string and
 input limit solves (`string_current_limit`, `string_voltage_limit`,
 `input_current_limit`, `input_voltage_limit`), and string, group and parallel
