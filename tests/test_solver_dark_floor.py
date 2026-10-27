@@ -5,14 +5,23 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from breos.electrical import _curves_power, _CurveSource, _parallel_arrays_power, _single_array_power, _StringGroup
+from breos.electrical import (
+    PVString,
+    _curves_power,
+    _CurveSource,
+    _parallel_arrays_power,
+    _single_array_power,
+    _StringGroup,
+    string_limited_dc,
+)
+from breos.equipment import MpptSpec
 from breos.pv import _solver
 from breos.pv_modules import get_module
 from breos.solar import _get_cec_params
-from tests.test_module_shading import _parts
+from tests.test_module_shading import LIT, _parts, _shading
 from tests.test_solver_convergence import LAYOUTS, SEED, represented
 from tests.test_solver_regressions import TWILIGHT, reverse_reference
-from tests.test_string_energy import _breakdown
+from tests.test_string_energy import _breakdown, _inverter, _setup
 
 SCALES = 10.0 ** np.arange(-30, 1)
 
@@ -175,3 +184,72 @@ def test_dark_iv_bracketing_with_finite_shunt_is_physical_and_not_a_recovery(mon
     assert voltage[0] == pytest.approx(reverse_reference(-0.01, params), rel=1e-10)
     assert voltage[0] > 0.0
     assert diagnostics.result() == {"recovered_steps": 0, "by_stage": {}}
+
+
+def _mixed_light_input(irradiance, path, startup=0.0):
+    module = get_module("Generic_400W")
+    irradiance = np.asarray(irradiance, dtype=float)
+    arrays = []
+    strings = []
+    for array, light in enumerate((np.full(len(irradiance), 800.0), irradiance)):
+        breakdown = _breakdown(module, 7, light, np.full(len(light), 25.0), 1.0)
+        parts = replace(
+            _parts(),
+            beam=light,
+            circumsolar=np.zeros(len(light)),
+            sky=np.zeros(len(light)),
+            other=np.zeros(len(light)),
+            temp_cell=np.full(len(light), 25.0),
+            sun_azimuth=np.full(len(light), 180.0),
+            sun_elevation=np.full(len(light), 50.0),
+        )
+        arrays.append(replace(breakdown, irradiance_parts=parts))
+        shaded = path == "curves" or (path in ("mixed", "mismatched") and array == 1)
+        modules = [{"beam_shaded_fraction": [[0.1 * j]]} for j in range(7)] if path == "mismatched" else [LIT] * 7
+        strings.append(PVString(0, 0, array, 7, module_shading=_shading(modules) if shaded else None))
+    inverter = _inverter(MpptSpec(25.0), startup_voltage_v=startup)
+    return string_limited_dc(_setup(inverter, strings, [(module, 7)] * 2), arrays)
+
+
+@pytest.mark.parametrize("path", ["groups", "curves", "mixed", "mismatched"])
+@pytest.mark.parametrize("startup", [0.0, 80.0])
+def test_a_dark_parallel_string_loads_the_lit_string_without_blocking_startup(path, startup):
+    energy = _mixed_light_input([0.0, 0.999e-6, 1.001e-6], path, startup)
+    power = energy.dc.to_numpy()
+    print(f"path={path}, startup={startup:g}: {power}")
+    assert np.all(power > 2200.0)
+    np.testing.assert_allclose(power, power[-1], rtol=1e-6)
+    # Both branches carry current at the shared MPP, including the dark one.
+    np.testing.assert_allclose(power, 2218.37, rtol=1e-5)
+
+
+@pytest.mark.parametrize("path", ["groups", "curves", "mixed", "mismatched"])
+def test_one_parallel_string_can_sweep_from_darkness_while_the_other_stays_lit(path):
+    irradiance = np.unique(np.r_[0.0, 800.0 * SCALES, [0.999e-6, 1.001e-6]])
+    diagnostics = _solver.SolverDiagnostics()
+    with _solver.solver_scope(diagnostics=diagnostics):
+        energy = _mixed_light_input(irradiance, path, 80.0)
+    power = energy.dc.to_numpy()
+    assert np.all(np.isfinite(power)) and np.all(power > 0.0)
+    # Rsh still changes below the photocurrent floor: its extra loading costs
+    # at most 2e-8 W here. Allow 1e-10 relative for that and search roundoff.
+    assert np.all(np.diff(power) >= -1e-10 * power[:-1]), (irradiance, power)
+    np.testing.assert_allclose(power[irradiance <= 1.001e-6], power[0], rtol=1e-6)
+    print(f"path={path}: {len(power)} steps, largest decrease={max(0.0, -np.diff(power).min()):.9g} W")
+
+
+def test_a_dark_string_keeps_its_static_current_losses_and_cable_resistance():
+    module = get_module("Generic_400W")
+    factor = 0.98 * 0.96 * 0.95
+    breakdown = replace(
+        _breakdown(module, 7, [0.0, 0.999e-6, 1.001e-6, 800.0], [25.0] * 4, factor * 0.97),
+        pvwatts_components_pct={"soiling": 2.0, "mismatch": 4.0, "availability": 3.0},
+        age_degradation_pct=5.0,
+    )
+    group = _StringGroup(breakdown, 1, cable_ohm=0.2, modules=7)
+    np.testing.assert_allclose(group.string_scale, factor, rtol=1e-15)
+    np.testing.assert_allclose(
+        group.operating.resistance_series,
+        breakdown.module_operating.resistance_series + factor * 0.2 / 7,
+        rtol=1e-15,
+    )

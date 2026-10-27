@@ -643,10 +643,14 @@ def test_unsigned_current_never_goes_negative_above_open_circuit():
     assert (dim.current(np.full(STEPS, dim.v_oc[0] + 1.0), every) == 0).all()
     clear = _curve([LIT] * 8)
     window = (dim.v_oc[0] + 1.0, clear.v_oc[0])
-    _, limited, _ = _curves_power([_CurveSource(clear), _CurveSource(dim)], *window, 50.0, 50.0)
+    _, limited, voltage = _curves_power([_CurveSource(clear), _CurveSource(dim)], *window, 50.0, 50.0)
     _, alone, _ = _curves_power([_CurveSource(clear)], *window, 50.0, 50.0)
-    # Above its open circuit, the dim string carries nothing: the clear one delivers alone.
-    assert limited[0] == pytest.approx(alone[0], rel=1e-3)
+    # The unsigned query clips at zero, but a parallel input includes the
+    # dim string's reverse current in its balance.
+    reverse = dim.current(voltage, every, signed=True)
+    assert np.all(reverse < 0.0)
+    assert np.all(limited < alone)
+    np.testing.assert_allclose(limited, voltage * (clear.current(voltage, every) + reverse), rtol=1e-10)
 
 
 @pytest.mark.parametrize("fraction", [0.5, 0.57])

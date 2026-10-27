@@ -659,7 +659,12 @@ removed in 0.9.0.
   incorrect roots are recovered and reported. Reverse-current fallback
   brackets expand past endpoint roundoff. Represented convergence cases now
   demonstrate why refining several peaks is necessary. Module photocurrent
-  below 1e-9 of its reference is treated as exactly dark.
+  below 1e-9 of its reference is treated as exactly dark. A dark string in
+  parallel retains its static current losses and reverse-current loading;
+  the lit input can still reach its start-up voltage. Shaded strings cache
+  their reverse branch and dark diode parameters, avoiding repeated exact
+  solves during the parallel peak search. Both caches are built on demand,
+  so strings on their own MPPT input pay no construction cost for them.
 - `plot_breakeven` finds the year-0 investment as
   `find_payback_year_interpolated` does. A projection without
   `attrs["total_investment"]` that has NPV cumulative costs but only nominal
