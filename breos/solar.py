@@ -17,6 +17,7 @@ from pvlib.location import Location
 
 from breos.cec_fit import fit_cec_params
 from breos.inverter import _calculate_dc_ac_power_arrays
+from breos.pv import _solver
 from breos.pv.iam import calculate_front_effective_irradiance
 from breos.pv.model_options import (
     BIFACIAL_MODELS as BIFACIAL_MODELS,
@@ -264,6 +265,7 @@ class PVProductionBreakdown:
     # order of ``inverters``; None otherwise.
     inverter_dc: Optional[Tuple[pd.Series, ...]] = None
     inverter_dc_voltage: Optional[Tuple[pd.Series, ...]] = None
+    solver_diagnostics: Optional[dict[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -683,7 +685,7 @@ def _module_dc_before_losses(
         cec = pvlib.pvsystem.calcparams_cec(
             effective_irradiance, temp_cell, pv_params.alpha_sc, a_ref, I_L_ref, I_o_ref, R_sh_ref, R_s, Adjust
         )
-        mpp = pvlib.pvsystem.max_power_point(*cec, method="newton")
+        mpp = _solver.mpp(*cec, stage="module_mpp", steps=times)
 
     def column(key: str) -> np.ndarray:
         return np.asarray(mpp[key] if isinstance(mpp, dict) else getattr(mpp, key), dtype=float)

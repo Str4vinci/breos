@@ -24,6 +24,7 @@ from breos.app_config import (
 )
 from breos.electrical import string_cable_loss, string_limited_dc
 from breos.inverter import AcCable, InverterConversion, InverterUnits, ac_derate
+from breos.pv import _solver
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs, solar_position_warning_scope
 from breos.pv.shading import ModuleMeanShading
@@ -475,6 +476,16 @@ def arrays_with_module_shading(resolved: ResolvedAppConfig) -> list[dict[str, An
 def build_pv_production_breakdown(
     cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame
 ) -> PVProductionBreakdown:
+    """Build PV production with recovery counts retained when inputs are reused."""
+    diagnostics = _solver.SolverDiagnostics()
+    with _solver.solver_scope(diagnostics=diagnostics, steps=weather.index):
+        result = _build_pv_production_breakdown(cfg, resolved, weather)
+    return replace(result, solver_diagnostics=diagnostics.result())
+
+
+def _build_pv_production_breakdown(
+    cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame
+) -> PVProductionBreakdown:
     """Build undegraded system-level PV production and loss-stage details."""
     location = Location(resolved.lat, resolved.lon, tz=resolved.timezone)
     options = configured_pv_model_kwargs(cfg)
@@ -500,7 +511,10 @@ def build_pv_production_breakdown(
                 dual_axis_max_tilt=cfg["dual_axis_max_tilt"],
             )
         ]
-    arrays = [_array_breakdown(grid, model, loss_overrides=cfg["pv_loss_overrides"]) for model in models]
+    arrays = []
+    for index, model in enumerate(models):
+        with _solver.solver_scope(array=index):
+            arrays.append(_array_breakdown(grid, model, loss_overrides=cfg["pv_loss_overrides"]))
     total = _sum_pv_breakdowns(arrays) if len(arrays) > 1 else arrays[0]
 
     electrical = resolved.electrical

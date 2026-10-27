@@ -72,6 +72,7 @@ from breos.projection import (
     tariff_records,
     value_projection,
 )
+from breos.pv._solver import SolverDiagnostics
 from breos.pv.model_options import (
     DEFAULT_SOLAR_POSITION,
     resolve_solar_position_method,
@@ -195,9 +196,29 @@ class MonteCarloSettings:
             raise ValueError("weather_start_year must not be later than weather_end_year")
 
 
+def _solver_summary(by_weather_year: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Recovery counts for prepared source years, counted once per weather year."""
+    years = deepcopy(by_weather_year or {})
+    stages: dict[str, int] = {}
+    for record in years.values():
+        for stage, count in record["by_stage"].items():
+            stages[stage] = stages.get(stage, 0) + count
+    return {
+        "by_weather_year": years,
+        "total": {
+            "recovered_steps": sum(record["recovered_steps"] for record in years.values()),
+            "by_stage": dict(sorted(stages.items())),
+        },
+    }
+
+
 @dataclass
 class MonteCarloResult:
-    """Outcome of a Monte Carlo study."""
+    """Outcome of a Monte Carlo study.
+
+    ``solver`` reports recoveries by source weather year and their total,
+    counted once per prepared year rather than per trajectory draw.
+    """
 
     runs: pd.DataFrame  # one row per run
     summary: dict[str, dict[str, float]]  # metric -> descriptive statistics and quantiles
@@ -208,6 +229,9 @@ class MonteCarloResult:
     # P50/P75/P90/P99 annual yield over the weather years, for one year and
     # the study horizon (breos.exceedance); None with fewer than two years.
     yield_exceedance: dict[str, Any] | None = None
+    # Recoveries in the parent's prepared inputs, by source weather year and
+    # summed over those years; not multiplied by trajectory sampling.
+    solver: dict[str, Any] = field(default_factory=_solver_summary)
 
 
 def _sample_pv_model_factor(settings: MonteCarloSettings, run_idx: int) -> float:
@@ -319,6 +343,8 @@ def _build_pv_years(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     weather_by_year: dict[int, pd.DataFrame],
+    *,
+    solver_by_year: dict[int, dict[str, Any]] | None = None,
 ) -> _PvYears:
     """Build each year's undegraded DC production, battery temperature and inverter series.
 
@@ -326,12 +352,15 @@ def _build_pv_years(
     a :class:`MonteCarloYearCache` build them again from the frames it holds.
     The inverter series are its temperature derating and its efficiency
     curve's row at each step's operating voltage, each None when not modelled.
+    ``solver_by_year`` retains the recovery record from each prepared year.
     """
     dc_by_year: dict[int, pd.Series] = {}
     temp_by_year: dict[int, pd.Series] = {}
     inverter_by_year: dict[int, InverterSteps] = {}
     for year, weather in weather_by_year.items():
         breakdown = build_pv_production_breakdown(cfg, resolved, weather)
+        if solver_by_year is not None:
+            solver_by_year[year] = deepcopy(breakdown.solver_diagnostics or SolverDiagnostics().result())
         dc_by_year[year] = breakdown.dc_after_losses
         temp_by_year[year] = build_battery_temperature_series(
             cfg["battery_temperature"],
@@ -352,10 +381,11 @@ def _precompute_year_caches(
     settings: MonteCarloSettings,
     *,
     runtime_weather: dict[str, Any] | None = None,
+    solver_by_year: dict[int, dict[str, Any]] | None = None,
 ) -> _PvYears:
     """Build per-year undegraded DC production, battery temperature and inverter series."""
     weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
-    return _build_pv_years(cfg, resolved, weather_by_year)
+    return _build_pv_years(cfg, resolved, weather_by_year, solver_by_year=solver_by_year)
 
 
 # Config keys the PV layer of the year cache never reads, directly or through
@@ -460,6 +490,7 @@ class MonteCarloYearCache:
         dc_by_year: dict[int, pd.Series],
         temp_by_year: dict[int, pd.Series],
         inverter_by_year: dict[int, InverterSteps],
+        solver_by_year: dict[int, dict[str, Any]] | None = None,
     ) -> None:
         self._weather_key = weather_key
         self._weather_by_year = weather_by_year
@@ -468,6 +499,11 @@ class MonteCarloYearCache:
         self._dc_by_year = dc_by_year
         self._temp_by_year = temp_by_year
         self._inverter_by_year = inverter_by_year
+        self._solver_by_year = (
+            deepcopy(solver_by_year)
+            if solver_by_year is not None
+            else {year: SolverDiagnostics().result() for year in dc_by_year}
+        )
 
     @property
     def weather_key(self) -> dict[str, Any]:
@@ -488,7 +524,12 @@ class MonteCarloYearCache:
         return f"MonteCarloYearCache(weather_file={self._weather_key['weather_file']!r}, years={self.available_years})"
 
     def _years_for(
-        self, cfg: dict[str, Any], resolved: ResolvedAppConfig, settings: MonteCarloSettings
+        self,
+        cfg: dict[str, Any],
+        resolved: ResolvedAppConfig,
+        settings: MonteCarloSettings,
+        *,
+        solver_by_year: dict[int, dict[str, Any]] | None = None,
     ) -> tuple[dict[int, pd.Series], dict[int, pd.Series], dict[int, InverterSteps], dict[str, Any]]:
         """The DC, temperature and inverter series and weather record for one study."""
         weather_key = _weather_cache_key(cfg, resolved, settings)
@@ -500,10 +541,14 @@ class MonteCarloYearCache:
             )
         pv_key = _pv_cache_key(cfg)
         if pv_key is None or pv_key != self._pv_key:
+            rebuilt_solver: dict[int, dict[str, Any]] = {}
             self._dc_by_year, self._temp_by_year, self._inverter_by_year = _build_pv_years(
-                cfg, resolved, self._weather_by_year
+                cfg, resolved, self._weather_by_year, solver_by_year=rebuilt_solver
             )
+            self._solver_by_year = rebuilt_solver
             self._pv_key = pv_key
+        if solver_by_year is not None:
+            solver_by_year.update(deepcopy(self._solver_by_year))
         # New dicts over the shared series: a study reads them and never
         # writes to them, and its provenance keeps its own weather record.
         return (
@@ -593,9 +638,19 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
     weather_key = _weather_cache_key(cfg, resolved, settings)
     runtime_weather: dict[str, Any] = {}
     weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
-    dc_by_year, temp_by_year, inverter_by_year = _build_pv_years(cfg, resolved, weather_by_year)
+    solver_by_year: dict[int, dict[str, Any]] = {}
+    dc_by_year, temp_by_year, inverter_by_year = _build_pv_years(
+        cfg, resolved, weather_by_year, solver_by_year=solver_by_year
+    )
     return MonteCarloYearCache(
-        weather_key, weather_by_year, runtime_weather, _pv_cache_key(cfg), dc_by_year, temp_by_year, inverter_by_year
+        weather_key,
+        weather_by_year,
+        runtime_weather,
+        _pv_cache_key(cfg),
+        dc_by_year,
+        temp_by_year,
+        inverter_by_year,
+        solver_by_year,
     )
 
 
@@ -1177,18 +1232,23 @@ def run_montecarlo(
     # One "auto" fallback warning per study. A year cache that reuses its PV
     # layer builds nothing that warns, so the study warns from its weather
     # record; a study that built its PV layer and warned does not warn again.
+    solver_by_year: dict[int, dict[str, Any]] = {}
     with solar_position_warning_scope():
         if year_cache is None:
             runtime_weather: dict[str, Any] = {}
             if resolved.vehicle is None:
                 dc_by_year, temp_by_year, inverter_by_year = _precompute_year_caches(
-                    cfg, resolved, settings, runtime_weather=runtime_weather
+                    cfg, resolved, settings, runtime_weather=runtime_weather, solver_by_year=solver_by_year
                 )
             else:
                 weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
-                dc_by_year, temp_by_year, inverter_by_year = _build_pv_years(cfg, resolved, weather_by_year)
+                dc_by_year, temp_by_year, inverter_by_year = _build_pv_years(
+                    cfg, resolved, weather_by_year, solver_by_year=solver_by_year
+                )
         else:
-            dc_by_year, temp_by_year, inverter_by_year, runtime_weather = year_cache._years_for(cfg, resolved, settings)
+            dc_by_year, temp_by_year, inverter_by_year, runtime_weather = year_cache._years_for(
+                cfg, resolved, settings, solver_by_year=solver_by_year
+            )
             if resolved.vehicle is not None:
                 weather_by_year = year_cache._weather_by_year
         warn_solar_position_fallback(
@@ -1285,6 +1345,7 @@ def run_montecarlo(
     runs_df.attrs["currency"] = currency
     yearly_df = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else None
     exceedance = _yield_exceedance(cfg, resolved, aligned_by_year, settings, years_per_run)
+    solver = _solver_summary(solver_by_year)
     return MonteCarloResult(
         runs=runs_df,
         summary=_summarize(runs_df),
@@ -1292,6 +1353,7 @@ def run_montecarlo(
         available_years=[int(y) for y in available_years],
         yearly=yearly_df,
         yield_exceedance=exceedance,
+        solver=solver,
         provenance={
             "breos_version": package_version(),
             "result_schema_version": RESULT_SCHEMA_VERSION,
@@ -1300,6 +1362,7 @@ def run_montecarlo(
             "resolved_config": cfg,
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
+            "solver": deepcopy(solver),
             "runtime_weather": runtime_weather,
             # The load is built for target_year; resolved_config keeps the
             # start_date the user gave, which Monte Carlo does not use.

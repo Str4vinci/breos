@@ -23,6 +23,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `[smart_charging].grid_import_limit_w` also works without a stationary
   battery. Ledger 3.1 gains vehicle states, flows, origins and boundary
   transfers; a configuration guide and offline Porto gallery case explain them.
+- Electrical single-diode solves check lit operating points and retry failed
+  points with a bracketing solver. A second failure raises `ValueError` with
+  the stage, step, equipment and diode parameters. `electrical.solver` reports
+  recovered steps and counts by stage, including aggregate module solves;
+  Monte Carlo retains the counts by source weather year and in total in
+  `solver`, including cached studies and the CLI JSON outputs. Non-finite
+  diode inputs raise a separate `ValueError` without a retry. Darkness and
+  inverter limits do not count as failures. Seeded convergence
+  tests compare the string and parallel peak searches with dense searches of
+  the same represented curves.
 - AC-coupled batteries ([#419](https://github.com/Str4vinci/breos/issues/419),
   ADR 0004). `battery_coupling = "ac"` gives the battery its own
   bidirectional inverter on the AC bus beside the PV inverter, sized by

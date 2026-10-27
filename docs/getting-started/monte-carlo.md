@@ -144,6 +144,32 @@ a payback median of 9.8 years means little if only 60% of runs pay back.
 The provenance file and the `--json` output are standard JSON, so a statistic
 with no defined value is written as `null`, never as `NaN` or `Infinity`.
 
+`solver` reports electrical solver recoveries in the prepared PV inputs. It
+is available on the Python `MonteCarloResult` and its `provenance` dict, in
+the provenance file and in
+`--json` output. For example:
+
+```json
+{
+  "by_weather_year": {
+    "2021": {"recovered_steps": 1, "by_stage": {"module_mpp": 1}},
+    "2022": {"recovered_steps": 0, "by_stage": {}}
+  },
+  "total": {"recovered_steps": 1, "by_stage": {"module_mpp": 1}}
+}
+```
+
+The keys identify source weather years, even though their timestamps are
+restamped to `target_year`. Python uses integer year keys; JSON uses strings.
+Each year counts distinct recovered steps overall and within each solve
+stage. `total` sums those records across all available weather years.
+Trajectories and repeated draws of a year do not multiply the counts.
+Records come from the parent process's prepared inputs and survive cache
+reuse and parallel workers. A new PV design rebuilds the counts with its
+inputs. With no recoveries, every year's count and the total are zero, with
+empty `by_stage` objects. See [Electrical check](interpreting-results.md#electrical-check)
+for what counts as a solver failure.
+
 ## P50 and P90 yield
 
 A P90 annual yield is the yield exceeded with 90 % probability: the 10th

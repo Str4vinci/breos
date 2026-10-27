@@ -138,7 +138,7 @@ fig.tight_layout()
 
 # %%
 # The vehicle benefit in parts
-# ---------------------------
+# ----------------------------
 # Operating savings are the difference in the households' home bills,
 # exports, away purchases and priced unserved driving. Subtract additional
 # vehicle wear and the installed charger premium to get the vehicle benefit.

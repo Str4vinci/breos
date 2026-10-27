@@ -89,6 +89,7 @@
   "direct_pv_ac_load_kwh": 1706.39,
   "electrical.fidelity": "aggregate",
   "electrical.findings.__len__": 0,
+  "electrical.solver.recovered_steps": 0,
   "electrical.status": "not_evaluated",
   "financial.__len__": 4,
   "financial[0].balance": -6801.08,
