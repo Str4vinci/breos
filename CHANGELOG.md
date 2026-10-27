@@ -675,7 +675,8 @@ removed in 0.9.0.
   IV solves check a scaled diode residual as well as bounds, so finite but
   incorrect roots are recovered and reported. Reverse-current fallback
   brackets expand past endpoint roundoff. Represented convergence cases now
-  demonstrate why refining several peaks is necessary.
+  demonstrate why refining several peaks is necessary. Module photocurrent
+  below 1e-9 of its reference is treated as exactly dark.
 - `plot_breakeven` finds the year-0 investment as
   `find_payback_year_interpolated` does. A projection without
   `attrs["total_investment"]` that has NPV cumulative costs but only nominal

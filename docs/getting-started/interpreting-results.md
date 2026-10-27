@@ -420,6 +420,7 @@ raise a separate `ValueError` without a retry. Both errors name the stage,
 step, known equipment indices and diode parameters. Darkness, bypass
 conduction and an inverter with no feasible operating point do not count
 as solver failures.
+Photocurrent below one billionth of the module's reference is treated as exactly dark.
 
 Counts stay with the prepared PV inputs. Cached runs and revaluation retain
 the same diagnostics. Projection years do not multiply the counts.

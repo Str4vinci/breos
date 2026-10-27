@@ -201,6 +201,7 @@ class IrradianceParts:
             cec = pvlib.pvsystem.calcparams_cec(
                 effective_irradiance, temp_cell, self.pv_params.alpha_sc, a_ref, I_L_ref, I_o_ref, R_sh_ref, R_s, Adjust
             )
+        cec = (_solver.floor_photocurrent(cec[0], I_L_ref), *cec[1:])
         shape = np.shape(effective_irradiance)
         return tuple(np.broadcast_to(np.asarray(value, dtype=float), shape) for value in cec)
 
@@ -685,6 +686,7 @@ def _module_dc_before_losses(
         cec = pvlib.pvsystem.calcparams_cec(
             effective_irradiance, temp_cell, pv_params.alpha_sc, a_ref, I_L_ref, I_o_ref, R_sh_ref, R_s, Adjust
         )
+        cec = (_solver.floor_photocurrent(cec[0], I_L_ref), *cec[1:])
         mpp = _solver.mpp(*cec, stage="module_mpp", steps=times)
 
     def column(key: str) -> np.ndarray:

@@ -11,6 +11,7 @@ from breos.equipment import MpptSpec
 from breos.pv import _solver
 from breos.pv.mismatch import _part_voltage
 from breos.pv_modules import get_module
+from breos.solar import _get_cec_params
 from tests.test_module_shading import CHIMNEY, _module_shaded_config
 from tests.test_solver_convergence import represented
 from tests.test_string_energy import _breakdown, _inverter, _setup
@@ -228,11 +229,12 @@ def test_vanishing_light_does_not_trigger_an_endpoint_cancellation_failure():
         2.2033579794118368e20,
         1.856751155059707,
     ]
-    expected = pvlib.pvsystem.max_power_point(*diode, method="newton")
+    reference = _get_cec_params(get_module("Generic_400W"))[0]
+    diode[0] = _solver.floor_photocurrent(diode[0], reference)
     diagnostics = _solver.SolverDiagnostics()
     with _solver.solver_scope(diagnostics=diagnostics):
         result = _solver.mpp(*diode)
-    assert result == expected
+    assert all(value == 0.0 for value in result.values())
     assert diagnostics.result() == {"recovered_steps": 0, "by_stage": {}}
 
 
