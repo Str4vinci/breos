@@ -147,7 +147,7 @@ def parallel_reference(sources, v_min, v_max, current_limit, string_limit):
     lower = np.full(len(upper), float(v_min))
 
     def currents(voltage):
-        return np.asarray([s.current(voltage, rows) for s in sources])
+        return np.asarray([s.current(voltage, rows, signed=True) for s in sources])
 
     def allowed(voltage):
         each = currents(voltage)
@@ -202,7 +202,7 @@ def test_parallel_peak_convergence(diodes, parallel, breakdown):
     for limits in [(0.0, np.inf, np.inf, np.inf), (65.0, 130.0, 9.0, 4.0)]:
         _, production, voltage = _curves_power(sources, *limits)
         lit = production > 1e-6
-        each = np.asarray([source.current(voltage, np.ones(CASES, dtype=bool)) for source in sources])
+        each = np.asarray([source.current(voltage, np.ones(CASES, dtype=bool), signed=True) for source in sources])
         assert np.all(voltage[lit] >= limits[0] - 1e-7)
         assert np.all(voltage[lit] <= limits[1] + 1e-7)
         assert np.all(each[:, lit].sum(axis=0) <= limits[2] + 1e-7)
