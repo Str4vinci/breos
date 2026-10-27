@@ -76,6 +76,8 @@ class SiteRun:
     tariff: ResolvedTariff | None
     reference_tariff: ResolvedTariff | None
     provenance: Mapping[str, Any]
+    # Recovered single-diode solves in the site's PV preparation; None without PV.
+    solver_diagnostics: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -316,6 +318,7 @@ def _run_pv_site(site: ResolvedAppConfig, deps: AppRuntimeDependencies, *, retai
             "execution": execution,
             **extra_provenance,
         },
+        inputs.pv_breakdown.solver_diagnostics,
     )
 
 

@@ -111,7 +111,7 @@ def _site_provenance(site: SiteRun, account: ParticipantAccount | AssetAccount) 
         record["ledger_schema_version"] = LEDGER_SCHEMA_VERSION
         record["weather"].setdefault("latitude", lat)
         record["weather"].setdefault("longitude", lon)
-        record["electrical"] = electrical_result(resolved.electrical)
+        record["electrical"] = electrical_result(resolved.electrical, site.solver_diagnostics)
         record["vehicle"] = None
     if isinstance(account, ParticipantAccount) and account.terminal_health is not None:
         record["terminal_value"] = _json_record(account.terminal_health.provenance)

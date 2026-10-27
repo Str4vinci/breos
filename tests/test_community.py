@@ -211,6 +211,33 @@ def test_provenance_matches_app_and_is_sorted_json_safe(config, billing):
     assert provenance["sites"]["shared-roof"]["load_profile"]["source"] == "community_zero_load"
 
 
+def test_site_provenance_reports_the_sites_own_solver_recoveries(config, monkeypatch):
+    import pvlib
+
+    original = pvlib.pvsystem.max_power_point
+    injected = False
+
+    def forced(*args, method="newton", **kwargs):
+        # The first lit Newton solve fails, so one site's preparation recovers one step.
+        nonlocal injected
+        result = original(*args, method=method, **kwargs)
+        if method == "newton" and not injected:
+            result["p_mp"][np.flatnonzero(np.asarray(args[0]) > 0.1)[0]] = np.nan
+            injected = True
+        return result
+
+    monkeypatch.setattr(pvlib.pvsystem, "max_power_point", forced)
+    provenance = simulate(config).result().provenance
+    recovered = {
+        key: site["electrical"]["solver"]["recovered_steps"]
+        for key, site in provenance["sites"].items()
+        if "electrical" in site
+    }
+    assert injected
+    assert max(recovered.values()) == 1
+    assert all(count in (0, 1) for count in recovered.values())
+
+
 def test_rerun_replaces_results_and_input_mutation_does_not_change_run(config, monkeypatch):
     community = Community(config)
     config["participants"].clear()
