@@ -430,6 +430,40 @@ class TestPVProduction:
         assert lit.any()
         assert (bifacial.temp_cell[lit] > front_only.temp_cell[lit]).all()
 
+    def test_cec_fit_takes_the_cells_in_series_of_parallel_cell_strings(self, monkeypatch):
+        # A quarter-cut module (Jinko Tiger Neo 3.0 JKM470N-48QL6-DB): 192
+        # cells in 4 parallel strings, so 48 in series. Started from 192 cells
+        # in series the fit does not converge.
+        module = _module_params(
+            Mpp=470,
+            Vmp=30.97,
+            Imp=15.18,
+            Voc=36.19,
+            Isc=15.8,
+            T_Pmax_pct=-0.26,
+            T_Voc_pct=-0.24,
+            T_Isc_pct=0.046,
+            N_Cells=192,
+            bypass_diodes=3,
+            cell_strings_in_parallel=4,
+        )
+        seen = []
+        original_fit = solar.fit_cec_params
+
+        def wrapped_fit(*args, **kwargs):
+            seen.append(kwargs["cells_in_series"])
+            return original_fit(*args, **kwargs)
+
+        monkeypatch.setattr(solar, "fit_cec_params", wrapped_fit)
+        solar._cec_param_cache.clear()
+        try:
+            params = solar._get_cec_params(module)
+        finally:
+            solar._cec_param_cache.clear()
+
+        assert seen == [48]
+        assert all(np.isfinite(v) for v in params)
+
     def test_more_modules_more_production(self, synthetic_weather, porto_location, pv_params):
         dc_1 = calculate_pv_production_dc(
             weather_data=synthetic_weather,
