@@ -2,8 +2,8 @@
  "case": "east_west",
  "title": "East-west and south-facing arrays",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-308-g09d373d",
- "generated_utc": "2026-10-22T08:51:30+00:00",
+ "git_describe": "v0.7.0-332-g464baad-dirty",
+ "generated_utc": "2026-10-28T13:32:50+00:00",
  "runtime_s": 6.0,
  "cheap": true,
  "configs": {
@@ -50,7 +50,7 @@
   "winter": 3
  },
  "files": {
-  "designs.csv": "cff82046696d4cf00b10c893c893b426fa9f06ef217cdbd6d4f1946070c6f868",
+  "designs.csv": "2104ffe978cad29a31ff7ff8bbb01a1148de2cc258bc22c7c6dcba2db9ca1e11",
   "week_summer.csv": "c90fb74d90baca6b0b098e87012956baaed96387b9e9146046f350e38c0cd830",
   "week_winter.csv": "88d6d8cae6c594c2a457edc5c50df537848519510c8df778cc098488c67522df"
  }
