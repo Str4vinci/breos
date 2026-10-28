@@ -9,12 +9,12 @@
   "consumption_kwh": 4000.0,
   "self_consumption_kwh": 3152.71,
   "grid_import_kwh": 843.41,
-  "grid_export_kwh": 4990.64,
+  "grid_export_kwh": 4990.65,
   "grid_independence_pct": 78.91,
   "self_consumption_pct": 38.72,
   "total_investment": 7788.85,
   "payback_year": 13,
-  "npv_savings": 4717.14,
+  "npv_savings": 4717.13,
   "lcoe_per_kwh": 0.1016,
   "battery_soh_end_pct": 70.46,
   "battery_replacements": 1,
@@ -85,7 +85,7 @@
    },
    {
     "year": 2,
-    "balance": -6036.95,
+    "balance": -6036.96,
     "cost_with_system": 8244.25,
     "cost_without_system": 2207.29
    },
@@ -115,14 +115,14 @@
    },
    {
     "year": 7,
-    "balance": -2020.41,
+    "balance": -2020.42,
     "cost_with_system": 9561.13,
     "cost_without_system": 7540.71
    },
    {
     "year": 8,
     "balance": -1271.9,
-    "cost_with_system": 9848.43,
+    "cost_with_system": 9848.44,
     "cost_without_system": 8576.53
    },
    {
@@ -134,7 +134,7 @@
    {
     "year": 10,
     "balance": 174.79,
-    "cost_with_system": 10443.3,
+    "cost_with_system": 10443.31,
     "cost_without_system": 10618.1
    },
    {
@@ -145,7 +145,7 @@
    },
    {
     "year": 12,
-    "balance": -599.61,
+    "balance": -599.62,
     "cost_with_system": 13219.83,
     "cost_without_system": 12620.21
    },
@@ -163,8 +163,8 @@
    },
    {
     "year": 15,
-    "balance": 1509.9,
-    "cost_with_system": 14041.18,
+    "balance": 1509.89,
+    "cost_with_system": 14041.19,
     "cost_without_system": 15551.08
    },
    {
@@ -175,7 +175,7 @@
    },
    {
     "year": 17,
-    "balance": 2836.35,
+    "balance": 2836.34,
     "cost_with_system": 14621.53,
     "cost_without_system": 17457.88
    },
@@ -193,7 +193,7 @@
    },
    {
     "year": 20,
-    "balance": 4717.14,
+    "balance": 4717.13,
     "cost_with_system": 15532.07,
     "cost_without_system": 20249.2
    }
@@ -210,23 +210,23 @@
   "usable_ac_system_production_kwh": 5401.68,
   "curtailment_dc_kwh": 0.34,
   "consumption_kwh": 4000.0,
-  "self_consumption_kwh": 2630.39,
+  "self_consumption_kwh": 2630.38,
   "grid_import_kwh": 1365.76,
-  "grid_export_kwh": 2771.29,
+  "grid_export_kwh": 2771.3,
   "grid_independence_pct": 65.86,
   "self_consumption_pct": 48.7,
   "total_investment": 7788.85,
   "payback_year": 18,
-  "npv_savings": 1243.71,
+  "npv_savings": 1243.74,
   "lcoe_per_kwh": 0.153,
-  "battery_soh_end_pct": 74.63,
+  "battery_soh_end_pct": 74.64,
   "battery_replacements": 1,
   "battery_replacement_cost_npv": 2241.76,
   "terminal_health_credit": null,
   "terminal_health_credit_npv": null,
   "npv_savings_terminal_adjusted": null,
   "co2_avoided_total_year1_kg": 690.93,
-  "co2_avoided_total_lifetime_kg": 13202.61,
+  "co2_avoided_total_lifetime_kg": 13202.6,
   "grid_import_cost_year1_prices": 352.64,
   "grid_export_revenue_year1_prices": 110.85,
   "fixed_charge_year1_prices": 109.5,
@@ -234,8 +234,8 @@
   "no_system_fixed_charge_year1_prices": 109.5,
   "bill_year1": 351.29,
   "no_system_bill_year1": 1142.3,
-  "co2_avoided_self_consumption_lifetime_kg": 6394.14,
-  "co2_avoided_export_lifetime_kg": 6808.46,
+  "co2_avoided_self_consumption_lifetime_kg": 6394.16,
+  "co2_avoided_export_lifetime_kg": 6808.44,
   "tilt": 45.0,
   "electricity_cost": 0.2582,
   "electricity_sold_cost": 0.04,
@@ -282,7 +282,7 @@
    },
    {
     "year": 1,
-    "balance": -7117.96,
+    "balance": -7117.97,
     "cost_with_system": 8226.99,
     "cost_without_system": 1109.03
    },
@@ -300,62 +300,62 @@
    },
    {
     "year": 4,
-    "balance": -5200.0,
-    "cost_with_system": 9571.93,
+    "balance": -5200.01,
+    "cost_with_system": 9571.94,
     "cost_without_system": 4371.93
    },
    {
     "year": 5,
-    "balance": -4588.88,
-    "cost_with_system": 10027.39,
+    "balance": -4588.89,
+    "cost_with_system": 10027.4,
     "cost_without_system": 5438.51
    },
    {
     "year": 6,
     "balance": -3991.16,
-    "cost_with_system": 10485.9,
+    "cost_with_system": 10485.91,
     "cost_without_system": 6494.74
    },
    {
     "year": 7,
-    "balance": -3406.44,
-    "cost_with_system": 10947.15,
+    "balance": -3406.45,
+    "cost_with_system": 10947.16,
     "cost_without_system": 7540.71
    },
    {
     "year": 8,
-    "balance": -2834.37,
-    "cost_with_system": 11410.9,
+    "balance": -2834.38,
+    "cost_with_system": 11410.91,
     "cost_without_system": 8576.53
    },
    {
     "year": 9,
-    "balance": -2274.5,
-    "cost_with_system": 11876.79,
+    "balance": -2274.51,
+    "cost_with_system": 11876.8,
     "cost_without_system": 9602.29
    },
    {
     "year": 10,
-    "balance": -1726.56,
-    "cost_with_system": 12344.66,
+    "balance": -1726.57,
+    "cost_with_system": 12344.67,
     "cost_without_system": 10618.1
    },
    {
     "year": 11,
-    "balance": -1190.26,
-    "cost_with_system": 12814.3,
+    "balance": -1190.27,
+    "cost_with_system": 12814.31,
     "cost_without_system": 11624.04
    },
    {
     "year": 12,
-    "balance": -2868.14,
-    "cost_with_system": 15488.36,
+    "balance": -2868.16,
+    "cost_with_system": 15488.37,
     "cost_without_system": 12620.21
    },
    {
     "year": 13,
     "balance": -2313.4,
-    "cost_with_system": 15920.11,
+    "cost_with_system": 15920.12,
     "cost_without_system": 13606.72
    },
    {
@@ -366,38 +366,38 @@
    },
    {
     "year": 15,
-    "balance": -1240.86,
+    "balance": -1240.85,
     "cost_with_system": 16791.94,
     "cost_without_system": 15551.08
    },
    {
     "year": 16,
     "balance": -722.19,
-    "cost_with_system": 17231.32,
+    "cost_with_system": 17231.31,
     "cost_without_system": 16509.13
    },
    {
     "year": 17,
     "balance": -214.74,
-    "cost_with_system": 17672.62,
+    "cost_with_system": 17672.61,
     "cost_without_system": 17457.88
    },
    {
     "year": 18,
-    "balance": 281.81,
-    "cost_with_system": 18115.6,
+    "balance": 281.82,
+    "cost_with_system": 18115.59,
     "cost_without_system": 18397.41
    },
    {
     "year": 19,
-    "balance": 767.85,
-    "cost_with_system": 18559.98,
+    "balance": 767.86,
+    "cost_with_system": 18559.96,
     "cost_without_system": 19327.82
    },
    {
     "year": 20,
-    "balance": 1243.71,
-    "cost_with_system": 19005.49,
+    "balance": 1243.74,
+    "cost_with_system": 19005.47,
     "cost_without_system": 20249.2
    }
   ],
@@ -413,23 +413,23 @@
   "usable_ac_system_production_kwh": 5401.68,
   "curtailment_dc_kwh": 0.34,
   "consumption_kwh": 4000.0,
-  "self_consumption_kwh": 2630.39,
+  "self_consumption_kwh": 2630.38,
   "grid_import_kwh": 1365.76,
-  "grid_export_kwh": 2771.29,
+  "grid_export_kwh": 2771.3,
   "grid_independence_pct": 65.86,
   "self_consumption_pct": 48.7,
   "total_investment": 9226.35,
   "payback_year": 9,
-  "npv_savings": 7836.86,
+  "npv_savings": 7836.89,
   "lcoe_per_kwh": 0.1716,
-  "battery_soh_end_pct": 74.63,
+  "battery_soh_end_pct": 74.64,
   "battery_replacements": 1,
   "battery_replacement_cost_npv": 2241.76,
   "terminal_health_credit": null,
   "terminal_health_credit_npv": null,
   "npv_savings_terminal_adjusted": null,
   "co2_avoided_total_year1_kg": 1780.66,
-  "co2_avoided_total_lifetime_kg": 34025.8,
+  "co2_avoided_total_lifetime_kg": 34025.79,
   "grid_import_cost_year1_prices": 552.04,
   "grid_export_revenue_year1_prices": 218.93,
   "fixed_charge_year1_prices": 109.5,
@@ -437,8 +437,8 @@
   "no_system_fixed_charge_year1_prices": 109.5,
   "bill_year1": 442.61,
   "no_system_bill_year1": 1726.3,
-  "co2_avoided_self_consumption_lifetime_kg": 16479.01,
-  "co2_avoided_export_lifetime_kg": 17546.79,
+  "co2_avoided_self_consumption_lifetime_kg": 16479.05,
+  "co2_avoided_export_lifetime_kg": 17546.74,
   "tilt": 45.0,
   "electricity_cost": 0.4042,
   "electricity_sold_cost": 0.079,
@@ -485,7 +485,7 @@
    },
    {
     "year": 1,
-    "balance": -8077.13,
+    "balance": -8077.14,
     "cost_with_system": 9753.15,
     "cost_without_system": 1676.02
    },
@@ -504,61 +504,61 @@
    {
     "year": 4,
     "balance": -4788.05,
-    "cost_with_system": 11395.12,
+    "cost_with_system": 11395.13,
     "cost_without_system": 6607.08
    },
    {
     "year": 5,
-    "balance": -3739.26,
-    "cost_with_system": 11958.21,
+    "balance": -3739.27,
+    "cost_with_system": 11958.22,
     "cost_without_system": 8218.95
    },
    {
     "year": 6,
-    "balance": -2713.11,
-    "cost_with_system": 12528.29,
+    "balance": -2713.13,
+    "cost_with_system": 12528.3,
     "cost_without_system": 9815.17
    },
    {
     "year": 7,
-    "balance": -1708.97,
-    "cost_with_system": 13104.87,
+    "balance": -1708.98,
+    "cost_with_system": 13104.88,
     "cost_without_system": 11395.9
    },
    {
     "year": 8,
-    "balance": -726.24,
-    "cost_with_system": 13687.52,
+    "balance": -726.25,
+    "cost_with_system": 13687.53,
     "cost_without_system": 12961.28
    },
    {
     "year": 9,
-    "balance": 235.82,
-    "cost_with_system": 14275.64,
+    "balance": 235.8,
+    "cost_with_system": 14275.66,
     "cost_without_system": 14511.46
    },
    {
     "year": 10,
-    "balance": 1177.65,
-    "cost_with_system": 14868.94,
+    "balance": 1177.63,
+    "cost_with_system": 14868.96,
     "cost_without_system": 16046.59
    },
    {
     "year": 11,
-    "balance": 2099.75,
-    "cost_with_system": 15467.07,
+    "balance": 2099.72,
+    "cost_with_system": 15467.1,
     "cost_without_system": 17566.82
    },
    {
     "year": 12,
-    "balance": 819.13,
-    "cost_with_system": 18253.16,
+    "balance": 819.11,
+    "cost_with_system": 18253.18,
     "cost_without_system": 19072.29
    },
    {
     "year": 13,
-    "balance": 1764.43,
-    "cost_with_system": 18798.71,
+    "balance": 1764.42,
+    "cost_with_system": 18798.72,
     "cost_without_system": 20563.14
    },
    {
@@ -575,32 +575,32 @@
    },
    {
     "year": 16,
-    "balance": 4478.55,
+    "balance": 4478.56,
     "cost_with_system": 20470.85,
     "cost_without_system": 24949.41
    },
    {
     "year": 17,
-    "balance": 5344.89,
-    "cost_with_system": 21038.31,
+    "balance": 5344.91,
+    "cost_with_system": 21038.29,
     "cost_without_system": 26383.2
    },
    {
     "year": 18,
-    "balance": 6192.99,
-    "cost_with_system": 21610.08,
+    "balance": 6193.01,
+    "cost_with_system": 21610.06,
     "cost_without_system": 27803.07
    },
    {
     "year": 19,
-    "balance": 7023.46,
-    "cost_with_system": 22185.7,
+    "balance": 7023.49,
+    "cost_with_system": 22185.67,
     "cost_without_system": 29209.16
    },
    {
     "year": 20,
-    "balance": 7836.86,
-    "cost_with_system": 22764.74,
+    "balance": 7836.89,
+    "cost_with_system": 22764.7,
     "cost_without_system": 30601.59
    }
   ],

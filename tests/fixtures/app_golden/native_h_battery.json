@@ -547,11 +547,11 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "0ecb814ff1727929691078989f3654ef28288d50",
+  "breos_commit": "464baadfa282a6e6918c24c51aad3686e4785bff",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
-  "python": "3.13.14"
+  "python": "3.12.13"
  },
  "scenario": "native_h_battery",
  "schema": "breos-app-golden-v1"

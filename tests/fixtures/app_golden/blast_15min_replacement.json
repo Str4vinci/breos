@@ -496,7 +496,7 @@
   "pv_loss_waterfall.energy_balance.battery_stored_energy.standby_loss_kwh": 23.06,
   "pv_loss_waterfall.energy_balance.pv_dc.curtailed_kwh": 0.0,
   "pv_loss_waterfall.energy_balance.pv_dc.generation_kwh": 4038.79,
-  "pv_loss_waterfall.energy_balance.pv_dc.residual_kwh": -0.0,
+  "pv_loss_waterfall.energy_balance.pv_dc.residual_kwh": 0.0,
   "pv_loss_waterfall.energy_balance.pv_dc.to_battery_kwh": 1002.56,
   "pv_loss_waterfall.energy_balance.pv_dc.to_inverter_kwh": 3036.23,
   "pv_loss_waterfall.flow_unit": "kWh per year",
@@ -601,11 +601,11 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "0ecb814ff1727929691078989f3654ef28288d50",
+  "breos_commit": "464baadfa282a6e6918c24c51aad3686e4785bff",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
-  "python": "3.13.14"
+  "python": "3.12.13"
  },
  "scenario": "blast_15min_replacement",
  "schema": "breos-app-golden-v1"
