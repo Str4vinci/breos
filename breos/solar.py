@@ -629,7 +629,7 @@ def _get_cec_params(pv_params: PVModuleParams):
         pv_params.alpha_sc,
         pv_params.beta_voc,
         pv_params.gamma_pmp_effective,
-        pv_params.N_Cells,
+        pv_params.cells_in_series,
     )
     if key in _cec_param_cache:
         return _cec_param_cache[key]
@@ -643,7 +643,7 @@ def _get_cec_params(pv_params: PVModuleParams):
         alpha_sc=pv_params.alpha_sc,
         beta_voc=pv_params.beta_voc,
         gamma_pmp=pv_params.gamma_pmp_effective,
-        cells_in_series=pv_params.N_Cells,
+        cells_in_series=pv_params.cells_in_series,
     )
     _cec_param_cache[key] = cec
     return cec
