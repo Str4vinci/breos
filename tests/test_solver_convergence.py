@@ -20,7 +20,7 @@ CASES = 16
 DENSE_POINTS = 8193
 
 
-def represented(seed, diodes, parallel, breakdown, cases=CASES, step=None):
+def represented(seed, diodes, parallel, breakdown, cases=CASES, step=None, cable_ohm=0.2):
     rng = np.random.default_rng(seed)
     module = replace(
         get_module("Generic_400W"),
@@ -82,7 +82,7 @@ def represented(seed, diodes, parallel, breakdown, cases=CASES, step=None):
     shading = ModuleShading.from_mapping(
         {"azimuth_deg": azimuth.tolist(), "elevation_deg": [50], "modules": modules}
     ).for_module(diodes, parallel)
-    return ShadedStringCurve(shading, parts, scale, len(modules), cable_ohm=0.2)
+    return ShadedStringCurve(shading, parts, scale, len(modules), cable_ohm=cable_ohm)
 
 
 def polish(grid, power):

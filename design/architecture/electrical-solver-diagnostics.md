@@ -61,6 +61,28 @@ the exact represented curve. This retains continuity between exactly zero
 and near-zero irradiance without an iterative solve at every search point.
 Forward queries reuse the existing table, and reverse queries select cached
 polynomial coefficients directly instead of copying a whole step's table.
+
+Half-chain tables extend before a reverse solve needs more range. Each
+chain's new current bound includes the requested reverse current and the
+other chains' available forward current. The shared voltage range ends at
+the smallest chain endpoint, so no chain's interpolation clips. Extensions
+append bands above the last valid voltage; existing forward and reverse
+values stay unchanged when a later query needs another band. Original chain
+knots are recreated lazily from their diode parameters and current range.
+The outer reverse grid includes the extension joins and nearby points.
+Intervals crossing a join interpolate current linearly to avoid polynomial
+overshoot there.
+Forward table queries locate their bracket by vectorised binary search,
+using the same comparisons and interpolation arithmetic as the original scan.
+
+Reverse-current inversion checks both bracket endpoints and its final
+voltage residual against `1e-8 + 1e-10 * abs(V)` volts. A failed check raises
+through the shared solver error formatter at `string_reverse_current`,
+including the step, equipment and diode parameters. The regression sweep
+covers all four represented layouts from Voc to the reverse voltage that
+three other STC strings could drive. Cached interpolation uses the existing
+1e-4 curve tolerance; exact fallback roots satisfy the stricter residual.
+
 Current scales on zero-power steps come from the static loss percentages and
 module age, excluding availability. Producing steps retain their previous arithmetic
 to preserve rounding. Cable resistance uses that same current scale; power
