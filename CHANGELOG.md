@@ -682,6 +682,9 @@ removed in 0.9.0.
   their reverse branch and dark diode parameters, avoiding repeated exact
   solves during the parallel peak search. Both caches are built on demand,
   so strings on their own MPPT input pay no construction cost for them.
+  Half-chain reverse tables grow with the requested range; reverse-current
+  inversion checks its bracket and residual instead of returning a clipped,
+  unconverged value.
 - `plot_breakeven` finds the year-0 investment as
   `find_payback_year_interpolated` does. A projection without
   `attrs["total_investment"]` that has NPV cumulative costs but only nominal

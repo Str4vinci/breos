@@ -52,6 +52,7 @@ _BISECTION_STEPS = 40
 _REFINED_PEAKS = 4
 # Reverse-current samples, with a smooth interpolation in log current.
 _REVERSE_POINTS = 192
+_REVERSE_EXTENSION_POINTS = 64
 _GOLDEN_RATIO = (5.0**0.5 - 1.0) / 2.0
 # Relative distance of the grid points either side of a part's short-circuit
 # current, on its own curve below it and on the bypass diode above it.
@@ -492,9 +493,29 @@ class ShadedStringCurve:
         saturation = np.asarray(params[1])
         amps = np.r_[0.0, np.geomspace(1e-16, 1.5 * float(self.parts.pv_params.Isc), _REVERSE_POINTS)]
         current = np.broadcast_to(-amps, (len(rows), len(amps)))
+        self._extend_reverse(current[:, -1], np.arange(len(rows)))
+        corners = []
+        for substring in self._substrings:
+            if substring.section is not None:
+                corner = np.zeros(len(rows))
+                split = substring.split
+                mapping, reverse_i, _ = substring.section._reverse_bands[0]
+                corner[split] = reverse_i[mapping[substring.position[split]], -1]
+                corners.append(np.clip(corner, current[:, -1], 0.0))
+        if corners:
+            edges = [
+                np.clip(corner * factor, current[:, -1], 0.0) for corner in corners for factor in (0.96, 1.0, 1.04)
+            ]
+            current = np.sort(np.column_stack((current, *edges)), axis=1)[:, ::-1]
         voltage = self._voltage(current) - (self.scale[rows] * self.cable_ohm)[:, None] * current
-        log_current = np.log1p(amps[None, :] / saturation[:, None])
-        return voltage, saturation, _interpolation_coefficients(voltage, log_current)
+        log_current = np.log1p(-current / saturation[:, None])
+        polynomial = _interpolation_coefficients(voltage, log_current)
+        if corners:
+            start = np.clip(np.arange(current.shape[1] - 1) - 2, 0, current.shape[1] - 6)
+            for corner in corners:
+                crosses = (current[:, start] >= corner[:, None]) & (current[:, start + 5] <= corner[:, None])
+                polynomial[2][crosses] = False
+        return voltage, saturation, (*polynomial, -current)
 
     def _terminal_voltage(self, current: np.ndarray, select: np.ndarray, cabled: bool) -> np.ndarray:
         voltage = self._voltage(current, select)
@@ -764,13 +785,13 @@ class ShadedStringCurve:
                     reverse_v, saturation, coefficients = self._reverse_curve
                     active = reverse.any(axis=1)
                     select = positions[active]
-                    log_current = _polynomial_interp(
+                    measured = -_polynomial_interp(
                         reverse_v,
                         coefficients,
                         columns[active],
                         select,
+                        saturation,
                     )
-                    measured = -saturation[select, None] * np.expm1(log_current)
                     values[active] = np.where(reverse[active], measured, values[active])
                     missing = columns > reverse_v[positions, -1:]
                     if missing.any():
@@ -779,14 +800,28 @@ class ShadedStringCurve:
             out[mismatched] = (scale[:, None] * values).reshape(target.shape)
         return out
 
+    def _extend_reverse(self, current: np.ndarray, select: np.ndarray) -> None:
+        """Give each split substring enough reverse range for the string's current."""
+        for substring in self._substrings:
+            if substring.section is not None:
+                split = substring.split[select]
+                if split.any():
+                    substring.section.extend_reverse(current[split], substring.position[select[split]])
+
     def _reverse_current(self, voltage: np.ndarray, select: np.ndarray, initial: np.ndarray) -> np.ndarray:
         """Invert the exact reverse branch, so its table cannot create a jump at darkness."""
         steps = self.mismatched[select]
         drop = self.scale[steps] * self.cable_ohm
 
         def at(current: np.ndarray) -> np.ndarray:
+            self._extend_reverse(current, select)
             return self._voltage(current, select) - drop * current
 
+        def fail(message: str, bad: np.ndarray) -> None:
+            raise _solver._problem(message, "string_reverse_current", bad, params, steps, self._solver_location)
+
+        params = list(self.parts.diode_parameters(self.mean_irradiance[steps], steps))
+        tolerance = 1e-8 + 1e-10 * np.abs(voltage)
         low = self._table_i[select, 0].copy()
         high = np.zeros(len(select))
         for _ in range(8):
@@ -794,15 +829,22 @@ class ShadedStringCurve:
             if not expand.any():
                 break
             low = np.where(expand, low * 2.0, low)
+        bracket_low, bracket_high = at(low), at(high)
+        invalid = (
+            ~np.isfinite(bracket_low)
+            | ~np.isfinite(bracket_high)
+            | (bracket_low < voltage - tolerance)
+            | (bracket_high > voltage + tolerance)
+        )
+        if invalid.any():
+            fail("Electrical reverse-current bracket failed", invalid)
         # The mean module is a close starting point when every part is dark;
         # interpolation is closer for a lit string with uneven shading.
-        params = list(self.parts.diode_parameters(self.mean_irradiance[steps], steps))
         params[2] = params[2] + drop / self.modules
         mean = _solver.current(
             voltage / self.modules, *params, stage="string_current", steps=steps, location=self._solver_location
         )
         current = np.clip(np.where(mean < 0, mean, initial), low, high)
-        tolerance = 1e-8 + 1e-10 * np.abs(voltage)
         for iteration in range(60):
             found = at(current)
             done = np.abs(found - voltage) <= tolerance
@@ -817,6 +859,10 @@ class ShadedStringCurve:
                 newton = current - np.divide(found - voltage, slope, out=np.zeros_like(current), where=slope != 0)
                 candidate = np.where((newton > low) & (newton < high), newton, candidate)
             current = np.where(done, current, candidate)
+        residual = at(current) - voltage
+        invalid = ~np.isfinite(current) | ~np.isfinite(residual) | (np.abs(residual) > tolerance)
+        if invalid.any():
+            fail("Electrical reverse-current residual failed", invalid)
         return current
 
     def own_mean_power(self) -> np.ndarray:
@@ -856,10 +902,17 @@ def _table_current(table_v: np.ndarray, table_i: np.ndarray, voltage: np.ndarray
     the curve's first segment extended into negative current.
     """
     points = table_v.shape[1]
-    above = (table_v > voltage[:, None]).sum(axis=1)
+    index = np.arange(len(voltage))
+    low, high = np.zeros(len(voltage), dtype=int), np.full(len(voltage), points, dtype=int)
+    for _ in range(points.bit_length()):
+        middle = (low + high) // 2
+        greater = table_v[index, np.minimum(middle, points - 1)] > voltage
+        active = low < high
+        low = np.where(active & greater, middle + 1, low)
+        high = np.where(active & ~greater, middle, high)
+    above = low
     upper = np.clip(above, 1, points - 1)
     lower = upper - 1
-    index = np.arange(len(voltage))
     v0, v1 = table_v[index, lower], table_v[index, upper]
     i0, i1 = table_i[index, lower], table_i[index, upper]
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -897,10 +950,10 @@ def _interpolation_coefficients(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarra
 
 
 def _polynomial_interp(
-    x: np.ndarray, polynomial: tuple[np.ndarray, ...], query: np.ndarray, select: np.ndarray
+    x: np.ndarray, polynomial: tuple[np.ndarray, ...], query: np.ndarray, select: np.ndarray, saturation: np.ndarray
 ) -> np.ndarray:
     """Evaluate the local polynomial, bounded by its interval's endpoint values."""
-    nodes, coefficients, valid, y = polynomial
+    nodes, coefficients, valid, y, amps = polynomial
     x = x[select]
     rows, points = x.shape
     span = float(np.max(x) - np.min(x)) + 1.0
@@ -917,8 +970,9 @@ def _polynomial_interp(
     for order in range(4, -1, -1):
         value = c[:, :, order] + (fraction - n[:, :, order]) * value
     lower, upper = y[source, interval], y[source, interval + 1]
-    linear = lower + fraction * (upper - lower)
-    return np.clip(np.where(valid[source, interval], value, linear), lower, upper)
+    linear = amps[source, interval] + fraction * (amps[source, interval + 1] - amps[source, interval])
+    measured = saturation[select, None] * np.expm1(np.clip(value, lower, upper))
+    return np.where(valid[source, interval], measured, linear)
 
 
 def _rowwise_interp(x: np.ndarray, y: np.ndarray, query: np.ndarray) -> np.ndarray:
@@ -1058,6 +1112,79 @@ class _HalfSection:
                 jumps += _rowwise_interp(falling, current, -at)
             self.caps.extend(jumps.T)
         self.knees = [sum(knees)] + ([sum(brightest)] if brightest else [])
+        self._chains = chains
+        self._chain_reach = reach
+        self._steps = steps
+        self._solver_location = _solver.solver_location()
+        self._reverse_reach = np.zeros(rows)
+        self._reverse_bands: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+
+    @cached_property
+    def _chain_tables(self) -> list[tuple[np.ndarray, np.ndarray]]:
+        """Recreate the original reverse knots only when an extension needs them."""
+        reverse = -1.5 * np.geomspace(1e-4, 1.0, 24)[::-1]
+        current = self._chain_reach[:, None] * np.r_[reverse, 0.0][None, :]
+        tables = []
+        for chain in self._chains:
+            voltage = np.zeros(current.shape)
+            for part in chain:
+                voltage += _solver.voltage(
+                    current,
+                    *[p[:, None] for p in part[:5]],
+                    stage="half_reverse_voltage",
+                    steps=self._steps,
+                    location=self._solver_location,
+                )
+            tables.append((-voltage, current))
+        return tables
+
+    def extend_reverse(self, current: np.ndarray, rows: np.ndarray) -> None:
+        """Append a reverse band without changing the existing forward curve."""
+        required = np.zeros(len(self._reverse_reach))
+        np.minimum.at(required, rows, current)
+        selected = np.flatnonzero(required < self._reverse_reach)
+        if not selected.size:
+            return
+        safe = np.min([-falling[selected, 0] for falling, _ in self._chain_tables], axis=0)
+        anchor = np.argmax(self._voltage[selected] <= safe[:, None], axis=1)
+        anchor_v = self._voltage[selected, anchor].copy()
+        anchor_i = self._current[selected, anchor].copy()
+        for mapping, table_i, table_v in self._reverse_bands:
+            found = mapping[selected]
+            present = found >= 0
+            anchor_v[present] = table_v[found[present], 0]
+            anchor_i[present] = table_i[found[present], 0]
+        photo = [np.min([p[0][selected] for p in chain], axis=0) for chain in self._chains]
+        tables = []
+        steps = np.asarray(self._steps)[selected] if self._steps is not None else selected
+        for k, (chain, (falling, amps)) in enumerate(zip(self._chains, self._chain_tables, strict=True)):
+            # One chain may carry the requested reverse current plus all the
+            # forward current the other chains can still supply.
+            bound = -required[selected] + sum(p for j, p in enumerate(photo) if j != k)
+            bound = np.maximum(bound, -amps[selected, 0]) * 1.1
+            reverse = -np.geomspace(bound, -amps[selected, 0], _REVERSE_EXTENSION_POINTS, axis=1)[:, :-1]
+            volts = np.zeros(reverse.shape)
+            for part in chain:
+                volts += _solver.voltage(
+                    reverse,
+                    *[p[selected, None] for p in part[:5]],
+                    stage="half_reverse_voltage",
+                    steps=steps,
+                    location=self._solver_location,
+                )
+            tables.append(
+                (np.concatenate((-volts, falling[selected]), axis=1), np.concatenate((reverse, amps[selected]), axis=1))
+            )
+        top = np.min([-falling[:, 0] for falling, _ in tables], axis=0)
+        volts = anchor_v[:, None] + (top - anchor_v)[:, None] * np.linspace(0.0, 1.0, 2 * _REVERSE_EXTENSION_POINTS)
+        total = np.zeros_like(volts)
+        for falling, amps in tables:
+            total += _rowwise_interp(falling, amps, -volts)
+        total[:, 0] = anchor_i
+        mapping = np.full(len(self._reverse_reach), -1, dtype=int)
+        mapping[selected] = np.arange(len(selected))
+        self._reverse_bands.append((mapping, total[:, ::-1], volts[:, ::-1]))
+        self._reverse_reach[selected] = total[:, -1]
 
     def voltage(self, current: np.ndarray, rows: Any) -> np.ndarray:
         """The substring's voltage at ``current`` on the steps ``rows`` of its table."""
@@ -1065,6 +1192,13 @@ class _HalfSection:
         table_i, table_v = self._current[rows], self._voltage[rows]
         query = current.reshape(table_i.shape[0], -1)
         voltage = _rowwise_interp(table_i, table_v, query)
+        for mapping, reverse_i, reverse_v in self._reverse_bands:
+            selected = mapping[rows]
+            present = selected >= 0
+            if present.any():
+                i, v = reverse_i[selected[present]], reverse_v[selected[present]]
+                extended = _rowwise_interp(i, v, query[present])
+                voltage[present] = np.where(query[present] < i[:, -1:], extended, voltage[present])
         # Beyond what the strings carry together, the bypass diode takes the current.
         voltage = np.where(query > table_i[:, -1:], -self.bypass_v, voltage)
         return np.maximum(voltage, -self.bypass_v).reshape(shape)
