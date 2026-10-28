@@ -9,11 +9,11 @@ battery_kwh,storage_cost_per_kwh,npv_savings,payback_year,total_investment,metho
 5.0,325,6384.95,9,6913.85,repriced
 5.0,350,6146.69,9,7038.85,repriced
 5.0,375,5908.43,12,7163.85,repriced
-5.0,400,5670.18,12,7288.85,repriced
-5.0,425,5431.92,12,7413.85,repriced
-5.0,450,5193.66,13,7538.85,repriced
-5.0,475,4955.4,13,7663.85,repriced
-5.0,500,4717.14,13,7788.85,repriced
+5.0,400,5670.17,12,7288.85,repriced
+5.0,425,5431.91,12,7413.85,repriced
+5.0,450,5193.65,13,7538.85,repriced
+5.0,475,4955.39,13,7663.85,repriced
+5.0,500,4717.13,13,7788.85,repriced
 5.0,525,4478.88,14,7913.85,repriced
 5.0,550,4240.62,14,8038.85,repriced
 5.0,575,4002.36,14,8163.85,repriced
@@ -31,7 +31,7 @@ battery_kwh,storage_cost_per_kwh,npv_savings,payback_year,total_investment,metho
 10.0,400,4017.24,15,9288.85,repriced
 10.0,425,3541.07,16,9538.85,repriced
 10.0,450,3064.9,16,9788.85,repriced
-10.0,475,2588.73,17,10038.85,repriced
+10.0,475,2588.74,17,10038.85,repriced
 10.0,500,2112.57,18,10288.85,repriced
 10.0,525,1636.4,18,10538.85,repriced
 10.0,550,1160.23,19,10788.85,repriced

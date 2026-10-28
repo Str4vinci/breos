@@ -168,12 +168,12 @@
   "consumption_kwh": 4000.0,
   "self_consumption_kwh": 3152.71,
   "grid_import_kwh": 843.41,
-  "grid_export_kwh": 4990.64,
+  "grid_export_kwh": 4990.65,
   "grid_independence_pct": 78.91,
   "self_consumption_pct": 38.72,
   "total_investment": 7788.85,
   "payback_year": 13,
-  "npv_savings": 4717.14,
+  "npv_savings": 4717.13,
   "lcoe_per_kwh": 0.1016,
   "battery_soh_end_pct": 70.46,
   "battery_replacements": 1,
@@ -205,7 +205,7 @@
    },
    {
     "year": 2,
-    "balance": -6036.95,
+    "balance": -6036.96,
     "cost_with_system": 8244.25,
     "cost_without_system": 2207.29
    },
@@ -235,14 +235,14 @@
    },
    {
     "year": 7,
-    "balance": -2020.41,
+    "balance": -2020.42,
     "cost_with_system": 9561.13,
     "cost_without_system": 7540.71
    },
    {
     "year": 8,
     "balance": -1271.9,
-    "cost_with_system": 9848.43,
+    "cost_with_system": 9848.44,
     "cost_without_system": 8576.53
    },
    {
@@ -254,7 +254,7 @@
    {
     "year": 10,
     "balance": 174.79,
-    "cost_with_system": 10443.3,
+    "cost_with_system": 10443.31,
     "cost_without_system": 10618.1
    },
    {
@@ -265,7 +265,7 @@
    },
    {
     "year": 12,
-    "balance": -599.61,
+    "balance": -599.62,
     "cost_with_system": 13219.83,
     "cost_without_system": 12620.21
    },
@@ -283,8 +283,8 @@
    },
    {
     "year": 15,
-    "balance": 1509.9,
-    "cost_with_system": 14041.18,
+    "balance": 1509.89,
+    "cost_with_system": 14041.19,
     "cost_without_system": 15551.08
    },
    {
@@ -295,7 +295,7 @@
    },
    {
     "year": 17,
-    "balance": 2836.35,
+    "balance": 2836.34,
     "cost_with_system": 14621.53,
     "cost_without_system": 17457.88
    },
@@ -313,7 +313,7 @@
    },
    {
     "year": 20,
-    "balance": 4717.14,
+    "balance": 4717.13,
     "cost_with_system": 15532.07,
     "cost_without_system": 20249.2
    }
@@ -405,7 +405,7 @@
    {
     "year": 8,
     "balance": -2886.21,
-    "cost_with_system": 11462.75,
+    "cost_with_system": 11462.74,
     "cost_without_system": 8576.53
    },
    {

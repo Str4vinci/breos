@@ -2,9 +2,9 @@
  "case": "montecarlo",
  "title": "Monte Carlo analysis of weather and demand",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-308-g09d373d",
- "generated_utc": "2026-10-22T09:40:53+00:00",
- "runtime_s": 2619.7,
+ "git_describe": "v0.7.0-332-g464baad-dirty",
+ "generated_utc": "2026-10-28T14:22:16+00:00",
+ "runtime_s": 2622.3,
  "cheap": false,
  "configs": {
   "configs/examples/montecarlo.toml": "f8aed7e52e2a98849b02c9337dbe73b90ffe1f35e9dcba0ac618cde84cd32442"
@@ -47,8 +47,8 @@
   "currency"
  ],
  "files": {
-  "runs.csv.gz": "00faba92b085e42a1cf142b592792a2c47273f678e0ab5b488c206fe8cd481fa",
-  "summary.json": "5a2fcc70cfc54fb707e8ca580b422eeeeba7f4e244789a37e0f393310a229b0b",
+  "runs.csv.gz": "293c5bfa23026baa5029f6a2afb9556eb8ba32ce0c90869238f04f1c57fc1a53",
+  "summary.json": "b0dc2090703951243ed69354031cb9816a2067a5f02bc9b6ce849ae14e4d610e",
   "weather_years.csv": "e56deac7c5898d407d3d1f090e57c085a94f13adccf225ee8d9501e4f7a79709"
  }
 }
