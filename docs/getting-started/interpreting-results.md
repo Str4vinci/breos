@@ -294,10 +294,11 @@ the same diagnostics. Projection years do not multiply the counts.
 Stage names identify module, string and cable MPPs (`module_mpp`,
 `string_mpp`, `cable_mpp`), short-circuit currents (`substring_isc`,
 `string_isc`, `input_isc`),
-part and half-chain voltages (`part_voltage`, `half_voltage`), string and
+part and half-chain voltages (`part_voltage`, `half_voltage`,
+`half_reverse_voltage`), string and
 input limit solves (`string_current_limit`, `string_voltage_limit`,
 `input_current_limit`, `input_voltage_limit`), and string, group and parallel
-IV evaluations (`string_voc`, `string_current`, `group_voc`, `group_current`,
+IV evaluations (`string_voc`, `string_current`, `string_reverse_current`, `group_voc`, `group_current`,
 `parallel_voc`, `parallel_current`, `input_voc`, `input_open_circuit`).
 
 Each finding has `code`, `severity` and `message`; `value` and `limit` in
