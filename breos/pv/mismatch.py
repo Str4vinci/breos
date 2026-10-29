@@ -496,7 +496,9 @@ class ShadedStringCurve:
         self._extend_reverse(current[:, -1], np.arange(len(rows)))
         corners = []
         for substring in self._substrings:
-            if substring.section is not None:
+            # A section merged into an alike one has no split step and no
+            # reverse band of its own; _extend_reverse skips it the same way.
+            if substring.section is not None and substring.split.any():
                 corner = np.zeros(len(rows))
                 split = substring.split
                 mapping, reverse_i, _ = substring.section._reverse_bands[0]
