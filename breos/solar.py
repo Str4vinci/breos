@@ -64,6 +64,7 @@ from breos.pv.shading import CIRCUMSOLAR_MODELS, ArrayShading, ModuleMeanShading
 from breos.pv.temperature import calculate_cell_temperature
 from breos.pv_modules import PVModuleParams, get_module
 from breos.utils import IRRADIANCE_COLUMN_ALIASES, MET_COLUMN_ALIASES, find_irradiance_column, find_met_column
+from breos.weather import validate_weather_irradiance
 
 # The module an entry point models when it is given none.
 _DEFAULT_MODULE = "Generic_400W"
@@ -403,6 +404,15 @@ def _compute_irradiance_and_cell_temp_detail(
     # apparent_zenith (refraction-corrected) everywhere, matching pvlib's
     # ModelChain; aoi above uses it too. Mixing true and apparent zenith in
     # one transposition call was an inconsistency fixed in 0.3.4.
+    if model_options.transposition_model == "klucher":
+        bad = (ghi == 0) & (dhi > 0)
+        if bad.any():
+            raise ValueError(
+                f"weather has {int(bad.sum())} rows with GHI=0 and DHI>0 "
+                f"(first at {weather_aligned.index[int(np.flatnonzero(bad)[0])]}). "
+                "Klucher transposition divides DHI by GHI. "
+                "Repair these values explicitly before computing PV."
+            )
     poa = pvlib.irradiance.get_total_irradiance(
         surface_tilt=surface_tilt,
         surface_azimuth=surface_azimuth,
@@ -418,6 +428,9 @@ def _compute_irradiance_and_cell_temp_detail(
         **ground_kwargs,
     )
 
+    # Finite weather can still yield NaN POA, e.g. Reindl with a small negative
+    # GHI reading accepted by the measurement tolerances. Keep POA cleanup for
+    # those model-domain cases, after refusing missing weather at extraction.
     poa_global_unshaded = None
     front_unshaded = None
     components = None
@@ -1356,13 +1369,14 @@ def calculate_pv_production_ac(
 
 def _extract_irradiance(weather_df: pd.DataFrame):
     """Extract DNI, GHI, DHI under any name in ``IRRADIANCE_COLUMN_ALIASES``."""
-    values = []
+    irradiance = {}
     for component in ("dni", "ghi", "dhi"):
         column = find_irradiance_column(weather_df.columns, component)
         if column is None:
             raise KeyError(f"Could not find column. Tried: {list(IRRADIANCE_COLUMN_ALIASES[component])}")
-        values.append(weather_df[column].values)
-    return tuple(values)
+        irradiance[column] = pd.to_numeric(weather_df[column], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+    validate_weather_irradiance(weather_df, irradiance)
+    return tuple(irradiance.values())
 
 
 def _extract_met_data(weather_df: pd.DataFrame):
