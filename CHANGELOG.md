@@ -669,6 +669,13 @@ removed in 0.9.0.
 
 ### Fixed
 
+- Tariff classification (#437). Known holidays now apply in every year the
+  index touches, including a year it covers for less than a day: the last UTC
+  hours of a year east of UTC, or a short window, priced 1 January as an
+  ordinary day. A step is in the `dst` season while the clock is on the larger
+  of its year's two UTC offsets, so Europe/Dublin, which the timezone database
+  gives a negative winter DST offset, now has a summer season.
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.
