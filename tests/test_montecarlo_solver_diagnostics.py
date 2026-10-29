@@ -47,7 +47,8 @@ def test_recovery_belongs_to_its_source_weather_year_and_survives_workers(
     monkeypatch.setattr(pvlib.pvsystem, "max_power_point", forced)
     if start_method is not None:
         monkeypatch.setattr(mc, "Pool", multiprocessing.get_context(start_method).Pool)
-        monkeypatch.setattr(mc.multiprocessing, "get_start_method", lambda: start_method)
+        # Python 3.13+ spawn asks for get_start_method(allow_none=True).
+        monkeypatch.setattr(mc.multiprocessing, "get_start_method", lambda allow_none=False: start_method)
     cache = mc.build_year_cache(config, settings) if cached else None
     with monkeypatch.context() as reuse:
         if cached:
