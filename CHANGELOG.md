@@ -669,6 +669,15 @@ removed in 0.9.0.
 
 ### Fixed
 
+- Custom load profiles (#440). In a timezone whose clock moves by part of a
+  step, such as `Australia/Lord_Howe` (30 minutes), the rows are pinned at the
+  finer step and averaged back, so the winter load shape no longer flattens
+  into a constant. A profile with no energy and a positive
+  `annual_consumption_kwh` raises instead of returning 0 kWh. A numeric first
+  column is a row label only when it counts the rows; otherwise it is a value
+  column, so an undated file with two load columns asks for `load_profile_column`
+  instead of reading the second one.
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.
