@@ -48,6 +48,7 @@ from breos.weather import (
     fill_leap_day,
     parse_weather_filename,
     read_weather_csv,
+    relabel_right_labeled_interval_means,
     warn_if_naive_weather_timestamps,
 )
 
@@ -409,6 +410,10 @@ def load_weather_for_simulation(
     if weather_index.tz is None:
         warn_if_naive_weather_timestamps(weather_index, weather.attrs.get(WEATHER_METADATA_KEY) or {}, "Local weather")
         weather.index = weather_index.tz_localize("UTC")
+    # Right-labelled interval means move to the start of their interval before
+    # the year is remapped and its coverage checked, at every resolution: a
+    # complete year labelled 01:00 to the next midnight covers the year.
+    weather = relabel_right_labeled_interval_means(weather)
     weather = remap_tmy_year(weather, start_year)
     # The resampler carries the weather metadata over and adds its own
     # resolution and method fields to it.

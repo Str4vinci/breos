@@ -371,6 +371,27 @@ def test_historical_weather_without_requested_year_coverage_is_not_selected(tmp_
     assert loaded is None
 
 
+def test_historical_year_selection_follows_the_interval_start_of_right_labels(tmp_path):
+    # Open-Meteo interval means are labelled at the end of their hour: the row
+    # stamped 2023-01-01 00:00 is the last hour of 2022.
+    labels = pd.date_range("2022-01-01 01:00", "2025-01-01 00:00", freq="h", tz="UTC")
+    weather = pd.DataFrame({"ghi": 0.0}, index=labels)
+    weather.loc[pd.Timestamp("2023-01-01 00:00", tz="UTC"), "ghi"] = 10.0
+    weather.loc[pd.Timestamp("2024-01-01 00:00", tz="UTC"), "ghi"] = 100.0
+    weather.attrs["breos_weather_metadata"] = {
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "right",
+    }
+    save_weather_csv(weather, tmp_path / "porto_historical_2022_2024_openmeteo.csv")
+
+    loaded = load_weather("porto", data_type="historical", start_year=2023, end_year=2023, weather_dir=str(tmp_path))
+
+    assert len(loaded) == 8760
+    assert loaded.index[0] == pd.Timestamp("2023-01-01 01:00", tz="UTC")
+    assert loaded.index[-1] == pd.Timestamp("2024-01-01 00:00", tz="UTC")
+    assert loaded["ghi"].sum() == 100.0
+
+
 def test_ambiguous_weather_files_are_rejected(tmp_path):
     for filename in (
         "porto_historical_2018_2024_openmeteo.csv",
@@ -920,10 +941,54 @@ def test_read_weather_csv_reads_local_times_across_dst_as_instants(tmp_path):
     assert read_weather_csv(path).index.equals(local.tz_convert("UTC"))
 
 
-def test_preload_weather_by_year_refuses_local_times_across_dst(tmp_path):
-    # Its years are split on the file's clock, which a changing offset has not got.
-    local = pd.date_range("2022-01-01", "2023-12-31 23:00", freq="h", tz="Europe/Berlin")
-    path = _hourly_year_csv(tmp_path / "berlin.csv", [str(stamp) for stamp in local])
+@pytest.mark.parametrize(("zone", "new_year"), [("Europe/Berlin", "+01:00"), ("Australia/Sydney", "+11:00")])
+def test_preload_weather_by_year_splits_local_times_across_dst_into_civil_years(tmp_path, zone, new_year):
+    # The years are split on the fixed clock of the file's New Year offset,
+    # so every civil year keeps its 8760 rows in both hemispheres; the reader
+    # of a single file, read_weather_csv, takes the same file.
+    local = pd.date_range("2022-01-01", "2023-12-31 23:00", freq="h", tz=zone)
+    path = _hourly_year_csv(tmp_path / "local.csv", [stamp.isoformat() for stamp in local])
 
-    with pytest.raises(ValueError, match="UTC offset changes within the file"):
-        preload_weather_by_year(str(path), target_year=2025)
+    years = preload_weather_by_year(str(path), target_year=2025)
+
+    assert sorted(years) == [2022, 2023]
+    for frame in years.values():
+        assert len(frame) == 8760
+        assert frame["date"].iloc[0] == pd.Timestamp(f"2025-01-01T00:00{new_year}")
+        assert frame["date"].iloc[-1] == pd.Timestamp(f"2025-12-31T23:00{new_year}")
+    assert read_weather_csv(path).index.equals(local.tz_convert("UTC"))
+
+
+def test_a_battery_temperature_file_on_local_time_across_dst_is_read_as_instants(tmp_path):
+    from breos.weather import _read_temperature_file
+
+    local = pd.date_range("2025-01-01", "2025-12-31 23:00", freq="h", tz="Europe/Berlin")
+    path = tmp_path / "temperature.csv"
+    pd.DataFrame({"date": [stamp.isoformat() for stamp in local], "temp": 10.0}).to_csv(path, index=False)
+
+    assert _read_temperature_file(str(path)).index.equals(local.tz_convert("UTC"))
+
+
+@pytest.mark.parametrize(
+    ("source_zone", "target_zone"),
+    [("Europe/Berlin", "Europe/Berlin"), ("UTC", "Europe/Berlin"), ("UTC", "UTC"), ("Australia/Sydney", "UTC")],
+)
+def test_representative_temperatures_are_restamped_on_their_own_clock(source_zone, target_zone):
+    # A representative 2023 is restamped onto a 2025 calendar: in a named zone
+    # without landing on the hour the spring change skips, and from UTC onto a
+    # civil year whose first hour lies in the UTC year before.
+    from breos.weather import _align_temperature_to_index
+
+    source_index = pd.date_range("2023-01-01", "2024-01-01", freq="h", tz=source_zone, inclusive="left")
+    source = pd.Series(source_index.hour.to_numpy(dtype=float), index=source_index, name="temp_air")
+    target = pd.date_range("2025-01-01", "2026-01-01", freq="h", tz=target_zone, inclusive="left")
+
+    aligned = _align_temperature_to_index(source, target, label="weather temperature", align_calendar_year=True)
+
+    assert aligned.index.equals(target)
+    assert np.isfinite(aligned.to_numpy()).all()
+    # Instants move by whole years, as the App's weather restamp moves them,
+    # so in a named zone the hours between the two years' clock changes keep
+    # their sun, not their wall clock. In UTC every hour keeps its reading.
+    if source_zone == target_zone == "UTC":
+        np.testing.assert_array_equal(aligned.to_numpy(), target.hour.to_numpy(dtype=float))
