@@ -662,6 +662,14 @@ removed in 0.9.0.
 
 ### Fixed
 
+- Weather with gaps, non-finite GHI/DNI/DHI, or inconsistent GHI/DHI is now
+  refused before PV calculation, resampling or terrain-horizon shading. Errors
+  name the affected columns and first timestamp. Fill missing values and repair
+  inconsistent readings explicitly, preserving a regular time grid; small
+  measurement discrepancies remain accepted. Klucher also refuses zero GHI
+  with positive DHI, which would otherwise divide by zero during transposition
+  (#439).
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.

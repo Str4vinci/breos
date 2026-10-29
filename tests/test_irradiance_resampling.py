@@ -9,7 +9,7 @@ from breos import App
 from breos.app_config import resolve_app_config
 from breos.app_inputs import resample_hourly_weather
 from breos.cli import build_parser
-from breos.weather import WEATHER_METADATA_KEY, resample_to_15min
+from breos.weather import IRRADIANCE_RESAMPLING_POLICIES, WEATHER_METADATA_KEY, resample_to_15min
 
 COORDINATES = {"latitude": 41.1579, "longitude": -8.6291, "altitude": 0.0}
 
@@ -50,7 +50,7 @@ def test_overcast_diffuse_is_not_capped(policy):
 )
 def test_independent_component_hourly_conservation(names, kwargs):
     source = _weather().rename(columns=dict(zip(("ghi", "dni", "dhi"), names, strict=True)))
-    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 700]])
+    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 425]])
     result = resample_to_15min(source, **kwargs, **COORDINATES)
     np.testing.assert_allclose(result.to_numpy().reshape(-1, 4, 3).mean(axis=1), source, rtol=1e-9, atol=1e-6)
     metadata = result.attrs[WEATHER_METADATA_KEY]
@@ -234,7 +234,7 @@ def test_optimizer_prepares_hourly_weather_before_pv(monkeypatch, runner, policy
 
 def test_closure_diagnostics_are_observational():
     source = _weather()
-    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 700]])
+    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 425]])
     unconserved = resample_to_15min(source, irradiance_resampling="clear_sky", **COORDINATES)
     conserved = resample_to_15min(source, **COORDINATES)
     diagnostics = conserved.attrs[WEATHER_METADATA_KEY]["irradiance_closure"]
@@ -333,7 +333,7 @@ def _minute_geometry(result, centre_offset):
 
 def test_quadrature_conserves_interval_mean_dni_and_dhi_and_closes_per_sample():
     source = _weather()
-    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 700]])
+    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 425]])
     result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
     means = result.to_numpy().reshape(-1, 4, 3).mean(axis=1)
     np.testing.assert_allclose(means[:, 1:], source[["dni", "dhi"]], rtol=1e-12)
@@ -427,6 +427,8 @@ def test_quadrature_skips_only_dark_steps(monkeypatch):
     index = pd.date_range("2025-03-20 04:00", periods=18, freq="h", tz="UTC")
     rng = np.random.default_rng(0)
     source = pd.DataFrame(rng.uniform(0, 600, (len(index), 3)), index=index, columns=["ghi", "dni", "dhi"])
+    # Keep the random components within the accepted weather contract.
+    source["ghi"] = np.maximum(source.ghi, source.dhi)
     for basis in ("interval_mean", "instant"):
         source.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": basis, "timestamp_label_basis": "left"}
         fast = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
@@ -462,13 +464,13 @@ def test_quadrature_leaves_other_columns_to_interpolation():
 def test_quadrature_refuses_non_finite_irradiance(basis, component, bad):
     source = _weather(basis)
     source.loc[source.index[2], component] = bad
-    with pytest.raises(ValueError, match=f"quadrature.*finite irradiance.*'{component}' has 1 missing"):
+    with pytest.raises(ValueError, match=f"weather column '{component}' has 1 values that are not finite numbers"):
         resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
 
 
 def test_quadrature_reconciliation_is_undefined_without_input_ghi():
     source = _weather()
-    source[["ghi", "dni", "dhi"]] = [0.0, 400.0, 100.0]
+    source[["ghi", "dni", "dhi"]] = [0.0, 400.0, 20.0]
     result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
     assert result.ghi.sum() > 0
     reconciliation = result.attrs[WEATHER_METADATA_KEY]["irradiance_quadrature"]["ghi_reconciliation"]
@@ -487,3 +489,31 @@ def test_quadrature_step_means_do_not_close_with_one_cosine():
     step_cos = cos_zenith.reshape(-1, 15).mean(axis=1)
     residual = np.abs(result.ghi - result.dni * step_cos - result.dhi)
     assert residual.iloc[3] > 5.0
+
+
+@pytest.mark.parametrize("policy", IRRADIANCE_RESAMPLING_POLICIES)
+@pytest.mark.parametrize("invalid", ["inconsistent", "nonfinite", "nonnumeric"])
+def test_resampling_rejects_inconsistent_source_before_reconciliation(policy, invalid):
+    source = _weather()
+    source.attrs[WEATHER_METADATA_KEY]["timestamp_label_basis"] = "right"
+    stamp = source.index[2]
+    if invalid == "inconsistent":
+        source.loc[stamp, ["ghi", "dhi"]] = [0, 867.347]
+        message = "inconsistent irradiance"
+    else:
+        source["ghi"] = source.ghi.astype(object)
+        source.loc[stamp, "ghi"] = np.nan if invalid == "nonfinite" else "missing"
+        message = "not finite numbers"
+    original = source.copy(deep=True)
+    with pytest.raises(ValueError, match=message) as exc:
+        resample_to_15min(source, irradiance_resampling=policy, **COORDINATES)
+    assert str(stamp) in str(exc.value)
+    pd.testing.assert_frame_equal(source, original)
+
+
+@pytest.mark.parametrize("columns", [["ghi"], ["dni"], ["dhi"], ["temp_air"]])
+def test_partial_column_resampling_still_works(columns):
+    source = _weather().assign(temp_air=20.0)[columns]
+    result = resample_to_15min(source, **COORDINATES)
+    assert list(result.columns) == columns
+    assert np.isfinite(result.to_numpy()).all()
