@@ -330,3 +330,24 @@ def test_a_pv_key_changes_the_cache_key_and_the_year_cache(change, one_year_weat
 def test_a_value_json_cannot_hold_is_never_reused():
     assert _pv_cache_key({"battery_temperature": pd.Series([20.0])}) is None
     assert _pv_cache_key({"battery_temperature": 20.0}) is not None
+
+
+def test_a_study_started_inside_another_does_not_take_over_its_trajectories(weather, monkeypatch):
+    # Serial studies used to share one process-wide context. Starting a second
+    # study while the first is between trajectories, as a thread would,
+    # switched the first study's remaining trajectories to the second's inputs.
+    small, large = {**BASE, "annual_consumption_kwh": 1000}, {**BASE, "annual_consumption_kwh": 9000}
+    settings = _settings(weather, load_uncertainty=0.0)
+    expected = run_montecarlo(small, settings).yearly["Load_kWh"].tolist()
+
+    simulate = montecarlo_module._simulate_trajectory
+    interrupted = []
+
+    def interrupt_once(*args, **kwargs):
+        if not interrupted:
+            interrupted.append(True)
+            run_montecarlo(large, settings)
+        return simulate(*args, **kwargs)
+
+    monkeypatch.setattr(montecarlo_module, "_simulate_trajectory", interrupt_once)
+    assert run_montecarlo(small, settings).yearly["Load_kWh"].tolist() == expected

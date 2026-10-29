@@ -63,6 +63,8 @@ DEFAULT_MAX_BATTERY_KWH = 30.0
 DEFAULT_MIN_TILT_DEG = 10.0
 DEFAULT_MAX_TILT_DEG = 90.0
 DEFAULT_TILT_MARGIN_DEG = 15.0
+# The search's tilt and azimuth grid, in degrees.
+ORIENTATION_STEP_DEG = 5.0
 DEFAULT_TIMEZONE = "UTC"
 DEFAULT_RESOLUTION = "h"
 DEFAULT_OBJECTIVE_BASIS = "projected"
@@ -414,12 +416,13 @@ def _check_blast_model(battery: Mapping[str, Any]) -> None:
         raise ValueError("battery.blast_model requires battery.degradation_engine = 'blast'")
 
 
-def _currency(resolved: Mapping[str, Any]) -> str:
+def _currency(resolved: Mapping[str, Any], *, battery_kwh: float | None = None) -> str:
     """The run's currency: ``currency``, else the tariff's, else EUR; and check the costs are in it.
 
     The flat energy prices count as given in ``[financials]`` as well as in
     ``[costs]``. A search whose ``constraints.max_battery_kwh`` is 0 never
-    prices a battery.
+    prices a battery. A fixed design's ``battery_kwh`` decides instead of
+    the search bound: it prices a battery exactly when it installs one.
     """
     tariff = resolved.get("tariff")
     tariff_currency = TARIFF_TABLE.validate(tariff, "tariff")["currency"] if tariff is not None else None
@@ -431,10 +434,20 @@ def _currency(resolved: Mapping[str, Any]) -> str:
         currency,
         given=[*resolved["costs"], *flat_prices],
         tariff=tariff is not None,
-        battery=False if max_battery == 0 else None,
+        battery=(False if max_battery == 0 else None) if battery_kwh is None else battery_kwh > 0,
         coupling=resolved["battery"]["coupling"],
     )
     return currency
+
+
+def check_design_currency(resolved: Mapping[str, Any], battery_kwh: float) -> None:
+    """Check a fixed design's prices are in the run currency, for the battery it installs.
+
+    :func:`resolve_optimization_config` checks the costs a search may read, by
+    its battery bound; a design evaluated outside the search can install a
+    battery that bound excludes.
+    """
+    _currency(resolved, battery_kwh=battery_kwh)
 
 
 def adjusted_max_tilt_deg(latitude: float, margin_deg: float) -> float:
@@ -638,6 +651,12 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(
             f"constraints.min_tilt_deg ({constraints['min_tilt_deg']:g}) is above the maximum tilt "
             f"({max_tilt:g}); lower it or raise constraints.max_tilt_deg"
+        )
+    step = ORIENTATION_STEP_DEG
+    if math.ceil(constraints["min_tilt_deg"] / step) * step > math.floor(max_tilt / step) * step:
+        raise ValueError(
+            f"The tilt range {constraints['min_tilt_deg']:g}–{max_tilt:g}° holds no multiple of {step:g}°, the "
+            "search's tilt grid; widen constraints.min_tilt_deg or constraints.max_tilt_deg to include one"
         )
 
     mode = resolved.setdefault("mode", {}) or {}

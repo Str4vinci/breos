@@ -324,16 +324,23 @@ def _list_options_command(args: argparse.Namespace) -> int:
 
 def _validate_config(args: argparse.Namespace) -> int:
     config = _load_config(args.config)
+    sweep_points = None
     if "sweep" in config:
+        # A sweep runs its points, never the base: each point must resolve,
+        # and the base may leave out a key the grid supplies.
         grid = _normalise_sweep_grid(config["sweep"])
         base = {key: value for key, value in config.items() if key != "sweep"}
-        for _, run_config in _sweep_run_configs(base, grid):
-            _resolved_config_summary(run_config)
-    payload = _resolved_config_summary(config)
+        summaries = [_resolved_config_summary(run_config) for _, run_config in _sweep_run_configs(base, grid)]
+        sweep_points = len(summaries)
+        payload = {**summaries[0], "sweep": {"points": sweep_points, "summary_of": "the first point"}}
+    else:
+        payload = _resolved_config_summary(config)
     if args.json:
         print(_json_text(payload, "the config summary", indent=2))
     else:
         print(f"Config OK: {args.config}")
+        if sweep_points is not None:
+            print(f"Sweep: {sweep_points} points, each valid; the lines below describe the first")
         print(f"Location: {payload['location']['key'] or 'custom'} ({payload['location']['timezone']})")
         print(f"PV: {payload['pv']['n_modules']} modules, {payload['pv']['system_kwp']:.3f} kWp")
         print(f"Inverter AC rating: {payload['inverter']['ac_rating_kw']:.3f} kW")

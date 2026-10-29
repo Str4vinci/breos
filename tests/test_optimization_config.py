@@ -218,3 +218,42 @@ def test_whole_numbers_may_be_written_as_floats():
 def test_the_resolver_refuses_what_the_search_would(changes, error):
     with pytest.raises(ValueError, match=error):
         resolve_optimization_config({**MINIMAL, **changes})
+
+
+@pytest.mark.parametrize(("low", "high"), [(11.0, 14.0), (12.0, 12.0)])
+def test_tilt_bounds_without_a_grid_point_are_refused(low, high):
+    # Repair snaps tilt to 5° steps; 11–14° holds none, and clipping the
+    # empty range used to return 10°, outside the recorded bounds.
+    with pytest.raises(ValueError, match=r"holds no multiple of 5°"):
+        resolve_optimization_config({**MINIMAL, "constraints": {"min_tilt_deg": low, "max_tilt_deg": high}})
+    assert resolve_optimization_config({**MINIMAL, "constraints": {"min_tilt_deg": 11.0, "max_tilt_deg": 15.0}})
+
+
+def test_snapping_refuses_bounds_without_a_grid_point():
+    with pytest.raises(ValueError, match="hold no multiple of 5"):
+        optimization._snap_to_grid_within_bounds(np.array([12.0]), 5.0, 11.0, 14.0)
+
+
+def test_a_fixed_design_with_a_battery_needs_its_battery_prices_in_the_run_currency():
+    # The search bound says no battery, but the evaluated design installs one:
+    # its battery prices would otherwise be the EUR defaults, labelled USD.
+    from breos.economics import default_amount_cost_keys
+    from tests.conftest import _build_synthetic_weather
+
+    weather = _build_synthetic_weather(2023)
+    load = pd.DataFrame({"Load": np.full(len(weather), 500.0)}, index=weather.index)
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC", "altitude": 0},
+        "simulation": {"years_projection": 1},
+        "currency": "USD",
+        "constraints": {"budget": 10000, "max_battery_kwh": 0},
+        "costs": dict.fromkeys(default_amount_cost_keys(tariff=False, battery=False), 0.0),
+    }
+    with pytest.raises(ValueError, match=r"The run is in USD, but storage_cost_per_kwh"):
+        optimization.evaluate_projected_design(
+            weather, load, config, n_modules=2, battery_kwh=5, tilt=30, azimuth=180, execution_backend="python"
+        )
+    result = optimization.evaluate_projected_design(
+        weather, load, config, n_modules=2, battery_kwh=0, tilt=30, azimuth=180, execution_backend="python"
+    )
+    assert result.provenance["currency"] == "USD"

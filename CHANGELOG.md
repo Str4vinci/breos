@@ -669,6 +669,17 @@ removed in 0.9.0.
 
 ### Fixed
 
+- Optimisation, Monte Carlo and the CLI (#441). Serial Monte Carlo studies no
+  longer share a process-wide context, so two studies run from threads keep
+  their own inputs. `evaluate_projected_design` checks the battery prices for
+  the battery it installs, not the search bound, so a USD design no longer
+  reports EUR battery defaults. Tilt bounds that hold no multiple of 5° are
+  refused instead of returning a tilt outside them. An array that sets
+  `albedo` or `surface_type` replaces the top-level other, which used to fail
+  at simulation. `breos validate-config` checks a sweep's points without
+  requiring the base, which the sweep never runs, and says how many points it
+  checked.
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.

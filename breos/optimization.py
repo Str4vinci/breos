@@ -37,7 +37,9 @@ from breos.optimization_config import (
     DEFAULT_OBJECTIVE_BASIS,
     EARLY_STOP_DEFAULTS,
     LAYOUTS,
+    ORIENTATION_STEP_DEG,
     adjusted_max_tilt_deg,
+    check_design_currency,
     resolve_optimization_config,
     resolve_run_settings,
 )
@@ -996,10 +998,12 @@ def evaluate_projected_design(
     # and reports the cheap problem late.
     require_backend(execution_backend)
 
+    resolved = resolve_optimization_config(config)
+    check_design_currency(resolved, float(battery_kwh))
     study = _DesignStudy.resolve(
         tmy_data,
         houseload,
-        resolve_optimization_config(config),
+        resolved,
         battery_kwh=float(battery_kwh),
         execution_backend=execution_backend,
         weather_by_year=weather_by_year,
@@ -1033,6 +1037,8 @@ def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, u
     """
     lowest = np.ceil(lower / step) * step
     highest = np.floor(upper / step) * step
+    if np.any(lowest > highest):
+        raise ValueError(f"the bounds {lower}–{upper} hold no multiple of {step:g}")
     return np.clip(np.round(values / step) * step, lowest, highest)
 
 
@@ -1144,7 +1150,7 @@ try:
                         lower.append(-90.0)  # Search around North (0°)
                         upper.append(90.0)
                 self.single_orientation_genes = tuple(range(2, len(lower)))
-                self.gene_steps += (5.0,) * len(self.single_orientation_genes)
+                self.gene_steps += (ORIENTATION_STEP_DEG,) * len(self.single_orientation_genes)
             # The last gene picks the layout when more than one is searched:
             # its value is an index into self.layouts.
             self.layout_gene: Optional[int] = None

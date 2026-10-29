@@ -1482,6 +1482,11 @@ def _configured_array(index: int, arr: Mapping[str, Any], location: Location, de
     options = {
         key: arr.get(key, defaults[key]) if key in PER_ARRAY_MODEL_OPTION_KEYS else defaults[key] for key in defaults
     }
+    # albedo and surface_type are two ways to give one ground reflectance: an
+    # array that sets one replaces the inherited other, rather than meeting it.
+    for chosen, other in (("albedo", "surface_type"), ("surface_type", "albedo")):
+        if arr.get(chosen) is not None and arr.get(other) is None and other in options:
+            options[other] = None
     pv_params = get_module(arr.get("module", _DEFAULT_MODULE))
     tracking = arr.get("tracking", "fixed")
     shading = arr.get("shading")
