@@ -313,7 +313,7 @@ def test_apply_horizon_names_every_accepted_column_when_one_is_missing():
         ("Float64", "Float64", False),
         ("Float32", "Float32", False),
         ("Int64", "Float64", False),
-        # A missing nullable value stays missing in the shaded output.
+        # Explicitly fill a missing nullable row before shading.
         pytest.param("Float64", "Float64", True, id="Float64-missing-row"),
     ],
 )
@@ -327,6 +327,7 @@ def test_apply_horizon_accepts_any_numeric_irradiance_dtype(dtype, shaded_ghi_dt
     weather.attrs = reference.attrs
     if missing_row:
         weather.iloc[12, :] = pd.NA
+        weather = weather.fillna(0.0)
     profile = [[0, 30], [90, 30], [180, 30], [270, 30]]
 
     shaded = apply_terrain_horizon_profile(weather, location, profile, freq="h", solar_position="interval-start")
@@ -338,9 +339,22 @@ def test_apply_horizon_accepts_any_numeric_irradiance_dtype(dtype, shaded_ghi_dt
     assert shaded["dhi"].dtype == weather["dhi"].dtype
     assert shaded["ghi"].dtype == shaded_ghi_dtype
     if missing_row:
-        assert shaded.iloc[12].isna().all()
+        assert (shaded.iloc[12] == 0).all()
     np.testing.assert_allclose(
         shaded[["ghi", "dni", "dhi"]].to_numpy(dtype=float, na_value=np.nan),
         expected[["ghi", "dni", "dhi"]],
         rtol=1e-6,
     )
+
+
+@pytest.mark.parametrize("column,bad", [("ghi", 0.0), ("ghi", np.nan), ("dni", np.inf), ("dhi", -np.inf)])
+def test_horizon_cannot_conceal_invalid_source_irradiance(column, bad):
+    weather = _weather()
+    weather.loc[weather.index[0], column] = bad
+    original = weather.copy(deep=True)
+    with pytest.raises(ValueError, match="inconsistent irradiance|not finite numbers") as exc:
+        apply_terrain_horizon_profile(
+            weather, _FakeLocation(_solar_position(weather.index)), [[0, 90], [180, 90]], freq="h"
+        )
+    assert str(weather.index[0]) in str(exc.value)
+    pd.testing.assert_frame_equal(weather, original)

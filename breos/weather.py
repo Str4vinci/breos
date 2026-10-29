@@ -48,6 +48,51 @@ logger = logging.getLogger(__name__)
 
 IRRADIANCE_RESAMPLING_POLICIES = ("auto", "clear_sky", "clear_sky_energy_conserving", "quadrature")
 
+# Conservative tolerances for measured irradiance, in W/m² except the fraction.
+IRRADIANCE_LOW_GHI = 1.0
+IRRADIANCE_LOW_GHI_MAX_DHI = 20.0
+IRRADIANCE_ABSOLUTE_TOLERANCE = 50.0
+IRRADIANCE_RELATIVE_TOLERANCE = 0.10
+
+
+def validate_weather_irradiance(weather: pd.DataFrame, irradiance: dict[str, np.ndarray] | None = None) -> None:
+    """Refuse non-finite components and gross GHI/DHI inconsistencies.
+
+    Validate only the components present, without changing the frame. PV
+    extraction can pass its already converted arrays under their actual column
+    names; resampling and horizon processing validate source columns directly.
+    Night rows follow the same policy as daylight rows.
+    """
+    if irradiance is None:
+        irradiance = {
+            str(column): pd.to_numeric(weather[column], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+            for column in weather.columns
+            if irradiance_component(column) is not None
+        }
+    for column, values in irradiance.items():
+        bad = ~np.isfinite(values)
+        if bad.any():
+            raise ValueError(
+                f"weather column {column!r} has {int(bad.sum())} values that are not finite numbers "
+                f"(first at {weather.index[int(np.flatnonzero(bad)[0])]}). Fill them explicitly before computing PV."
+            )
+
+    ghi_column = find_irradiance_column(irradiance, "ghi")
+    dhi_column = find_irradiance_column(irradiance, "dhi")
+    if ghi_column is None or dhi_column is None:
+        return
+    ghi, dhi = irradiance[ghi_column], irradiance[dhi_column]
+    tolerance = np.maximum(IRRADIANCE_ABSOLUTE_TOLERANCE, IRRADIANCE_RELATIVE_TOLERANCE * np.maximum(ghi, 0))
+    bad = ((ghi <= IRRADIANCE_LOW_GHI) & (dhi > IRRADIANCE_LOW_GHI_MAX_DHI)) | (dhi - ghi > tolerance)
+    if bad.any():
+        first = int(np.flatnonzero(bad)[0])
+        raise ValueError(
+            f"weather columns {ghi_column!r} and {dhi_column!r} have {int(bad.sum())} rows with inconsistent "
+            f"irradiance (first at {weather.index[first]}: GHI={ghi[first]:g}, DHI={dhi[first]:g} W/m²). "
+            "DHI must not exceed GHI by more than max(50 W/m², 10% of GHI), or exceed 20 W/m² when GHI is "
+            "at most 1 W/m². Repair these values explicitly before computing PV, preserving a regular time grid."
+        )
+
 
 def validate_irradiance_resampling(value: Any) -> str:
     """Validate the shared hourly-to-quarter-hour irradiance policy."""
@@ -1235,6 +1280,7 @@ def resample_to_15min(
     Raises:
         ValueError: If DataFrame doesn't have DatetimeIndex
     """
+    validate_weather_irradiance(df_hourly)
     df_hourly = relabel_right_labeled_interval_means(df_hourly)
     weather_metadata = deepcopy(df_hourly.attrs.get(WEATHER_METADATA_KEY) or {})
     requested_policy = validate_irradiance_resampling(irradiance_resampling)
@@ -1305,13 +1351,6 @@ def resample_to_15min(
             raise ValueError(
                 "irradiance_resampling='quadrature' requires GHI, DNI and DHI columns; missing: " + ", ".join(missing)
             )
-        for col in irrad_col_map:
-            values = pd.to_numeric(df_hourly[col], errors="coerce").to_numpy(dtype=float)
-            if not np.isfinite(values).all():
-                raise ValueError(
-                    f"irradiance_resampling='quadrature' requires finite irradiance; column {col!r} has "
-                    f"{int(np.sum(~np.isfinite(values)))} missing or non-finite values"
-                )
         _require_regular_hourly_index(df_hourly, resolved_policy)
         quadrature_columns, quadrature_record = _quadrature_irradiance(
             df_hourly,
