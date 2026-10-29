@@ -451,16 +451,20 @@ def _align_input_arrays(
 
         rng_utc = rng.tz_convert("UTC") if rng.tz is not None else rng.tz_localize("UTC")
 
-        # Only remap year if load covers a single year different from simulation.
-        # Use dominant year (most frequent) to handle tz-aware indices that
-        # span two calendar years in UTC (e.g., CET midnight = UTC 23:00 prev day).
-        load_dominant_year = load_utc.year.value_counts().idxmax()
-        sim_dominant_year = rng_utc.year.value_counts().idxmax()
         houseload_series.index = load_utc
-        if load_dominant_year != sim_dominant_year:
-            year_offset = sim_dominant_year - load_dominant_year
-            houseload_series = remap_datetime_index_years(houseload_series, year_offset)
-        houseload_series = _repeat_annual_load_across_year_edges(houseload_series, rng_utc)
+        # A load that already holds every simulated instant is used as it is:
+        # remapping a multi-year record would put another year's readings on
+        # these steps. Otherwise it is an annual profile, shifted onto the
+        # simulated year by dominant year (most frequent), which handles
+        # tz-aware indices that span two calendar years in UTC (e.g., CET
+        # midnight = UTC 23:00 prev day), and repeated across the year edge.
+        if not rng_utc.isin(load_utc).all():
+            load_dominant_year = load_utc.year.value_counts().idxmax()
+            sim_dominant_year = rng_utc.year.value_counts().idxmax()
+            if load_dominant_year != sim_dominant_year:
+                year_offset = sim_dominant_year - load_dominant_year
+                houseload_series = remap_datetime_index_years(houseload_series, year_offset)
+            houseload_series = _repeat_annual_load_across_year_edges(houseload_series, rng_utc)
         load_utc = houseload_series.index
 
         # Convert back to target timezone (UTC→local is always unambiguous)
@@ -781,15 +785,17 @@ def _resolve_start_state(
     """The span's starting aging state: a native snapshot's values, else the arguments and the battery's own.
 
     The arguments are the multi-year continuation seam (the App's year loop);
-    a native snapshot takes precedence over them. ``initial_resistance_growth``
+    a snapshot takes precedence over them. ``initial_resistance_growth``
     None is the battery's configured starting resistance. BLAST restores its
-    own state from the snapshot (:func:`_build_degradation_lifecycle`).
+    engine from the snapshot (:func:`_build_degradation_lifecycle`), but the
+    FEC and calendar counters both engines snapshot are carried here, so a
+    BLAST span continued from its returned state counts on from them.
     """
     native = engine_key == "native" and initial_degradation_state is not None
-    payload: Mapping[str, Any] = initial_degradation_state if native and initial_degradation_state else {}
+    payload: Mapping[str, Any] = initial_degradation_state or {}
 
-    def carried(key: str, default: Any) -> Any:
-        return float(payload.get(key, default)) if native else default
+    def carried(key: str, default: Any, *, shared: bool = False) -> Any:
+        return float(payload.get(key, default)) if native or shared else default
 
     if "resistance_growth" in payload:
         resistance_growth = float(payload["resistance_growth"])
@@ -798,8 +804,8 @@ def _resolve_start_state(
     else:
         resistance_growth = initial_resistance_growth
     return _StartState(
-        fec=carried("fec_cum", initial_fec),
-        calendar_seconds=carried("cumulative_calendar_seconds", initial_calendar_seconds),
+        fec=carried("fec_cum", initial_fec, shared=True),
+        calendar_seconds=carried("cumulative_calendar_seconds", initial_calendar_seconds, shared=True),
         cumulative_cycle_deg=carried("cumulative_cycle_degradation", initial_cumulative_cycle_deg),
         cumulative_cal_deg=carried("cumulative_calendar_degradation", initial_cumulative_cal_deg),
         soh_fraction=carried("soh_fraction", battery_config.initial_soh / 100.0),
@@ -1180,13 +1186,15 @@ def _apply_resistance_fade(
     mean_t_cell: float,
     mean_soc_absolute: float,
     dt_days: float,
-) -> float:
-    """Grow internal resistance for one period and return the effective RTE.
+    calendar_seconds_before: float,
+) -> None:
+    """Grow internal resistance for one period and update the efficiencies.
 
     The cycle term is charged against the FEC standing at the *start* of the
     period, so this period's cycles do not count towards their own aging; the
     lifecycle step has already folded them into the cumulative FEC, so they
-    are subtracted back out here.
+    are subtracted back out here. The calendar term likewise runs from the
+    calendar age at the start of the period, ``calendar_seconds_before``.
     """
     day_fec = sum(max(0.0, min(1.0, c["doc"])) * c["count"] for c in cycles)
     fec_before_day = aging.fec_cum - day_fec
@@ -1195,7 +1203,7 @@ def _apply_resistance_fade(
     aging.resistance_growth, _ = update_battery_resistance_calendar(
         aging.resistance_growth,
         T_cell_C=mean_t_cell,
-        cumulative_cal_seconds=aging.cumulative_cal_seconds,
+        cumulative_cal_seconds=calendar_seconds_before,
         dt_days=dt_days,
         mean_soc_absolute=mean_soc_absolute,
     )
@@ -1206,7 +1214,6 @@ def _apply_resistance_fade(
         battery_config.charge_efficiency,
         battery_config.discharge_efficiency,
     )
-    return aging.eff_charge * aging.eff_discharge
 
 
 def _apply_battery_replacement(
@@ -1514,7 +1521,6 @@ def _apply_daily_degradation(
 
     mean_soc_abs = float(np.mean(soc_absolute_day))
     mean_t_cell = float(np.mean(t_cell_day))
-    effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
 
     degradation_step = lifecycle.step(
         DegradationDay(
@@ -1536,18 +1542,20 @@ def _apply_daily_degradation(
     # what keeps a retired pack's final part-period in the lifetime figure.
     aging.fec_lifetime += degradation_step.fec - aging.fec_cum
     aging.fec_cum = degradation_step.fec
+    calendar_seconds_before = aging.cumulative_cal_seconds
     aging.cumulative_cal_seconds = degradation_step.calendar_seconds
     aging.cumulative_cycle_deg += degradation_step.cycle_degradation
     aging.cumulative_cal_deg += degradation_step.calendar_degradation
 
     if battery_config.enable_resistance_fade:
-        effective_rte = _apply_resistance_fade(
+        _apply_resistance_fade(
             aging,
             battery_config,
             degradation_step.cycle_records,
             mean_t_cell=mean_t_cell,
             mean_soc_absolute=mean_soc_abs,
             dt_days=dt_days,
+            calendar_seconds_before=calendar_seconds_before,
         )
 
     reached_end_of_life = aging.soh_fraction <= battery_config.eol_percentage
@@ -1627,7 +1635,8 @@ def _apply_daily_degradation(
     degradation_record.update(lifecycle.tracking_fields(degradation_step))
     if battery_config.enable_resistance_fade:
         degradation_record["Resistance_Growth"] = aging.resistance_growth
-        degradation_record["Effective_RTE"] = effective_rte
+        # Read after the replacement decision, so a swap row reports the new pack.
+        degradation_record["Effective_RTE"] = aging.eff_charge * aging.eff_discharge
     degradation_tracking.append(degradation_record)
 
     aging.day_start_soc = day_end_soc_absolute

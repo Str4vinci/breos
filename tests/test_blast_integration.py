@@ -367,3 +367,48 @@ def test_blast_split_matches_continuous_at_mid_swing_boundary(blast_model):
     assert year_two_results["Battery_PV_Origin_Energy_End"].iloc[-1] == pytest.approx(
         continuous_results["Battery_PV_Origin_Energy_End"].iloc[-1], abs=1e-6
     )
+
+
+def test_blast_continued_from_its_state_counts_on_from_the_carried_counters():
+    # Continuing from the returned state alone, without repeating the scalar
+    # counter arguments, must carry the calendar clock and the FEC total, so
+    # each span reports its own FEC and the spans add up to the continuous run.
+    index = pd.date_range("2025-01-01", periods=48, freq="h", tz="UTC")
+    pv = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=index)
+    load = pd.DataFrame({"Load": ([400.0] * 8 + [0.0] * 8 + [400.0] * 8) * 2}, index=index)
+    temperature = pd.Series(25.0, index=index)
+    common = dict(
+        battery_config=BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False),
+        freq="h",
+        degradation_engine="blast",
+        blast_model="lfp_gr_250ah_prismatic",
+        return_degradation_state=True,
+    )
+
+    def run(start, stop, **kwargs):
+        return simulate_energy_balance(
+            pv_dc=pv.iloc[start:stop],
+            houseload=load.iloc[start:stop],
+            temperature_series=temperature.iloc[start:stop],
+            **common,
+            **kwargs,
+        )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        *_, continuous = run(0, 48)
+        first_results, *_, first_degradation, first = run(0, 24)
+        *_, second_degradation, second = run(
+            24,
+            48,
+            initial_degradation_state=first,
+            initial_energy_wh=float(first_results["Battery_Energy_End"].iloc[-1]),
+            initial_pv_origin_energy_wh=float(first_results["Battery_PV_Origin_Energy_End"].iloc[-1]),
+        )
+
+    assert second["cumulative_calendar_seconds"] == continuous["cumulative_calendar_seconds"] == 172800.0
+    assert second["fec_cum"] == pytest.approx(continuous["fec_cum"], rel=1e-12)
+    first_span = first_degradation["Cumulative_FEC_All_Packs"].iloc[-1]
+    second_span = second_degradation["Cumulative_FEC_All_Packs"].iloc[-1]
+    assert second_span == pytest.approx(continuous["fec_cum"] - first["fec_cum"], rel=1e-12)
+    assert first_span + second_span == pytest.approx(continuous["fec_cum"], rel=1e-12)
