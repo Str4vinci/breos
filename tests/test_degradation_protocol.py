@@ -227,3 +227,103 @@ def test_native_rainflow_uses_plateau_end_and_counts_exact_one_percent_cycle():
         (cycle["start_idx"], cycle["end_idx"]) for cycle in expected
     ]
     assert observed[0]["doc"] == pytest.approx(0.01)
+
+
+class _PerSampleRainflowCounter(_NativeRainflowCounter):
+    """The counter's scan as a plain per-sample loop, the reference for its numpy scan."""
+
+    def step(self, day):
+        if day.soc.size == 0:
+            return self.finish() if day.finalize_cycles else []
+        if self._step_seconds is None:
+            self._step_seconds = float(day.step_seconds)
+        cycles = []
+        if self._current is None:
+            anchor = (float(day.start_soc), 0.0, 0)
+            self._points.append(anchor)
+            first_sample = (float(day.soc[0]), day.step_seconds, 1)
+            self._previous = anchor
+            self._current = first_sample
+            self._last_delta = first_sample[0] - anchor[0]
+            self._has_nonflat_pair = self._last_delta != 0.0
+            self._next_index = 2
+            samples = day.soc[1:]
+        else:
+            samples = day.soc
+        for soc in samples:
+            next_point = (float(soc), self._next_index * day.step_seconds, self._next_index)
+            self._next_index += 1
+            if next_point[0] == self._current[0]:
+                self._current = next_point
+                continue
+            next_delta = next_point[0] - self._current[0]
+            if self._last_delta is not None and self._last_delta * next_delta < 0:
+                cycles.extend(self._push_reversal(self._current, min_doc_fraction=0.01))
+            self._previous = self._current
+            self._current = next_point
+            self._last_delta = next_delta
+            self._has_nonflat_pair = True
+        if day.finalize_cycles:
+            cycles.extend(self.finish())
+        return cycles
+
+
+def _edge_trace(rng, kind, n):
+    if kind == "walk":
+        return np.clip(0.5 + np.cumsum(rng.normal(0, 0.05, n)), 0.05, 0.95)
+    if kind == "plateau":
+        return np.round(np.clip(0.5 + np.cumsum(rng.normal(0, 0.05, n)), 0.1, 0.9), 2)
+    if kind == "ties":
+        return rng.choice([0.2, 0.5, 0.8, 0.5000000000000001], n)
+    if kind == "flat":
+        return np.full(n, 0.6)
+    if kind == "tiny":
+        # Steps near 1e-200 whose products underflow to zero.
+        return rng.choice([-2, -1, 0, 1, 2], n) * 1e-200
+    if kind == "nonfinite":
+        return rng.choice([0.2, 0.5, np.inf, -np.inf, np.nan, 1e308, -1e308], n)
+    t = np.arange(n)
+    return np.clip(0.5 + 0.45 * np.sin(2 * np.pi * t / 96 + rng.uniform(0, 6)) + rng.normal(0, 0.01, n), 0.1, 0.95)
+
+
+@pytest.mark.parametrize("raise_on_error", [False, True])
+@pytest.mark.parametrize("kind", ["walk", "plateau", "ties", "flat", "tiny", "nonfinite", "battery"])
+def test_native_rainflow_scan_matches_the_per_sample_loop_on_edge_cases(kind, raise_on_error):
+    # Plateaus, exact ties, steps that underflow when multiplied, flat days and
+    # one to 96 samples a day, with restores mid-stream: every cycle and every
+    # snapshot must equal the per-sample loop's, by repr, so a numpy scalar
+    # leaking into the carried state fails too. The loop's Python floats never
+    # raise, so the scan must not either under numpy's strictest error settings.
+    rng = np.random.default_rng(20261103)
+    for _ in range(80):
+        steps_per_day = int(rng.choice([1, 2, 24, 96]))
+        days = int(rng.integers(1, 8))
+        trace = _edge_trace(rng, kind, steps_per_day * days)
+        start = float(trace[0]) if rng.random() < 0.5 else float(np.round(rng.uniform(0.1, 0.9), 2))
+        reference, counter = _PerSampleRainflowCounter(), _NativeRainflowCounter()
+        for d in range(days):
+            soc = trace[d * steps_per_day : (d + 1) * steps_per_day]
+            day = DegradationDay(
+                soc=soc,
+                time_ticks=np.arange(len(soc), dtype=np.int64),
+                ticks_per_second=1.0,
+                temperature_c=np.zeros(len(soc)),
+                step_seconds=86400 / steps_per_day,
+                start_soc=start,
+                start_temperature_c=20.0,
+                finalize_cycles=d == days - 1 and rng.random() < 0.7,
+            )
+            carried = reference._current
+            if carried is not None and not np.isclose(start, carried[0], rtol=0.0, atol=1e-9):
+                # A carry the next day does not start from (NaN never does) is refused.
+                with pytest.raises(ValueError, match="carry SOC"):
+                    counter.step(day)
+                break
+            with np.errstate(all="raise" if raise_on_error else "ignore"):
+                emitted = counter.step(day)
+            assert repr(emitted) == repr(reference.step(day))
+            assert repr(counter.snapshot()) == repr(reference.snapshot())
+            if rng.random() < 0.2:
+                counter = _NativeRainflowCounter(counter.snapshot())
+                reference = _PerSampleRainflowCounter(reference.snapshot())
+            start = float(soc[-1]) if reference._current is not None else start

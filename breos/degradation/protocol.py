@@ -198,31 +198,47 @@ class _NativeRainflowCounter:
             self._last_delta = first_sample[0] - anchor[0]
             self._has_nonflat_pair = self._last_delta != 0.0
             self._next_index = 2
-            samples = zip(day.soc[1:], day.time_ticks[1:], strict=True)
+            soc = day.soc[1:]
         else:
-            samples = zip(day.soc, day.time_ticks, strict=True)
+            soc = day.soc
 
-        for soc, _ in samples:
+        n_samples = len(soc)
+        if n_samples:
             assert self._current is not None
-            next_point = (float(soc), self._next_index * day.step_seconds, self._next_index)
-            self._next_index += 1
-            if next_point[0] == self._current[0]:
-                # rainflow.reversals labels a plateau at its final sample.
-                # Keep the timestamp and index current even without a turn.
-                self._current = next_point
-                continue
-            next_delta = next_point[0] - self._current[0]
-            if self._last_delta is not None and self._last_delta * next_delta < 0:
-                cycles.extend(
-                    self._push_reversal(
-                        self._current,
-                        min_doc_fraction=0.01,
-                    )
-                )
-            self._previous = self._current
-            self._current = next_point
-            self._last_delta = next_delta
-            self._has_nonflat_pair = True
+            # Same scan as the per-sample loop, in numpy: a sample that equals
+            # the one before it extends a plateau (rainflow.reversals labels a
+            # plateau at its final sample), and a reversal is a sign change of
+            # consecutive non-flat deltas. Only reversals reach Python.
+            step_seconds = day.step_seconds
+            first_index = self._next_index
+            values = np.empty(n_samples + 1)
+            values[0] = self._current[0]
+            values[1:] = soc
+            moved = np.flatnonzero(values[1:] != values[:-1])
+
+            def point_at(position: int) -> tuple[float, float, int]:
+                if position == 0:
+                    assert self._current is not None
+                    return self._current
+                index = first_index + position - 1
+                return (float(values[position]), index * step_seconds, index)
+
+            if moved.size:
+                # The loop did this arithmetic on Python floats, which never
+                # raise; numpy may, under the caller's error settings.
+                with np.errstate(all="ignore"):
+                    deltas = values[moved + 1] - values[moved]
+                    previous_deltas = np.empty_like(deltas)
+                    previous_deltas[0] = np.nan if self._last_delta is None else self._last_delta
+                    previous_deltas[1:] = deltas[:-1]
+                    reversals = moved[previous_deltas * deltas < 0].tolist()
+                for position in reversals:
+                    cycles.extend(self._push_reversal(point_at(position), min_doc_fraction=0.01))
+                self._previous = point_at(int(moved[-1]))
+                self._last_delta = float(deltas[-1])
+                self._has_nonflat_pair = True
+            self._current = point_at(n_samples)
+            self._next_index = first_index + n_samples
 
         if day.finalize_cycles:
             cycles.extend(self.finish())
