@@ -1870,6 +1870,184 @@ def _dispatch_day(
             matrix[R_VEHICLE_GRID_ORIGIN_ENERGY_END, i] = vehicle_grid_origin
 
 
+def _dispatch_day_candidates(
+    matrix: np.ndarray,
+    pv_dc_vals: np.ndarray,
+    load_vals: np.ndarray,
+    temp_vals: np.ndarray,
+    lo: int,
+    hi: int,
+    start_energies: np.ndarray,
+    pv_origin: float,
+    grid_origin: float,
+    nominal_energy_wh: float,
+    soh_fraction: float,
+    max_soc: float,
+    min_soc: float,
+    standby_loss_per_step_wh: float,
+    eff_charge: float,
+    eff_discharge: float,
+    inv_eff: float,
+    cap_charge_in_wh: float,
+    cap_discharge_ac_wh: float,
+    inv_cap_ac_wh: float,
+    cap_stored_wh: float,
+    thermal_resistance_k_per_w: float,
+    hours_per_step: float,
+    ac_output_scale: float,
+    pow_two: float,
+    discharge_allowed: np.ndarray,
+    reserve_levels: np.ndarray,
+    target_levels: np.ndarray,
+    grid_eff: float,
+    grid_import_cap_wh: float,
+    curve_ac: np.ndarray,
+    curve_eff: np.ndarray,
+    curve_rows: np.ndarray,
+    ac_derate: np.ndarray,
+    cable_k: float,
+    night_wh: float,
+    ac_coupled: bool,
+    battery_inverter_wh: float,
+    battery_inverter_eff: float,
+    pv_chain_ac: np.ndarray,
+    pv_chain_loss: np.ndarray,
+    pv_chain_clip: np.ndarray,
+    pv_chain_night: np.ndarray,
+    stationary_active: bool,
+    vehicle_enabled: bool,
+    vehicle_energy: float,
+    vehicle_pv_origin: float,
+    vehicle_grid_origin: float,
+    vehicle_mode: int,
+    vehicle_capacity: float,
+    vehicle_target: float,
+    vehicle_ceiling: float,
+    vehicle_floor: float,
+    vehicle_rating_wh: float,
+    vehicle_charger_eff: float,
+    vehicle_eff_c: float,
+    vehicle_eff_d: float,
+    vehicle_import_cap_wh: float,
+    vehicle_plugged: np.ndarray,
+    vehicle_countdown: np.ndarray,
+    vehicle_charge_period: np.ndarray,
+    vehicle_discharge_period: np.ndarray,
+    vehicle_was_plugged: bool,
+    vehicle_minimum: float,
+    vehicle_drive_first: np.ndarray,
+    vehicle_park_hours: np.ndarray,
+    vehicle_drive_second: np.ndarray,
+    vehicle_away_target: float,
+    vehicle_away_power_w: float,
+    vehicle_away_efficiency: float,
+    vehicle_soh_fraction: float,
+    vehicle_retired: bool,
+    candidate_levels: np.ndarray,
+    out_import: np.ndarray,
+    out_export: np.ndarray,
+    out_discharge: np.ndarray,
+    out_end: np.ndarray,
+) -> None:
+    """Run :func:`_dispatch_day` once per candidate of one planner day.
+
+    The arguments are :func:`_dispatch_day`'s, as :func:`_day_arguments`
+    packs them, except three: ``start_energies`` is each candidate's start
+    energy, and ``reserve_levels`` and ``target_levels`` hold one row of
+    instructions per target level, ``candidate_levels`` naming each
+    candidate's row. Every candidate dispatches steps ``[lo, hi)`` of
+    *matrix* from scratch, as one call of :func:`_dispatch_day` would, and
+    leaves its grid import, PV export and battery DC discharge rows in row
+    ``c`` of ``out_import``, ``out_export`` and ``out_discharge`` (columns
+    ``[0, hi - lo)``) and its end energy in ``out_end[c]``.
+
+    One call per planner day instead of one per candidate is the point: the
+    day's inputs are packed and handed over once. The day loop is the same
+    function, so a candidate costs what it did, bit for bit.
+    """
+    n = hi - lo
+    for c in range(len(start_energies)):
+        level = candidate_levels[c]
+        _dispatch_day(
+            matrix,
+            pv_dc_vals,
+            load_vals,
+            temp_vals,
+            lo,
+            hi,
+            start_energies[c],
+            pv_origin,
+            grid_origin,
+            nominal_energy_wh,
+            soh_fraction,
+            max_soc,
+            min_soc,
+            standby_loss_per_step_wh,
+            eff_charge,
+            eff_discharge,
+            inv_eff,
+            cap_charge_in_wh,
+            cap_discharge_ac_wh,
+            inv_cap_ac_wh,
+            cap_stored_wh,
+            thermal_resistance_k_per_w,
+            hours_per_step,
+            ac_output_scale,
+            pow_two,
+            discharge_allowed,
+            reserve_levels[level],
+            target_levels[level],
+            grid_eff,
+            grid_import_cap_wh,
+            curve_ac,
+            curve_eff,
+            curve_rows,
+            ac_derate,
+            cable_k,
+            night_wh,
+            ac_coupled,
+            battery_inverter_wh,
+            battery_inverter_eff,
+            pv_chain_ac,
+            pv_chain_loss,
+            pv_chain_clip,
+            pv_chain_night,
+            stationary_active,
+            vehicle_enabled,
+            vehicle_energy,
+            vehicle_pv_origin,
+            vehicle_grid_origin,
+            vehicle_mode,
+            vehicle_capacity,
+            vehicle_target,
+            vehicle_ceiling,
+            vehicle_floor,
+            vehicle_rating_wh,
+            vehicle_charger_eff,
+            vehicle_eff_c,
+            vehicle_eff_d,
+            vehicle_import_cap_wh,
+            vehicle_plugged,
+            vehicle_countdown,
+            vehicle_charge_period,
+            vehicle_discharge_period,
+            vehicle_was_plugged,
+            vehicle_minimum,
+            vehicle_drive_first,
+            vehicle_park_hours,
+            vehicle_drive_second,
+            vehicle_away_target,
+            vehicle_away_power_w,
+            vehicle_away_efficiency,
+            vehicle_soh_fraction,
+            vehicle_retired,
+        )
+        out_import[c, :n] = matrix[R_GRID_IMPORT, lo:hi]
+        out_export[c, :n] = matrix[L_PV_AC_EXPORT, lo:hi]
+        out_discharge[c, :n] = matrix[L_BATTERY_DISCHARGE_DC, lo:hi]
+        out_end[c] = matrix[R_BATTERY_ENERGY, hi - 1]
+
+
 def _day_arguments(
     out: Any,
     pv_dc_vals: np.ndarray,
@@ -2049,6 +2227,35 @@ def _day_arguments(
         float(vehicle_soh_fraction),
         bool(vehicle_retired),
     )
+
+
+# Where _day_arguments puts the arguments a planner candidate changes.
+_ARG_LO, _ARG_HI, _ARG_ENERGY, _ARG_RESERVE, _ARG_TARGET = 4, 5, 6, 26, 27
+
+
+def _candidate_arguments(
+    day_arguments: Tuple[Any, ...],
+    lo: int,
+    hi: int,
+    start_energies: np.ndarray,
+    reserve_levels: np.ndarray,
+    target_levels: np.ndarray,
+    candidate_levels: np.ndarray,
+    outputs: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+) -> Tuple[Any, ...]:
+    """The arguments of :func:`_dispatch_day_candidates`, from one packing of :func:`_day_arguments`.
+
+    ``day_arguments`` is packed once for the planner's whole window; only the
+    day's bounds, the start energies and the per-level instructions differ
+    from one call to the next.
+    """
+    args = list(day_arguments)
+    args[_ARG_LO] = lo
+    args[_ARG_HI] = hi
+    args[_ARG_ENERGY] = start_energies
+    args[_ARG_RESERVE] = reserve_levels
+    args[_ARG_TARGET] = target_levels
+    return (*args, candidate_levels, *outputs)
 
 
 def _dispatch_day_python(out: Any, *args: Any, **state: Any) -> None:

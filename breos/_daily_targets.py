@@ -66,17 +66,23 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from breos._dispatch import L_BATTERY_DISCHARGE_DC, L_PV_AC_EXPORT, R_GRID_IMPORT, lfp_capacity_factor
+from breos._dispatch import (
+    L_PV_AC_EXPORT,
+    R_GRID_IMPORT,
+    _candidate_arguments,
+    _day_arguments,
+    _dispatch_day_candidates,
+    lfp_capacity_factor,
+)
 from breos.battery import (
     BatteryConfig,
     _dispatch_no_battery_vectorized,
     _pv_inverter_conversion,
-    _resolve_dispatch_day,
     _ResultBuffers,
     _step_energy_cap,
 )
 from breos.dispatch_instructions import DispatchInstructions
-from breos.execution import is_pv_only_dispatch
+from breos.execution import is_pv_only_dispatch, validate_execution_backend
 from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 
@@ -349,6 +355,16 @@ def full_terminal_energy_wh(problem: DailyTargetProblem) -> float:
     return usable_wh * config.max_soc * end_capacity
 
 
+def _resolve_dispatch_candidates(execution_backend: str) -> Any:
+    """:func:`breos._dispatch._dispatch_day_candidates` on ``execution_backend``, compiled for numba."""
+    validate_execution_backend(execution_backend)
+    if execution_backend == "python":
+        return _dispatch_day_candidates
+    from breos._numba_dispatch import require_numba_dispatch_candidates
+
+    return require_numba_dispatch_candidates()
+
+
 class _DayEvaluator:
     """Run one day of production dispatch on a scratch buffer and price it."""
 
@@ -365,11 +381,17 @@ class _DayEvaluator:
         self.wear_cost_per_kwh = wear_cost_per_kwh
         self.buffers = _ResultBuffers(len(problem.instructions))
         self.series = (np.array(problem.pv_dc_w), np.array(problem.load_w), np.array(problem.temperature_c))
-        self.dispatch_day = _resolve_dispatch_day(execution_backend)
-        self.level_instructions = [
-            daily_target_instructions(problem.instructions, problem.day_starts, np.full(problem.n_days, level))
-            for level in levels
-        ]
+        self.dispatch_candidates = _resolve_dispatch_candidates(execution_backend)
+        # Row k is daily_target_instructions at levels[k] on every day: the
+        # per-level arrays are all that differ between levels. Adding 0.0
+        # turns a -0.0 level into 0.0, as DispatchInstructions does.
+        base = problem.instructions.grid_target_fraction
+        held = problem.instructions.discharge_allowed & ~np.isnan(base)
+        column = np.asarray(levels, dtype=np.float64)[:, None] + 0.0
+        self.target_levels = np.where(np.isnan(base), np.nan, column)
+        self.reserve_levels = np.where(held, column, problem.instructions.reserve_fraction)
+        self.scratch = (np.empty((0, 0)), np.empty((0, 0)), np.empty((0, 0)), np.empty(0))
+        self.memo: dict[bytes, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         soh, eff_charge, eff_discharge = problem.health()
         if config.conversion.night_consumption_w > 0.0:
             # The inverter's night draw is a cost of the system, not of a
@@ -387,7 +409,7 @@ class _DayEvaluator:
                 np.maximum(0.0, self.series[0] * hours), battery_config=config, hours_per_step=hours, cap_wh=cap_wh
             )
             pv_chain = (ac, loss, clip, np.zeros(len(ac)))
-        self.state = {
+        self.state: dict[str, Any] = {
             "battery_config": config,
             "battery_soh_decimal": soh,
             # Origins never feed a dispatch decision, so they cannot move a cost.
@@ -403,6 +425,17 @@ class _DayEvaluator:
             "cap_stored_wh": _step_energy_cap(config.stored_power_limit_w, hours),
             "pv_chain": pv_chain,
         }
+        # Packed once: the day bounds, start energies and per-level
+        # instructions are swapped in per call by _candidate_arguments.
+        self.day_arguments = _day_arguments(
+            self.buffers, *self.series, 0, 0, Battery_Energy_Wh=0.0, instructions=problem.instructions, **self.state
+        )
+        n_steps = len(problem.instructions)
+        self.step_arrays = [
+            value
+            for value in (*self.day_arguments, problem.import_price_per_kwh, problem.export_price_per_kwh)
+            if isinstance(value, np.ndarray) and value.ndim == 1 and len(value) == n_steps
+        ]
 
     def run(self, day: int, energy_wh: float, level: int) -> tuple[float, float]:
         """``(cost, end_energy_wh)`` of ``day`` from ``energy_wh`` at target level ``level``.
@@ -415,21 +448,69 @@ class _DayEvaluator:
 
     def run_priced(self, day: int, energy_wh: float, level: int) -> tuple[float, float, float]:
         """``(import cost less export revenue, wear cost, end_energy_wh)`` of one day, as :meth:`run`."""
+        money, wear, end = self.run_many(day, np.array([float(energy_wh)]), np.array([level], dtype=np.int64))
+        return float(money[0]), float(wear[0]), float(end[0])
+
+    def run_many(
+        self, day: int, energies_wh: np.ndarray, levels: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """:meth:`run_priced` of ``day`` for each pair of ``energies_wh`` and ``levels``, in one dispatch call.
+
+        Returns the money, wear and end-energy arrays, one entry per pair,
+        each entry bit for bit what one dispatch call per candidate gives:
+        every candidate is the same day dispatch, priced with the same dot
+        products and sum over the same contiguous steps.
+        """
         problem = self.problem
         lo, hi = problem.day_starts[day], problem.day_starts[day + 1]
-        self.dispatch_day(
-            self.buffers,
-            *self.series,
-            lo,
-            hi,
-            Battery_Energy_Wh=energy_wh,
-            instructions=self.level_instructions[level],
-            **self.state,
+        energies_wh = np.ascontiguousarray(energies_wh, dtype=np.float64)
+        levels = np.ascontiguousarray(levels, dtype=np.int64)
+        # A day whose every input is the same, bit for bit, as one already run
+        # (a persistence forecast repeats one day over the horizon) has the
+        # same candidates' results: the dispatch reads only steps [lo, hi).
+        key = b"".join(
+            (
+                energies_wh.tobytes(),
+                levels.tobytes(),
+                self.reserve_levels[:, lo:hi].tobytes(),
+                self.target_levels[:, lo:hi].tobytes(),
+                *(array[lo:hi].tobytes() for array in self.step_arrays),
+            )
         )
-        end_energy = self.buffers.columns["Battery_Energy"][hi - 1]
-        matrix = self.buffers.matrix
-        wear = _window_wear_cost(matrix, problem, lo, hi, self.wear_cost_per_kwh)
-        return _window_cost(matrix, problem, lo, hi), wear, float(end_energy)
+        cached = self.memo.get(key)
+        if cached is not None:
+            return cached
+        n = len(energies_wh)
+        width = hi - lo
+        if self.scratch[0].shape[0] < n or self.scratch[0].shape[1] < width:
+            rows, cols = max(n, self.scratch[0].shape[0]), max(width, self.scratch[0].shape[1])
+            self.scratch = (np.empty((rows, cols)), np.empty((rows, cols)), np.empty((rows, cols)), np.empty(rows))
+        imports, exports, discharge, ends = self.scratch
+        self.dispatch_candidates(
+            *_candidate_arguments(
+                self.day_arguments,
+                lo,
+                hi,
+                energies_wh,
+                self.reserve_levels,
+                self.target_levels,
+                levels,
+                self.scratch,
+            )
+        )
+        hours = problem.hours_per_step
+        # np.vecdot runs each row through the dot product ``a @ b`` runs; a
+        # matrix-vector product would not, and could differ in the last bit.
+        money_w = np.vecdot(imports[:n, :width], problem.import_price_per_kwh[lo:hi]) - np.vecdot(
+            exports[:n, :width], problem.export_price_per_kwh[lo:hi]
+        )
+        money = money_w * hours / 1000.0
+        wear = discharge[:n, :width].sum(axis=1) * hours / 1000.0 * self.wear_cost_per_kwh
+        result = (money, wear, ends[:n].copy())
+        for array in result:
+            array.setflags(write=False)
+        self.memo[key] = result
+        return result
 
 
 def _window_cost(matrix: np.ndarray, problem: DailyTargetProblem, lo: int, hi: int) -> float:
@@ -439,11 +520,6 @@ def _window_cost(matrix: np.ndarray, problem: DailyTargetProblem, lo: int, hi: i
         - matrix[L_PV_AC_EXPORT, lo:hi] @ problem.export_price_per_kwh[lo:hi]
     )
     return money_w * problem.hours_per_step / 1000.0
-
-
-def _window_wear_cost(matrix: np.ndarray, problem: DailyTargetProblem, lo: int, hi: int, per_kwh: float) -> float:
-    """``per_kwh`` on the DC energy the battery discharges over steps ``[lo, hi)``."""
-    return float(matrix[L_BATTERY_DISCHARGE_DC, lo:hi].sum()) * problem.hours_per_step / 1000.0 * per_kwh
 
 
 def check_wear_cost(value: float, name: str = "wear_cost_per_kwh") -> float:
@@ -552,30 +628,36 @@ def solve_daily_targets(
             wear += day_wear
         return _plan(np.full(n_days, levels[0]), stage, float(terminal_cost(energy)), start, energy, soc_grid, wear)
 
-    # Backward pass: the cheapest cost to go from each grid energy at each day boundary.
+    # Backward pass: the cheapest cost to go from each grid energy at each day
+    # boundary. A day's candidates, every grid energy at every level, run in
+    # one dispatch call, state by state and level by level within each.
+    n_levels = len(levels)
+    grid_energies = np.repeat(soc_grid, n_levels)
+    grid_levels = np.tile(np.arange(n_levels, dtype=np.int64), len(soc_grid))
     values = np.empty((n_days + 1, len(soc_grid)))
     values[n_days] = terminal_cost(soc_grid)
     for day in range(n_days - 1, -1, -1):
-        following = values[day + 1]
-        for state, energy_wh in enumerate(soc_grid):
+        money, day_wear, end_wh = evaluator.run_many(day, grid_energies, grid_levels)
+        totals = ((money + day_wear) + np.interp(end_wh, soc_grid, values[day + 1])).tolist()
+        for state in range(len(soc_grid)):
             best = math.inf
-            for level in range(len(levels)):
-                cost, end_wh = evaluator.run(day, float(energy_wh), level)
-                best = min(best, cost + float(np.interp(end_wh, soc_grid, following)))
+            for total in totals[state * n_levels : (state + 1) * n_levels]:
+                best = min(best, total)
             values[day, state] = best
 
     # Forward pass from the exact energy; the grid only prices what follows.
+    every_level = np.arange(n_levels, dtype=np.int64)
     schedule = np.empty(n_days)
     energy, stage, wear = start, 0.0, 0.0
     for day in range(n_days):
-        following = values[day + 1]
+        money, day_wear, end_wh = evaluator.run_many(day, np.full(n_levels, energy), every_level)
+        totals = (money + day_wear + np.interp(end_wh, soc_grid, values[day + 1])).tolist()
         best_total, best_level, best_cost, best_wear, best_end = math.inf, 0, 0.0, 0.0, energy
-        for level in range(len(levels)):
-            cost, day_wear, end_wh = evaluator.run_priced(day, energy, level)
-            total = cost + day_wear + float(np.interp(end_wh, soc_grid, following))
+        for level, total in enumerate(totals):
             # Levels rise, and a strict margin keeps a tie on the lower one.
             if total < best_total - _TIE_TOLERANCE:
-                best_total, best_level, best_cost, best_wear, best_end = total, level, cost, day_wear, end_wh
+                best_total, best_level = total, level
+                best_cost, best_wear, best_end = float(money[level]), float(day_wear[level]), float(end_wh[level])
         schedule[day] = levels[best_level]
         stage += best_cost
         wear += best_wear

@@ -126,3 +126,11 @@ def require_numba_dispatch_day() -> Any:
             'Install it with: pip install "breos[fast]"'
         )
     return _dispatch_day_numba
+
+
+def require_numba_dispatch_candidates() -> Any:
+    """Return the compiled :func:`breos._dispatch._dispatch_day_candidates`, or explain what is missing."""
+    require_numba_dispatch_day()
+    from breos._numba_dispatch_kernels import _dispatch_day_candidates_kernel
+
+    return _dispatch_day_candidates_kernel

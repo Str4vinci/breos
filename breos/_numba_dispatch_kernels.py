@@ -53,7 +53,9 @@ for _helper in (
     _dispatch._dispatch_vehicle_step,
     _dispatch._vehicle_drive,
     _dispatch._dispatch_vehicle_away_step,
+    _dispatch._dispatch_day,
 ):
     register_jitable(fastmath=False)(_helper)
 
 _dispatch_day_kernel = njit(cache=True, fastmath=False, nogil=True)(_dispatch._dispatch_day)
+_dispatch_day_candidates_kernel = njit(cache=True, fastmath=False, nogil=True)(_dispatch._dispatch_day_candidates)
