@@ -6,7 +6,9 @@ This module provides the NSGA-II multi-objective design search
 (:func:`evaluate_projected_design`) behind it.
 """
 
+import threading
 import warnings
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
@@ -696,36 +698,70 @@ def _layout_arrays(layout: str, n_modules: int, tilt: Any, azimuth: Any) -> list
 
 
 def _layout_dc_production(
-    arrays: Sequence[Tuple[int, Any, Any]],
-    *,
-    weather_data: pd.DataFrame,
-    location: Any,
-    pv_params: PVModuleParams,
-    freq: str,
-    model_options: Mapping[str, Any],
+    arrays: Sequence[Tuple[int, Any, Any]], array_dc: Callable[[int, Any, Any], pd.Series]
 ) -> pd.Series:
     """The DC output of every array, summed as the App sums ``[[pv_arrays]]``.
 
-    Each array is its own fixed-tilt PV model run, and the series are added
-    in order with ``fill_value=0``, as ``calculate_multi_array_production``
-    does, so an East-West design gives the App's floats.
+    ``array_dc(modules, tilt, azimuth)`` is one array's fixed-tilt PV model
+    run. The series are added in order with ``fill_value=0``, as
+    ``calculate_multi_array_production`` does, so an East-West design gives
+    the App's floats.
     """
     total: Optional[pd.Series] = None
     for modules, tilt, azimuth in arrays:
-        series = calculate_pv_production_dc(
-            weather_data=weather_data,
-            location=location,
-            tilt=tilt,
-            surface_azimuth=azimuth,
-            n_modules=modules,
-            pv_params=pv_params,
-            freq=freq,
-            **model_options,
-        )
+        series = array_dc(modules, tilt, azimuth)
         total = series if total is None else total.add(series, fill_value=0.0)
     if total is None:
         raise ValueError("a design needs at least one PV array")
     return total
+
+
+def _exact_key(value: Any) -> Any:
+    """``value`` as a key that tells apart any two values a PV run could tell apart, -0.0 and 0.0 included."""
+    if value is None:
+        return None
+    return type(value).__name__, np.float64(value).tobytes()
+
+
+class _ArrayDcCache:
+    """Each PV array's DC output, by weather frame and array, kept up to ``max_values`` floats.
+
+    Designs of one search share arrays: those that differ only in battery
+    size share all of them, and East-West designs a module apart share one.
+    A pickled cache arrives empty, so a worker task does not carry it. A
+    lock guards the store, for runners that score designs on threads; two
+    threads may both compute a missing array, and the first stored is kept.
+    """
+
+    def __init__(self, max_values: int = 16_000_000) -> None:
+        self.max_values = max_values
+        self.entries: "OrderedDict[Tuple[Any, ...], pd.Series]" = OrderedDict()
+        self.values = 0
+        self.lock = threading.Lock()
+
+    def __reduce__(self) -> Tuple[Any, ...]:
+        return (_ArrayDcCache, (self.max_values,))
+
+    def get(self, key: Tuple[Any, ...], compute: Callable[[], pd.Series]) -> pd.Series:
+        """The series stored under ``key``, computed and stored first if it is not there."""
+        with self.lock:
+            series = self.entries.get(key)
+            if series is not None:
+                self.entries.move_to_end(key)
+                return series
+        series = compute()
+        with self.lock:
+            stored = self.entries.get(key)
+            if stored is not None:
+                self.entries.move_to_end(key)
+                return stored
+            self.entries[key] = series
+            self.values += len(series)
+            # The oldest go first, and a series larger than the bound is not kept.
+            while self.values > self.max_values:
+                _, dropped = self.entries.popitem(last=False)
+                self.values -= len(dropped)
+        return series
 
 
 # eq=False: a study is compared by identity; its frames have no truth value.
@@ -756,6 +792,7 @@ class _DesignStudy:
     battery_replacement_treatment: Dict[str, Any]
     execution_backend: str
     solar_position: Dict[str, Any]
+    dc_cache: _ArrayDcCache = field(default_factory=_ArrayDcCache, repr=False)
 
     @classmethod
     @solar_position_warning_scope()
@@ -848,25 +885,34 @@ class _DesignStudy:
         """
         scale = self.config["dc_output_scale"]
 
-        def dc_for(frame: pd.DataFrame) -> pd.Series:
-            series = _layout_dc_production(
-                arrays,
-                weather_data=frame,
-                location=self.location,
-                pv_params=self.pv_params,
-                freq=self.config["simulation"]["resolution"],
-                model_options=self.model_options,
-            )
-            return series if scale == 1.0 else series * scale
+        def dc_for(frame: pd.DataFrame, frame_index: int) -> pd.Series:
+            def array_dc(modules: int, tilt: Any, azimuth: Any) -> pd.Series:
+                return self.dc_cache.get(
+                    (frame_index, modules, _exact_key(tilt), _exact_key(azimuth)),
+                    lambda: calculate_pv_production_dc(
+                        weather_data=frame,
+                        location=self.location,
+                        tilt=tilt,
+                        surface_azimuth=azimuth,
+                        n_modules=modules,
+                        pv_params=self.pv_params,
+                        freq=self.config["simulation"]["resolution"],
+                        **self.model_options,
+                    ),
+                )
+
+            series = _layout_dc_production(arrays, array_dc)
+            # A copy: a stored series must not take the index set below, nor any later edit.
+            return series.copy() if scale == 1.0 else series * scale
 
         if self.weather_by_year is None:
-            return dc_for(self.weather)
+            return dc_for(self.weather, 0)
         # Every year must land on the same intra-year index, because the load
         # profile and the battery temperature series are aligned to it once.
-        reference = dc_for(self.weather_by_year[0])
+        reference = dc_for(self.weather_by_year[0], 0)
         series = [reference]
-        for frame in self.weather_by_year[1:]:
-            year_dc = dc_for(frame)
+        for frame_index, frame in enumerate(self.weather_by_year[1:], start=1):
+            year_dc = dc_for(frame, frame_index)
             if len(year_dc) != len(reference):
                 raise ValueError(
                     "every weather_by_year frame must produce the same number of "
