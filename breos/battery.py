@@ -1481,7 +1481,7 @@ def _apply_daily_degradation(
     degradation_tracking: List[Dict[str, Any]],
     *,
     step_index: int,
-    step_time: pd.Timestamp,
+    step_times: pd.DatetimeIndex,
     time_ticks: np.ndarray,
     ticks_per_second: float,
     soc_absolute_day: np.ndarray,
@@ -1493,12 +1493,14 @@ def _apply_daily_degradation(
     grid_origin_energy_wh: float,
     battery_energy_beginning: float,
     replacement_skipped_by: Optional[str] = None,
+    keep_record: bool = True,
 ) -> Tuple[float, float, float]:
     """Close out one degradation period, returning ``(energy, pv_origin, grid_origin)``.
 
     Runs the lifecycle step, optional resistance fade and the end-of-life
     replacement check in that order, mutating *aging* in place and appending
-    one row to *degradation_tracking*. The stored-energy values are
+    one row to *degradation_tracking*, unless ``keep_record`` is false (a
+    summary run, which builds no degradation frame). The stored-energy values are
     returned rather than carried on *aging* because the per-step loop owns
     them and only a replacement changes them here.
 
@@ -1574,7 +1576,7 @@ def _apply_daily_degradation(
         and not aging.retired
     ):
         aging.end_of_life_events.append(
-            EndOfLifeEvent(step_index, step_time, "replaced", "end_of_life", aging.soh_percent)
+            EndOfLifeEvent(step_index, step_times[step_index], "replaced", "end_of_life", aging.soh_percent)
         )
         cycle_degradation_for_row = degradation_step.cycle_degradation + _settle_terminal_cycles(aging, lifecycle)
         battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh, day_end_soc_absolute = (
@@ -1600,7 +1602,9 @@ def _apply_daily_degradation(
             assert reason is not None
             retire = battery_config.skipped_replacement_action == "retire"
             aging.end_of_life_events.append(
-                EndOfLifeEvent(step_index, step_time, "retired" if retire else "kept", reason, aging.soh_percent)
+                EndOfLifeEvent(
+                    step_index, step_times[step_index], "retired" if retire else "kept", reason, aging.soh_percent
+                )
             )
             aging.past_end_of_life = True
         if not retire and not aging.retired and aging.soh_fraction <= 0.0:
@@ -1608,7 +1612,7 @@ def _apply_daily_degradation(
             # is retired as a skipped swap's "retire" retires one.
             retire = True
             aging.end_of_life_events.append(
-                EndOfLifeEvent(step_index, step_time, "retired", "zero_health", aging.soh_percent)
+                EndOfLifeEvent(step_index, step_times[step_index], "retired", "zero_health", aging.soh_percent)
             )
         if retire:
             # The pack's last cycles end here: the energy it holds is
@@ -1627,8 +1631,12 @@ def _apply_daily_degradation(
                 )
             )
 
+    if not keep_record:
+        aging.day_start_soc = day_end_soc_absolute
+        aging.day_start_t_cell = day_end_t_cell
+        return battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh
     degradation_record = {
-        "Datetime": step_time,
+        "Datetime": step_times[step_index],
         "SOH": aging.soh_percent,
         "Cycle_Degradation": cycle_degradation_for_row,
         "Calendar_Degradation": degradation_step.calendar_degradation,
@@ -1764,6 +1772,8 @@ class _CoreRun:
     lifecycle: DegradationLifecycle
     degradation_tracking: List[Dict[str, Any]]
     hours_per_step: float
+    # The degradation periods closed; a summary run keeps no tracking rows.
+    degradation_periods: int = 0
     # The daily controller's carry; None without a controller.
     controller_carry: Optional[ControllerCarry] = None
     # A copy of the instructions a daily controller's decisions dispatched,
@@ -1913,7 +1923,7 @@ def _build_simulation_summary(
         carried_energy_wh=float(buffers.columns["Battery_Energy"][-1]),
         carried_pv_origin_energy_wh=float(buffers.columns["Battery_PV_Origin_Energy_End"][-1]),
         carried_grid_origin_energy_wh=float(buffers.columns["Battery_Grid_Origin_Energy_End"][-1]),
-        has_degradation_rows=bool(core.degradation_tracking),
+        has_degradation_rows=core.degradation_periods > 0,
         fec_cum=aging.fec_cum,
         cumulative_calendar_seconds=aging.cumulative_cal_seconds,
         cumulative_cycle_degradation=aging.cumulative_cycle_deg,
@@ -2230,6 +2240,7 @@ def _simulate_core(
         )
 
     degradation_tracking: List[Dict[str, Any]] = []
+    degradation_periods = 0
 
     n_steps = len(rng)
 
@@ -2600,6 +2611,7 @@ def _simulate_core(
             aging=aging,
             lifecycle=degradation_lifecycle,
             degradation_tracking=degradation_tracking,
+            degradation_periods=degradation_periods,
             hours_per_step=hours_per_step,
             vehicle_carry=final_vehicle_carry(),
             vehicle_end_of_life_events=() if vehicle_lifecycle is None else tuple(vehicle_lifecycle.events),
@@ -2715,6 +2727,7 @@ def _simulate_core(
         # The window's closing row, written by its final segment, holds the
         # state the day close continues from.
         battery_energy_beginning = float(out.columns["Battery_Energy_Beginning"][last_step])
+        degradation_periods += 1
         Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _apply_daily_degradation(
             aging,
             degradation_lifecycle,
@@ -2722,9 +2735,11 @@ def _simulate_core(
             out,
             degradation_tracking,
             step_index=last_step,
-            # Timestamps are read once per closed day rather than once per
-            # step; nothing inside the window depends on the calendar.
-            step_time=rng[last_step],
+            # The timestamp is read only for a record or an end-of-life
+            # event; nothing inside the window depends on the calendar.
+            step_times=rng,
+            # A summary reads only whether any period closed.
+            keep_record=not summary_only,
             time_ticks=time_ticks[window_start:window_end],
             ticks_per_second=ticks_per_second,
             # Copied before the call so a replacement rewriting the closing
@@ -2760,6 +2775,7 @@ def _simulate_core(
         aging=aging,
         lifecycle=degradation_lifecycle,
         degradation_tracking=degradation_tracking,
+        degradation_periods=degradation_periods,
         hours_per_step=hours_per_step,
         vehicle_carry=final_vehicle_carry(),
         vehicle_end_of_life_events=() if vehicle_lifecycle is None else tuple(vehicle_lifecycle.events),
