@@ -1461,6 +1461,18 @@ def _dispatch_no_battery_vectorized(
     out.columns["Inverter_Loss"][steps] = conversion_w
 
 
+def _mean(values: np.ndarray) -> float:
+    """``float(np.mean(values))``, without np.mean's wrapper for float64.
+
+    For float64, np.mean is add.reduce divided by the count, so this returns
+    the same bits; any other dtype goes to np.mean, which may accumulate in
+    another precision.
+    """
+    if values.dtype == np.float64 and values.size:
+        return float(np.add.reduce(values)) / values.size
+    return float(np.mean(values))
+
+
 def _apply_daily_degradation(
     aging: _AgingState,
     lifecycle: DegradationLifecycle,
@@ -1512,8 +1524,10 @@ def _apply_daily_degradation(
     day_end_soc_absolute = float(soc_absolute_day[-1])
     day_end_t_cell = float(t_cell_day[-1])
 
-    mean_soc_abs = float(np.mean(soc_absolute_day))
-    mean_t_cell = float(np.mean(t_cell_day))
+    # np.mean is add.reduce over the size; doing it directly skips ~4 us of
+    # wrapper per call and returns the same bits.
+    mean_soc_abs = _mean(soc_absolute_day)
+    mean_t_cell = _mean(t_cell_day)
     effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
 
     degradation_step = lifecycle.step(
@@ -1526,6 +1540,8 @@ def _apply_daily_degradation(
             start_soc=aging.day_start_soc,
             start_temperature_c=aging.day_start_t_cell,
             finalize_cycles=finalize_cycles,
+            soc_mean=mean_soc_abs,
+            temperature_mean_c=mean_t_cell,
         )
     )
     aging.soh_fraction = degradation_step.soh_fraction

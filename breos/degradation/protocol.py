@@ -178,7 +178,14 @@ class _NativeRainflowCounter:
             self._step_seconds = float(day.step_seconds)
         elif self._step_seconds != day.step_seconds:
             raise ValueError("native rainflow step size changed across a continued span")
-        if self._current is not None and not np.isclose(day.start_soc, self._current[0], rtol=0.0, atol=1e-9):
+        # Scalar np.isclose costs ~17 us; abs() <= atol is the same test for finite
+        # SOC (rtol=0), and anything non-finite falls through to np.isclose. The
+        # difference is taken on Python floats, which, like np.isclose, never
+        # raise under numpy's floating-point error settings.
+        if self._current is not None and not (
+            abs(float(day.start_soc) - self._current[0]) <= 1e-9
+            or np.isclose(day.start_soc, self._current[0], rtol=0.0, atol=1e-9)
+        ):
             raise ValueError("native rainflow carry SOC does not match the next span's starting SOC")
 
         cycles: list[dict[str, float | int]] = []
@@ -234,14 +241,18 @@ class DegradationDay:
     start_soc: float
     start_temperature_c: float
     finalize_cycles: bool = True
+    # The caller has usually taken these means already; passing them in
+    # avoids a second np.mean of the same arrays every day.
+    soc_mean: float | None = None
+    temperature_mean_c: float | None = None
 
     @property
     def mean_soc(self) -> float:
-        return float(np.mean(self.soc))
+        return float(np.mean(self.soc)) if self.soc_mean is None else self.soc_mean
 
     @property
     def mean_temperature_c(self) -> float:
-        return float(np.mean(self.temperature_c))
+        return float(np.mean(self.temperature_c)) if self.temperature_mean_c is None else self.temperature_mean_c
 
 
 @dataclass(frozen=True)
