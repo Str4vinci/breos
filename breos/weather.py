@@ -25,6 +25,7 @@ import pvlib
 from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator, interp1d
 
+from breos._sun_cache import sun_frame
 from breos.constants import (
     DEFAULT_INDOOR_CEILING_C,
     DEFAULT_INDOOR_COUPLING_ALPHA,
@@ -1336,10 +1337,21 @@ def resample_to_15min(
 
     if use_clearsky:
         site = Location(latitude, longitude, altitude=altitude)
-        cs_hourly = site.get_clearsky(df_hourly.index + source_offset)
+        # Kept for reuse: Monte Carlo restamps every weather year onto one
+        # calendar, so each year's resample asks for the same instants.
+        source_times = df_hourly.index + source_offset
+        cs_hourly = sun_frame("clear_sky", site, source_times, lambda: site.get_clearsky(source_times))
         # One solar position serves the clear-sky model and the closure diagnostic.
-        solar_position_15min = site.get_solarposition(target_index + target_offset)
-        cs_15min = site.get_clearsky(target_index + target_offset, solar_position=solar_position_15min)
+        target_times = target_index + target_offset
+        solar_position_15min = sun_frame(
+            "solar_position", site, target_times, lambda: site.get_solarposition(target_times)
+        )
+        cs_15min = sun_frame(
+            "clear_sky",
+            site,
+            target_times,
+            lambda: site.get_clearsky(target_times, solar_position=solar_position_15min),
+        )
 
     quadrature_columns: dict[Hashable, np.ndarray] = {}
     quadrature_record: dict[str, Any] = {}

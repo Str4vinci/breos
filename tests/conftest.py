@@ -423,9 +423,9 @@ def jinko(monkeypatch):
 @pytest.fixture(autouse=True)
 def _fresh_solar_positions():
     """Each test computes the sun afresh, so no test depends on which ran before it in the process."""
-    from breos.pv import model_options
+    from breos import _sun_cache
 
-    model_options._SOLAR_POSITIONS.clear()
+    _sun_cache.clear()
 
 
 @pytest.fixture

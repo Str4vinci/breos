@@ -13,7 +13,7 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 
-from breos import App, cli
+from breos import App, _sun_cache, cli
 from breos.app_config import APP_CONFIG_FIELDS
 from breos.app_inputs import (
     INPUT_INDEPENDENT_KEYS,
@@ -22,7 +22,6 @@ from breos.app_inputs import (
     reuse_prepared_inputs,
 )
 from breos.economics import default_amount_cost_keys
-from breos.pv import model_options
 from breos.pv_modules import MODULES
 from tests.offline_app import offline_weather
 from tests.test_vehicle_config import VEHICLE
@@ -114,7 +113,7 @@ CHANGES = {
 def _prepared(config):
     # Each run computes the sun afresh: the pickles below compare bytes, and
     # pandas fills private caches on the objects a computation touches.
-    model_options._SOLAR_POSITIONS.clear()
+    _sun_cache.clear()
     with offline_weather():
         app = App(config)
         return prepare_simulation_inputs(app._resolved.cfg, app._resolved, app._runtime_dependencies())
