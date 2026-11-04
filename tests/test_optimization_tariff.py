@@ -188,17 +188,27 @@ def test_optimizer_accepts_disabled_smart_charging_unchanged(tariff_case):
 
 def test_optimizer_money_matches_the_step_ledger(tariff_case, monkeypatch):
     from breos import projection
+    from breos.battery import simulate_energy_balance
 
     frames = []
-    simulate = projection.simulate_energy_balance
+    summarize = projection.simulate_energy_balance_summary
 
-    def record(**kwargs):
-        result = simulate(**kwargs)
-        frames.append(result[0])
-        return result
+    def record(*, aligned, weights, **kwargs):
+        # The optimizer runs summaries; rerun the year with per-step frames to price it step by step.
+        index = aligned.index
+        frames.append(
+            simulate_energy_balance(
+                pv_dc=pd.Series(aligned.pv_dc_w, index=index),
+                houseload=pd.DataFrame({"Load": aligned.load_w}, index=index),
+                temperature_series=pd.Series(aligned.temperature_c, index=index),
+                **kwargs,
+            )[0]
+        )
+        return summarize(aligned=aligned, weights=weights, **kwargs)
 
-    monkeypatch.setattr(projection, "simulate_energy_balance", record)
+    monkeypatch.setattr(projection, "simulate_energy_balance_summary", record)
     result = evaluate(tariff_case)
+    assert len(frames) == len(result.yearly) == 2
     for i, frame in enumerate(frames):
         local = pd.DatetimeIndex(frame["Datetime"]).tz_convert("Europe/Lisbon")
         prices = np.where((local.hour >= 8) & (local.hour < 22), 0.50, 0.10)

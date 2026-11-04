@@ -212,7 +212,7 @@ def test_solar_design_problem_uses_configured_resolution(monkeypatch):
     assert captured["freq"] == "15min"
     # Two 15-minute steps at 400 W are 0.2 kWh, not the 0.8 kWh of two hours.
     assert out["Projected_PV_Production_Year1_kWh"] == pytest.approx(0.2)
-    assert list(captured["temperature_series"]) == [20.0, 20.0]
+    assert list(captured["aligned"].temperature_c) == [20.0, 20.0]
 
 
 def test_solar_design_problem_scores_zeb_from_explicit_ac_ledger(monkeypatch, tiny_inputs):

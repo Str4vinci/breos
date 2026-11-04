@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from breos.app_inputs import resample_hourly_weather
-from breos.battery import BatteryConfig
+from breos.battery import AlignedSimulationInputs, BatteryConfig, align_simulation_inputs
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
     calculate_costs,
@@ -394,8 +394,15 @@ def _evaluate_projected_design_metrics(
     reference_tariff: ResolvedTariff | None = None,
     reference_import_price_escalation: Optional[float] = None,
     currency: str = DEFAULT_CURRENCY,
+    align_year: Optional[Callable[[pd.Series, bool], AlignedSimulationInputs]] = None,
 ) -> Dict[str, Any]:
     """Evaluate one design over the projected horizon using production engines.
+
+    Every year runs as a summary from aligned inputs, as Monte Carlo runs
+    its years: the same physics and the same reductions as a run with
+    per-step frames, without building the frames. ``align_year(dc, has_battery)``
+    aligns one year's DC output with the load and, with a battery, the
+    temperature; None aligns all three with :func:`align_simulation_inputs`.
 
     ``base_dc_power`` is normally one weather year, repeated for every
     projected year and scaled by PV degradation. Passing a sequence of series
@@ -454,13 +461,23 @@ def _evaluate_projected_design_metrics(
             ac_output_scale=ac_output_scale,
         )
 
+    if align_year is None:
+
+        def align_year(dc: pd.Series, with_battery: bool) -> AlignedSimulationInputs:
+            return align_simulation_inputs(dc, houseload, temperature_series if with_battery else None, freq=freq)
+
+    # One alignment per distinct series; a repeated weather year aligns once.
+    aligned_by_series: Dict[int, AlignedSimulationInputs] = {}
+
     def year_inputs(year_idx: int) -> ProjectionYear:
         degradation_factor = (1.0 - float(degradation_rate)) ** year_idx
+        series = dc_by_year[year_idx]
+        aligned = aligned_by_series.get(id(series))
+        if aligned is None:
+            aligned = aligned_by_series[id(series)] = align_year(series, has_battery)
+        # Scaling after alignment is exact: reindexing only selects elements.
         return ProjectionYear(
-            pv_degradation_factor=degradation_factor,
-            pv_dc=dc_by_year[year_idx] * degradation_factor,
-            houseload=houseload,
-            temperature_series=temperature_series,
+            pv_degradation_factor=degradation_factor, aligned=aligned.scaled(pv_factor=degradation_factor)
         )
 
     projection = project_years(
@@ -793,6 +810,9 @@ class _DesignStudy:
     execution_backend: str
     solar_position: Dict[str, Any]
     dc_cache: _ArrayDcCache = field(default_factory=_ArrayDcCache, repr=False)
+    # The study calendar with its aligned load and temperature, keyed by
+    # whether the design has a battery (a PV-only run reads 25 C).
+    calendars: Dict[bool, AlignedSimulationInputs] = field(default_factory=dict, repr=False)
 
     @classmethod
     @solar_position_warning_scope()
@@ -922,6 +942,23 @@ class _DesignStudy:
             series.append(year_dc)
         return series
 
+    def align_year(self, dc: pd.Series, has_battery: bool) -> AlignedSimulationInputs:
+        """One year's DC output on the study calendar; the load and temperature are aligned once per study."""
+        calendar = self.calendars.get(has_battery)
+        if calendar is not None and len(dc) and dc.index[0] == calendar.index[0] and dc.index[-1] == calendar.index[-1]:
+            return calendar.with_pv_dc(dc)
+        calendar = align_simulation_inputs(
+            dc,
+            self.houseload,
+            self.temperature_series if has_battery else None,
+            freq=self.config["simulation"]["resolution"],
+        )
+        # Every later design reads these arrays; none may write them.
+        calendar.load_w.setflags(write=False)
+        calendar.temperature_c.setflags(write=False)
+        self.calendars[has_battery] = calendar
+        return calendar
+
     def score(
         self,
         arrays: Sequence[Tuple[int, Any, Any]],
@@ -956,6 +993,7 @@ class _DesignStudy:
             reference_tariff=self.pricing.reference_tariff,
             reference_import_price_escalation=self.pricing.reference_import_price_escalation,
             currency=self.pricing.currency,
+            align_year=self.align_year,
         )
 
     def provenance(self, **extra: Any) -> Dict[str, Any]:

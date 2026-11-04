@@ -420,6 +420,13 @@ def _align_curve_rows(inverter_curve_row: Optional[pd.Series], rng: pd.DatetimeI
     return array
 
 
+def _align_pv_dc(pv_dc: pd.Series, rng: pd.DatetimeIndex) -> np.ndarray:
+    """Reindex PV DC power onto ``rng`` as float64, refusing a step without a finite value."""
+    pv_values = pv_dc.reindex(rng)
+    _require_complete_series(pv_values, "pv_dc")
+    return pv_values.values.astype(np.float64)
+
+
 def _align_input_arrays(
     pv_dc: pd.Series,
     houseload: pd.DataFrame,
@@ -435,8 +442,7 @@ def _align_input_arrays(
     than the simulation window, and it repeats across the year edge (see
     :func:`_repeat_annual_load_across_year_edges`).
     """
-    pv_values = pv_dc.reindex(rng)
-    _require_complete_series(pv_values, "pv_dc")
+    pv_values = _align_pv_dc(pv_dc, rng)
 
     if isinstance(houseload.index, pd.DatetimeIndex):
         houseload_series = houseload.iloc[:, 0].copy()
@@ -471,7 +477,7 @@ def _align_input_arrays(
         houseload_series.index = new_load_idx
     else:
         houseload_series = houseload.iloc[:, 0].copy()
-        houseload_series.index = pv_values.index
+        houseload_series.index = rng
     houseload_series = houseload_series.reindex(rng)
     _require_complete_series(houseload_series, "houseload")
     negative = houseload_series.to_numpy(dtype=float) < 0.0
@@ -489,7 +495,7 @@ def _align_input_arrays(
         _require_complete_series(temperature_series, "temperature_series")
 
     return (
-        pv_values.values.astype(np.float64),
+        pv_values,
         houseload_series.values.astype(np.float64),
         temperature_series.values.astype(np.float64),
     )
@@ -558,6 +564,27 @@ class AlignedSimulationInputs:
             freq=self.freq,
             pv_chain=self.pv_chain if pv_factor == 1.0 else None,
             pv_chain_key=self.pv_chain_key if pv_factor == 1.0 else None,
+            inverter_ac_derate=self.inverter_ac_derate,
+            inverter_curve_row=self.inverter_curve_row,
+        )
+
+    def with_pv_dc(self, pv_dc: pd.Series) -> "AlignedSimulationInputs":
+        """Return the same calendar, load and temperature with ``pv_dc`` aligned onto it as the PV.
+
+        ``pv_dc`` must start and end where this calendar does. The PV is then
+        reindexed and checked exactly as :func:`align_simulation_inputs`
+        does, so the result equals what that function builds from ``pv_dc``
+        and this calendar's load and temperature, without aligning the load
+        again. A design sweep on one weather year aligns its load once.
+        """
+        if len(pv_dc.index) == 0 or pv_dc.index[0] != self.index[0] or pv_dc.index[-1] != self.index[-1]:
+            raise ValueError("pv_dc must start and end where the aligned calendar does")
+        return AlignedSimulationInputs(
+            index=self.index,
+            pv_dc_w=_align_pv_dc(pv_dc, self.index),
+            load_w=self.load_w,
+            temperature_c=self.temperature_c,
+            freq=self.freq,
             inverter_ac_derate=self.inverter_ac_derate,
             inverter_curve_row=self.inverter_curve_row,
         )

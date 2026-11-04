@@ -495,10 +495,10 @@ def _projected_metrics(monkeypatch, **batt_spec):
 
     def recording_balance(**kwargs):
         captured["permissions"].append(kwargs["battery_config"].allow_terminal_replacement)
-        return simulate_energy_balance(**kwargs)
+        return simulate_energy_balance_summary(**kwargs)
 
     monkeypatch.setattr(optimization_module, "cost_analysis_projection", recording)
-    monkeypatch.setattr(projection_module, "simulate_energy_balance", recording_balance)
+    monkeypatch.setattr(projection_module, "simulate_energy_balance_summary", recording_balance)
     metrics = _evaluate_projected_design_metrics(
         base_dc_power=pv,
         houseload=load,

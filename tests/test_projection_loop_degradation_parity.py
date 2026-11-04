@@ -125,8 +125,8 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
         pv_breakdown=_pv_breakdown(pv),
     )
     monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
-    # App and the optimizer both run the shared loop's simulate_energy_balance,
-    # so each run gets its own spy.
+    # App runs the shared loop's simulate_energy_balance; Monte Carlo and the
+    # optimizer run its summaries. Each run gets its own spy.
     with monkeypatch.context() as patch:
         _spy(patch, projection_module, "simulate_energy_balance", app_records, app_calls)
         app_artifacts = app_runner.run_app_simulation(resolved, deps=SimpleNamespace())
@@ -134,23 +134,24 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
     # Monte Carlo: one trajectory with a single weather year and no load
     # uncertainty, so the draw is the App's inputs exactly.
     mc_records, mc_calls = [], []
-    _spy(monkeypatch, projection_module, "simulate_energy_balance_summary", mc_records, mc_calls)
-    mc_metrics, _trajectory = _simulate_trajectory(
-        _Study(
-            cfg,
-            resolved,
-            np.array([2025]),
-            PROJECTION_YEARS,
-            # run_montecarlo resolves an unset backend; this calls the trajectory directly.
-            MonteCarloSettings(weather_file="unused.csv", load_uncertainty=0.0, execution_backend="python"),
-            {2025: align_simulation_inputs(pv, load, temperature, freq="h")},
-        ),
-        np.random.default_rng(0),
-    )
+    with monkeypatch.context() as patch:
+        _spy(patch, projection_module, "simulate_energy_balance_summary", mc_records, mc_calls)
+        mc_metrics, _trajectory = _simulate_trajectory(
+            _Study(
+                cfg,
+                resolved,
+                np.array([2025]),
+                PROJECTION_YEARS,
+                # run_montecarlo resolves an unset backend; this calls the trajectory directly.
+                MonteCarloSettings(weather_file="unused.csv", load_uncertainty=0.0, execution_backend="python"),
+                {2025: align_simulation_inputs(pv, load, temperature, freq="h")},
+            ),
+            np.random.default_rng(0),
+        )
 
     # Projected optimization: the year loop behind evaluate_projected_design.
     opt_records, opt_calls = [], []
-    _spy(monkeypatch, projection_module, "simulate_energy_balance", opt_records, opt_calls)
+    _spy(monkeypatch, projection_module, "simulate_energy_balance_summary", opt_records, opt_calls)
     batt_spec = {
         "min_soc": cfg["battery_min_soc"],
         "max_soc": cfg["battery_max_soc"],

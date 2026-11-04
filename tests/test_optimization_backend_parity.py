@@ -163,3 +163,68 @@ def test_fixed_target_evaluation_is_identical_on_both_backends(_lisbon_inputs, e
     _assert_metrics_identical(python.metrics, compiled.metrics)
     assert python.yearly.equals(compiled.yearly)
     assert python.financial.equals(compiled.financial)
+
+
+def _evaluate_per_step(monkeypatch, weather, load, config, backend, **kwargs):
+    """The same evaluation with every project year run on per-step frames, the path App runs."""
+    from breos import optimization
+    from breos.projection import ProjectionYear
+
+    real = optimization.project_years
+    frame_years = []
+
+    def per_step(years, year_inputs, **options):
+        def frame_year(year_idx):
+            year = year_inputs(year_idx)
+            aligned = year.aligned
+            frame_years.append(year_idx)
+            return ProjectionYear(
+                pv_degradation_factor=year.pv_degradation_factor,
+                pv_dc=pd.Series(aligned.pv_dc_w, index=aligned.index),
+                houseload=load,
+                temperature_series=pd.Series(aligned.temperature_c, index=aligned.index),
+            )
+
+        return real(years, frame_year, **options)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(optimization, "project_years", per_step)
+        result = evaluate_projected_design(weather, load, config, execution_backend=backend, **kwargs)
+    assert frame_years == list(range(config["simulation"]["years_projection"]))
+    return result
+
+
+@pytest.mark.parametrize(
+    ("case", "battery_kwh"),
+    [("flat", 0.0), ("tou", 0.0), ("flat", 5.0), ("fixed_target", 5.0), ("fixed_target_blast", 5.0)],
+)
+@pytest.mark.parametrize("backend", ["python", "numba"])
+@pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
+def test_summary_years_equal_per_step_years_bit_for_bit(_lisbon_inputs, monkeypatch, case, battery_kwh, backend):
+    """The optimizer runs its years as summaries; every metric equals a per-step run to the last bit.
+
+    No tolerance: the summary must reduce the same per-step values in the
+    same order as the frames, priced or not, through every replacement.
+    """
+    resolution, weather, load = _lisbon_inputs
+    config = _fixed_target_config(resolution, "blast" if case.endswith("blast") else "native")
+    if case == "flat":
+        del config["tariff"]
+    if not case.startswith("fixed_target"):
+        del config["smart_charging"]
+    if case == "flat" or case == "fixed_target":
+        # Early end of life, so every battery case crosses several replacements.
+        config["battery"].update(eol_percentage=0.98, enable_resistance_fade=True)
+    n_modules, _, tilt = _FIXED_TARGET_DESIGN
+    kwargs = dict(n_modules=n_modules, battery_kwh=battery_kwh, tilt=tilt, azimuth=180.0)
+
+    summary = evaluate_projected_design(weather, load, config, execution_backend=backend, **kwargs)
+    per_step = _evaluate_per_step(monkeypatch, weather, load, config, backend, **kwargs)
+
+    if battery_kwh > 0:
+        assert summary.metrics["Projected_Total_Replacements"] > 0
+    if "tariff" in config:
+        assert summary.yearly["Import_Cost"].sum() > 0
+    _assert_metrics_identical(summary.metrics, per_step.metrics)
+    assert summary.yearly.equals(per_step.yearly)
+    assert summary.financial.equals(per_step.financial)

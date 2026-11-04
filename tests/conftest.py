@@ -165,13 +165,16 @@ def write_multiyear_weather():
 
 
 def _stub_projection_balance(monkeypatch, index, captured=None, **columns):
-    """Replace the projection loop's dispatch with a fixed per-step ledger.
+    """Replace the projection loop's summary run with a fixed per-step ledger.
 
     Every column the year row sums is zero on ``index`` unless ``columns``
     sets it, in W. Each call's keyword arguments are stored in ``captured``
-    when given, so a test can check what the optimizer asked the loop to run.
+    when given, so a test can check what the optimizer asked the loop to run;
+    the year's inputs are in ``captured["aligned"]``.
     """
+    from breos.battery import SimulationSummary, weighted_column_sums
     from breos.projection import _ROW_SUM_COLUMNS
+    from breos.utils import get_hours_per_step
 
     frame = pd.DataFrame(
         0.0,
@@ -188,12 +191,36 @@ def _stub_projection_balance(monkeypatch, index, captured=None, **columns):
     for name, values in columns.items():
         frame[name] = values
 
-    def fake_balance(**kwargs):
+    def fake_summary(**kwargs):
         if captured is not None:
             captured.update(kwargs)
-        return frame, 0.0, pd.DataFrame(), 0, pd.DataFrame(), None
+        arrays = {name: frame[name].to_numpy(dtype=float) for name in frame.columns}
+        return SimulationSummary(
+            n_steps=len(frame),
+            hours_per_step=get_hours_per_step(kwargs["aligned"].freq),
+            column_sums={name: float(np.sum(values)) for name, values in arrays.items()},
+            total_pv_wh=0.0,
+            summary_row={},
+            final_soh_percent=100.0,
+            n_replacements=0,
+            replaced_capacity_wh=0.0,
+            opening_energy_wh=0.0,
+            opening_pv_origin_energy_wh=0.0,
+            opening_grid_origin_energy_wh=0.0,
+            carried_energy_wh=float(arrays["Battery_Energy_End"][-1]),
+            carried_pv_origin_energy_wh=float(arrays["Battery_PV_Origin_Energy_End"][-1]),
+            carried_grid_origin_energy_wh=float(arrays["Battery_Grid_Origin_Energy_End"][-1]),
+            has_degradation_rows=False,
+            fec_cum=0.0,
+            cumulative_calendar_seconds=0.0,
+            cumulative_cycle_degradation=0.0,
+            cumulative_calendar_degradation=0.0,
+            resistance_growth=0.0,
+            replacement_steps=(),
+            weighted_sums=weighted_column_sums(arrays, kwargs.get("weights")),
+        )
 
-    monkeypatch.setattr("breos.projection.simulate_energy_balance", fake_balance)
+    monkeypatch.setattr("breos.projection.simulate_energy_balance_summary", fake_summary)
     return frame
 
 
