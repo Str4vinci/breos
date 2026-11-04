@@ -22,6 +22,13 @@ Importing this module requires Numba. :mod:`breos._numba_dispatch` must stay
 importable without it -- that is where the availability check and the friendly
 error live -- so this module is imported lazily from there, never at its top.
 
+One compiled function is not shared with the Python backend:
+:func:`breos.degradation._rainflow_kernel.rainflow_day`, the native rainflow
+count's daily scan on arrays. The Python backend keeps the numpy scan of
+``_NativeRainflowCounter``; the two repeat the same float64 arithmetic in the
+same order, and ``tests/test_degradation_protocol.py`` holds both, and the
+interpreted kernel, to a per-sample reference by repr.
+
 ``fastmath=False`` is deliberate: enabling it would let LLVM reassociate and
 contract the arithmetic and would break bit identity with the Python backend.
 """
@@ -32,6 +39,7 @@ from numba import njit
 from numba.extending import register_jitable
 
 from breos import _dispatch
+from breos.degradation import _rainflow_kernel
 
 for _helper in (
     _dispatch._curve_efficiency,
@@ -59,3 +67,8 @@ for _helper in (
 
 _dispatch_day_kernel = njit(cache=True, fastmath=False, nogil=True)(_dispatch._dispatch_day)
 _dispatch_day_candidates_kernel = njit(cache=True, fastmath=False, nogil=True)(_dispatch._dispatch_day_candidates)
+
+for _rainflow_helper in (_rainflow_kernel._emit_cycle, _rainflow_kernel._push_reversal):
+    register_jitable(fastmath=False)(_rainflow_helper)
+
+_rainflow_day_kernel = njit(cache=True, fastmath=False, nogil=True)(_rainflow_kernel.rainflow_day)

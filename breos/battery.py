@@ -846,6 +846,7 @@ def _build_degradation_lifecycle(
     initial_calendar_seconds: float,
     default_day_start_soc: float,
     default_day_start_t_cell: float,
+    rainflow_kernel: Optional[Callable[..., int]] = None,
 ) -> Tuple[DegradationLifecycle, float, float]:
     """Construct the degradation backend and its first day-boundary state.
 
@@ -864,6 +865,7 @@ def _build_degradation_lifecycle(
             cycle_step=_update_battery_soh_from_cycles,
             calendar_step=update_battery_soh_calendar,
             initial_rainflow_state=state_payload.get("native_rainflow_state"),
+            rainflow_kernel=rainflow_kernel,
         )
         return (
             lifecycle,
@@ -1783,6 +1785,16 @@ def _resolve_dispatch_day(execution_backend: str) -> Any:
     return require_numba_dispatch_day()
 
 
+def _resolve_rainflow_kernel(execution_backend: str) -> Optional[Callable[..., int]]:
+    """The compiled native rainflow day scan for the numba backend; None (numpy and Python) otherwise."""
+    validate_execution_backend(execution_backend)
+    if execution_backend == "python":
+        return None
+    from breos._numba_dispatch import require_numba_rainflow_day
+
+    return require_numba_rainflow_day()
+
+
 @dataclass(slots=True)
 class _CoreRun:
     """Everything one simulated span produced, before any result is shaped.
@@ -2314,6 +2326,7 @@ def _simulate_core(
         initial_calendar_seconds=start.calendar_seconds,
         default_day_start_soc=degradation_day_start_soc,
         default_day_start_t_cell=degradation_day_start_t_cell,
+        rainflow_kernel=_resolve_rainflow_kernel(execution_backend),
     )
 
     battery_soh_decimal = degradation_lifecycle.soh()
@@ -2495,6 +2508,7 @@ def _simulate_core(
             vehicle_carry,
             initial_soc=energy_v / capacity_v if capacity_v > 0.0 else 0.0,
             initial_temperature=float(vehicle_temp[0]),
+            rainflow_kernel=_resolve_rainflow_kernel(execution_backend),
         )
         charge_v = np.zeros(n_steps, dtype=np.bool_)
         discharge_v = np.ones(n_steps, dtype=np.bool_)

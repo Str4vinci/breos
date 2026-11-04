@@ -134,3 +134,11 @@ def require_numba_dispatch_candidates() -> Any:
     from breos._numba_dispatch_kernels import _dispatch_day_candidates_kernel
 
     return _dispatch_day_candidates_kernel
+
+
+def require_numba_rainflow_day() -> Any:
+    """Return the compiled :func:`breos.degradation._rainflow_kernel.rainflow_day`, or explain what is missing."""
+    require_numba_dispatch_day()
+    from breos._numba_dispatch_kernels import _rainflow_day_kernel
+
+    return _rainflow_day_kernel

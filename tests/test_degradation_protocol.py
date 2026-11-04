@@ -8,6 +8,7 @@ from breos.degradation.native import _detect_cycles_rainflow_arrays
 from breos.degradation.protocol import (
     DegradationDay,
     NativeDegradationAdapter,
+    _CompiledRainflowCounter,
     _NativeRainflowCounter,
 )
 
@@ -282,13 +283,47 @@ def _edge_trace(rng, kind, n):
         return rng.choice([-2, -1, 0, 1, 2], n) * 1e-200
     if kind == "nonfinite":
         return rng.choice([0.2, 0.5, np.inf, -np.inf, np.nan, 1e308, -1e308], n)
+    if kind == "damped":
+        # Each swing smaller than the last: nothing closes and the residue keeps
+        # every reversal, past the compiled counter's first array capacity.
+        k = np.arange(n)
+        return 0.5 + np.where(k % 2 == 0, 1.0, -1.0) * 0.45 * 0.999**k
     t = np.arange(n)
     return np.clip(0.5 + 0.45 * np.sin(2 * np.pi * t / 96 + rng.uniform(0, 6)) + rng.normal(0, 0.01, n), 0.1, 0.95)
 
 
+def _numpy_counter(state=None):
+    return _NativeRainflowCounter(state)
+
+
+def _interpreted_kernel_counter(state=None):
+    # The kernel's own source run by Python: pins its logic without Numba.
+    # Interpreted, it computes on numpy scalars, which honour np.errstate;
+    # compiled code ignores it, as the Python-float loop does.
+    from breos.degradation._rainflow_kernel import rainflow_day
+
+    def kernel(*args):
+        with np.errstate(all="ignore"):
+            return rainflow_day(*args)
+
+    return _CompiledRainflowCounter(state, kernel=kernel)
+
+
+def _compiled_kernel_counter(state=None):
+    pytest.importorskip("numba")
+    from breos._numba_dispatch import require_numba_rainflow_day
+
+    return _CompiledRainflowCounter(state, kernel=require_numba_rainflow_day())
+
+
+@pytest.mark.parametrize(
+    "make_counter",
+    [_numpy_counter, _interpreted_kernel_counter, _compiled_kernel_counter],
+    ids=["numpy", "kernel-python", "kernel-numba"],
+)
 @pytest.mark.parametrize("raise_on_error", [False, True])
-@pytest.mark.parametrize("kind", ["walk", "plateau", "ties", "flat", "tiny", "nonfinite", "battery"])
-def test_native_rainflow_scan_matches_the_per_sample_loop_on_edge_cases(kind, raise_on_error):
+@pytest.mark.parametrize("kind", ["walk", "plateau", "ties", "flat", "tiny", "nonfinite", "damped", "battery"])
+def test_native_rainflow_scan_matches_the_per_sample_loop_on_edge_cases(kind, raise_on_error, make_counter):
     # Plateaus, exact ties, steps that underflow when multiplied, flat days and
     # one to 96 samples a day, with restores mid-stream: every cycle and every
     # snapshot must equal the per-sample loop's, by repr, so a numpy scalar
@@ -300,7 +335,7 @@ def test_native_rainflow_scan_matches_the_per_sample_loop_on_edge_cases(kind, ra
         days = int(rng.integers(1, 8))
         trace = _edge_trace(rng, kind, steps_per_day * days)
         start = float(trace[0]) if rng.random() < 0.5 else float(np.round(rng.uniform(0.1, 0.9), 2))
-        reference, counter = _PerSampleRainflowCounter(), _NativeRainflowCounter()
+        reference, counter = _PerSampleRainflowCounter(), make_counter()
         for d in range(days):
             soc = trace[d * steps_per_day : (d + 1) * steps_per_day]
             day = DegradationDay(
@@ -324,6 +359,66 @@ def test_native_rainflow_scan_matches_the_per_sample_loop_on_edge_cases(kind, ra
             assert repr(emitted) == repr(reference.step(day))
             assert repr(counter.snapshot()) == repr(reference.snapshot())
             if rng.random() < 0.2:
-                counter = _NativeRainflowCounter(counter.snapshot())
+                counter = make_counter(counter.snapshot())
                 reference = _PerSampleRainflowCounter(reference.snapshot())
             start = float(soc[-1]) if reference._current is not None else start
+
+
+def test_numba_backend_counts_native_rainflow_with_the_compiled_scan(monkeypatch):
+    # The fingerprints cannot see a silent fallback to the numpy scan: it
+    # returns the same bits. Pin the selection itself, down to the counter a
+    # real battery and vehicle run build.
+    pytest.importorskip("numba")
+    from breos import battery
+    from breos._numba_dispatch_kernels import _rainflow_day_kernel
+    from breos.vehicle import lifecycle as vehicle_lifecycle
+
+    assert battery._resolve_rainflow_kernel("python") is None
+    assert battery._resolve_rainflow_kernel("numba") is _rainflow_day_kernel
+
+    built = []
+    real_battery, real_vehicle = battery._build_degradation_lifecycle, vehicle_lifecycle._build_vehicle_lifecycle
+
+    def spy_battery(*args, **kwargs):
+        result = real_battery(*args, **kwargs)
+        built.append(("battery", type(result[0]._rainflow)))
+        return result
+
+    def spy_vehicle(*args, **kwargs):
+        result = real_vehicle(*args, **kwargs)
+        built.append(("vehicle", type(result._rainflow)))
+        return result
+
+    monkeypatch.setattr(battery, "_build_degradation_lifecycle", spy_battery)
+    monkeypatch.setattr(vehicle_lifecycle, "_build_vehicle_lifecycle", spy_vehicle)
+    from breos import App
+
+    vehicle = {
+        "mode": "v2h",
+        "battery_kwh": 60,
+        "departure_soc": 0.8,
+        "charger_ac_rating_kw": 7.4,
+        "charger_efficiency": 0.94,
+        "battery_cost_per_kwh": 120,
+        "charger_cost": 0,
+        "schedule": {
+            "weekday": {"arrive": "18:00", "depart": "08:00", "trip_kwh": 9},
+            "weekend": {"arrive": "14:00", "depart": "10:00", "trip_kwh": 12},
+        },
+    }
+    for backend, expected in (("numba", _CompiledRainflowCounter), ("python", _NativeRainflowCounter)):
+        built.clear()
+        App(
+            {
+                "location": "porto",
+                "n_modules": 4,
+                "annual_consumption_kwh": 3000,
+                "battery_kwh": 5.0,
+                "start_date": "2025-01-01",
+                "projection_years": 1,
+                "execution_backend": backend,
+                "vehicle": vehicle,
+            }
+        ).simulate()
+        assert built and {kind for kind, _ in built} == {"battery", "vehicle"}
+        assert all(counter is expected for _, counter in built), (backend, [(k, c.__name__) for k, c in built])
