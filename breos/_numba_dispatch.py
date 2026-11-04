@@ -16,7 +16,7 @@ compiled and cached.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 from breos._dispatch import _day_arguments
 
@@ -85,6 +85,11 @@ def _kernel() -> Any:
 
 def _dispatch_day_numba(out: Any, *args: Any, **state: Any) -> None:
     """Run the compiled ``_dispatch_day``; takes the arguments of ``_day_arguments``."""
+    _run_packed_numba(_day_arguments(out, *args, **state))
+
+
+def _run_packed_numba(arguments: Sequence[Any]) -> None:
+    """Run the compiled ``_dispatch_day`` on a packing of ``_day_arguments``."""
     global _JIT_CACHE_STATE
 
     kernel = _kernel()
@@ -94,7 +99,7 @@ def _dispatch_day_numba(out: Any, *args: Any, **state: Any) -> None:
         cache_hits_before = _cache_event_count(kernel.stats.cache_hits)
         cache_misses_before = _cache_event_count(kernel.stats.cache_misses)
 
-    kernel(*_day_arguments(out, *args, **state))
+    kernel(*arguments)
     if observe_cache:
         cache_hits_after = _cache_event_count(kernel.stats.cache_hits)
         cache_misses_after = _cache_event_count(kernel.stats.cache_misses)

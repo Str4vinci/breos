@@ -24,7 +24,10 @@ from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its nam
     _ROW,
     _ROW_COLUMNS,
     LEDGER_SCHEMA_VERSION,
+    _day_arguments,
     _dispatch_day_python,
+    _restate_day,
+    _run_packed_python,
     compute_cell_temperature,
 )
 from breos.constants import (
@@ -1785,6 +1788,19 @@ def _resolve_dispatch_day(execution_backend: str) -> Any:
     return require_numba_dispatch_day()
 
 
+def _resolve_packed_day(dispatch_day: Any) -> Optional[Callable[[List[Any]], None]]:
+    """The callable that runs a span's packing of ``_day_arguments`` on *dispatch_day*'s backend.
+
+    None for any other callable, a test's stand-in for one, which then gets
+    the per-day call it was written for.
+    """
+    if dispatch_day is _dispatch_day_python:
+        return _run_packed_python
+    from breos._numba_dispatch import _dispatch_day_numba, _run_packed_numba
+
+    return _run_packed_numba if dispatch_day is _dispatch_day_numba else None
+
+
 def _resolve_rainflow_kernel(execution_backend: str) -> Optional[Callable[..., int]]:
     """The compiled native rainflow day scan for the numba backend; None (numpy and Python) otherwise."""
     validate_execution_backend(execution_backend)
@@ -2694,6 +2710,28 @@ def _simulate_core(
     # (see BatteryConfig.replacement_min_remaining_years).
     steps_after_span = battery_config.replacement_years_after_span * n_steps
     min_remaining_steps = battery_config.replacement_min_remaining_years * n_steps
+    # Everything the day loop passes but the day's bounds and starting state
+    # is the span's.
+    span_dispatch: Dict[str, Any] = dict(
+        battery_config=battery_config,
+        hours_per_step=hours_per_step,
+        standby_loss_per_step_wh=standby_loss_per_step_wh,
+        cap_wh=cap_wh,
+        cap_charge_wh=cap_charge_wh,
+        cap_discharge_wh=cap_discharge_wh,
+        cap_stored_wh=cap_stored_wh,
+        instructions=dispatch_arrays,
+        ac_derate=_full_rating,
+        curve_rows=_dispatch_curve_rows,
+        pv_chain=ac_pv_chain,
+    )
+    # Without a vehicle or a daily controller nothing else changes between
+    # days either, so the span packs _day_arguments once, on its first day,
+    # and restates only the day's bounds and state after that. A vehicle's
+    # state reaches derived arguments, and a controller can rebind the
+    # instructions' scalars each day; both pack every day.
+    run_packed = _resolve_packed_day(dispatch_day) if session is None and vehicle_config is None else None
+    packed: Optional[List[Any]] = None
     window_start = 0
     while window_start < n_steps:
         window_end = min(window_start + steps_per_day, n_steps)
@@ -2730,33 +2768,40 @@ def _simulate_core(
                 out.columns["Battery_SOH"][segment_start:segment_end] = aging.soh_percent
                 if vehicle_config is not None:
                     dispatch_vehicle_only(segment_start, segment_end)
-            else:
-                dispatch_day(
-                    out,
-                    _pv_dc_vals,
-                    _load_vals,
-                    _temp_vals,
+            elif packed is not None:
+                assert run_packed is not None
+                _restate_day(
+                    packed,
                     segment_start,
                     segment_end,
-                    battery_config=battery_config,
+                    Battery_Energy_Wh,
+                    Battery_PV_Origin_Energy_Wh,
+                    Battery_Grid_Origin_Energy_Wh,
+                    battery_soh_decimal,
+                    eff_charge,
+                    eff_discharge,
+                )
+                run_packed(packed)
+            else:
+                day_state: Dict[str, Any] = dict(
                     battery_soh_decimal=battery_soh_decimal,
                     Battery_Energy_Wh=Battery_Energy_Wh,
                     Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
                     Battery_Grid_Origin_Energy_Wh=Battery_Grid_Origin_Energy_Wh,
                     eff_charge=eff_charge,
                     eff_discharge=eff_discharge,
-                    hours_per_step=hours_per_step,
-                    standby_loss_per_step_wh=standby_loss_per_step_wh,
-                    cap_wh=cap_wh,
-                    cap_charge_wh=cap_charge_wh,
-                    cap_discharge_wh=cap_discharge_wh,
-                    cap_stored_wh=cap_stored_wh,
-                    instructions=dispatch_arrays,
-                    ac_derate=_full_rating,
-                    curve_rows=_dispatch_curve_rows,
-                    pv_chain=ac_pv_chain,
+                    **span_dispatch,
                     **vehicle_state,
                 )
+                if run_packed is None:
+                    dispatch_day(out, _pv_dc_vals, _load_vals, _temp_vals, segment_start, segment_end, **day_state)
+                else:
+                    packed = list(
+                        _day_arguments(
+                            out, _pv_dc_vals, _load_vals, _temp_vals, segment_start, segment_end, **day_state
+                        )
+                    )
+                    run_packed(packed)
             if session is not None:
                 session.complete_segment(_pv_dc_vals, _load_vals, _temp_vals)
             segment_last = segment_end - 1

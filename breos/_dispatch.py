@@ -21,7 +21,7 @@ This module must not import Numba. ``import breos`` reaches it through
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, cast
 
 import numpy as np
 
@@ -2258,9 +2258,49 @@ def _candidate_arguments(
     return (*args, candidate_levels, *outputs)
 
 
+# Where _day_arguments puts the state a day of a plain span starts from.
+_ARG_PV_ORIGIN, _ARG_GRID_ORIGIN, _ARG_SOH, _ARG_EFF_CHARGE, _ARG_EFF_DISCHARGE = 7, 8, 10, 14, 15
+
+
+def _restate_day(
+    arguments: List[Any],
+    lo: int,
+    hi: int,
+    battery_energy_wh: float,
+    pv_origin_wh: float,
+    grid_origin_wh: float,
+    soh_fraction: float,
+    eff_charge: float,
+    eff_discharge: float,
+) -> None:
+    """Put a day's bounds and starting state into a span's packing of :func:`_day_arguments`, in place.
+
+    Over a span with no vehicle and no daily controller, these are the only
+    arguments that change from one day to the next: health and efficiency
+    after each day's aging, stored energy and its origins after each day's
+    dispatch. Everything else is the span's, so the span packs once and
+    restates the day here. The coercions are :func:`_day_arguments`' own,
+    and ``tests/test_numba_dispatch_parity.py`` holds the restated packing
+    to a fresh one.
+    """
+    arguments[_ARG_LO] = lo
+    arguments[_ARG_HI] = hi
+    arguments[_ARG_ENERGY] = float(battery_energy_wh)
+    arguments[_ARG_PV_ORIGIN] = float(pv_origin_wh)
+    arguments[_ARG_GRID_ORIGIN] = float(grid_origin_wh)
+    arguments[_ARG_SOH] = float(soh_fraction)
+    arguments[_ARG_EFF_CHARGE] = float(eff_charge)
+    arguments[_ARG_EFF_DISCHARGE] = float(eff_discharge)
+
+
+def _run_packed_python(arguments: Sequence[Any]) -> None:
+    """Run :func:`_dispatch_day` as Python on a packing of :func:`_day_arguments`."""
+    _dispatch_day(*arguments)
+
+
 def _dispatch_day_python(out: Any, *args: Any, **state: Any) -> None:
     """Run :func:`_dispatch_day` as Python; the reference backend.
 
     Takes the arguments of :func:`_day_arguments`.
     """
-    _dispatch_day(*_day_arguments(out, *args, **state))
+    _run_packed_python(_day_arguments(out, *args, **state))
