@@ -2596,6 +2596,8 @@ def _simulate_core(
             cap_charge_wh=cap_charge_wh,
             cap_discharge_wh=cap_discharge_wh,
             instructions=instructions,
+            ac_derate=_ones,
+            curve_rows=_own_curve_rows,
             stationary_active=False,
             **vehicle_state,
         )
@@ -2621,8 +2623,13 @@ def _simulate_core(
     # The dispatch reads instructions at global positions; a controller's
     # buffer is filled day by day ahead of each segment.
     dispatch_arrays: Any = instructions if session is None else session.instructions
-    # The kernels read a per-step rating fraction; one array of ones serves every day.
-    _full_rating = np.ones(n_steps) if _derate_vals is None else _derate_vals
+    # The kernels read a per-step rating fraction and curve row. Without
+    # per-step series, one array of each serves every day: _day_arguments
+    # would otherwise build a whole-run array for every day it packs.
+    _ones = np.ones(n_steps)
+    _full_rating = _ones if _derate_vals is None else _derate_vals
+    _own_curve_rows = np.full(n_steps, battery_config.conversion.curve_row)
+    _dispatch_curve_rows = _own_curve_rows if _curve_rows is None else _curve_rows
 
     # PV-only balance is already vectorized with NumPy and does not need the
     # general per-step dispatcher. This common path is faster than either the
@@ -2745,8 +2752,8 @@ def _simulate_core(
                     cap_discharge_wh=cap_discharge_wh,
                     cap_stored_wh=cap_stored_wh,
                     instructions=dispatch_arrays,
-                    ac_derate=_full_rating if _derate_vals is None else _derate_vals,
-                    curve_rows=_curve_rows,
+                    ac_derate=_full_rating,
+                    curve_rows=_dispatch_curve_rows,
                     pv_chain=ac_pv_chain,
                     **vehicle_state,
                 )
