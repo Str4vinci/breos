@@ -565,8 +565,6 @@ class BatteryDegradationModel:
         # While this will not be precise, it still helps get a guess as to where the plateaus of the anode-reference potential are.
         Ua = BatteryDegradationModel._get_Ua(soc)
 
-        cycles = sum(count for _, _, count, _, _ in extract_cycles(soc))
-
         stressors = {
             "t_secs": t_secs,
             "delta_t_days": delta_t_days,
@@ -576,7 +574,6 @@ class BatteryDegradationModel:
             "dod": dod,
             "Ua": Ua,
             "Crate": Crate,
-            "cycles": cycles,
         }
 
         return stressors
