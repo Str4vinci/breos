@@ -15,8 +15,8 @@ from typing import Dict, List, Mapping, Sequence, Tuple, cast
 
 import numpy as np
 import pandas as pd
-import rainflow
 
+from breos._rainflow import extract_cycles as _extract_rainflow_cycles
 from breos.constants import (
     A_Q,
     A_R,
@@ -161,11 +161,12 @@ def _detect_cycles_rainflow_arrays(
     if len(soc_values) < 2:
         return []
 
-    # rainflow.extract_cycles expects a sequence; multiply by 100 for percent
+    # Count on percent SOC and convert the range back to a fraction; the
+    # incremental counter in breos.degradation.protocol rounds the same way.
     soc_pct = soc_values * 100.0
 
     cycles = []
-    for rng, mean, count, i_start, i_end in rainflow.extract_cycles(soc_pct):
+    for rng, mean, count, i_start, i_end in _extract_rainflow_cycles(soc_pct):
         doc = rng / 100.0  # convert back to fraction
         if doc < min_doc_fraction:
             continue
