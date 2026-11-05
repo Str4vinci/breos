@@ -42,7 +42,6 @@ dependencies = [
     "numpy>=2.0",
     "pandas>=2.3.3",
     "pvlib>=0.14.0,<0.16",
-    "rainflow>=3.2.0",
     "scipy>=1.14",
     "threadpoolctl>=3.5.0",
 ]
@@ -77,6 +76,7 @@ dev = [
     "numba>=0.63.1",
     "openmeteo-requests>=1.7.4",
     "pymoo>=0.6.1.6",
+    "rainflow>=3.2.0",
     "requests-cache>=1.2.1",
     "timezonefinder>=8.2.1",
 ]
@@ -177,7 +177,6 @@ module = [
     "mpl_toolkits.*",
     "pvlib.*",
     "pymoo.*",
-    "rainflow.*",
     "requests.*",
     "scipy.*",
     "threadpoolctl.*",

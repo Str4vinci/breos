@@ -221,6 +221,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- `rainflow` is no longer a runtime dependency. `update_battery_soh_cyclewise`
+  counts cycles with BREOS's own ASTM E1049-85 counter in `breos._rainflow`,
+  which gives the same cycles, value for value, as `rainflow.extract_cycles`
+  3.2.0 and counts a year of hourly SOC about 6 times faster (a 15-minute
+  year about 2 to 4 times). The energy balance already used the incremental
+  counter in `breos.degradation.protocol` and is unchanged. `rainflow` stays
+  in the `dev` extra as the tests' reference. Code that calls
+  `rainflow.extract_cycles` itself, as an earlier entry suggested for counting
+  cycles outside a simulation, must now install `rainflow` on its own.
 - CI runs less on PRs that cannot need it. Draft PRs run nothing until they
   are marked ready for review. A PR that changes only documentation runs the
   test suite, checks and docs build on Python 3.12 alone, and skips the other

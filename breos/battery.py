@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, 
 
 import numpy as np
 import pandas as pd
-import rainflow
 
 from breos._controller import ControllerBatteryState, ControllerCarry, DailyDispatchController, _ControllerSession
 from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its names stay importable here
@@ -29,6 +28,7 @@ from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its nam
     compute_cell_temperature,
     lfp_capacity_factor,
 )
+from breos._rainflow import extract_cycles as _extract_rainflow_cycles
 from breos.constants import (
     A_Q,
     A_R,
@@ -2572,11 +2572,12 @@ def _detect_cycles_rainflow_arrays(
     if len(soc_values) < 2:
         return []
 
-    # rainflow.extract_cycles expects a sequence; multiply by 100 for percent
+    # Count on percent SOC and convert the range back to a fraction; the
+    # incremental counter in breos.degradation.protocol rounds the same way.
     soc_pct = soc_values * 100.0
 
     cycles = []
-    for rng, mean, count, i_start, i_end in rainflow.extract_cycles(soc_pct):
+    for rng, mean, count, i_start, i_end in _extract_rainflow_cycles(soc_pct):
         doc = rng / 100.0  # convert back to fraction
         if doc < min_doc_fraction:
             continue
