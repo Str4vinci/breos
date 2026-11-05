@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
 
+from breos._rainflow import Point, RainflowCounter, RawCycle
 from breos.degradation import _rainflow_kernel as _rk
 
 if TYPE_CHECKING:
@@ -21,37 +22,36 @@ if TYPE_CHECKING:
 
 DegradationEngineName = Literal["native", "blast"]
 _NATIVE_RAINFLOW_STATE_VERSION = 1
+# Cycles shallower than this SOC fraction do not age the native model.
+_MIN_CYCLE_DOC = 0.01
 
 
 class _NativeRainflowCounter:
-    """Incremental ASTM rainflow counter with a residual turning-point stack.
+    """The energy balance's rainflow count, day by day, on :class:`breos._rainflow.RainflowCounter`.
 
-    The state mirrors ``rainflow.reversals`` and ``rainflow.extract_cycles``:
-    confirmed reversals can close cycles as samples arrive, while the final
-    half cycles remain pending until the caller closes the whole simulation.
-    Only the unresolved turning points and two reversal-scanner points are
-    retained, so daily stepping does not rescan the run history.
+    A run's first day starts from an anchor at the starting SOC, sample 0;
+    sample k is k steps later. Ranges are compared on percent SOC, as
+    ``_detect_cycles_rainflow_arrays`` counts them, and cycles shallower than
+    1 % are dropped. The final half cycles remain pending until the caller
+    closes the whole simulation, and the open count round-trips through
+    :meth:`snapshot`, so daily stepping does not rescan the run history.
     """
 
     def __init__(self, state: Mapping[str, Any] | None = None) -> None:
-        self._points: deque[tuple[float, float, int]] = deque()
-        self._previous: tuple[float, float, int] | None = None
-        self._current: tuple[float, float, int] | None = None
-        self._last_delta: float | None = None
-        self._has_nonflat_pair = False
-        self._next_index = 0
+        self._counter = RainflowCounter(scale=100.0)
         self._step_seconds: float | None = None
         if state:
             self._restore(state)
 
     @staticmethod
-    def _point(value: Any) -> tuple[float, float, int] | None:
+    def _point(value: Any) -> Point | None:
         if value is None:
             return None
         if not isinstance(value, (list, tuple)) or len(value) != 3:
             raise ValueError("native rainflow points must contain SOC, elapsed seconds, and sample index")
         soc, elapsed_seconds, index = value
-        return float(soc), float(elapsed_seconds), int(index)
+        float(elapsed_seconds)  # Checked, not kept: a point's time is its index times the step.
+        return float(soc), int(index)
 
     def _restore(self, state: Mapping[str, Any]) -> None:
         if state.get("schema_version") != _NATIVE_RAINFLOW_STATE_VERSION:
@@ -59,115 +59,86 @@ class _NativeRainflowCounter:
                 "Unsupported native rainflow state schema "
                 f"{state.get('schema_version')!r}; expected {_NATIVE_RAINFLOW_STATE_VERSION!r}"
             )
+        counter = self._counter
         try:
             residue = [self._point(point) for point in state.get("residue", [])]
             if any(point is None for point in residue):
                 raise ValueError("native rainflow residue points must not be null")
-            self._points = deque(point for point in residue if point is not None)
-            self._previous = self._point(state.get("previous"))
-            self._current = self._point(state.get("current"))
+            counter.points = deque(point for point in residue if point is not None)
+            counter.previous = self._point(state.get("previous"))
+            counter.current = self._point(state.get("current"))
             last_delta = state.get("last_delta")
-            self._last_delta = None if last_delta is None else float(last_delta)
-            self._has_nonflat_pair = bool(state.get("has_nonflat_pair", False))
-            self._next_index = int(state.get("next_index", 0))
+            counter.last_delta = None if last_delta is None else float(last_delta)
+            counter.moved = bool(state.get("has_nonflat_pair", False))
+            counter.next_index = int(state.get("next_index", 0))
             step_seconds = state.get("step_seconds")
             self._step_seconds = None if step_seconds is None else float(step_seconds)
         except (TypeError, ValueError) as exc:
             raise ValueError("Invalid native rainflow state") from exc
-        if self._next_index < 0:
+        if counter.next_index < 0:
             raise ValueError("Invalid native rainflow state")
-        if self._step_seconds is not None and (not np.isfinite(self._step_seconds) or self._step_seconds <= 0):
+        if self._step_seconds is None:
+            if counter.points or counter.current is not None or counter.previous is not None:
+                raise ValueError("Invalid native rainflow state")
+        elif not np.isfinite(self._step_seconds) or self._step_seconds <= 0:
             raise ValueError("Invalid native rainflow step size")
 
     def snapshot(self) -> dict[str, Any]:
-        def serialize(point: tuple[float, float, int] | None) -> list[float | int] | None:
-            return None if point is None else [point[0], point[1], point[2]]
+        counter = self._counter
+        step_seconds = self._step_seconds
+
+        def serialize(point: Point | None) -> list[float | int] | None:
+            if point is None:
+                return None
+            assert step_seconds is not None
+            return [point[0], point[1] * step_seconds, point[1]]
 
         return {
             "schema_version": _NATIVE_RAINFLOW_STATE_VERSION,
-            "residue": [serialize(point) for point in self._points],
-            "previous": serialize(self._previous),
-            "current": serialize(self._current),
-            "last_delta": self._last_delta,
-            "has_nonflat_pair": self._has_nonflat_pair,
-            "next_index": self._next_index,
-            "step_seconds": self._step_seconds,
+            "residue": [serialize(point) for point in counter.points],
+            "previous": serialize(counter.previous),
+            "current": serialize(counter.current),
+            "last_delta": counter.last_delta,
+            "has_nonflat_pair": counter.moved,
+            "next_index": counter.next_index,
+            "step_seconds": step_seconds,
         }
 
     def reset(self) -> None:
-        self._points.clear()
-        self._previous = None
-        self._current = None
-        self._last_delta = None
-        self._has_nonflat_pair = False
-        self._next_index = 0
+        self._counter.reset()
         self._step_seconds = None
 
     def finish(self) -> list[dict[str, float | int]]:
         """Emit terminal half cycles from the current residue and reset it."""
-        cycles: list[dict[str, float | int]] = []
-        if self._current is not None and self._has_nonflat_pair:
-            cycles.extend(self._push_reversal(self._current, min_doc_fraction=0.01))
-            while len(self._points) > 1:
-                cycle = self._format_cycle(self._points[0], self._points[1], 0.5)
-                self._points.popleft()
-                if cycle["doc"] >= 0.01:
-                    cycles.append(cycle)
+        cycles = self._format(self._counter.finish())
         self.reset()
         return cycles
 
-    def _format_cycle(
-        self,
-        point1: tuple[float, float, int],
-        point2: tuple[float, float, int],
-        count: float,
-    ) -> dict[str, float | int]:
-        soc1, time1, index1 = point1
-        soc2, time2, index2 = point2
-        # Match _detect_cycles_rainflow_arrays, which passes percent SOC to
-        # rainflow before converting the range back to a fraction. Computing
-        # the range directly on fractions can put a 1% cycle just below the
-        # minimum through floating-point rounding.
-        doc = abs(soc1 * 100.0 - soc2 * 100.0) / 100.0
-        duration_seconds = abs(time2 - time1)
-        duration_hours = duration_seconds / 3600.0
-        return {
-            "doc": doc,
-            "mean_soc": 0.5 * (soc1 * 100.0 + soc2 * 100.0) / 100.0,
-            "count": count,
-            "mean_c_rate": doc / duration_hours if duration_hours > 0 else 0.0,
-            "start_idx": index1,
-            "end_idx": index2,
-        }
-
-    def _push_reversal(
-        self,
-        point: tuple[float, float, int],
-        *,
-        min_doc_fraction: float,
-    ) -> list[dict[str, float | int]]:
-        cycles: list[dict[str, float | int]] = []
-        self._points.append(point)
-        while len(self._points) >= 3:
-            x1 = self._points[-3][0] * 100.0
-            x2 = self._points[-2][0] * 100.0
-            x3 = self._points[-1][0] * 100.0
-            x_range = abs(x3 - x2)
-            y_range = abs(x2 - x1)
-            if x_range < y_range:
-                break
-            if len(self._points) == 3:
-                cycle = self._format_cycle(self._points[0], self._points[1], 0.5)
-                self._points.popleft()
-            else:
-                cycle = self._format_cycle(self._points[-3], self._points[-2], 1.0)
-                last = self._points.pop()
-                self._points.pop()
-                self._points.pop()
-                self._points.append(last)
-            if cycle["doc"] >= min_doc_fraction:
-                cycles.append(cycle)
-        return cycles
+    def _format(self, cycles: list[RawCycle]) -> list[dict[str, float | int]]:
+        """The cycles of at least 1 % depth as records, with depth and mean as SOC fractions."""
+        step_seconds = self._step_seconds
+        records: list[dict[str, float | int]] = []
+        for (soc1, index1), (soc2, index2), count in cycles:
+            # Match _detect_cycles_rainflow_arrays, which counts on percent SOC
+            # and converts the range back to a fraction. Computing the range
+            # directly on fractions can put a 1% cycle just below the minimum
+            # through floating-point rounding.
+            doc = abs(soc1 * 100.0 - soc2 * 100.0) / 100.0
+            if not doc >= _MIN_CYCLE_DOC:
+                continue
+            assert step_seconds is not None
+            duration_hours = abs(index2 * step_seconds - index1 * step_seconds) / 3600.0
+            records.append(
+                {
+                    "doc": doc,
+                    "mean_soc": 0.5 * (soc1 * 100.0 + soc2 * 100.0) / 100.0,
+                    "count": count,
+                    "mean_c_rate": doc / duration_hours if duration_hours > 0 else 0.0,
+                    "start_idx": index1,
+                    "end_idx": index2,
+                }
+            )
+        return records
 
     def _check_day(self, day: "DegradationDay", current_soc: float | None) -> None:
         """Reject a day that cannot continue the count from ``current_soc`` (None before the first sample)."""
@@ -192,60 +163,13 @@ class _NativeRainflowCounter:
     def step(self, day: "DegradationDay") -> list[dict[str, float | int]]:
         if day.soc.size == 0:
             return self.finish() if day.finalize_cycles else []
-        self._check_day(day, None if self._current is None else self._current[0])
-
-        cycles: list[dict[str, float | int]] = []
-        if self._current is None:
-            anchor = (float(day.start_soc), 0.0, 0)
-            self._points.append(anchor)
-            first_sample = (float(day.soc[0]), day.step_seconds, 1)
-            self._previous = anchor
-            self._current = first_sample
-            self._last_delta = first_sample[0] - anchor[0]
-            self._has_nonflat_pair = self._last_delta != 0.0
-            self._next_index = 2
-            soc = day.soc[1:]
+        current = self._counter.current
+        self._check_day(day, None if current is None else current[0])
+        if current is None:
+            # The anchor at the starting SOC is sample 0.
+            cycles = self._format(self._counter.extend(np.concatenate(([float(day.start_soc)], day.soc))))
         else:
-            soc = day.soc
-
-        n_samples = len(soc)
-        if n_samples:
-            assert self._current is not None
-            # Same scan as the per-sample loop, in numpy: a sample that equals
-            # the one before it extends a plateau (rainflow.reversals labels a
-            # plateau at its final sample), and a reversal is a sign change of
-            # consecutive non-flat deltas. Only reversals reach Python.
-            step_seconds = day.step_seconds
-            first_index = self._next_index
-            values = np.empty(n_samples + 1)
-            values[0] = self._current[0]
-            values[1:] = soc
-            moved = np.flatnonzero(values[1:] != values[:-1])
-
-            def point_at(position: int) -> tuple[float, float, int]:
-                if position == 0:
-                    assert self._current is not None
-                    return self._current
-                index = first_index + position - 1
-                return (float(values[position]), index * step_seconds, index)
-
-            if moved.size:
-                # The loop did this arithmetic on Python floats, which never
-                # raise; numpy may, under the caller's error settings.
-                with np.errstate(all="ignore"):
-                    deltas = values[moved + 1] - values[moved]
-                    previous_deltas = np.empty_like(deltas)
-                    previous_deltas[0] = np.nan if self._last_delta is None else self._last_delta
-                    previous_deltas[1:] = deltas[:-1]
-                    reversals = moved[previous_deltas * deltas < 0].tolist()
-                for position in reversals:
-                    cycles.extend(self._push_reversal(point_at(position), min_doc_fraction=0.01))
-                self._previous = point_at(int(moved[-1]))
-                self._last_delta = float(deltas[-1])
-                self._has_nonflat_pair = True
-            self._current = point_at(n_samples)
-            self._next_index = first_index + n_samples
-
+            cycles = self._format(self._counter.extend(day.soc))
         if day.finalize_cycles:
             cycles.extend(self.finish())
         return cycles
@@ -256,7 +180,7 @@ class _CompiledRainflowCounter(_NativeRainflowCounter):
 
     The residue and scanner state live in arrays that
     :func:`breos.degradation._rainflow_kernel.rainflow_day` advances in place;
-    the tuple state of the parent is rebuilt from them only to snapshot or to
+    the shared counter's state is rebuilt from them only to snapshot or to
     close the residue, which stay in Python. Both counters return the same
     cycles, bit for bit, and the same snapshots.
     """
@@ -289,55 +213,59 @@ class _CompiledRainflowCounter(_NativeRainflowCounter):
         self._capacity = capacity
 
     def _load(self) -> None:
-        """Copy the parent's tuple state into the arrays."""
-        self._ensure_capacity(len(self._points) + 1)
-        for row, (soc, elapsed_seconds, index) in enumerate(self._points):
+        """Copy the shared counter's state into the arrays."""
+        counter = self._counter
+        step_seconds = 0.0 if self._step_seconds is None else self._step_seconds
+        self._ensure_capacity(len(counter.points) + 1)
+        for row, (soc, index) in enumerate(counter.points):
             self._points_f[row, 0] = soc
-            self._points_f[row, 1] = elapsed_seconds
+            self._points_f[row, 1] = index * step_seconds
             self._points_i[row] = index
         fstate = np.zeros(_rk.FSTATE_SIZE)
         istate = np.zeros(_rk.ISTATE_SIZE, dtype=np.int64)
-        istate[_rk._I_N_POINTS] = len(self._points)
-        if self._current is not None:
+        istate[_rk._I_N_POINTS] = len(counter.points)
+        if counter.current is not None:
+            soc, index = counter.current
             istate[_rk._I_HAS_CURRENT] = 1
-            fstate[_rk._F_CURRENT_SOC], fstate[_rk._F_CURRENT_TIME], istate[_rk._I_CURRENT_INDEX] = self._current
-        if self._previous is not None:
+            fstate[_rk._F_CURRENT_SOC], fstate[_rk._F_CURRENT_TIME], istate[_rk._I_CURRENT_INDEX] = (
+                soc,
+                index * step_seconds,
+                index,
+            )
+        if counter.previous is not None:
+            soc, index = counter.previous
             istate[_rk._I_HAS_PREVIOUS] = 1
-            fstate[_rk._F_PREVIOUS_SOC], fstate[_rk._F_PREVIOUS_TIME], istate[_rk._I_PREVIOUS_INDEX] = self._previous
-        if self._last_delta is not None:
+            fstate[_rk._F_PREVIOUS_SOC], fstate[_rk._F_PREVIOUS_TIME], istate[_rk._I_PREVIOUS_INDEX] = (
+                soc,
+                index * step_seconds,
+                index,
+            )
+        if counter.last_delta is not None:
             istate[_rk._I_HAS_LAST_DELTA] = 1
-            fstate[_rk._F_LAST_DELTA] = self._last_delta
-        istate[_rk._I_HAS_NONFLAT_PAIR] = int(self._has_nonflat_pair)
-        istate[_rk._I_NEXT_INDEX] = self._next_index
+            fstate[_rk._F_LAST_DELTA] = counter.last_delta
+        istate[_rk._I_HAS_NONFLAT_PAIR] = int(counter.moved)
+        istate[_rk._I_NEXT_INDEX] = counter.next_index
         self._fstate = fstate
         self._istate = istate
 
     def _store(self) -> None:
-        """Rebuild the parent's tuple state from the arrays."""
+        """Rebuild the shared counter's state from the arrays."""
+        counter = self._counter
         fstate = self._fstate.tolist()
         istate = self._istate.tolist()
         n_points = istate[_rk._I_N_POINTS]
-        self._points = deque(
-            zip(
-                self._points_f[:n_points, 0].tolist(),
-                self._points_f[:n_points, 1].tolist(),
-                self._points_i[:n_points].tolist(),
-                strict=True,
-            )
+        counter.points = deque(
+            zip(self._points_f[:n_points, 0].tolist(), self._points_i[:n_points].tolist(), strict=True)
         )
-        self._current = (
-            (fstate[_rk._F_CURRENT_SOC], fstate[_rk._F_CURRENT_TIME], istate[_rk._I_CURRENT_INDEX])
-            if istate[_rk._I_HAS_CURRENT]
-            else None
+        counter.current = (
+            (fstate[_rk._F_CURRENT_SOC], istate[_rk._I_CURRENT_INDEX]) if istate[_rk._I_HAS_CURRENT] else None
         )
-        self._previous = (
-            (fstate[_rk._F_PREVIOUS_SOC], fstate[_rk._F_PREVIOUS_TIME], istate[_rk._I_PREVIOUS_INDEX])
-            if istate[_rk._I_HAS_PREVIOUS]
-            else None
+        counter.previous = (
+            (fstate[_rk._F_PREVIOUS_SOC], istate[_rk._I_PREVIOUS_INDEX]) if istate[_rk._I_HAS_PREVIOUS] else None
         )
-        self._last_delta = fstate[_rk._F_LAST_DELTA] if istate[_rk._I_HAS_LAST_DELTA] else None
-        self._has_nonflat_pair = bool(istate[_rk._I_HAS_NONFLAT_PAIR])
-        self._next_index = istate[_rk._I_NEXT_INDEX]
+        counter.last_delta = fstate[_rk._F_LAST_DELTA] if istate[_rk._I_HAS_LAST_DELTA] else None
+        counter.moved = bool(istate[_rk._I_HAS_NONFLAT_PAIR])
+        counter.next_index = istate[_rk._I_NEXT_INDEX]
 
     def snapshot(self) -> dict[str, Any]:
         self._store()
@@ -371,7 +299,7 @@ class _CompiledRainflowCounter(_NativeRainflowCounter):
             float(day.start_soc),
             self._out_f,
             self._out_i,
-            0.01,
+            _MIN_CYCLE_DOC,
         )
         cycles: list[dict[str, float | int]] = []
         if n_cycles:
