@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import math
 import os
 import re
@@ -22,13 +23,16 @@ from breos.config_schema import (
     anything,
     boolean,
     choice,
+    got,
     integer,
     list_of,
     mapping_of,
     number,
     optional,
+    shown,
     table,
     text,
+    unknown_keys_message,
 )
 from breos.constants import (
     BATTERY_COUPLINGS,
@@ -158,7 +162,8 @@ _TRACKING_MODES = ("fixed", "single_axis", "dual_axis")
 def _count(value: Any, where: str) -> int:
     """A whole number of at least 1, such as a module count."""
     if not _is_int(value) or value < 1:
-        raise ValueError(f"'{where}' must be >= 1")
+        kind = "" if _is_int(value) else "a whole number "
+        raise ValueError(f"'{where}' must be {kind}>= 1{got(value)}")
     return value
 
 
@@ -2691,10 +2696,14 @@ def resolve_smart_charging_spec(
 
 def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
     """Validate top-level keys, required inputs, and location structure."""
-    unknown = set(cfg) - ALLOWED_CONFIG_KEYS
+    if "community" in cfg:
+        raise ValueError(
+            "This is an energy community config ([community] table), and breos run and App simulate one "
+            "building. Run it from Python with breos.Community(config).simulate()."
+        )
+    unknown = {key: value for key, value in cfg.items() if key not in ALLOWED_CONFIG_KEYS}
     if unknown:
-        available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
-        raise ValueError(f"Unknown config key(s): {', '.join(sorted(unknown))}. Available: {available}")
+        raise ValueError(unknown_keys_message(unknown, ALLOWED_CONFIG_KEYS, noun="config key"))
 
     validate_montecarlo_config(cfg)
 
@@ -2710,7 +2719,10 @@ def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
     if isinstance(loc, dict):
         for field in ("latitude", "longitude", "timezone"):
             if field not in loc:
-                raise ValueError(f"Custom location must include '{field}'")
+                # Other keys are ignored, so a misspelt field only shows here.
+                near = difflib.get_close_matches(field, [str(key) for key in loc], n=1, cutoff=0.6)
+                found = f" (found 'location.{near[0]}': a misspelling?)" if near else ""
+                raise ValueError(f"Custom location must include '{field}'{found}")
         number(minimum=-90, maximum=90)(loc["latitude"], "location.latitude")
         number(minimum=-180, maximum=180)(loc["longitude"], "location.longitude")
         if not isinstance(loc["timezone"], str):
@@ -2887,7 +2899,11 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     min_soc = _finite_real(cfg["battery_min_soc"], "battery_min_soc")
     max_soc = _finite_real(cfg["battery_max_soc"], "battery_max_soc")
     if not 0 <= min_soc < max_soc <= 1:
-        raise ValueError("'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1")
+        percent = " (they are fractions: 0.1 means 10 %)" if max(min_soc, max_soc) > 1 else ""
+        raise ValueError(
+            "'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1; "
+            f"got {shown(cfg['battery_min_soc'])} and {shown(cfg['battery_max_soc'])}{percent}"
+        )
     if cfg["battery_power_limit_c_rate"] is not None:
         if cfg["battery_max_charge_power_w"] is not None or cfg["battery_max_discharge_power_w"] is not None:
             raise ValueError(
@@ -3030,7 +3046,12 @@ def resolve_location(cfg: dict[str, Any]) -> tuple[float, float, str, str | None
         locations = load_config_json("locations.json")
         if loc not in locations:
             available = ", ".join(sorted(locations))
-            raise ValueError(f"Unknown location '{loc}'. Available: {available}")
+            near = difflib.get_close_matches(loc, sorted(locations), n=1, cutoff=0.6)
+            hint = f" (did you mean '{near[0]}'?)" if near else ""
+            raise ValueError(
+                f"Unknown location '{loc}'{hint}. Available: {available}, or a [location] table with latitude, "
+                "longitude and timezone"
+            )
         loc_data = locations[loc]
         return loc_data["latitude"], loc_data["longitude"], loc_data["timezone"], loc
     return loc["latitude"], loc["longitude"], loc["timezone"], None

@@ -747,6 +747,19 @@ def test_external_profile_rejects_bad_values(tmp_path, value, message):
         load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))
 
 
+def test_missing_external_file_says_what_rlp_directory_is(tmp_path):
+    with pytest.raises(FileNotFoundError, match=r"missing', which does not exist yet .*How to get it: https://"):
+        load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path / "missing"))
+    (tmp_path / "a-file").write_text("x")
+    with pytest.raises(FileNotFoundError, match=r"a-file', which is not a directory\."):
+        load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path / "a-file"))
+
+
+def test_bundled_profile_missing_from_rlp_directory_points_to_the_shipped_copy(tmp_path):
+    with pytest.raises(FileNotFoundError, match=r"Remove rlp_directory to use the copy BREOS ships\.$"):
+        load_profile("demandlib_h0", 1000, rlp_directory=str(tmp_path))
+
+
 def test_external_profile_rejects_irregular_timestamps(tmp_path):
     # A local-clock file with a DST gap has the right length but moves every
     # later row by one hour.
@@ -931,7 +944,7 @@ def test_the_requested_resolution_is_preferred_and_the_other_is_resampled(tmp_pa
 
 
 def test_missing_external_file_names_the_patterns(tmp_path):
-    with pytest.raises(FileNotFoundError, match=r"no file in .* matches 'REE_\*_2\.0TD_1000kwh_hourly\.csv' or"):
+    with pytest.raises(FileNotFoundError, match=r"put one matching 'REE_\*_2\.0TD_1000kwh_hourly\.csv' or"):
         load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))
 
 

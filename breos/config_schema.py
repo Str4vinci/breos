@@ -16,6 +16,7 @@ whether to keep the normalised values.
 
 from __future__ import annotations
 
+import difflib
 import math
 from dataclasses import dataclass, field
 from numbers import Integral, Real
@@ -24,8 +25,80 @@ from typing import Any, Callable, Iterable, Mapping
 Checker = Callable[[Any, str], Any]
 
 
+CONFIG_REFERENCE_URL = "https://breos.readthedocs.io/en/latest/getting-started/config-reference.html"
+# An unknown-key message lists the allowed keys only up to this many; past
+# it, the message points to the configuration reference instead.
+_LIST_LIMIT = 30
+
+
 def _format_keys(where: str, keys: Iterable[str]) -> str:
     return ", ".join(f"{where}.{key}" for key in keys)
+
+
+def shown(value: Any) -> str:
+    """Return ``repr(value)`` for a message, cut to 60 characters.
+
+    A ``repr`` that fails gives the type name, so the message never replaces
+    the error it explains.
+    """
+    try:
+        text = repr(value)
+    except Exception:  # noqa: BLE001
+        text = f"a {type(value).__name__}"
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
+def got(value: Any) -> str:
+    """Return ``"; got <value>"`` for the end of a message about a bad value."""
+    return f"; got {shown(value)}"
+
+
+def _hint(key: str, value: Any, allowed: list[str], prefix: str) -> str | None:
+    """Return what a misspelt ``key`` most likely means, or None.
+
+    A table whose name and sub-keys join into allowed flat keys (``[battery]``
+    with ``kwh``) points to those flat keys.
+    """
+    if isinstance(value, Mapping):
+        flat = [f"'{prefix}{key}_{sub}'" for sub in value if f"{key}_{sub}" in allowed]
+        if flat:
+            return f"not a table: write {' and '.join(flat)}"
+    matches = difflib.get_close_matches(key, allowed, n=1, cutoff=0.6)
+    return f"did you mean '{prefix}{matches[0]}'?" if matches else None
+
+
+def unknown_keys_message(
+    unknown: Mapping[str, Any],
+    allowed: Iterable[str],
+    *,
+    where: str = "",
+    noun: str = "key",
+) -> str:
+    """Say which keys are unknown and what each one most likely means.
+
+    Args:
+        unknown: The unknown keys and their values.
+        allowed: The keys the table allows.
+        where: The table's dotted name, or ``""`` for the top level.
+        noun: What a key is called in the message, such as ``"config key"``.
+
+    When a key has no close match, the allowed keys are listed, or, past
+    ``_LIST_LIMIT`` of them, the message points to the configuration reference.
+    """
+    allowed = sorted(allowed)
+    prefix = f"{where}." if where else ""
+    parts = []
+    unmatched = False
+    for key in sorted(unknown, key=str):
+        hint = _hint(str(key), unknown[key], allowed, prefix)
+        unmatched = unmatched or hint is None
+        parts.append(f"'{prefix}{key}'" + (f" ({hint})" if hint else ""))
+    message = f"Unknown {noun}{'s' if len(parts) > 1 else ''} {', '.join(parts)}."
+    if unmatched and len(allowed) <= _LIST_LIMIT:
+        message += f" Available: {', '.join(prefix + key for key in allowed)}"
+    elif unmatched:
+        message += f" Every key is listed at {CONFIG_REFERENCE_URL}"
+    return message
 
 
 @dataclass(frozen=True)
@@ -65,13 +138,9 @@ class TableSpec:
         where = where or self.name
         if not isinstance(value, Mapping):
             raise TypeError(f"'{where}' must be a {self.kind}")
-        unknown = sorted(str(key) for key in value if key not in self.keys)
+        unknown = {key: item for key, item in value.items() if key not in self.keys}
         if unknown:
-            if len(unknown) == 1:
-                unknown_text = f"Unknown key '{where}.{unknown[0]}'"
-            else:
-                unknown_text = "Unknown keys " + ", ".join(f"'{where}.{key}'" for key in unknown)
-            raise ValueError(f"{unknown_text}. Available: {_format_keys(where, sorted(self.keys))}")
+            raise ValueError(unknown_keys_message(unknown, self.keys, where=where))
         missing = sorted(key for key in self.required if key not in value)
         if missing:
             raise ValueError(f"'{where}' needs {_format_keys(where, missing)}")
@@ -100,14 +169,16 @@ def number(
         if value is None and allow_none:
             return None
         if isinstance(value, bool) or not isinstance(value, Real):
-            raise TypeError(f"'{where}' must be a finite number")
+            raise TypeError(f"'{where}' must be a finite number{got(value)}")
         result = float(value)
         if not math.isfinite(result):
-            raise ValueError(f"'{where}' must be a finite number")
+            raise ValueError(f"'{where}' must be a finite number{got(value)}")
         low_ok = minimum is None or (result > minimum if min_exclusive else result >= minimum)
         high_ok = maximum is None or (result < maximum if max_exclusive else result <= maximum)
         if not (low_ok and high_ok):
-            raise ValueError(f"'{where}' must be {_range_text(minimum, maximum, min_exclusive, max_exclusive)}")
+            raise ValueError(
+                f"'{where}' must be {_range_text(minimum, maximum, min_exclusive, max_exclusive)}{got(value)}"
+            )
         return result
 
     return check
@@ -123,12 +194,12 @@ def integer(*, minimum: int | None = None, whole_floats: bool = False) -> Checke
     def check(value: Any, where: str) -> int:
         if whole_floats and isinstance(value, float):
             if not (math.isfinite(value) and value.is_integer()):
-                raise ValueError(f"'{where}' must be a whole number")
+                raise ValueError(f"'{where}' must be a whole number{got(value)}")
         elif isinstance(value, bool) or not isinstance(value, Integral):
-            raise TypeError(f"'{where}' must be an integer")
+            raise TypeError(f"'{where}' must be an integer{got(value)}")
         result = int(value)
         if minimum is not None and result < minimum:
-            raise ValueError(f"'{where}' must be >= {minimum}")
+            raise ValueError(f"'{where}' must be >= {minimum}{got(value)}")
         return result
 
     return check

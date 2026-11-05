@@ -494,6 +494,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- Config errors are shorter and say what to fix. A misspelt key names the
+  nearest valid key (`'battery_capacty_kwh' (did you mean 'battery_kwh'?)`)
+  instead of listing all 91 keys, and a `[battery]` table points to the flat
+  `battery_kwh` key. A value out of range or of the wrong type is quoted
+  (`'tilt' must be between 0 and 90; got 95`), and SOC limits given in
+  percent say they are fractions. A community config given to `breos run` or
+  `App` says to run it with `breos.Community`. A missing external load
+  profile file says where to put it and links to the page on getting it.
+  Exception types are unchanged.
 - The sun's position, about 80 % of a PV run's time, is computed once per
   site and time grid and kept for the next request, up to about 20 MB per
   process. A repeated PV run takes a fifth of the time, and the arrays of
