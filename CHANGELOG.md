@@ -6,6 +6,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- `PVModuleParams.Max_Series_Fuse_A`, the datasheet's maximum series fuse
+  rating in A, validated as positive and `None` when unpublished. Metadata
+  for a client's reverse-current check; no model reads it.
 - AC-coupled batteries ([#419](https://github.com/Str4vinci/breos/issues/419),
   ADR 0004). `battery_coupling = "ac"` gives the battery its own
   bidirectional inverter on the AC bus beside the PV inverter, sized by
