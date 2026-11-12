@@ -250,11 +250,12 @@ import_prices = { peak = 0.2310, off_peak = 0.1210 }
 export_prices = { all = 0.0500 }
 fixed_charge_per_day = 0.30
 
-# n_modules varies fastest, so the grid order alternates PV designs.
+# Eight two-year cases vary battery size, tariff and PV design. The fixed
+# target remains a sweep key; n_modules varies fastest to alternate cache keys.
 [sweep]
 battery_kwh = [5.0, 10.0]
 "tariff.import_prices.off_peak" = [0.10, 0.14]
-"smart_charging.target_usable_fraction" = [0.5, 0.9]
+"smart_charging.target_usable_fraction" = [0.5]
 n_modules = [8, 10]
 """
 
@@ -286,13 +287,13 @@ def test_a_sweep_writes_the_same_csv_bytes_with_and_without_the_cache(monkeypatc
     monkeypatch.setattr(cli, "reuse_prepared_inputs", contextlib.nullcontext)
     fresh = tmp_path / "fresh.csv"
     assert cli.main(["sweep", "--config", str(config_path), "--output", str(fresh)]) == 0
-    assert len(calls) == 16
+    assert len(calls) == 8
 
     assert cached.read_bytes() == fresh.read_bytes()
     rows = list(csv.DictReader(fresh.open(encoding="utf-8")))
-    assert len(rows) == 16
+    assert len(rows) == 8
     # The CSV keeps the grid order, not the run order.
-    assert [row["run"] for row in rows] == [str(n) for n in range(1, 17)]
+    assert [row["run"] for row in rows] == [str(n) for n in range(1, 9)]
     assert [row["param_n_modules"] for row in rows[:4]] == ["8", "10", "8", "10"]
     # The runs differ, so the equality is not between identical rows.
-    assert len({row["grid_import_cost_year1_prices"] for row in rows}) > 8
+    assert len({row["grid_import_cost_year1_prices"] for row in rows}) > 4

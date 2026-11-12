@@ -2,6 +2,7 @@
 
 import json
 import math
+from copy import deepcopy
 from datetime import date
 
 import pandas as pd
@@ -12,6 +13,7 @@ import breos.projection as projection_module
 from breos.app import App
 from breos.app_config import merge_defaults, validate_config
 from breos.load_profiles import load_profile as real_load_profile
+from tests.conftest import _build_synthetic_weather, _patch_tmy_weather
 
 
 def test_app_rejects_invalid_profile_losses_temperature_and_montecarlo_keys():
@@ -720,21 +722,31 @@ class TestGcrValidation:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="class")
+def _simulated_app_result(request):
+    # Each worker owns its fixture. Grouping a class keeps its read-only
+    # simulation together; every assertion test gets its own result copy.
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        _patch_tmy_weather(monkeypatch, _build_synthetic_weather())
+        app = App(request.cls.CONFIG)
+        app.simulate()
+    return app.result()
+
+
+@pytest.mark.xdist_group("app_no_battery")
 class TestAppSimulateNoBattery:
+    CONFIG = {
+        "location": "porto",
+        "n_modules": 6,
+        "annual_consumption_kwh": 3000,
+        "cost_preset": "residential_pt",
+        "emissions_country": "PT",
+        "projection_years": 5,
+    }
+
     @pytest.fixture(autouse=True)
-    def _setup(self, _patch_weather):
-        self.app = App(
-            {
-                "location": "porto",
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
-                "cost_preset": "residential_pt",
-                "emissions_country": "PT",
-                "projection_years": 5,
-            }
-        )
-        self.app.simulate()
-        self.result = self.app.result()
+    def _setup(self, _simulated_app_result):
+        self.result = deepcopy(_simulated_app_result)
 
     def test_json_serializable(self):
         json.dumps(self.result)
@@ -940,23 +952,22 @@ def test_monthly_rows_follow_the_local_year_of_fixed_offset_weather(monkeypatch,
         assert sum(row[key] for row in monthly) == pytest.approx(year_one[key], abs=0.1)
 
 
+@pytest.mark.xdist_group("app_multi_array")
 class TestAppSimulateMultiArray:
+    CONFIG = {
+        "location": "porto",
+        "annual_consumption_kwh": 3000,
+        "cost_preset": "residential_pt",
+        "projection_years": 5,
+        "pv_arrays": [
+            {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
+            {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
+        ],
+    }
+
     @pytest.fixture(autouse=True)
-    def _setup(self, _patch_weather):
-        self.app = App(
-            {
-                "location": "porto",
-                "annual_consumption_kwh": 3000,
-                "cost_preset": "residential_pt",
-                "projection_years": 5,
-                "pv_arrays": [
-                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
-                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
-                ],
-            }
-        )
-        self.app.simulate()
-        self.result = self.app.result()
+    def _setup(self, _simulated_app_result):
+        self.result = deepcopy(_simulated_app_result)
 
     def test_arrays_are_echoed(self):
         assert self.result["n_modules"] == 6
@@ -1175,22 +1186,21 @@ class TestAppSimulateTracking:
         )
 
 
+@pytest.mark.xdist_group("app_with_battery")
 class TestAppSimulateWithBattery:
+    CONFIG = {
+        "location": "porto",
+        "n_modules": 6,
+        "annual_consumption_kwh": 3000,
+        "battery_kwh": 5.0,
+        "cost_preset": "residential_pt",
+        "emissions_country": "PT",
+        "projection_years": 5,
+    }
+
     @pytest.fixture(autouse=True)
-    def _setup(self, _patch_weather):
-        self.app = App(
-            {
-                "location": "porto",
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
-                "battery_kwh": 5.0,
-                "cost_preset": "residential_pt",
-                "emissions_country": "PT",
-                "projection_years": 5,
-            }
-        )
-        self.app.simulate()
-        self.result = self.app.result()
+    def _setup(self, _simulated_app_result):
+        self.result = deepcopy(_simulated_app_result)
 
     def test_battery_keys_present(self):
         assert "battery_soh_end_pct" in self.result
