@@ -1,10 +1,10 @@
 {
  "case": "first_home",
- "title": "Your first home",
- "breos_version": "0.7.0",
- "git_describe": "v0.6.2-610-gd29419b",
- "generated_utc": "2026-10-01T20:54:25+00:00",
- "runtime_s": 2.3,
+ "title": "PV and battery system in Porto",
+ "breos_version": "0.7.1",
+ "git_describe": "v0.7.0-104-gba568a1",
+ "generated_utc": "2026-11-12T16:35:04+00:00",
+ "runtime_s": 5.1,
  "cheap": true,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
@@ -16,7 +16,7 @@
   }
  },
  "dependencies": {
-  "python": "3.12.13",
+  "python": "3.13.14",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
@@ -31,7 +31,7 @@
   "summer": 27
  },
  "files": {
-  "result.json": "f15881a0937f40b4b2a19aab06ee99d0c0926f79b95e1ee5a1c329b2c645c292",
+  "result.json": "ee9f96e8f1b3e04b8e13306515a9011077ac535eb9d74daa53ad4e9caf20eedb",
   "week_winter.csv": "f2ecc5d21e3e61543c9874d27c41f11276a1f8c8e677b40618b600c58cf897a5",
   "week_summer.csv": "599ef11d587048e3957d092a0da54f4dced176f8f225621f06311f3cb9d997d2"
  }
