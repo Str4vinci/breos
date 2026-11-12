@@ -150,6 +150,13 @@ def _run(config):
     return app
 
 
+@pytest.fixture(scope="module")
+def _planner_app():
+    # The scaling and rejection checks use the same unmodified two-year plan.
+    # Copies below keep their public App calls isolated from each other.
+    return _run(PLANNER_RUN)
+
+
 # A money output is named for money and not for a physical unit; every one
 # must scale by K (a zero stays zero), and every other output must not move.
 _MONEY = re.compile(
@@ -197,9 +204,14 @@ def _assert_results_scale(base, scaled):
     return money
 
 
-@pytest.mark.parametrize("config", [BASE, TARIFF_RUN, PLANNER_RUN], ids=["flat", "tariff", "planner"])
-def test_scaling_every_money_input_scales_every_money_output(config):
-    base, scaled = _run(config), _run(_scaled_config(config, K, "JPY"))
+@pytest.mark.parametrize(
+    "config",
+    [BASE, TARIFF_RUN, pytest.param(PLANNER_RUN, marks=pytest.mark.xdist_group("currency_planner"))],
+    ids=["flat", "tariff", "planner"],
+)
+def test_scaling_every_money_input_scales_every_money_output(config, request):
+    base = deepcopy(request.getfixturevalue("_planner_app")) if config is PLANNER_RUN else _run(config)
+    scaled = _run(_scaled_config(config, K, "JPY"))
     base_result, scaled_result = base.result(), scaled.result()
 
     assert base_result["provenance"]["currency"] == "EUR"
@@ -371,8 +383,9 @@ def test_revalue_back_to_the_default_currency_restates_every_cost():
     assert flatten(defaults) == flatten(_run({**config, "currency": None, "costs": {}}).result())
 
 
-def test_revalue_refuses_a_currency_change_under_a_wear_cost():
-    base = _run(PLANNER_RUN)
+@pytest.mark.xdist_group("currency_planner")
+def test_revalue_refuses_a_currency_change_under_a_wear_cost(_planner_app):
+    base = deepcopy(_planner_app)
     scaled = _scaled_config(PLANNER_RUN, K, "JPY")
     weather_patch, load_patch = _offline()
     with weather_patch, load_patch:

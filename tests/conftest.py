@@ -279,9 +279,8 @@ def emissions_params():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def _patch_weather(monkeypatch, synthetic_weather):
-    """Monkeypatch fetch_tmy_weather_data so App tests never hit the network."""
+def _patch_tmy_weather(monkeypatch, synthetic_weather):
+    """Patch App weather using either a function or a scoped MonkeyPatch."""
 
     def _fake_fetch(*args, **kwargs):
         weather = synthetic_weather.copy()
@@ -298,3 +297,9 @@ def _patch_weather(monkeypatch, synthetic_weather):
 
     monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fake_fetch)
     monkeypatch.setattr("breos.app.load_weather", lambda **kw: None)  # force fetch path
+
+
+@pytest.fixture
+def _patch_weather(monkeypatch, synthetic_weather):
+    """Monkeypatch fetch_tmy_weather_data so App tests never hit the network."""
+    _patch_tmy_weather(monkeypatch, synthetic_weather)
