@@ -4,7 +4,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
-## [0.7.1] - 2026-11-12
+## [0.7.1] - 2026-11-13
 
 0.7.1 adds the library features that tariff and battery studies need. Runs
 that set none of the new keys give the same results as 0.7.0. The main
