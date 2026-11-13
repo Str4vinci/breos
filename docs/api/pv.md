@@ -13,7 +13,9 @@ The module-performance path uses the CEC six-parameter single-diode model.
 BREOS fits its parameters locally from catalogue or datasheet values with
 `breos.cec_fit`, then evaluates them with pvlib. It does not require PySAM and
 does not automatically import SAM/CEC component tables; those remain useful
-model documentation and comparison data.
+model documentation and comparison data. When a datasheet has no solution at
+its short-circuit current, the fit raises it by 1 % per step, as SAM does, and
+records the datasheet and fitted values in the result's `isc_adjustment`.
 
 ## Specified inverter data
 

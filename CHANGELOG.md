@@ -491,6 +491,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   cache of a 20-year Monte Carlo study about 29 s instead of 6 s, mostly for
   the one-minute solar positions. The default stays `"auto"`, so results
   are unchanged and the result format stays `"1"`.
+- `breos.cec_fit.fit_cec_params` records when it raised the short-circuit
+  current to make the fit feasible (SAM's heuristic: 1 % per step, up to
+  five steps). Its result is still the plain six-parameter tuple, now a
+  `CecFitParams` whose `isc_adjustment` holds the datasheet and fitted Isc
+  and the rise in percent, or None at the datasheet value; the Seraphim
+  SEG E11B 310 datasheet fits at 8.86 A × 1.01³ = 9.128 A, +3.03 %. No
+  fitted value changes, and no warning is raised.
 
 ### Changed
 
