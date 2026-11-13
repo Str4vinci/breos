@@ -708,6 +708,23 @@ removed in 0.9.0.
   0.21 kWh, the gap to the same strings on separate inputs. Single strings,
   unshaded strings and inputs with one string are unchanged.
 
+- Inverter temperature derating now only caps the AC output. It replaced
+  the inverter's rating by the derated rating everywhere, so the efficiency
+  curve and the PVWatts part-load ratio were read against the lower rating
+  and a derated inverter converted low power more efficiently than the same
+  inverter without derating: at 50 % derating on a 4 kW inverter, 200 W of
+  DC converted at 93.5 % instead of 88.9 % on a measured curve and at
+  91.9 % instead of 85.9 % with PVWatts. The curve and the part-load ratio
+  now stay on the nameplate, so below the derated limit AC output is the
+  same as without derating, and the DC above what the limit needs is
+  clipped. Results with temperature derating change: a 6.3 kWp Porto
+  system on a 5 kW inverter held to 80 % all year delivers 4.26 kWh less
+  AC in year 1 on a measured curve (−0.05 %) and 8.11 kWh less with
+  PVWatts (−0.09 %), with 6 to 7 kWh more clipped; with a 5 kWh battery,
+  15.68 kWh (−0.17 %) and 25.97 kWh (−0.29 %) less. In all four cases
+  self-consumption falls by 3.6 to 15.6 kWh, to its value without
+  derating. Runs without derating are unchanged.
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.

@@ -948,11 +948,13 @@ discharge alike, as they share the inverter; beside an AC-coupled battery it
 is the PV inverter's alone, and the battery inverter keeps its PVWatts curve.
 `inverter_efficiency` is then not used for the conversion.
 
-`temperature_derating` lowers the AC rating in hot ambients: the allowed
+`temperature_derating` caps the AC output in hot ambients: the allowed
 output as a fraction of the nameplate at each ambient, linear between the
 points and held beyond them. The ambient is the weather's air temperature,
 for an inverter outdoors, or `electrical_environment.inverter_ambient_temp_c`
-when you state it, for one indoors. DC above the derated rating is clipped;
+when you state it, for one indoors. The efficiency curve and the part-load
+ratio stay on the nameplate, so below the cap the conversion is the same as
+without derating. DC above what the cap needs is clipped;
 a DC-coupled battery may still store it, an AC-coupled one cannot. With several inverters, both keys need
 string-level energy, which applies each to its own inverter. The planned
 charging targets of `daily_persistence` are chosen on one row, the row of
