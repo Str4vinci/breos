@@ -7,8 +7,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [0.7.1] - 2026-11-13
 
 0.7.1 adds the library features that tariff and battery studies need. Runs
-that set none of the new keys give the same results as 0.7.0. The main
-changes:
+that set none of the new keys give the same results as 0.7.0, with two
+exceptions listed under Fixed: a 15-minute money total can move in its last
+digit on a multi-core machine, and a battery kept in service until its state
+of health reaches 0 is now retired. The main changes:
 
 - Currency selection: a top-level `currency` key takes any ISO 4217 code.
   BREOS does not convert, so a run in another currency than EUR sets its own
@@ -297,6 +299,14 @@ changes:
   the steps it served (32.65 % instead of 30.33 % for the second case).
   Runs whose pack never reaches zero health, every default run among them,
   are bit-identical.
+
+### Security
+
+- The lock file pins Pillow 13.0.0 instead of 12.3.0, which clears its open
+  security advisories, and certifi 2026.10.23, which drops the compromised
+  emSign intermediate certificates. Both are lock-only changes: Pillow comes
+  in only through the plotting, optimization, docs and dev extras, BREOS does
+  not import it, and the declared dependency ranges do not change.
 
 ## [0.7.0] - 2026-10-02
 
