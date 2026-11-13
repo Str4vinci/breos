@@ -92,6 +92,8 @@ def _spy_on_dispatch(monkeypatch, record):
 
     monkeypatch.setattr(battery, "_resolve_dispatch_day", _resolve)
     monkeypatch.setattr(_numba_dispatch, "require_numba_dispatch_day", lambda: reference)
+    # The numba backend also compiles the rainflow day scan; None is the reference scan.
+    monkeypatch.setattr(battery, "_resolve_rainflow_kernel", lambda execution_backend: None)
 
 
 @pytest.fixture
