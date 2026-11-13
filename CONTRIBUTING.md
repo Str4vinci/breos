@@ -121,11 +121,12 @@ uv run pytest tests/test_app.py -v
   the suite on the lowest supported dependency versions and without Numba.
   Draft PRs run nothing until you mark them ready for review, so open one as
   a draft while it is still in progress. A PR that changes only
-  documentation runs the suite and the docs build on Python 3.12 alone.
+  documentation runs the suite on Python 3.12 and the separate `quality-docs`
+  job, which runs lint, formatting, type checks and the strict docs build.
   The lightweight macOS/Windows public-entrypoint checks run on pushes to and
   PRs into `main` or `release/**`; the slow tests and the core-package
-  coverage report run on pushes to and PRs into `release/**`. All three also
-  run nightly and on demand.
+  coverage report run on pushes to and PRs into `release/**`. PRs from a
+  release branch also run all three, as does the workflow dispatch button.
 - Keep PRs focused — one feature or fix per PR
 
 ## Reporting Issues

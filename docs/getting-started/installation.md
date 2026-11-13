@@ -1,6 +1,6 @@
 # Installation
 
-BREOS requires Python 3.11 or newer.
+BREOS requires Python 3.11.5 or newer.
 
 ## From PyPI
 
