@@ -686,6 +686,14 @@ removed in 0.9.0.
   Non-finite values are still refused, and source data, including a
   15-minute file, is checked as before. Results do not change.
 
+- An hourly App or Monte Carlo run in a timezone with a fractional-hour UTC
+  offset, such as `Asia/Kolkata` (UTC+5:30), on weather stamped on whole UTC
+  hours now fails when the weather is loaded, with an error that names the
+  timezone and its offset and suggests `resolution = "15min"`. Before, the
+  weather and the load profile shared no instant, and the run failed late,
+  saying the house load had no finite value. Hourly weather already stamped
+  on the local hours is still accepted. Results do not change.
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.

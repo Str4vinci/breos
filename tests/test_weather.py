@@ -738,6 +738,93 @@ def test_fetch_tmy_rejects_fractional_hour_timezone_before_request(monkeypatch):
     assert requested is False
 
 
+_VALIDATION_WEATHER = Path(__file__).resolve().parents[1] / "validation" / "data" / "weather"
+_NEW_DELHI_TMY = _VALIDATION_WEATHER / "new_delhi_tmy_2005_2023_pvgis-era5.csv.gz"
+
+
+def _app_on_weather_file(weather_file, timezone, resolution, latitude=28.61, longitude=77.21):
+    from breos.app import App
+
+    app = App(
+        {
+            "location": {"latitude": latitude, "longitude": longitude, "timezone": timezone},
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "projection_years": 1,
+            "solar_position": "interval-start",
+            "weather_file": str(weather_file),
+            "resolution": resolution,
+        }
+    )
+    app.simulate()
+    return app.result()
+
+
+def test_hourly_weather_on_utc_hours_is_rejected_in_a_fractional_hour_timezone():
+    # The PVGIS TMY is stamped on whole UTC hours; the hourly load steps on
+    # local hours at UTC+5:30, so the two share no instant. This used to fail
+    # late, blaming an empty house load.
+    with pytest.raises(ValueError, match=r"whole UTC hours.*Asia/Kolkata \(UTC\+5:30\).*resolution = \"15min\""):
+        _app_on_weather_file(_NEW_DELHI_TMY, "Asia/Kolkata", "h")
+
+
+def test_fractional_hour_timezone_runs_at_15_minutes():
+    result = _app_on_weather_file(_NEW_DELHI_TMY, "Asia/Kolkata", "15min")
+
+    assert result["usable_ac_system_production_kwh"] > 0
+
+
+def test_hourly_weather_on_local_hours_runs_in_a_fractional_hour_timezone(tmp_path):
+    weather = read_weather_csv(_NEW_DELHI_TMY)
+    weather.index = (weather.index + pd.Timedelta(minutes=30)).tz_convert("+05:30")
+    weather.index.name = "time"
+    path = tmp_path / "new_delhi_local_hours.csv"
+    weather.to_csv(path)
+
+    result = _app_on_weather_file(path, "Asia/Kolkata", "h")
+
+    assert result["usable_ac_system_production_kwh"] > 0
+
+
+def test_hourly_weather_file_runs_in_a_whole_hour_timezone():
+    result = _app_on_weather_file(
+        _VALIDATION_WEATHER / "berlin_tmy_2005_2023_pvgis-sarah3.csv.gz",
+        "Europe/Berlin",
+        "h",
+        latitude=52.52,
+        longitude=13.40,
+    )
+
+    assert result["usable_ac_system_production_kwh"] > 0
+
+
+def test_hourly_monte_carlo_weather_on_utc_hours_is_rejected_in_a_fractional_hour_timezone(tmp_path):
+    from breos.montecarlo import MonteCarloSettings, run_montecarlo
+
+    tmy = read_weather_csv(_NEW_DELHI_TMY).tz_convert("UTC")
+    tmy = tmy[tmy.index.year == 2025]
+    hours = pd.date_range("2025-01-01", periods=8760, freq="h", tz="UTC")
+    year = tmy.reindex(hours).ffill().bfill()
+    years = []
+    for target in (2021, 2022):
+        frame = year.copy()
+        frame.index = hours.map(lambda stamp, target=target: stamp.replace(year=target))
+        years.append(frame)
+    path = tmp_path / "new_delhi_historical.csv"
+    pd.concat(years).rename_axis("date").to_csv(path)
+    config = {
+        "location": {"latitude": 28.61, "longitude": 77.21, "timezone": "Asia/Kolkata"},
+        "n_modules": 6,
+        "annual_consumption_kwh": 3000,
+        "projection_years": 1,
+        "solar_position": "interval-start",
+        "resolution": "h",
+    }
+
+    with pytest.raises(ValueError, match=r"whole UTC hours.*Asia/Kolkata \(UTC\+5:30\).*resolution = \"15min\""):
+        run_montecarlo(config, MonteCarloSettings(weather_file=str(path), n_runs=2, years_per_run=1, seed=1))
+
+
 @pytest.mark.parametrize("freq", ["30min", "15T", "H"])
 def test_read_epw_rejects_unsupported_frequency_before_reading(monkeypatch, freq):
     # 30min used to return the hourly file unchanged.
