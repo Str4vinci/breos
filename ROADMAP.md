@@ -38,7 +38,9 @@ for the tariff and smart-charging design.
 ## 0.7.1
 
 0.7.1 adds the library features that tariff and battery studies need. Runs that
-set none of the new keys give the same results as 0.7.0.
+set none of the new keys give the same results as 0.7.0, except that a 15-minute
+money total can move in its last digit on a multi-core machine and a battery
+whose state of health reaches 0 is now retired.
 
 - Currency selection: a top-level `currency` key takes any ISO 4217 code.
   BREOS does not convert, so a run in another currency than EUR sets its own
@@ -47,7 +49,8 @@ set none of the new keys give the same results as 0.7.0.
 - East–West layouts in the optimizer search space.
 - An annual network credit capped at the household's own network charges.
 - Daily-target planner options: `overlap_policy = "hold_target"`, an optional
-  battery-wear cost, and planning at the start of each charging window.
+  battery-wear cost, planning at the start of each charging window, and
+  planning on a day-ahead weather forecast.
 - Battery replacement control in App: replacements can be turned off or
   skipped near the end of the project, and a battery at end of life can be
   retired so the project finishes PV-only. Results list the battery's state
@@ -62,12 +65,13 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete list.
 
 - **0.8** — the 0.8.0 milestone on GitHub.
   - 15-minute irradiance from hourly data by quadrature reconstruction, with
-    GHI derived from DNI and DHI (#417).
+    GHI derived from DNI and DHI, as an option (#417).
   - The `solar_position` default changes from `"interval-start"` to
-    `"weather"`, which reads the representative time of each step from the
-    weather metadata (#418). This and the quadrature change both change
-    results and ship with one upgrade note, before the AC-coupled reference
-    cases are computed.
+    `"auto"`, which reads the representative time of each step from the
+    weather metadata when it states one, and otherwise keeps
+    `"interval-start"` with a warning (#418). This changes results for
+    weather files that state their time basis, and ships with an upgrade
+    note.
   - AC-coupled batteries as accepted in ADR 0004 (#419).
   - Vehicle-to-home (V2H), on top of the AC-coupled model (#420), implemented
     for App and paired Monte Carlo. ADR 0005 was accepted on 2026-10-24.
