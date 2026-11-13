@@ -25,6 +25,7 @@ from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its nam
     _ROW_COLUMNS,
     LEDGER_SCHEMA_VERSION,
     _dispatch_day_python,
+    _vehicle_charge_ahead,
     compute_cell_temperature,
 )
 from breos.constants import (
@@ -2455,8 +2456,10 @@ def _simulate_core(
             charge_v = np.isin(vehicle_tariff.period_labels, vehicle_config.charge_periods)
             if vehicle_config.discharge_periods:
                 discharge_v = np.isin(vehicle_tariff.period_labels, vehicle_config.discharge_periods)
+        ahead_v = _vehicle_charge_ahead(vehicle_schedule.steps_to_departure, charge_v)
         charge_v.setflags(write=False)
         discharge_v.setflags(write=False)
+        ahead_v.setflags(write=False)
         vehicle_state = dict(
             vehicle_config=vehicle_config,
             vehicle_schedule=vehicle_schedule,
@@ -2470,6 +2473,7 @@ def _simulate_core(
             else bool(vehicle_carry.plugged),
             vehicle_charge_period=charge_v,
             vehicle_discharge_period=discharge_v,
+            vehicle_charge_ahead=ahead_v,
             grid_import_limit_w=grid_import_limit_w,
         )
 

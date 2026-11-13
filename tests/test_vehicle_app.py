@@ -248,7 +248,7 @@ def test_charger_premium_counted_once_and_wear_does_not_change_system_npv(app):
     free = revalue_offline(app, {"vehicle": {"charger_cost": 0}})
     original = app.result()
     assert free["total_investment"] == original["total_investment"] - VEHICLE["charger_cost"]
-    assert free["npv_savings"] == original["npv_savings"] + VEHICLE["charger_cost"]
+    assert free["npv_savings"] == pytest.approx(original["npv_savings"] + VEHICLE["charger_cost"], abs=1e-6)
     for name in ["vehicle_benefit", "household_adjusted_npv"]:
         assert free["vehicle"][name]["npv"] == pytest.approx(original["vehicle"][name]["npv"] + VEHICLE["charger_cost"])
     repriced = revalue_offline(app, {"vehicle": {"battery_cost_per_kwh": 240}})

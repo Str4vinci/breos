@@ -1459,7 +1459,10 @@ With a `[tariff]`, `charge_periods = ["off_peak"]` permits opportunistic grid
 charging in those periods. The guard may charge outside them. Grid charging
 stops at `departure_soc`; surplus PV may charge V1G/V2H to `max_soc`.
 `discharge_periods = ["peak"]` limits V2H discharge. Omit it to allow discharge
-at any time. Charge and discharge periods must be disjoint. Uncontrolled
+at any time. With `charge_periods` set, V2H does not discharge below
+`departure_soc` when no charge-period step remains before the next departure;
+energy above the target may still be discharged. Charge and discharge periods
+must be disjoint. Uncontrolled
 mode refuses period controls. The vehicle uses one direction per step.
 
 The shared site limit is `[smart_charging].grid_import_limit_w`. It counts
