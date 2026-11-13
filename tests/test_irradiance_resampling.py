@@ -1,5 +1,7 @@
 """Hourly irradiance policy, dawn/dusk support and public runner wiring."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -517,3 +519,41 @@ def test_partial_column_resampling_still_works(columns):
     result = resample_to_15min(source, **COORDINATES)
     assert list(result.columns) == columns
     assert np.isfinite(result.to_numpy()).all()
+
+
+# The committed hourly TMY files, with each site's coordinates and civil timezone.
+COMMITTED_TMY_DIR = Path(__file__).resolve().parents[1] / "validation" / "data" / "weather"
+COMMITTED_TMY_SITES = {
+    "berlin_tmy_2005_2023_pvgis-sarah3.csv.gz": (52.52, 13.40, "Europe/Berlin"),
+    "golden_colorado_tmy_2005_2023_pvgis-era5.csv.gz": (39.74, -105.18, "America/Denver"),
+    "melbourne_tmy_2005_2023_pvgis-era5.csv.gz": (-37.81, 144.96, "Australia/Melbourne"),
+    "nairobi_tmy_2005_2023_pvgis-sarah3.csv.gz": (-1.29, 36.82, "Africa/Nairobi"),
+    "new_delhi_tmy_2005_2023_pvgis-era5.csv.gz": (28.61, 77.21, "Asia/Kolkata"),
+    "porto_tmy_2005_2023_pvgis-sarah3.csv.gz": (41.15, -8.61, "Europe/Lisbon"),
+    "sao_paulo_tmy_2005_2023_pvgis-sarah3.csv.gz": (-23.55, -46.63, "America/Sao_Paulo"),
+}
+
+
+def test_every_committed_tmy_file_is_listed():
+    assert sorted(path.name for path in COMMITTED_TMY_DIR.glob("*.csv.gz")) == sorted(COMMITTED_TMY_SITES)
+
+
+# Resampled weather can break the GHI/DHI rule on a few steps although its
+# hourly source passes (Berlin, one step); PV extraction must still run.
+@pytest.mark.parametrize("name", list(COMMITTED_TMY_SITES))
+def test_committed_tmy_runs_at_15_minutes(name, no_fetch):
+    latitude, longitude, timezone = COMMITTED_TMY_SITES[name]
+    app = App(
+        {
+            "location": {"latitude": latitude, "longitude": longitude, "timezone": timezone},
+            "weather_file": str(COMMITTED_TMY_DIR / name),
+            "n_modules": 10,
+            "annual_consumption_kwh": 3000,
+            "start_date": "2025-01-01",
+            "resolution": "15min",
+            "projection_years": 1,
+            "solar_position": "interval-start",
+        }
+    )
+    app.simulate()
+    assert app.result()["pv_dc_generation_kwh"] > 0

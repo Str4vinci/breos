@@ -670,6 +670,15 @@ removed in 0.9.0.
   with positive DHI, which would otherwise divide by zero during transposition
   (#439).
 
+- Hourly weather that passes the GHI/DHI check no longer fails it at
+  15 minutes. The resampler reconstructs GHI and DHI separately, so its
+  output could exceed the tolerance on a few steps (one step for the
+  committed Berlin and São Paulo TMY files). PV extraction and
+  terrain-horizon shading now skip the GHI/DHI check for weather that
+  BREOS resampled, since the hourly source was checked before resampling.
+  Non-finite values are still refused, and source data, including a
+  15-minute file, is checked as before. Results do not change.
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.
