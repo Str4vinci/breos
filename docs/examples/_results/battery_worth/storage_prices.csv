@@ -15,9 +15,9 @@ battery_kwh,storage_cost_per_kwh,npv_savings,payback_year,total_investment,metho
 5.0,475,4973.24,13,7663.85,repriced
 5.0,500,4734.98,13,7788.85,repriced
 5.0,525,4496.72,14,7913.85,repriced
-5.0,550,4258.47,14,8038.85,repriced
-5.0,575,4020.21,14,8163.85,repriced
-5.0,600,3781.95,15,8288.85,repriced
+5.0,550,4258.46,14,8038.85,repriced
+5.0,575,4020.2,14,8163.85,repriced
+5.0,600,3781.94,15,8288.85,repriced
 10.0,150,8783.9,8,6788.85,repriced
 10.0,175,8307.74,8,7038.85,repriced
 10.0,200,7831.59,8,7288.85,repriced

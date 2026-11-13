@@ -1,7 +1,7 @@
 import_price_escalation,peak_price,npv_savings,payback_year,method
 0.0,0.18,-528.75,,repriced
-0.0,0.231,1467.26,17.0,repriced
-0.0,0.28,3384.99,14.0,repriced
+0.0,0.231,1467.25,17.0,repriced
+0.0,0.28,3384.98,14.0,repriced
 0.0,0.33,5341.85,12.0,repriced
 0.01,0.18,159.39,20.0,repriced
 0.01,0.231,2334.56,16.0,repriced
@@ -12,12 +12,12 @@ import_price_escalation,peak_price,npv_savings,payback_year,method
 0.02,0.28,5589.64,13.0,repriced
 0.02,0.33,7919.09,8.0,repriced
 0.03,0.18,1796.19,17.0,repriced
-0.03,0.231,4397.67,14.0,repriced
+0.03,0.231,4397.66,14.0,repriced
 0.03,0.28,6897.12,12.0,repriced
 0.03,0.33,9447.58,8.0,repriced
 0.04,0.18,2768.1,16.0,repriced
-0.04,0.231,5622.8,13.0,repriced
-0.04,0.28,8365.54,9.0,repriced
+0.04,0.231,5622.79,13.0,repriced
+0.04,0.28,8365.53,9.0,repriced
 0.04,0.33,11164.25,8.0,repriced
 0.05,0.18,3860.44,15.0,repriced
 0.05,0.231,6999.79,13.0,repriced

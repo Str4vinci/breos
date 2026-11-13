@@ -254,7 +254,7 @@
    {
     "year": 10,
     "balance": 184.34,
-    "cost_with_system": 10433.75,
+    "cost_with_system": 10433.76,
     "cost_without_system": 10618.1
    },
    {
@@ -265,7 +265,7 @@
    },
    {
     "year": 12,
-    "balance": -588.26,
+    "balance": -588.27,
     "cost_with_system": 13208.48,
     "cost_without_system": 12620.21
    },
@@ -283,13 +283,13 @@
    },
    {
     "year": 15,
-    "balance": 1523.7,
+    "balance": 1523.69,
     "cost_with_system": 14027.39,
     "cost_without_system": 15551.08
    },
    {
     "year": 16,
-    "balance": 2195.27,
+    "balance": 2195.26,
     "cost_with_system": 14313.86,
     "cost_without_system": 16509.13
    },
