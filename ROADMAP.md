@@ -38,7 +38,9 @@ for the tariff and smart-charging design.
 ## 0.7.1
 
 0.7.1 adds the library features that tariff and battery studies need. Runs that
-set none of the new keys give the same results as 0.7.0.
+set none of the new keys give the same results as 0.7.0, except that a 15-minute
+money total can move in its last digit on a multi-core machine and a battery
+whose state of health reaches 0 is now retired.
 
 - Currency selection: a top-level `currency` key takes any ISO 4217 code.
   BREOS does not convert, so a run in another currency than EUR sets its own
@@ -47,7 +49,8 @@ set none of the new keys give the same results as 0.7.0.
 - East–West layouts in the optimizer search space.
 - An annual network credit capped at the household's own network charges.
 - Daily-target planner options: `overlap_policy = "hold_target"`, an optional
-  battery-wear cost, and planning at the start of each charging window.
+  battery-wear cost, planning at the start of each charging window, and
+  planning on a day-ahead weather forecast.
 - Battery replacement control in App: replacements can be turned off or
   skipped near the end of the project, and a battery at end of life can be
   retired so the project finishes PV-only. Results list the battery's state
