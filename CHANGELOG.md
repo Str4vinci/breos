@@ -680,6 +680,21 @@ removed in 0.9.0.
   requiring the base, which the sweep never runs, and says how many points it
   checked.
 
+- `evaluate_projected_design` checks only what the design reads (#441). A
+  design without a battery is no longer asked for battery prices or for
+  `constraints.budget` in a non-EUR run, whatever the search bounds say; a
+  fixed design reads no `[constraints]`. An AC-coupled design with a battery
+  is asked for its inverter keys even when `constraints.max_battery_kwh` is 0,
+  where it used to fail with a `TypeError`. Tilt bounds without a multiple of
+  5° are refused only for a search with a tilt gene, not for a fixed design or
+  an East-West search. Results do not change.
+
+- A search that finds no feasible design raises `NoFeasibleDesignError`, a
+  `RuntimeError`, whose message names each constraint the scored designs
+  break and how many break it, and whose `evaluated` attribute holds the
+  table of scored designs. It used to give a bare message. Results do not
+  change.
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.

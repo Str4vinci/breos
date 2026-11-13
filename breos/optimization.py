@@ -39,7 +39,6 @@ from breos.optimization_config import (
     LAYOUTS,
     ORIENTATION_STEP_DEG,
     adjusted_max_tilt_deg,
-    check_design_currency,
     resolve_optimization_config,
     resolve_run_settings,
 )
@@ -98,6 +97,22 @@ class OptimizationResult:
             stacklevel=2,
         )
         return float("nan")
+
+
+class NoFeasibleDesignError(RuntimeError):
+    """A search scored no design that meets its constraints.
+
+    ``evaluated`` is the table of every design the search scored, as
+    ``details["evaluated"]`` of a successful run.
+    """
+
+    def __init__(self, message: str, evaluated: pd.DataFrame) -> None:
+        super().__init__(message)
+        self.evaluated = evaluated
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # Pickled with its table, so a search run in a worker process can raise it.
+        return (type(self), (str(self), self.evaluated))
 
 
 @dataclass
@@ -998,12 +1013,10 @@ def evaluate_projected_design(
     # and reports the cheap problem late.
     require_backend(execution_backend)
 
-    resolved = resolve_optimization_config(config)
-    check_design_currency(resolved, float(battery_kwh))
     study = _DesignStudy.resolve(
         tmy_data,
         houseload,
-        resolved,
+        resolve_optimization_config(config, battery_kwh=float(battery_kwh)),
         battery_kwh=float(battery_kwh),
         execution_backend=execution_backend,
         weather_by_year=weather_by_year,
@@ -1392,6 +1405,33 @@ def _evaluated_designs(problem: Any) -> pd.DataFrame:
     return table
 
 
+# Each constraint column and the setting it checks.
+_CONSTRAINT_SETTINGS = {
+    "Constraint_Budget": "constraints.budget",
+    "Constraint_Area": "constraints.max_area_m2",
+    "Constraint_ZEB": "constraints.enforce_zeb",
+}
+
+
+def _no_feasible_message(evaluated: pd.DataFrame) -> str:
+    """Name the constraints the evaluated designs break, most often broken first, with counts."""
+    total = len(evaluated)
+    counts = {
+        setting: int((evaluated[column] > 0.0).sum())
+        for column, setting in _CONSTRAINT_SETTINGS.items()
+        if column in evaluated
+    }
+    broken = sorted((item for item in counts.items() if item[1]), key=lambda item: -item[1])
+    named = "; ".join(
+        f"{setting} by every design ({count} of {total})" if count == total else f"{setting} by {count} of {total}"
+        for setting, count in broken
+    )
+    return (
+        f"Multi-objective optimization found no feasible solutions among the {total} designs it scored. "
+        f"Constraints broken: {named or 'none'}."
+    )
+
+
 def optimize_system_multi_objective(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -1450,7 +1490,9 @@ def optimize_system_multi_objective(
 
     Raises:
         ImportError: If pymoo is not installed.
-        RuntimeError: If the optimizer returns no feasible solution.
+        NoFeasibleDesignError: If the optimizer returns no feasible solution. It
+            is a ``RuntimeError``; its message names the constraints the scored
+            designs break, and its ``evaluated`` attribute holds them.
     """
     if _PYMOO_IMPORT_ERROR is not None:
         raise ImportError(
@@ -1518,14 +1560,15 @@ def optimize_system_multi_objective(
             pool.close()
             pool.join()
 
+    evaluated = _evaluated_designs(problem)
     if result.X is None or result.F is None:
-        raise RuntimeError("Multi-objective optimization found no feasible solutions.")
+        evaluated.attrs["currency"] = problem.study.pricing.currency
+        raise NoFeasibleDesignError(_no_feasible_message(evaluated), evaluated)
 
     # pymoo stores every ``out`` value on the evaluated individual, so the
     # Pareto diagnostics are already available even when workers performed
     # the scoring.
     pareto = _design_table(problem, np.atleast_2d(result.X), [individual.data for individual in result.opt])
-    evaluated = _evaluated_designs(problem)
     evaluation_counts = {
         "evaluations": int(sum(problem.score_requests.values())),
         "simulations": len(problem.scored),

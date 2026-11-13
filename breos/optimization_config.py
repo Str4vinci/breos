@@ -440,16 +440,6 @@ def _currency(resolved: Mapping[str, Any], *, battery_kwh: float | None = None) 
     return currency
 
 
-def check_design_currency(resolved: Mapping[str, Any], battery_kwh: float) -> None:
-    """Check a fixed design's prices are in the run currency, for the battery it installs.
-
-    :func:`resolve_optimization_config` checks the costs a search may read, by
-    its battery bound; a design evaluated outside the search can install a
-    battery that bound excludes.
-    """
-    _currency(resolved, battery_kwh=battery_kwh)
-
-
 def adjusted_max_tilt_deg(latitude: float, margin_deg: float) -> float:
     """The ``max_tilt_deg = "adjust"`` bound: 5° × round((|latitude| + margin) / 5), within 60–90°."""
     return float(min(max(5.0 * round((abs(float(latitude)) + float(margin_deg)) / 5.0), 60.0), 90.0))
@@ -494,12 +484,17 @@ def _check_battery_coupling(battery: Mapping[str, Any], costs: Mapping[str, Any]
         )
 
 
-def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
+def resolve_optimization_config(config: Mapping[str, Any], *, battery_kwh: float | None = None) -> dict[str, Any]:
     """Check an optimization config and return it with every default filled in.
 
     The input is left unchanged. Resolving a resolved config gives it back,
     so an entry point can resolve what it is handed without knowing whether a
     caller already did.
+
+    ``battery_kwh`` is a fixed design's installed battery. It replaces
+    ``constraints.max_battery_kwh`` in the price and coupling checks, and the
+    checks of what only a search reads (the budget's currency, the tilt grid)
+    are skipped: a fixed design reads no ``[constraints]``.
 
     Raises:
         TypeError: If a table is not a mapping or a value has the wrong type.
@@ -628,8 +623,8 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
     constraints = resolved.setdefault("constraints", {}) or {}
     resolved["constraints"] = constraints
-    resolved["currency"] = _currency(resolved)
-    if resolved["currency"] != DEFAULT_CURRENCY and "budget" not in constraints:
+    resolved["currency"] = _currency(resolved, battery_kwh=battery_kwh)
+    if battery_kwh is None and resolved["currency"] != DEFAULT_CURRENCY and "budget" not in constraints:
         raise ValueError(
             f"The run is in {resolved['currency']}, but constraints.budget would default to "
             f"{DEFAULT_BUDGET:g} {DEFAULT_CURRENCY}. BREOS does not convert currencies: set constraints.budget in "
@@ -643,7 +638,9 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     constraints.setdefault("max_tilt_deg", DEFAULT_MAX_TILT_DEG)
     constraints.setdefault("tilt_margin_deg", DEFAULT_TILT_MARGIN_DEG)
     constraints.setdefault("enforce_zeb", False)
-    _check_battery_coupling(battery, resolved["costs"], constraints["max_battery_kwh"])
+    _check_battery_coupling(
+        battery, resolved["costs"], constraints["max_battery_kwh"] if battery_kwh is None else battery_kwh
+    )
     max_tilt = constraints["max_tilt_deg"]
     if max_tilt == "adjust":
         max_tilt = adjusted_max_tilt_deg(location["latitude"], constraints["tilt_margin_deg"])
@@ -651,12 +648,6 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(
             f"constraints.min_tilt_deg ({constraints['min_tilt_deg']:g}) is above the maximum tilt "
             f"({max_tilt:g}); lower it or raise constraints.max_tilt_deg"
-        )
-    step = ORIENTATION_STEP_DEG
-    if math.ceil(constraints["min_tilt_deg"] / step) * step > math.floor(max_tilt / step) * step:
-        raise ValueError(
-            f"The tilt range {constraints['min_tilt_deg']:g}–{max_tilt:g}° holds no multiple of {step:g}°, the "
-            "search's tilt grid; widen constraints.min_tilt_deg or constraints.max_tilt_deg to include one"
         )
 
     mode = resolved.setdefault("mode", {}) or {}
@@ -668,6 +659,18 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "mode.fixed_azimuth sets the azimuth of the single-array layout, which mode.layouts does not "
             "search; remove mode.fixed_azimuth or add 'single' to mode.layouts"
+        )
+    # Only the single layout's tilt gene is on the grid; an East-West search
+    # fixes its tilt, and a fixed design brings its own.
+    step = ORIENTATION_STEP_DEG
+    if (
+        battery_kwh is None
+        and "single" in mode["layouts"]
+        and math.ceil(constraints["min_tilt_deg"] / step) * step > math.floor(max_tilt / step) * step
+    ):
+        raise ValueError(
+            f"The tilt range {constraints['min_tilt_deg']:g}–{max_tilt:g}° holds no multiple of {step:g}°, the "
+            "search's tilt grid; widen constraints.min_tilt_deg or constraints.max_tilt_deg to include one"
         )
 
     optimization = resolved.setdefault("optimization", {}) or {}
