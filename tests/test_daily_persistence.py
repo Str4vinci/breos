@@ -874,7 +874,7 @@ def test_python_at_15_minutes_recommends_numba_once(backend, resolution, warned)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         simulate_offline(config)
-    recommended = [item for item in caught if "execution_backend = 'numba'" in str(item.message)]
+    recommended = [item for item in caught if "breos[fast] extra" in str(item.message)]
     assert len(recommended) == (1 if warned else 0)
     if warned:
         assert recommended[0].category is UserWarning
@@ -896,7 +896,7 @@ def test_the_daily_mode_takes_hold_target():
         dataclasses.replace(direct, overlap_policy="reject")
 
 
-@pytest.mark.filterwarnings("ignore:.*execution_backend = 'numba'")
+@pytest.mark.filterwarnings("ignore:.*slow on the Python backend")
 def test_always_dispatch_holds_each_days_planned_target_at_15_minutes():
     app = simulate_offline({**WINDOW, "resolution": "15min", "period": JANUARY, "smart_charging": {**ALWAYS, **COARSE}})
     assert app.result()["provenance"]["smart_charging"]["overlap_policy"] == "hold_target"

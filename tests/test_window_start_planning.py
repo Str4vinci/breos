@@ -350,7 +350,7 @@ def test_the_window_boundary_gives_bihourly_windows_one_target_where_civil_days_
     assert np.isfinite(targets[2:]).all()
 
 
-@pytest.mark.filterwarnings("ignore:.*execution_backend = 'numba'")
+@pytest.mark.filterwarnings("ignore:.*slow on the Python backend")
 def test_a_held_window_has_one_floor_across_midnight():
     config = {**WINDOW, "resolution": "15min", "period": BIHOURLY_WEEK}
     app = simulate_offline({**config, "smart_charging": {**ALWAYS, **COARSE, **WINDOWED}})
@@ -364,7 +364,7 @@ def test_a_held_window_has_one_floor_across_midnight():
     assert executed.discharge_allowed.all()
 
 
-@pytest.mark.filterwarnings("ignore:.*execution_backend = 'numba'")
+@pytest.mark.filterwarnings("ignore:.*slow on the Python backend")
 def test_a_weekly_cycle_weekend_is_one_window():
     # 2026 weekly cycle, winter: Saturday off-peak 00:00-09:30, 13:00-18:30
     # and from 22:00 through Sunday to Monday 07:00; weekdays 00:00-07:00.
