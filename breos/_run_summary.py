@@ -101,14 +101,26 @@ def _system(result: dict[str, Any]) -> str:
 
 def _energy_block(result: dict[str, Any]) -> list[str]:
     vehicle_year = _vehicle_study_year1(result)
-    lines = _metric_row(result, "PV generation (DC)", "pv_dc_generation_kwh", "kWh")
+    # The self-consumption percentage is on the AC PV that reached the house
+    # or the grid, so that is the production figure shown. With a vehicle it
+    # leaves out PV that charged the vehicle (only PV the vehicle gave back to
+    # the house counts), so both lines say they cover the house only.
+    if vehicle_year is None:
+        production_label, self_label, self_words = "PV delivered (AC)", "Self-consumed PV", "of delivered PV"
+    else:
+        production_label, self_label, self_words = (
+            "PV to house and grid (AC)",
+            "PV used by the house",
+            "of PV to house and grid",
+        )
+    lines = _metric_row(result, production_label, "usable_ac_system_production_kwh", "kWh")
     lines += _metric_row(result, "House load", "consumption_kwh", "kWh")
     if vehicle_year is not None:
         pv_charge = _value(vehicle_year, "pv_ac_charge_kwh") or 0.0
         charge = pv_charge + (_value(vehicle_year, "grid_ac_charge_kwh") or 0.0)
         lines.append(_row("Vehicle charging at home", _number(charge), "kWh", f"{_number(pv_charge)} kWh from PV"))
-    self_note = _percent_note(result, "self_consumption_pct", "of PV used on site")
-    lines += _metric_row(result, "Self-consumed PV", "self_consumption_kwh", "kWh", note=self_note)
+    self_note = _percent_note(result, "self_consumption_pct", self_words)
+    lines += _metric_row(result, self_label, "self_consumption_kwh", "kWh", note=self_note)
     # Grid independence compares the import with the house load alone, so it
     # says nothing useful once the import also charges a vehicle.
     if vehicle_year is None:

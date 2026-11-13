@@ -65,7 +65,7 @@ def test_a_terminal_gets_the_summary_and_a_pipe_gets_the_json(config_path, capsy
     result = json.loads(piped)
 
     assert shown.splitlines()[0].startswith(f"BREOS {result['provenance']['breos_version']}, home.toml, Porto")
-    assert f"  PV generation (DC)  {_number(result['pv_dc_generation_kwh']):>14} kWh" in shown
+    assert f"  PV delivered (AC)  {_number(result['usable_ac_system_production_kwh']):>15} kWh" in shown
     assert f"{_number(result['grid_independence_pct'], 1)} % grid independence" in shown
     assert f"Net present value  {_number(result['npv_savings']):>15} EUR" in shown
     assert "Battery over 2 years" in shown
@@ -138,6 +138,60 @@ def test_vehicle_rows_replace_grid_independence():
     assert "grid independence" not in shown
     assert "Discounted payback        not within 3 years" in shown
     assert "V2H benefit vs V1G           -2497 EUR       not comparable" in shown
+
+
+def _row_numbers(shown, label):
+    """The kWh value and the note's percentage (or None) on the row starting with ``label``."""
+    row = next(line for line in shown.splitlines() if line.startswith(f"  {label}"))
+    value, _, note = row[2 + 26 :].partition(" kWh")
+    percent = note.split(" %")[0].strip() if " %" in note else None
+    return float(value.replace(" ", "")), None if percent is None else float(percent)
+
+
+# Year 1 of a stored PV and 5 kWh battery run.
+ENERGY = {
+    "pv_dc_generation_kwh": 8660.42,
+    "usable_ac_system_production_kwh": 8141.63,
+    "consumption_kwh": 4000.0,
+    "self_consumption_kwh": 3152.25,
+    "self_consumption_pct": 38.72,
+    "grid_import_kwh": 843.87,
+    "grid_export_kwh": 4989.38,
+    "grid_independence_pct": 78.9,
+}
+
+
+def test_self_consumption_percentage_is_on_the_production_figure_shown():
+    shown = format_run_summary(ENERGY)
+    production, _ = _row_numbers(shown, "PV delivered (AC)")
+    self_consumed, percent = _row_numbers(shown, "Self-consumed PV")
+
+    assert percent == round(self_consumed / production * 100, 1) == 38.7
+    assert "38.7 % of delivered PV" in shown
+    assert "(DC)" not in shown
+
+
+def test_vehicle_run_labels_self_consumption_as_house_only():
+    # Stored V2H year 1: the usable AC figure is house self-consumption plus
+    # export (3150.44 + 4242.91); the 758 kWh of PV that charged the vehicle
+    # is in neither, so the percentage covers the house only.
+    result = {
+        **ENERGY,
+        "usable_ac_system_production_kwh": 7393.35,
+        "self_consumption_kwh": 3150.44,
+        "self_consumption_pct": 42.61,
+        "grid_import_kwh": 4202.41,
+        "grid_export_kwh": 4242.91,
+        "vehicle": {"households": {"R2": {"yearly": [{"pv_ac_charge_kwh": 758.2, "grid_ac_charge_kwh": 3485.9}]}}},
+    }
+    shown = format_run_summary(result)
+    production, _ = _row_numbers(shown, "PV to house and grid (AC)")
+    house, percent = _row_numbers(shown, "PV used by the house")
+
+    assert percent == round(house / production * 100, 1) == 42.6
+    assert "  PV used by the house          3150 kWh       42.6 % of PV to house and grid" in shown
+    assert "used on site" not in shown
+    assert "Self-consumed PV" not in shown
 
 
 def test_missing_values_leave_their_lines_out():
