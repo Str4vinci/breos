@@ -397,7 +397,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - `execution_backend` defaults to the new value `"auto"` in App, the CLI,
   Monte Carlo, community runs and the optimizer entry points: the compiled
   dispatch when Numba is installed (the `breos[fast]` extra), the Python
-  dispatch otherwise. Results are identical, since the two backends are
+  dispatch otherwise, and also when `NUMBA_DISABLE_JIT` is set. Results
+  are identical, since the two backends are
   bit-identical by test. Without Numba nothing changes and nothing is
   warned. `"python"` and `"numba"` keep their meaning, and `"numba"` without
   the extra still fails before the run starts. The `execution` provenance

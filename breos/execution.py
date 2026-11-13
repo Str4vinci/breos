@@ -104,8 +104,9 @@ def validate_requested_backend(execution_backend: Any) -> str:
 def resolve_execution_backend(execution_backend: Any) -> str:
     """Return the backend that runs for a requested name.
 
-    ``"auto"`` is ``"numba"`` when Numba can be imported and ``"python"``
-    otherwise, without a warning: the two give the same numbers. The other
+    ``"auto"`` is ``"numba"`` when Numba can be imported and compiles
+    (``NUMBA_DISABLE_JIT`` is not set) and ``"python"`` otherwise, without a
+    warning: the two give the same numbers. The other
     names are returned as they are, so ``"numba"`` without Numba still fails
     in :func:`require_backend` with the install hint. Called once per run or
     study, where its config is resolved, never per step or per day.
@@ -113,9 +114,9 @@ def resolve_execution_backend(execution_backend: Any) -> str:
     requested = validate_requested_backend(execution_backend)
     if requested != "auto":
         return requested
-    from breos._numba_dispatch import numba_available
+    from breos._numba_dispatch import numba_available, numba_jit_enabled
 
-    return "numba" if numba_available() else "python"
+    return "numba" if numba_available() and numba_jit_enabled() else "python"
 
 
 def require_backend(execution_backend: str) -> str:
