@@ -243,7 +243,9 @@ def calculate_costs(
         Dictionary with cost breakdown and totals. ``replacement_cost_each``
         is what the projection prices each simulated replacement at, and
         ``battery_inverter_cost``, part of ``total_initial_cost``, is 0 unless
-        an AC-coupled battery is priced.
+        an AC-coupled battery is priced. ``pv_cost``, ``inverter_cost``,
+        ``battery_cost``, ``battery_inverter_cost``, ``installation_cost``,
+        ``other_costs`` and ``land_cost`` sum to ``total_initial_cost``.
 
     Raises:
         ValueError: If an AC-coupled battery has no battery inverter price or
@@ -333,6 +335,7 @@ def calculate_costs(
         "battery_inverter_cost": battery_inverter_cost,
         "installation_cost": installation_cost,
         "other_costs": other_costs,
+        "land_cost": float(cost_params.land_cost),
         "replacement_cost_each": (
             replacement_event_cost(battery_capacity_wh / 1000, cost_params.battery_cost_per_kwh)
             if replacement_cost_each is None
@@ -823,7 +826,13 @@ def value_year_rows(
             if "Replacement_Year_Fraction" in year_rows.columns
             else None
         ),
-        replacement_base > 0.0,
+        # A year with a swap, priced or free: a free swap still has an instant.
+        (replacement_base > 0.0)
+        | (
+            pd.to_numeric(year_rows["Replacements"], errors="coerce").fillna(0.0).to_numpy() > 0.0
+            if "Replacements" in year_rows.columns
+            else False
+        ),
     )
     flows["Replacement_Time_Years"] = replacement_time
     flows["Cost_Replacement"] = _replacement_outlay(

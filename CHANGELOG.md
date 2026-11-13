@@ -812,6 +812,20 @@ removed in 0.9.0.
   Runs whose pack never reaches zero health, every default run among them,
   are bit-identical.
 
+- `calculate_costs` returns `land_cost` with the other CAPEX components, so
+  `pv_cost`, `inverter_cost`, `battery_cost`, `battery_inverter_cost`,
+  `installation_cost`, `other_costs` and `land_cost` sum to
+  `total_initial_cost`. Before, `land_cost` was counted in the total but
+  missing from the returned components. `total_initial_cost` and every
+  other number are unchanged.
+
+- A free battery replacement (`battery_replacement_cost = 0`) reports the
+  instant of its swap. The financial rows' `replacement_time_years` was
+  None in every year because the booking time was tied to a positive
+  replacement cost; it is now set in every year with a swap. The money
+  columns stay 0 for a free swap, and runs with a priced replacement are
+  bit-identical.
+
 ### Documentation
 - A new page, How BREOS models PV modules, explains string-level detail:
   cells, bypass diodes and reverse bias; which module technologies it
