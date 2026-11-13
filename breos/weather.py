@@ -63,6 +63,12 @@ def validate_weather_irradiance(weather: pd.DataFrame, irradiance: dict[str, np.
     extraction can pass its already converted arrays under their actual column
     names; resampling and horizon processing validate source columns directly.
     Night rows follow the same policy as daylight rows.
+
+    The GHI/DHI rule checks source data. Weather whose metadata records that
+    :func:`resample_to_15min` produced it skips that rule, because the
+    resampler reconstructs GHI and DHI separately and can break it on a few
+    steps although its hourly source passed; the source was checked before
+    resampling. Non-finite values are refused in every frame.
     """
     if irradiance is None:
         irradiance = {
@@ -78,6 +84,9 @@ def validate_weather_irradiance(weather: pd.DataFrame, irradiance: dict[str, np.
                 f"(first at {weather.index[int(np.flatnonzero(bad)[0])]}). Fill them explicitly before computing PV."
             )
 
+    metadata = weather.attrs.get(WEATHER_METADATA_KEY)
+    if isinstance(metadata, dict) and "irradiance_resampling_method" in metadata:
+        return
     ghi_column = find_irradiance_column(irradiance, "ghi")
     dhi_column = find_irradiance_column(irradiance, "dhi")
     if ghi_column is None or dhi_column is None:
