@@ -219,6 +219,20 @@ class TestAppValidation:
             ),
             pytest.param({"location": "oporto"}, ValueError, r"did you mean 'porto'\?", id="location-key-typo"),
             pytest.param(
+                {"battery_indoor_model": "weather"},
+                TypeError,
+                r"^'battery_indoor_model' must be a table with the optional keys enabled, setpoint_c, coupling_alpha, "
+                r"floor_c and ceiling_c, such as battery_indoor_model = \{ enabled = false \}$",
+                id="indoor-model-text-names-keys",
+            ),
+            pytest.param(
+                {"tariff": {"currency": "EUR", "import_prices": {"all": 0.20}, "export_prices": {"all": 0.05}}},
+                ValueError,
+                r"\[tariff\] is for time-of-use prices; for one flat price, remove it and set costs\.electricity_cost, "
+                r"costs\.electricity_sold_cost and costs\.daily_power_cost$",
+                id="flat-tariff-points-to-costs",
+            ),
+            pytest.param(
                 {"battery_kwh": 5.0, "battery_min_soc": 10, "battery_max_soc": 90},
                 ValueError,
                 r"got 10 and 90 \(they are fractions: 0\.1 means 10 %\)$",

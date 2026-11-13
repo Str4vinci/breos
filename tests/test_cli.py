@@ -716,6 +716,8 @@ def test_sweep_resolves_a_season_price_that_the_season_never_uses(tmp_path, caps
         ),
         ("battery_indoor_model.setpoint", r"Available: battery_indoor_model\.ceiling_c"),
         ("costs.electricty_cost", r"Unknown sweep key 'costs\.electricty_cost'.*costs\.electricity_cost"),
+        ("batery_kwh", r"Unknown sweep key 'batery_kwh' \(did you mean 'battery_kwh'\?\)\.$"),
+        ("zzz_qqq", r"Unknown sweep key 'zzz_qqq'\. Every key is listed at https://"),
         (
             "location.foo",
             r"Unknown sweep key 'location\.foo'.*Dotted keys are supported only under 'ac_cable', "

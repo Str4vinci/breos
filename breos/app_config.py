@@ -1366,6 +1366,10 @@ INDOOR_MODEL_TABLE = TableSpec(
         "ceiling_c": number(),
     },
     check=_check_indoor_temperature_band,
+    kind=(
+        "table with the optional keys enabled, setpoint_c, coupling_alpha, floor_c and ceiling_c, such as "
+        "battery_indoor_model = { enabled = false }"
+    ),
     docs={
         "enabled": (
             "Remap the resolved `battery_temperature` (weather, fixed or CSV) to an indoor battery temperature "
@@ -2138,7 +2142,13 @@ def _selected_schedule(table: Mapping[str, Any]) -> ScheduleDefinition:
 
 def _check_tariff_prices(table: dict[str, Any], where: str) -> None:
     if ("schedule" in table) == ("custom_schedule" in table):
-        raise ValueError(f"'{where}' must set exactly one of 'schedule' or 'custom_schedule'")
+        message = f"'{where}' must set exactly one of 'schedule' or 'custom_schedule'"
+        if "schedule" not in table:
+            message += (
+                f". [{where}] is for time-of-use prices; for one flat price, remove it and set "
+                "costs.electricity_cost, costs.electricity_sold_cost and costs.daily_power_cost"
+            )
+        raise ValueError(message)
     _check_period_prices(table, where, ("import_prices", "export_prices"))
     _check_network_credit_periods(table, where)
 

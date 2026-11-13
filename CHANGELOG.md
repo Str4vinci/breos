@@ -502,6 +502,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   percent say they are fractions. A community config given to `breos run` or
   `App` says to run it with `breos.Community`. A missing external load
   profile file says where to put it and links to the page on getting it.
+  A misspelt sweep key names the nearest valid key too. A `[tariff]` table
+  without a schedule says to set a flat price with `costs.electricity_cost`,
+  `costs.electricity_sold_cost` and `costs.daily_power_cost`, and a
+  `battery_indoor_model` that is not a table names its keys.
   Exception types are unchanged.
 - The sun's position, about 80 % of a PV run's time, is computed once per
   site and time grid and kept for the next request, up to about 20 MB per
