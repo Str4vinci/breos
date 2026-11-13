@@ -16,7 +16,13 @@ from breos.solar import (
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
 )
-from breos.weather import _complete_weather_years, build_battery_temperature_series, validate_weather_irradiance
+from breos.weather import (
+    WEATHER_METADATA_KEY,
+    _complete_weather_years,
+    build_battery_temperature_series,
+    resample_to_15min,
+    validate_weather_irradiance,
+)
 
 
 def _dc(weather, location, pv_params, freq="h", **kwargs):
@@ -200,6 +206,24 @@ def test_night_inconsistency_is_not_exempt(tiny_weather, porto_location, pv_para
     tiny_weather.loc[tiny_weather.index[0], ["ghi", "dhi"]] = [0, 100]
     with pytest.raises(ValueError, match="inconsistent irradiance"):
         _dc(tiny_weather, porto_location, pv_params)
+
+
+def test_resampled_weather_skips_only_the_ghi_dhi_rule(tiny_weather, porto_location, pv_params):
+    resampled = resample_to_15min(
+        tiny_weather, latitude=porto_location.latitude, longitude=porto_location.longitude, altitude=0
+    )
+    assert "irradiance_resampling_method" in resampled.attrs[WEATHER_METADATA_KEY]
+    resampled.loc[resampled.index[48], ["ghi", "dhi"]] = [153.727, 204.051]
+    assert (_dc(resampled, porto_location, pv_params, freq="15min") >= 0).all()
+
+    source = resampled.copy()
+    source.attrs = {}
+    with pytest.raises(ValueError, match="have 1 rows with inconsistent irradiance"):
+        _dc(source, porto_location, pv_params, freq="15min")
+
+    resampled.loc[resampled.index[48], "dni"] = np.nan
+    with pytest.raises(ValueError, match="'dni' has 1 values that are not finite numbers"):
+        _dc(resampled, porto_location, pv_params, freq="15min")
 
 
 @pytest.mark.parametrize("row", [0, 12], ids=["night", "day"])
