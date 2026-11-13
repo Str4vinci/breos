@@ -22,7 +22,6 @@ import pandas as pd
 import pytest
 
 import breos._daily_persistence as persistence_module
-import breos.projection as projection_module
 from breos import App, optimization
 from breos._controller import ObservedCivilDay, _slot_arrays
 from breos._daily_persistence import (
@@ -44,6 +43,7 @@ from breos.optimization_config import resolve_optimization_config
 from breos.smart_charging import SmartChargingSpec, resolve_instructions, stored_energy_by_origin
 from breos.utils import get_hours_per_step
 from tests.offline_app import TOU, offline, simulate_offline
+from tests.project_year_runs import record_project_years
 from tests.test_controller_seam import (
     BACKENDS,
     FREQS,
@@ -928,15 +928,7 @@ def test_always_dispatch_holds_each_days_planned_target_at_15_minutes():
 
 
 def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
-    traces: list[DispatchInstructions] = []
-    detailed = projection_module._simulate_detailed_run
-
-    def recording(**kwargs):
-        run = detailed(**kwargs)
-        traces.append(run.controller_instructions)
-        return run
-
-    monkeypatch.setattr(projection_module, "_simulate_detailed_run", recording)
+    runs = record_project_years(monkeypatch)
     config = {**BASE, "smart_charging": {**DAILY, "grid_import_limit_w": 5000, **COARSE}}
     app = simulate_offline(config)
     artifacts = app._artifacts
@@ -995,6 +987,7 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
     assert record["schedule_hash"] == result["provenance"]["tariff"]["schedule_hash"]
 
     # The hash covers every step both years executed, in project order.
+    traces: list[DispatchInstructions] = [run.controller_instructions for run in runs]
     n_steps = len(artifacts.first_year_results_df)
     assert len(traces) == 2 and all(len(trace) == n_steps for trace in traces)
     executed = artifacts.projection.controller_instructions

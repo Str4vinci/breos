@@ -12,6 +12,7 @@ its swap is skipped. All three default to true, which changes nothing.
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,7 @@ from breos.pv_modules import get_module
 from breos.smart_charging import FixedTargetDayController
 from tests.conftest import declare_instant_at_labels
 from tests.offline_app import offline_weather
+from tests.project_year_runs import record_project_years
 from tests.test_controller_seam import _battery, _core, _Recording, _scenario
 from tests.test_daily_persistence import _small_grid
 
@@ -319,29 +321,35 @@ def _project(allow: bool, *, aligned: bool = False, years: int = 3, eol: float =
     )
 
 
-def _seen_permissions(monkeypatch, aligned: bool) -> list[bool]:
-    seen: list[bool] = []
-    name = "simulate_energy_balance_summary" if aligned else "simulate_energy_balance"
-    real = getattr(projection_module, name)
+def _recorded_years(monkeypatch, aligned: bool) -> list:
+    """A list each project year's run is appended to; each has the year's ``kwargs``."""
+    if not aligned:
+        return record_project_years(monkeypatch)
+    years: list[SimpleNamespace] = []
+    real = projection_module.simulate_energy_balance_summary
 
     def recording(**kwargs):
-        seen.append(kwargs["battery_config"].allow_terminal_replacement)
+        years.append(SimpleNamespace(kwargs=kwargs))
         return real(**kwargs)
 
-    monkeypatch.setattr(projection_module, name, recording)
-    return seen
+    monkeypatch.setattr(projection_module, "simulate_energy_balance_summary", recording)
+    return years
+
+
+def _permissions(years: list) -> list[bool]:
+    return [year.kwargs["battery_config"].allow_terminal_replacement for year in years]
 
 
 @pytest.mark.parametrize("aligned", [False, True], ids=["frames", "summary"])
 def test_the_projection_applies_the_policy_to_its_final_year_only(monkeypatch, aligned):
-    seen = _seen_permissions(monkeypatch, aligned)
+    years = _recorded_years(monkeypatch, aligned)
     built: list[BatteryConfig] = []
     default = _project(True, aligned=aligned)
-    assert seen == [True, True, True]
-    seen.clear()
+    assert _permissions(years) == [True, True, True]
+    years.clear()
     guarded = _project(False, aligned=aligned, record=built)
 
-    assert seen == [True, True, False]
+    assert _permissions(years) == [True, True, False]
     # The earlier years ran on copies; the caller's configs are untouched.
     assert [config.allow_terminal_replacement for config in built] == [False, False, False]
     assert default.yearly_df["Replacements"].tolist() == [3, 3, 3]

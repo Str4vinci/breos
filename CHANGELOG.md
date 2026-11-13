@@ -508,6 +508,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   one-time compile of about 3 s; later processes load the kernels from the
   on-disk cache. A one-year hourly run is about 0.2 s slower with Numba
   than without; a 20-year 15-minute run is about 4.5 times faster.
+- App builds the per-step results of its first project year only; later
+  years are reduced from the simulation's arrays, as Monte Carlo years are.
+  A 20-year App run is about 1.4 times faster (15-minute: 0.45 s to 0.32 s;
+  hourly: 0.25 s to 0.17 s with Numba) and the 15-minute run uses about
+  90 MiB less memory. `App.timeseries()` and `App.revalue` work as before,
+  and results are bit-identical.
 - The sun's position, about 80 % of a PV run's time, is computed once per
   site and time grid and kept for the next request, up to about 20 MB per
   process. A repeated PV run takes a fifth of the time, and the arrays of
