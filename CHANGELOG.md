@@ -686,6 +686,21 @@ removed in 0.9.0.
   Non-finite values are still refused, and source data, including a
   15-minute file, is checked as before. Results do not change.
 
+- Module-shaded strings in parallel on one input are now solved on their
+  exact curves. The input's best point was read off straight lines between
+  the points of each string's tabled curve, which lie below the curve, so
+  power read low and the shortfall was booked as parallel mismatch. Two
+  identical shaded strings now deliver twice one string; before, they fell
+  short on 279 of 297 test steps, by up to 0.34 %. Against a dense exact
+  search, two differently shaded strings read up to 0.23 % low per step and
+  0.06 % in energy; now within 3e-11. The input and string current limits
+  hold on the exact currents; before, the operating point could exceed them
+  slightly. Results for shaded strings in parallel change: in a year with
+  two shaded 10-module strings on one input, DC generation rises by
+  1.67 kWh (+0.025 %) and the parallel mismatch falls from 1.88 to
+  0.21 kWh, the gap to the same strings on separate inputs. Single strings,
+  unshaded strings and inputs with one string are unchanged.
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.
