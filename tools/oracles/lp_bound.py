@@ -154,7 +154,6 @@ from breos._dispatch import (
 from breos.app_inputs import reuse_prepared_inputs
 from breos.battery import BatteryConfig, _step_energy_cap
 from breos.dispatch_instructions import DispatchInstructions
-from breos.tariffs import result_currency
 from breos.utils import get_hours_per_step
 from tools.oracles._output import load_config, write_csv, write_json
 from tools.oracles.replay import (
@@ -988,7 +987,7 @@ def report(result: LpBoundResult, case: ReplayCase) -> dict[str, Any]:
 
     payload: dict[str, Any] = {
         "schema": result.schema,
-        "currency": result_currency(case.tariff),
+        "currency": case.resolved.currency,
         "n_steps": len(problem),
         "resolution": case.resolved.cfg["resolution"],
         "start": str(case.index[0]),

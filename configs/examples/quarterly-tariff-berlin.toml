@@ -8,6 +8,11 @@
 # standard price all day in Q2 and Q3. They are not any network operator's
 # published values; replace them with the operator's own before a study.
 #
+# [tariff.annual_network_credit] adds a Module 1-style annual reduction of the
+# network charges, capped at what each household paid for the network. Its
+# values are illustrative too: the network parts of the prices above, gross,
+# which set the cap and are never added to the bill.
+#
 #   breos run --config configs/examples/quarterly-tariff-berlin.toml
 
 location = "berlin"
@@ -30,6 +35,16 @@ q1 = { low = 0.25, standard = 0.33, high = 0.42 }
 q2 = { standard = 0.33 }
 q3 = { standard = 0.33 }
 q4 = { low = 0.25, standard = 0.33, high = 0.42 }
+
+[tariff.annual_network_credit]
+amount_per_year = 150.0
+network_fixed_per_year = 40.0
+
+[tariff.annual_network_credit.network_import_prices]
+q1 = { low = 0.03, standard = 0.09, high = 0.17 }
+q2 = { standard = 0.09 }
+q3 = { standard = 0.09 }
+q4 = { low = 0.03, standard = 0.09, high = 0.17 }
 
 [tariff.custom_schedule]
 identifier = "illustrative_module3_quarterly"

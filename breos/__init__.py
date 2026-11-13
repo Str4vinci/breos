@@ -126,6 +126,8 @@ from breos.solar import (
 
 # Weather
 from breos.weather import (
+    fetch_forecast_archive,
+    fetch_satellite_weather,
     fetch_tmy_weather_data,
     fetch_weather_data,
     load_weather,
@@ -148,6 +150,8 @@ __all__ = [
     "load_weather",
     "fetch_tmy_weather_data",
     "fetch_weather_data",
+    "fetch_forecast_archive",
+    "fetch_satellite_weather",
     "read_epw_file",
     # Solar
     "calculate_pv_production_dc",

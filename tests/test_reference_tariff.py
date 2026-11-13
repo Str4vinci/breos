@@ -8,7 +8,6 @@ energy flow are those of the same run without it.
 
 import math
 from copy import deepcopy
-from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -319,7 +318,7 @@ def test_reference_fixed_charge_is_required(reference, entry_point):
         elif entry_point == "app_config":
             resolve_app_config(config)
         elif entry_point == "reference_spec":
-            resolve_reference_tariff_spec(config, LISBON, None)
+            resolve_reference_tariff_spec(config, LISBON, "EUR")
         else:
             run_montecarlo(config, MonteCarloSettings(weather_file="unused.csv", n_runs=1))
 
@@ -333,7 +332,8 @@ def test_revalue_requires_fixed_charge_when_adding_a_reference(flat_app):
 @pytest.mark.parametrize(
     ("reference", "extra", "message"),
     [
-        ({**FLAT_REFERENCE, "currency": "USD"}, {}, r"'reference_tariff\.currency' must be one of: EUR"),
+        ({**FLAT_REFERENCE, "currency": "XYZ"}, {}, r"'reference_tariff\.currency' must be an ISO 4217 currency"),
+        ({**FLAT_REFERENCE, "currency": "USD"}, {}, r"'reference_tariff\.currency' is USD, but the run is in EUR"),
         ({k: v for k, v in FLAT_REFERENCE.items() if k != "currency"}, {}, r"reference_tariff\.currency"),
         (
             {**FLAT_REFERENCE, "fixed_charge_per_day": -0.1},
@@ -374,14 +374,11 @@ def test_reference_config_is_checked_at_construction(reference, extra, message):
         App({**BASE, **extra, "reference_tariff": reference})
 
 
-@pytest.mark.parametrize("tariff", [None, SimpleNamespace(prices=SimpleNamespace(currency="GBP"))])
-def test_the_reference_must_be_in_the_result_currency(tariff):
+def test_the_reference_must_be_in_the_run_currency():
     cfg = {"reference_tariff": {**FLAT_REFERENCE, "currency": "EUR"}, "resolution": "h"}
-    if tariff is None:
-        assert resolve_reference_tariff_spec(cfg, LISBON, None).prices.currency == "EUR"
-        return
-    with pytest.raises(ValueError, match=r"'reference_tariff\.currency' is EUR, but the result is in GBP"):
-        resolve_reference_tariff_spec(cfg, LISBON, tariff)
+    assert resolve_reference_tariff_spec(cfg, LISBON, "EUR").prices.currency == "EUR"
+    with pytest.raises(ValueError, match=r"'reference_tariff\.currency' is EUR, but the run is in GBP"):
+        resolve_reference_tariff_spec(cfg, LISBON, "GBP")
 
 
 # --- App.revalue -----------------------------------------------------------------

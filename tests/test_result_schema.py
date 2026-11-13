@@ -9,7 +9,7 @@ from breos.cli import _load_options
 from breos.optimization import SolarDesignProblem
 from breos.plotting import _currency, plot_breakeven_comparison
 from breos.result_schema import RESULT_SCHEMA_VERSION
-from breos.tariffs import DEFAULT_CURRENCY, result_currency
+from breos.tariffs import DEFAULT_CURRENCY, run_currency
 from tools.generate_app_golden import SCENARIOS, _fake_fetch
 
 
@@ -122,7 +122,8 @@ def test_replacement_npv_discounts_each_outlay_from_its_swap_instant(replacement
 
 def test_a_run_without_a_tariff_is_in_the_default_currency():
     assert DEFAULT_CURRENCY == "EUR"
-    assert result_currency(None) == "EUR"
+    assert run_currency(None, None) == "EUR"
+    assert run_currency(None, "USD") == run_currency("USD", "USD") == "USD"
 
 
 def test_optimizer_rejects_the_removed_budget_key():

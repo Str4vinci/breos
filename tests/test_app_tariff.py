@@ -62,7 +62,7 @@ CUSTOM_TARIFF = {
     ("tariff", "extra", "error", "message"),
     [
         ({**TOU, "schedule": "pt_2026"}, {}, ValueError, r"'tariff\.schedule' must be one of"),
-        ({**TOU, "currency": "USD"}, {}, ValueError, r"'tariff\.currency' must be one of: EUR"),
+        ({**TOU, "currency": "XYZ"}, {}, ValueError, r"'tariff\.currency' must be an ISO 4217 currency code"),
         ({**TOU, "import_prices": {"peak": 0.28}}, {}, ValueError, r"has no price for off_peak"),
         (
             {**TOU, "import_prices": {"peak": 0.3, "off_peak": 0.1, "super_off_peak": 0.05}},

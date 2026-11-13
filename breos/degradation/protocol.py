@@ -396,7 +396,9 @@ class BlastDegradationAdapter:
         self._engine: BlastEngine = (
             BlastEngine.from_snapshot(model_key, engine_snapshot) if engine_snapshot else BlastEngine(model_key)
         )
-        self._soh = self._engine.soh()
+        # Floored as each step floors it, so a pack continued at zero health
+        # cannot start a span below zero.
+        self._soh = max(0.0, self._engine.soh())
         self._fec = float(initial_fec)
         self._calendar_seconds = float(initial_calendar_seconds)
 

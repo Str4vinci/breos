@@ -29,6 +29,7 @@ from breos.app_config import (
     TARIFF_TABLE,
     TERMINAL_VALUE_TABLE,
     check_calendar_model,
+    check_cost_currency,
     default_module_key,
 )
 from breos.config_schema import (
@@ -36,14 +37,17 @@ from breos.config_schema import (
     anything,
     boolean,
     choice,
+    list_of,
     number,
     table,
     text,
 )
+from breos.constants import SKIPPED_REPLACEMENT_ACTIONS
 from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import PV_MODEL_CONFIG_KEYS
 from breos.smart_charging import PLANNER_MODES
+from breos.tariffs import DEFAULT_CURRENCY, check_currency, run_currency
 from breos.weather import IRRADIANCE_RESAMPLING_POLICIES
 
 # Search defaults. They apply when [constraints] leaves a key out, and the
@@ -58,6 +62,14 @@ DEFAULT_TILT_MARGIN_DEG = 15.0
 DEFAULT_TIMEZONE = "UTC"
 DEFAULT_RESOLUTION = "h"
 DEFAULT_OBJECTIVE_BASIS = "projected"
+
+# PV layouts the search can choose between (#384), in gene order. "single" is
+# one array whose tilt and azimuth are searched; "east_west" is two arrays at
+# azimuths 90 and 270 on one fixed tilt. A search covers "single" only unless
+# [mode] layouts names more.
+LAYOUTS = ("single", "east_west")
+DEFAULT_LAYOUTS = ("single",)
+DEFAULT_EAST_WEST_TILT_DEG = 10.0
 
 # NSGA-II run settings: an ``optimize_system_multi_objective`` argument, else
 # the [optimization] key, else this.
@@ -227,6 +239,10 @@ BATTERY_TABLE = TableSpec(
         # The final period of the last project year only; earlier years
         # always replace, since the next year inherits the pack.
         "allow_terminal_replacement": boolean,
+        # Measured to the end of the project, across its years.
+        "replacement_min_remaining_years": number(minimum=0),
+        # What a swap the two rules above skip does with the old pack.
+        "skipped_replacement_action": choice(SKIPPED_REPLACEMENT_ACTIONS),
         "initial_soh": number(minimum=0, maximum=100, min_exclusive=True),
     },
 )
@@ -268,7 +284,22 @@ CONSTRAINTS_TABLE = TableSpec(
         "enforce_zeb": boolean,
     },
 )
-MODE_TABLE = TableSpec("mode", keys={"fixed_azimuth": _optional(_real(-360, 360))})
+
+
+def _layouts(value: Any, where: str) -> list[str]:
+    """The layouts to search, once each and in :data:`LAYOUTS` order, so the layout gene is stable."""
+    named = set(list_of(choice(LAYOUTS), min_length=1)(value, where))
+    return [layout for layout in LAYOUTS if layout in named]
+
+
+MODE_TABLE = TableSpec(
+    "mode",
+    keys={
+        "fixed_azimuth": _optional(_real(-360, 360)),
+        "layouts": _layouts,
+        "east_west_tilt_deg": number(minimum=0, maximum=90),
+    },
+)
 EARLY_STOP_TABLE = TableSpec(
     "optimization.early_stop",
     keys={
@@ -324,6 +355,8 @@ OPTIMIZATION_TABLES: Mapping[str, TableSpec] = {
 }
 # Top-level scalars: the App keys the optimizer reads under the same name.
 OPTIMIZATION_SCALARS: Mapping[str, Any] = {
+    # The run's currency, as the App's top-level key.
+    "currency": _optional(check_currency),
     "pv_module": text,
     "inverter_efficiency": number(minimum=0, maximum=1, min_exclusive=True),
     "dc_output_scale": _dc_output_scale,
@@ -338,6 +371,28 @@ def _first_set(where: tuple[tuple[str, Any], ...], default: Any) -> Any:
         if value is not None:
             return value
     return default
+
+
+def _currency(resolved: Mapping[str, Any]) -> str:
+    """The run's currency: ``currency``, else the tariff's, else EUR; and check the costs are in it.
+
+    The flat energy prices count as given in ``[financials]`` as well as in
+    ``[costs]``. A search whose ``constraints.max_battery_kwh`` is 0 never
+    prices a battery.
+    """
+    tariff = resolved.get("tariff")
+    tariff_currency = TARIFF_TABLE.validate(tariff, "tariff")["currency"] if tariff is not None else None
+    currency = run_currency(resolved.get("currency"), tariff_currency)
+    financials = resolved.get("financials") or {}
+    flat_prices = [key for key in ("electricity_cost", "electricity_sold_cost") if key in financials]
+    max_battery = (resolved.get("constraints") or {}).get("max_battery_kwh")
+    check_cost_currency(
+        currency,
+        given=[*resolved["costs"], *flat_prices],
+        tariff=tariff is not None,
+        battery=False if max_battery == 0 else None,
+    )
+    return currency
 
 
 def adjusted_max_tilt_deg(latitude: float, margin_deg: float) -> float:
@@ -465,11 +520,20 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     battery.setdefault("replacement_cost", None)
     battery.setdefault("enable_replacement", True)
     battery.setdefault("allow_terminal_replacement", True)
+    battery.setdefault("replacement_min_remaining_years", 0.0)
+    battery.setdefault("skipped_replacement_action", "keep")
     battery.setdefault("initial_soh", 100.0)
     resolved["costs"] = resolved.get("costs") or {}
 
     constraints = resolved.setdefault("constraints", {}) or {}
     resolved["constraints"] = constraints
+    resolved["currency"] = _currency(resolved)
+    if resolved["currency"] != DEFAULT_CURRENCY and "budget" not in constraints:
+        raise ValueError(
+            f"The run is in {resolved['currency']}, but constraints.budget would default to "
+            f"{DEFAULT_BUDGET:g} {DEFAULT_CURRENCY}. BREOS does not convert currencies: set constraints.budget in "
+            f"{resolved['currency']}."
+        )
     constraints.setdefault("budget", DEFAULT_BUDGET)
     constraints.setdefault("max_area_m2", DEFAULT_MAX_AREA_M2)
     constraints.setdefault("max_modules", DEFAULT_MAX_MODULES)
@@ -490,6 +554,13 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     mode = resolved.setdefault("mode", {}) or {}
     resolved["mode"] = mode
     mode.setdefault("fixed_azimuth", None)
+    mode.setdefault("layouts", list(DEFAULT_LAYOUTS))
+    mode.setdefault("east_west_tilt_deg", DEFAULT_EAST_WEST_TILT_DEG)
+    if mode["fixed_azimuth"] is not None and "single" not in mode["layouts"]:
+        raise ValueError(
+            "mode.fixed_azimuth sets the azimuth of the single-array layout, which mode.layouts does not "
+            "search; remove mode.fixed_azimuth or add 'single' to mode.layouts"
+        )
 
     optimization = resolved.setdefault("optimization", {}) or {}
     resolved["optimization"] = optimization

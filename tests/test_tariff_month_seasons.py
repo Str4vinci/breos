@@ -692,11 +692,18 @@ def test_revalue_reprices_seasonal_prices_without_simulating_again():
         assert revalued[key] == pytest.approx(fresh[key], abs=0.011), key
     assert revalued["grid_import_cost_year1_prices"] != app.result()["grid_import_cost_year1_prices"]
 
-    # A different partition is a different schedule: the run is simulated again.
+    # A different partition is a different schedule: the energy by season no
+    # longer applies, and this greedy run is priced from its step flows.
     halves = deepcopy(SEASONAL_TARIFF["custom_schedule"])
     halves["seasons"] = {"q1": [1, 2, 3], "q2": [4, 5, 6, 7], "q3": [8, 9], "q4": [10, 11, 12]}
     moved = _revalue(app, {"tariff": {**changes["tariff"], "custom_schedule": halves}})
-    assert moved["provenance"]["revaluation"]["method"] == "resimulated"
+    assert moved["provenance"]["revaluation"]["method"] == "repriced_by_step"
+    moved_app = App({**BASE, "tariff": {**SEASONAL_TARIFF, "custom_schedule": halves}})
+    moved_app.simulate()
+    del moved["provenance"]["revaluation"]
+    for result in (moved, moved_app.result()):
+        del result["provenance"]["execution"]
+    assert moved == moved_app.result()
 
 
 # --- Monte Carlo and projected optimization --------------------------------

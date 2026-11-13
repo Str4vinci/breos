@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from breos import app_config  # noqa: E402
 from breos.app_config import (  # noqa: E402
+    ANNUAL_NETWORK_CREDIT_TABLE,
     APP_CONFIG_FIELDS,
     COSTS_TABLE,
     INDOOR_MODEL_TABLE,
@@ -97,6 +98,15 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "dispatch. Without a `schedule` or `custom_schedule` it is one flat price, `import_prices = { all = <price> }`.",
     ),
     (
+        "annual_network_credit",
+        ANNUAL_NETWORK_CREDIT_TABLE,
+        "An annual reduction of a household's network charges, capped at what it paid for the network that year, "
+        "as `[tariff.annual_network_credit]` (the system household) or `[reference_tariff.annual_network_credit]` "
+        "(the no-system household) in TOML; see [Annual network credit](configuration.md#annual-network-credit). "
+        "The network prices and fixed amount are parts of the tariff's own prices, given gross; they set the cap "
+        "and are never added to the bill.",
+    ),
+    (
         "terminal_value",
         TERMINAL_VALUE_TABLE,
         "Optional estimated residual value of the final battery pack, as `[terminal_value]` in TOML. `basis` "
@@ -110,10 +120,13 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "`target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses "
         'the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but '
         "`target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, "
-        '`target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` '
+        "`target_levels`, `soc_states`, `wear_cost_per_kwh` and `decision_boundary`. `grid_import_limit_w` is "
+        "optional in both. "
+        '`mode = "discharge_only"` '
         "takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from "
         'the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; '
-        '`"hold_target"` permits overlapping periods for `fixed_target` only, retaining the target as the discharge floor.',
+        '`"hold_target"` permits overlapping periods for `fixed_target` and `daily_persistence`, retaining the target '
+        "as the discharge floor.",
     ),
     (
         "period",

@@ -505,13 +505,13 @@ def test_a_tariff_fixed_charge_is_billed_on_the_window_civil_days():
     assert revalued["fixed_charge_year1_prices"] == 15.5
 
 
-def test_revalue_that_adds_a_tariff_simulates_the_window_again(battery_runs):
+def test_revalue_that_adds_a_tariff_prices_the_window_from_its_step_flows(battery_runs):
     _full, week = battery_runs
     with _weather():
         revalued = week.revalue({"tariff": TOU})
     fresh = _run({**BASE, "battery_kwh": 5, "period": JUNE_WEEK, "tariff": TOU}).result()
 
-    assert revalued["provenance"]["revaluation"]["method"] == "resimulated"
+    assert revalued["provenance"]["revaluation"]["method"] == "repriced_by_step"
     del revalued["provenance"]["revaluation"]
     for result in (revalued, fresh):
         del result["provenance"]["execution"]

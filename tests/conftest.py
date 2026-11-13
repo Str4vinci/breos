@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 from pvlib.location import Location
 
+from breos import tariffs
 from breos.battery import BatteryConfig, apply_indoor_temperature_model
 from breos.economics import CostParams
 from breos.emissions import EmissionsParams
@@ -12,6 +13,13 @@ from breos.load_profiles import load_profile
 from breos.pv_modules import get_module
 from breos.solar import calculate_pv_production_dc
 from breos.weather import extract_ambient_temperature
+
+
+@pytest.fixture(autouse=True)
+def _fresh_tariff_classifications():
+    """Classify afresh in every test, so a test that patches a tariff check sees it run."""
+    tariffs._CLASSIFICATIONS.clear()
+
 
 # ---------------------------------------------------------------------------
 # Synthetic weather (1 year, hourly, no API call)

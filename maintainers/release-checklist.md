@@ -68,8 +68,9 @@ notice, and pinned upstream provenance.
 
 Regenerate the example-gallery results *after* bumping the package version,
 so every page is stamped with the release: run
-`uv run python tools/regenerate_gallery_results.py` (all cases, about ten
-minutes; it fetches the Open-Meteo history for the Monte Carlo case), then
+`uv run python tools/regenerate_gallery_results.py` (all cases, more than an
+hour: the Monte Carlo case runs 10 000 trajectories and fetches the
+Open-Meteo history), then
 `uv run python tools/regenerate_gallery_results.py --check`, and commit
 `docs/examples/_results/`.
 
@@ -184,23 +185,31 @@ Release flow:
 1. Merge the release PR into `main` after all gates pass.
 2. Optionally trigger the `Publish` workflow manually (`workflow_dispatch`) on
    `main` to dry-run the upload against TestPyPI, then verify the release installs
-   into a throwaway environment. TestPyPI serves `breos` itself; the runtime
-   dependencies still come from PyPI:
+   into a throwaway environment. Download only the BREOS wheel from TestPyPI
+   and install that file, so every runtime dependency comes from PyPI:
 
    ```
+   rm -rf /tmp/breos-testpypi-dist
+   uvx pip download --no-deps --only-binary :all: \
+     --index-url https://test.pypi.org/simple/ \
+     --dest /tmp/breos-testpypi-dist breos==X.Y.Z
    uv venv --clear /tmp/breos-testpypi
    VIRTUAL_ENV=/tmp/breos-testpypi uv pip install \
-     --index https://test.pypi.org/simple/ \
-     breos==X.Y.Z
+     /tmp/breos-testpypi-dist/breos-X.Y.Z-py3-none-any.whl
    VIRTUAL_ENV=/tmp/breos-testpypi uv pip show breos
    VIRTUAL_ENV=/tmp/breos-testpypi uv pip check
+   cd /tmp && /tmp/breos-testpypi/bin/python -c "import breos; print(breos.__version__)"
+   /tmp/breos-testpypi/bin/breos run --location porto --n-modules 10 \
+     --annual-consumption-kwh 4000 --dry-run
    ```
 
-   `--index` gives TestPyPI priority while leaving PyPI as uv's default,
-   lower-priority index for dependencies that are absent from TestPyPI. Keep
-   uv's default `first-index` strategy: if an unexpected TestPyPI package
-   shadows a dependency, investigate it rather than enabling an `unsafe-*`
-   index strategy.
+   The import runs from `/tmp` so it loads the installed wheel, not the source
+   checkout, and the dry run is the quickstart's offline installation check.
+   Do not list TestPyPI as an index for `uv pip install`: TestPyPI hosts a
+   `numpy` project, and uv's default `first-index` strategy then takes `numpy`
+   only from TestPyPI, where no release satisfies `numpy>=2.0`. Do not work
+   around it with an `unsafe-*` index strategy either; it lets any TestPyPI
+   upload stand in for a dependency.
 3. Tag the release commit on `main` with an annotated tag
    (`git tag -a vX.Y.Z -m "BREOS X.Y.Z" && git push origin vX.Y.Z`). The
    workflow refuses tags whose commit is not on `main`, then publishes to

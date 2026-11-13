@@ -45,8 +45,8 @@ over objectives and constraints.
 two-parameter sweep CSV as a heatmap, and
 {py:func}`~breos.plotting.plot_orientation_landscape` draws a `tilt` ×
 `azimuth` sweep ([Plotting](../api/plotting.md#sweeps-and-the-optimizer-front)).
-The CSV does not record the currency, so pass `currency=` to label a money
-column such as `npv_savings` with it.
+The CSV's `currency` column labels a money column such as `npv_savings`
+with the run's currency.
 
 Every combination is validated before the first run starts, so a bad one,
 such as a charge period the tariff schedule does not have, stops the sweep
@@ -79,6 +79,7 @@ export_prices = { all = 0.0500 }
 ```
 
 Each run simulates again. For price scenarios on a finished run,
-{py:meth}`breos.App.revalue` re-prices the stored simulation instead; see
+{py:meth}`breos.App.revalue` re-prices the stored simulation instead, also on
+another tariff schedule when the run has no smart charging; see
 {doc}`../gallery/tariffs/plot_12_price_scenarios`. To compare whole offers,
 see {doc}`../gallery/tariffs/plot_09_which_tariff`.

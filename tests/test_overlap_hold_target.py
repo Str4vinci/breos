@@ -34,17 +34,12 @@ def test_overlap_requires_explicit_opt_in():
         App({**BASE, "tariff": TOU, "smart_charging": {**HOLD, "overlap_policy": "net"}})
 
 
-@pytest.mark.parametrize("mode", ["disabled", "discharge_only", "daily_persistence"])
+@pytest.mark.parametrize("mode", ["disabled", "discharge_only"])
 def test_hold_target_is_refused_where_it_cannot_hold_a_target(mode):
     fields = {"mode": mode, "overlap_policy": "hold_target"}
-    reason = (
-        "planner replaces grid targets but keeps reserves fixed"
-        if mode == "daily_persistence"
-        else "no grid-charge target"
-    )
-    with pytest.raises(ValueError, match=reason):
+    with pytest.raises(ValueError, match="no grid-charge target"):
         SmartChargingSpec(**fields)
-    with pytest.raises(ValueError, match=reason):
+    with pytest.raises(ValueError, match="no grid-charge target"):
         App({**BASE, "tariff": TOU, "smart_charging": fields})
 
 

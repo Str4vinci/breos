@@ -19,6 +19,7 @@ dev/
 !validation/data/weather/*.csv
 !validation/data/weather/*.csv.gz
 !docs/examples/_results/*/*.csv
+!docs/examples/_results/*/*.csv.gz
 .codex
 .claude/
 .DS_Store

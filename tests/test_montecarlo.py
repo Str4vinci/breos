@@ -654,7 +654,13 @@ def test_montecarlo_cli_labels_conditional_payback_statistics(monkeypatch, tmp_p
     )
 
     def fake_run(_config, settings):
-        return MonteCarloResult(runs=runs, summary=_summarize(runs), settings=settings, available_years=[2021])
+        return MonteCarloResult(
+            runs=runs,
+            summary=_summarize(runs),
+            settings=settings,
+            available_years=[2021],
+            provenance={"currency": "EUR"},
+        )
 
     monkeypatch.setattr(montecarlo_module, "run_montecarlo", fake_run)
 

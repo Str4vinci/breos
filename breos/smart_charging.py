@@ -28,7 +28,11 @@ resolved instructions.
 the fixed-target layout but chooses each day's target at runtime: a private
 controller (``breos._daily_persistence``) re-plans every civil day from a
 forecast that repeats the last complete observed day. It has no static
-instructions, so :func:`resolve_instructions` refuses it.
+instructions, so :func:`resolve_instructions` refuses it. It also takes
+``hold_target`` (A18): on a period in both sets the floor is each day's
+planned target. With ``decision_boundary = "charge_window_start"`` (A19) it
+decides one target at the start of each charge window instead of each civil
+day, held until the next window starts.
 """
 
 from __future__ import annotations
@@ -41,12 +45,14 @@ from typing import Any
 import numpy as np
 
 from breos._controller import ControllerDayDecision, ControllerDayInput
-from breos._daily_targets import DEFAULT_HORIZON_DAYS, DEFAULT_SOC_STATES, DEFAULT_TARGET_LEVELS
+from breos._daily_targets import DEFAULT_HORIZON_DAYS, DEFAULT_SOC_STATES, DEFAULT_TARGET_LEVELS, check_wear_cost
 from breos.dispatch_instructions import DispatchInstructions
 from breos.tariffs import ResolvedTariff
 
 SMART_CHARGING_MODES = ("disabled", "fixed_target", "daily_persistence", "discharge_only")
 OVERLAP_POLICIES = ("reject", "hold_target")
+# The modes with a grid-charge target that ``hold_target`` can hold (A14, A18).
+HOLD_TARGET_MODES = ("fixed_target", "daily_persistence")
 # The modes that plan targets at runtime; they take the planner settings.
 PLANNER_MODES = ("daily_persistence",)
 # The modes that never charge from the grid; they take discharge periods only.
@@ -57,6 +63,33 @@ PLANNER_SETTINGS: dict[str, tuple[int, int]] = {
     "target_levels": (DEFAULT_TARGET_LEVELS, 1),
     "soc_states": (DEFAULT_SOC_STATES, 2),
 }
+# The planner's wear cost (ADR 0002 A17), a planner setting that is a price,
+# not an integer: currency per kWh of DC energy the battery discharges.
+WEAR_COST_KEY = "wear_cost_per_kwh"
+# When the planner decides (ADR 0002 A19): at each configured-zone civil
+# midnight, the default, or at the start of each charge window.
+DECISION_BOUNDARY_KEY = "decision_boundary"
+DECISION_BOUNDARIES = ("civil_day", "charge_window_start")
+# What the planner forecasts PV with (ADR 0002 A20): the day before the
+# decision repeated (the default), day-ahead weather forecasts, one file per
+# lead day, or the run's own future (perfect information, a reference).
+FORECAST_KEY = "forecast"
+FORECASTS = ("persistence", "weather", "perfect")
+FORECAST_FILES_KEY = "forecast_weather_files"
+# Hours between a forecast's nominal issue (its valid time less one day per
+# lead day) and its first use, for ``forecast = "weather"``.
+PUBLICATION_DELAY_KEY = "forecast_publication_delay_hours"
+DEFAULT_PUBLICATION_DELAY_HOURS = 6.0
+# Every planner setting: the integers, the wear cost, the decision boundary
+# and the forecast.
+PLANNER_KEYS = (
+    *PLANNER_SETTINGS,
+    WEAR_COST_KEY,
+    DECISION_BOUNDARY_KEY,
+    FORECAST_KEY,
+    FORECAST_FILES_KEY,
+    PUBLICATION_DELAY_KEY,
+)
 # Normal App runs carry stored energy, origin shares and degradation from one
 # project year into the next (ADR 0002, boundary and terminal conventions).
 TERMINAL_CONVENTION = "physical_carry"
@@ -73,7 +106,10 @@ class SmartChargingSpec:
 
     ``fixed_target`` needs ``target_usable_fraction``. ``daily_persistence``
     refuses it, since the planner picks each day's target, and takes the
-    three planner settings instead. ``discharge_only`` takes
+    planner settings instead: three integers, ``wear_cost_per_kwh``, a
+    planning weight in currency per kWh of battery DC discharge (0 when
+    unset), and ``decision_boundary``, when each target is decided
+    (``"civil_day"`` when unset). ``discharge_only`` takes
     ``discharge_periods`` alone: it never charges from the grid, so every
     grid-charging setting stays unset. A planner setting left None is filled
     with the planner's default, so a resolved spec always holds the values
@@ -92,6 +128,11 @@ class SmartChargingSpec:
     target_levels: int | None = None
     soc_states: int | None = None
     overlap_policy: str = "reject"
+    wear_cost_per_kwh: float | None = None
+    decision_boundary: str | None = None
+    forecast: str | None = None
+    forecast_weather_files: tuple[str, ...] = ()
+    forecast_publication_delay_hours: float | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in SMART_CHARGING_MODES:
@@ -99,7 +140,8 @@ class SmartChargingSpec:
         check_overlap_policy(self.mode, self.overlap_policy)
         object.__setattr__(self, "charge_periods", tuple(self.charge_periods))
         object.__setattr__(self, "discharge_periods", tuple(self.discharge_periods))
-        planner = {name: getattr(self, name) for name in PLANNER_SETTINGS}
+        object.__setattr__(self, FORECAST_FILES_KEY, tuple(self.forecast_weather_files))
+        planner = {name: getattr(self, name) for name in PLANNER_KEYS}
         if self.mode == "disabled":
             settings = (
                 self.target_usable_fraction,
@@ -122,7 +164,7 @@ class SmartChargingSpec:
                     "charge_periods",
                     "grid_charge_efficiency",
                     "grid_import_limit_w",
-                    *PLANNER_SETTINGS,
+                    *PLANNER_KEYS,
                 )
                 if getattr(self, name) not in (None, ())
             ]
@@ -152,8 +194,17 @@ class SmartChargingSpec:
                 if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
                     raise ValueError(f"'smart_charging.{name}' must be an integer of at least {minimum}")
                 object.__setattr__(self, name, int(value))
+            wear = 0.0 if self.wear_cost_per_kwh is None else self.wear_cost_per_kwh
+            object.__setattr__(self, WEAR_COST_KEY, check_wear_cost(wear, f"smart_charging.{WEAR_COST_KEY}"))
+            boundary = "civil_day" if self.decision_boundary is None else self.decision_boundary
+            if boundary not in DECISION_BOUNDARIES:
+                raise ValueError(
+                    f"'smart_charging.{DECISION_BOUNDARY_KEY}' must be one of: {', '.join(DECISION_BOUNDARIES)}"
+                )
+            object.__setattr__(self, DECISION_BOUNDARY_KEY, boundary)
+            self._check_forecast()
         else:
-            given = [name for name, value in planner.items() if value is not None]
+            given = [name for name, value in planner.items() if value not in (None, ())]
             if given:
                 raise ValueError(
                     f"'smart_charging' with mode = '{self.mode}' takes no planner settings; "
@@ -164,7 +215,33 @@ class SmartChargingSpec:
             raise ValueError(
                 f"'smart_charging.charge_periods' and 'smart_charging.discharge_periods' share {', '.join(overlap)}; "
                 "every step either charges or discharges; "
-                "set overlap_policy = 'hold_target' with mode = 'fixed_target' to allow overlap"
+                "set overlap_policy = 'hold_target' with mode = 'fixed_target' or 'daily_persistence' "
+                "to allow overlap"
+            )
+
+    def _check_forecast(self) -> None:
+        """Fill and check the forecast settings of a planner spec (A20)."""
+        forecast = "persistence" if self.forecast is None else self.forecast
+        if forecast not in FORECASTS:
+            raise ValueError(f"'smart_charging.{FORECAST_KEY}' must be one of: {', '.join(FORECASTS)}")
+        object.__setattr__(self, FORECAST_KEY, forecast)
+        if forecast == "weather":
+            if not self.forecast_weather_files:
+                raise ValueError(
+                    f"'smart_charging.{FORECAST_KEY}' = 'weather' needs smart_charging.{FORECAST_FILES_KEY}: "
+                    "the forecast weather files, the first for lead day 1"
+                )
+            delay = self.forecast_publication_delay_hours
+            delay = DEFAULT_PUBLICATION_DELAY_HOURS if delay is None else delay
+            if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < 0:
+                raise ValueError(f"'smart_charging.{PUBLICATION_DELAY_KEY}' must be a number of at least 0")
+            object.__setattr__(self, PUBLICATION_DELAY_KEY, float(delay))
+            return
+        given = [name for name in (FORECAST_FILES_KEY, PUBLICATION_DELAY_KEY) if getattr(self, name) not in (None, ())]
+        if given:
+            raise ValueError(
+                f"{', '.join(f'smart_charging.{name}' for name in given)} needs "
+                f"smart_charging.{FORECAST_KEY} = 'weather'"
             )
 
 
@@ -172,14 +249,11 @@ def check_overlap_policy(mode: str, policy: str) -> None:
     """Validate the overlap policy for a table or a directly constructed spec."""
     if policy not in OVERLAP_POLICIES:
         raise ValueError(f"'smart_charging.overlap_policy' must be one of: {', '.join(OVERLAP_POLICIES)}")
-    if policy == "hold_target" and mode != "fixed_target":
-        reason = (
-            "the daily-persistence planner replaces grid targets but keeps reserves fixed, "
-            "so planning and replay cannot hold the same target"
-            if mode == "daily_persistence"
-            else "this mode has no grid-charge target to hold"
+    if policy == "hold_target" and mode not in HOLD_TARGET_MODES:
+        raise ValueError(
+            "'smart_charging.overlap_policy' = 'hold_target' requires mode = 'fixed_target' or "
+            "'daily_persistence': this mode has no grid-charge target to hold"
         )
-        raise ValueError(f"'smart_charging.overlap_policy' = 'hold_target' requires mode = 'fixed_target': {reason}")
 
 
 def resolve_instructions(spec: SmartChargingSpec, tariff: ResolvedTariff | None) -> DispatchInstructions | None:
@@ -206,7 +280,11 @@ def resolve_instructions(spec: SmartChargingSpec, tariff: ResolvedTariff | None)
 
 
 def check_tariff_periods(spec: SmartChargingSpec, tariff: ResolvedTariff) -> None:
-    """Raise ValueError if ``spec`` names a period that ``tariff``'s schedule does not have."""
+    """Raise ValueError if ``spec`` names a period that ``tariff``'s schedule does not have.
+
+    Also when ``spec`` decides at charge-window starts and every period is a
+    charge period: a window would then never end.
+    """
     periods = set(tariff.schedule.periods)
     for name in ("charge_periods", "discharge_periods"):
         unknown = sorted(set(getattr(spec, name)) - periods)
@@ -215,6 +293,16 @@ def check_tariff_periods(spec: SmartChargingSpec, tariff: ResolvedTariff) -> Non
                 f"'smart_charging.{name}' has period(s) {', '.join(unknown)} that schedule "
                 f"{tariff.schedule.identifier!r} does not have. Its periods: {', '.join(sorted(periods))}."
             )
+    check_charge_windows(spec.decision_boundary, spec.charge_periods, tariff.schedule.periods)
+
+
+def check_charge_windows(decision_boundary: str | None, charge_periods: Any, periods: Any) -> None:
+    """Raise ValueError if charge windows are the decision boundary and every period charges."""
+    if decision_boundary == "charge_window_start" and set(periods) <= set(charge_periods):
+        raise ValueError(
+            f"'smart_charging.{DECISION_BOUNDARY_KEY}' = 'charge_window_start' needs a tariff period outside "
+            "charge_periods: with every period a charge period, a charge window never ends"
+        )
 
 
 def period_layout(spec: SmartChargingSpec, period_labels: Any, target_usable_fraction: float) -> DispatchInstructions:
@@ -222,7 +310,9 @@ def period_layout(spec: SmartChargingSpec, period_labels: Any, target_usable_fra
 
     A discharge period may discharge; a charge period may grid-charge; the
     reserve is zero except on overlapping steps under ``hold_target``, where
-    it equals the target. ``daily_persistence`` plans on the disjoint layout.
+    it equals the target. ``daily_persistence`` plans on this layout, and
+    :func:`breos._daily_targets.daily_target_instructions` moves the target
+    and that reserve together to each day's target (A18).
     """
     assert spec.grid_charge_efficiency is not None
     labels = np.asarray(period_labels, dtype=object)

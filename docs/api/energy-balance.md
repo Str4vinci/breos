@@ -24,8 +24,22 @@ the nominal capacity swapped in (ledger schema 3.0). The economics prices it
 at `costs["replacement_cost_each"]`; see
 {py:func}`~breos.economics.replacement_event_cost`.
 `BatteryConfig(allow_terminal_replacement=False)` skips a replacement in the
-final degradation period of the call's span, which ends on its last step; see
+final degradation period of the call's span, which ends on its last step.
+`BatteryConfig(replacement_min_remaining_years=...)` skips any replacement
+that leaves the new pack less than that many project years: the call's span
+counts as one project year, and `replacement_years_after_span` more follow
+it. See
 [Battery replacement at the end of the horizon](../getting-started/configuration.md#battery-replacement-at-the-end-of-the-horizon).
+`BatteryConfig(skipped_replacement_action="retire")` switches off a pack
+whose replacement is skipped: from the next step the span dispatches as a
+PV-only system. A later span continued from its returned degradation state
+stays retired, or takes `battery_retired=True`.
+Each end-of-life crossing, replaced or not, is a
+{py:class}`~breos.battery.EndOfLifeEvent`: the summary's
+`end_of_life_events`, and on the detailed path the degradation frame's
+`attrs["end_of_life_events"]`, as JSON-safe
+{py:meth}`~breos.battery.EndOfLifeEvent.to_record` dicts (pandas writes
+attrs as JSON in `to_parquet`).
 
 ## Physical boundary and coupling
 

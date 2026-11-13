@@ -53,6 +53,7 @@ the authoritative license text. Core and optional dependencies currently include
 - **rainflow** — MIT
 - **requests-cache** — BSD 2-Clause
 - **scipy** — BSD 3-Clause
+- **threadpoolctl** — BSD 3-Clause
 - **timezonefinder** — MIT
 
 ## Scientific and model credits

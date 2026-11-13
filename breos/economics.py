@@ -50,6 +50,37 @@ COST_CONFIG_KEY_TO_PARAM: dict[str, str] = {
 }
 
 
+# The flat energy prices, which a time-of-use tariff replaces.
+FLAT_PRICE_COST_KEYS: tuple[str, ...] = ("electricity_cost", "electricity_sold_cost", "daily_power_cost")
+# The cost keys :func:`calculate_costs` prices only with a battery, and only without one.
+BATTERY_COST_KEYS: tuple[str, ...] = (
+    "storage_cost_per_kwh",
+    "installation_cost_battery",
+    "inverter_cost_per_kw_hybrid",
+)
+PV_ONLY_COST_KEYS: tuple[str, ...] = ("inverter_cost_per_kw_simple",)
+
+
+def default_amount_cost_keys(*, tariff: bool, battery: bool | None) -> tuple[str, ...]:
+    """The cost keys a run prices with whose :class:`CostParams` default is an amount of money.
+
+    Those defaults are amounts in the default currency, EUR; a zero default
+    is zero in any currency and is left out. ``tariff`` drops the flat energy
+    prices a tariff replaces. ``battery`` keeps the keys priced with a
+    battery (True), without one (False), or both (None, for a search that
+    may install either).
+    """
+    defaults = CostParams()
+    skipped = set(FLAT_PRICE_COST_KEYS if tariff else ())
+    if battery is True:
+        skipped.update(PV_ONLY_COST_KEYS)
+    elif battery is False:
+        skipped.update(BATTERY_COST_KEYS)
+    return tuple(
+        key for key, param in COST_CONFIG_KEY_TO_PARAM.items() if key not in skipped and getattr(defaults, param) != 0
+    )
+
+
 # The one default set for every projection entry point (ADR 0003 E6). Both are
 # nominal annual rates; an explicit 0.0 is valid and used as given, so callers
 # test for an absent key, never a falsy value.
@@ -516,6 +547,9 @@ def terminal_health_credit(
     horizon_years: int,
     npv_savings: float,
     allow_terminal_replacement: bool,
+    enable_replacement: bool = True,
+    replacement_min_remaining_years: float = 0.0,
+    skipped_replacement_action: str = "keep",
 ) -> TerminalHealthCredit:
     """Credit the installed pack's capacity health above its physical EOL threshold.
 
@@ -523,6 +557,9 @@ def terminal_health_credit(
     booked at exactly t = T, with the outlay routine's t = 0 price convention,
     and discounted from that instant. No cashflow or replacement is changed.
     Capacity health omits resistance-related limits; this is not resale value.
+    A pack kept or retired below its threshold (ADR 0003 E11, E12), for
+    instance with ``enable_replacement`` off, has no health above it, so it
+    earns no credit.
     """
     inputs = {
         "threshold": threshold,
@@ -584,8 +621,10 @@ def terminal_health_credit(
             "booking_time_years": horizon_years,
             "timing": "end_of_horizon_after_degradation_and_replacement",
             "replacement_policy": {
-                "enable_replacement": True,
+                "enable_replacement": enable_replacement,
                 "allow_terminal_replacement": allow_terminal_replacement,
+                "replacement_min_remaining_years": replacement_min_remaining_years,
+                "skipped_replacement_action": skipped_replacement_action,
             },
         },
     )
@@ -601,6 +640,8 @@ COST_PROJECTION_COLUMNS = (
     "Cost_No_Sys_Cumulative",
     "Cost_No_Sys_Import",
     "Cost_No_Sys_Fixed_Charge",
+    "Cost_No_Sys_Network_Charge",
+    "Cost_No_Sys_Network_Credit",
     "PV_Production_kWh",
     "Export_kWh",
     "Degradation_Factor",
@@ -608,6 +649,8 @@ COST_PROJECTION_COLUMNS = (
     "Revenue_Export",
     "Cost_Operation",
     "Cost_Daily",
+    "Cost_Network_Charge",
+    "Cost_Network_Credit",
     "Replacement_Time_Years",
     "Cost_Replacement",
     "Cost_System_Annual",
@@ -664,6 +707,14 @@ def value_year_rows(
     a reference tariff's; None uses the import escalation. Nothing is
     discounted here. ``attrs["total_replacement_cost"]`` is the replacements
     at t = 0 prices.
+
+    Rows with an annual network credit (ADR 0002 A15) carry each credit and
+    its cap basis, the eligible network charges, at year-1 prices:
+    ``Network_Credit`` and ``Network_Charge`` for the system household,
+    ``Baseline_Network_Credit`` and ``Baseline_Network_Charge`` for the
+    no-system one. Each escalates with its household's import prices and is
+    subtracted from its yearly cost, ``Cost_System_Annual`` or
+    ``Cost_No_Sys_Annual``. Rows without them value as before, bit for bit.
     """
     years = year_rows["Year"]
     rates = resolve_escalation_rates(inflation_rate, import_price_escalation, om_escalation)
@@ -686,6 +737,10 @@ def value_year_rows(
     ) * baseline_factors
     flows["Cost_No_Sys_Import"] = year_rows["Baseline_Import_Cost"] * baseline_factors
     flows["Cost_No_Sys_Fixed_Charge"] = year_rows["Baseline_Fixed_Charge"] * baseline_factors
+    if "Baseline_Network_Credit" in year_rows.columns:
+        flows["Cost_No_Sys_Network_Charge"] = year_rows["Baseline_Network_Charge"] * baseline_factors
+        flows["Cost_No_Sys_Network_Credit"] = year_rows["Baseline_Network_Credit"] * baseline_factors
+        flows["Cost_No_Sys_Annual"] = flows["Cost_No_Sys_Annual"] - flows["Cost_No_Sys_Network_Credit"]
     flows["PV_Production_kWh"] = year_rows["PV_Production_kWh"]
     flows["Export_kWh"] = year_rows["Export_kWh"]
     flows["Degradation_Factor"] = year_rows["PV_Degradation_Factor"]
@@ -693,6 +748,9 @@ def value_year_rows(
     flows["Revenue_Export"] = year_rows["Export_Revenue"] * sell_inflation_factors
     flows["Cost_Operation"] = costs["annual_operation_cost"] * om_factors
     flows["Cost_Daily"] = year_rows["Fixed_Charge"] * inflation_factors
+    if "Network_Credit" in year_rows.columns:
+        flows["Cost_Network_Charge"] = year_rows["Network_Charge"] * inflation_factors
+        flows["Cost_Network_Credit"] = year_rows["Network_Credit"] * inflation_factors
 
     # The replacement outlay is booked at the instant the pack is swapped:
     # inflated to it here and discounted from it later. The annual flows
@@ -721,6 +779,8 @@ def value_year_rows(
         + flows["Cost_Daily"]
         + flows["Cost_Replacement"]
     )
+    if "Cost_Network_Credit" in flows.columns:
+        flows["Cost_System_Annual"] = flows["Cost_System_Annual"] - flows["Cost_Network_Credit"]
     flows.attrs["total_replacement_cost"] = replacement_total_t0(replacement_base)
     return flows
 
@@ -815,14 +875,37 @@ def add_co2_projection(proj: pd.DataFrame, year_rows: pd.DataFrame, emissions_pa
     proj.attrs["lifetime_co2_avoided_export_kg"] = float(proj["CO2_Avoided_Export_Cumulative_kg"].iloc[-1])
 
 
+def _recorded_currency(frame: pd.DataFrame) -> Optional[str]:
+    """The currency a frame records: ``attrs["currency"]``, else its ``currency`` column, else None.
+
+    BREOS writes a ``currency`` column into the CSVs it saves, since a CSV
+    keeps no attrs; a column that names more than one currency raises.
+    """
+    if frame.attrs.get("currency") is not None:
+        return str(frame.attrs["currency"])
+    if "currency" not in frame.columns:
+        return None
+    codes = sorted({str(code) for code in frame["currency"].dropna()})
+    if len(codes) > 1:
+        raise ValueError(f"The input's currency column names several currencies ({', '.join(codes)}); keep them apart")
+    return codes[0] if codes else None
+
+
 def write_cost_projection(proj: pd.DataFrame, results_directory: str, scenario_name: str = "") -> str:
-    """Write a cost projection to ``cost_projection[_<scenario>].csv`` in ``results_directory``; return the path."""
+    """Write a cost projection to ``cost_projection[_<scenario>].csv`` in ``results_directory``; return the path.
+
+    The ``currency`` column names the currency the frame records
+    (``attrs["currency"]``, else its own ``currency`` column); a frame that
+    records none is written without one.
+    """
     import os
 
     os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
     path = f"{results_directory}/cost_projection{suffix}.csv"
-    proj.to_csv(path, index=False)
+    # A CSV keeps no attrs, so each row names the currency of its money.
+    currency = _recorded_currency(proj)
+    (proj if currency is None else proj.assign(currency=currency)).to_csv(path, index=False)
     return path
 
 

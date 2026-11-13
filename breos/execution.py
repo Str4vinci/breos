@@ -16,11 +16,13 @@ selection explicitly, never by ambient configuration.
 from __future__ import annotations
 
 import platform
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from threadpoolctl import ThreadpoolController, threadpool_limits
 
 EXECUTION_BACKENDS: tuple[str, ...] = ("python", "numba")
 
@@ -87,6 +89,40 @@ def require_backend(execution_backend: str) -> None:
         from breos._numba_dispatch import require_numba_dispatch_day
 
         require_numba_dispatch_day()
+
+
+def limit_worker_threads() -> None:
+    """Cap the native BLAS and OpenMP pools of a worker process at one thread.
+
+    A pool initialiser for Monte Carlo and optimizer workers. Each worker
+    already has a core of its own, and at 15-minute resolution the tariff
+    sums' ``np.dot`` is long enough for OpenBLAS to thread, so every worker
+    would start one thread per logical core and oversubscribe the CPU. The
+    limit lasts for the worker's lifetime; the parent keeps its own pools.
+    """
+    threadpool_limits(limits=1)
+
+
+_BLAS_CONTROLLER: ThreadpoolController | None = None
+
+
+@contextmanager
+def single_thread_blas() -> Iterator[None]:
+    """Run the enclosed BLAS calls on one thread, then restore the caller's pools.
+
+    Above about 10 000 elements OpenBLAS splits ``np.dot`` across threads and
+    adds the partial sums, so the last bit of a 15-minute tariff sum depends
+    on the thread count. One thread gives the same float in the parent and in
+    a worker, on any core count, and is faster at this size besides.
+
+    The controller is built once: building it scans the loaded libraries,
+    which costs far more than the sum.
+    """
+    global _BLAS_CONTROLLER
+    if _BLAS_CONTROLLER is None:
+        _BLAS_CONTROLLER = ThreadpoolController()
+    with _BLAS_CONTROLLER.limit(limits=1, user_api="blas"):
+        yield
 
 
 def backend_provenance(execution_backend: str, *, pv_only: bool = False) -> dict[str, Any]:

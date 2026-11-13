@@ -49,6 +49,7 @@ from breos.execution import (
     aggregate_jit_cache_states,
     backend_provenance,
     config_has_battery,
+    limit_worker_threads,
     observed_jit_cache_state,
     reset_jit_cache_observation,
     validate_execution_backend,
@@ -58,13 +59,14 @@ from breos.projection import (
     ProjectionYear,
     build_pv_only_battery_config,
     effective_reference_escalation,
+    first_end_of_life_metrics,
     run_projection,
     value_projection,
 )
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
-from breos.tariffs import ResolvedTariff, reference_tariff_provenance, result_currency, tariff_provenance
+from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
 from breos.utils import package_version
 from breos.weather import (
     _weather_file_sha256,
@@ -414,6 +416,16 @@ def _reject_period(cfg: dict[str, Any]) -> None:
         )
 
 
+def _reject_weather_file(cfg: dict[str, Any]) -> None:
+    """Refuse the App's one-year ``weather_file``: a study samples ``MonteCarloSettings.weather_file``."""
+    if cfg.get("weather_file") is not None:
+        raise ValueError(
+            "'weather_file' names the App's one-year weather and is not used by Monte Carlo, which samples the "
+            "years of MonteCarloSettings.weather_file ([montecarlo].weather_file in a config file). "
+            "Remove 'weather_file' from the config."
+        )
+
+
 def _reject_planned_smart_charging(resolved: ResolvedAppConfig) -> None:
     """Refuse daily-persistence smart charging, before any weather is loaded or any trajectory runs.
 
@@ -447,6 +459,7 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
     _reject_period(cfg)
+    _reject_weather_file(cfg)
     _reject_planned_smart_charging(resolved)
     weather_key = _weather_cache_key(cfg, resolved, settings)
     runtime_weather: dict[str, Any] = {}
@@ -654,6 +667,9 @@ def _simulate_trajectory(
         "lifetime_grid_independence_pct": lifetime_gi,
         "total_replacements": int(total_replacements),
         "total_replacement_cost_t0_prices": float(total_replacement_cost),
+        # The trajectory's first end-of-life crossing (ADR 0003 E11); NaN
+        # and None without one.
+        **first_end_of_life_metrics(projection.end_of_life_events),
         "mean_pv_dc_generation_kwh": float(yearly_df["PV_DC_Generation_kWh"].mean()),
         "mean_direct_pv_ac_load_kwh": float(yearly_df["Direct_PV_AC_Load_kWh"].mean()),
         "mean_pv_origin_battery_ac_load_kwh": float(yearly_df["PV_Origin_Battery_AC_Load_kWh"].mean()),
@@ -753,6 +769,12 @@ def _initialize_worker(*context: Any) -> None:
     """Install read-only trajectory inputs once per worker process."""
     global _WORKER_CONTEXT
     _WORKER_CONTEXT = context
+
+
+def _initialize_pool_worker(*context: Any) -> None:
+    """Initialise a pool worker: one native thread, then the trajectory inputs."""
+    limit_worker_threads()
+    _initialize_worker(*context)
 
 
 def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame | None, str | None]:
@@ -876,6 +898,7 @@ def run_montecarlo(
     if cfg["degradation_engine"] == "blast":
         raise ValueError("degradation_engine='blast' is not supported with Monte Carlo yet")
     _reject_period(cfg)
+    _reject_weather_file(cfg)
     if cfg["horizon_profile"] is not None:
         raise ValueError(
             "'horizon_profile' is not supported with Monte Carlo weather files yet because their "
@@ -942,7 +965,7 @@ def run_montecarlo(
         _initialize_worker(*context)
         outputs = [_run_trajectory_index(run_idx) for run_idx in range(settings.n_runs)]
     else:
-        with Pool(settings.n_procs, initializer=_initialize_worker, initargs=context) as pool:
+        with Pool(settings.n_procs, initializer=_initialize_pool_worker, initargs=context) as pool:
             outputs = pool.map(_run_trajectory_index, range(settings.n_runs))
 
     rows: list[dict[str, Any]] = []
@@ -964,7 +987,7 @@ def run_montecarlo(
         execution["jit_cache"] = aggregate_jit_cache_states(jit_cache_states)
 
     runs_df = pd.DataFrame(rows)
-    currency = result_currency(resolved.tariff)
+    currency = resolved.currency
     # Plot labels read the currency from the frame.
     runs_df.attrs["currency"] = currency
     yearly_df = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else None

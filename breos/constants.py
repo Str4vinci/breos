@@ -101,3 +101,7 @@ DEFAULT_INDOOR_SETPOINT_C = 22.0  # Indoor comfort midpoint (°C)
 DEFAULT_INDOOR_COUPLING_ALPHA = 0.3  # Outdoor influence (0=fully insulated, 1=outdoor)
 DEFAULT_INDOOR_FLOOR_C = 15.0  # Min indoor temp — even unheated garage in mild climate
 DEFAULT_INDOOR_CEILING_C = 35.0  # Max indoor temp — summer heat buildup
+
+# What a battery whose end-of-life replacement is skipped does next (ADR 0003
+# E12): stays in service below its threshold, or is switched off.
+SKIPPED_REPLACEMENT_ACTIONS = ("keep", "retire")

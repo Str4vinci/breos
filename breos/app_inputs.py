@@ -11,6 +11,7 @@ from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar, cast
 
+import numpy as np
 import pandas as pd
 from pvlib.location import Location
 
@@ -29,6 +30,7 @@ from breos.weather import (
     AmbiguousWeatherError,
     _normalised_horizon_metadata,
     fill_leap_day,
+    read_weather_csv,
     warn_if_naive_weather_timestamps,
 )
 
@@ -316,13 +318,18 @@ def load_weather_for_simulation(
     irradiance_resampling: str = "auto",
     weather_source: str | None = None,
     period: SimulationPeriod | None = None,
+    weather_file: str | None = None,
 ) -> pd.DataFrame:
     """Load TMY weather, falling back to PVGIS fetch.
 
     The weather must cover the whole calendar year of ``start_year``, or with
     a ``period`` the whole window, which the returned weather is cut to.
 
-    When ``weather_dir`` is not given, a ``weather/`` directory in the
+    ``weather_file`` (the App ``weather_file`` key) names the file to read,
+    relative to the working directory, and nothing is scanned or fetched. It
+    must hold at most one year of weather.
+
+    Otherwise, when ``weather_dir`` is not given, a ``weather/`` directory in the
     current working directory is scanned first: a file matching the
     location preset key takes precedence over the PVGIS fetch. Remove or
     rename the directory (or its files) to force a fresh fetch.
@@ -335,7 +342,10 @@ def load_weather_for_simulation(
     weather = None
     weather_path = weather_dir or Path.cwd() / "weather"
 
-    if resolved.loc_key and weather_path.is_dir():
+    if weather_file is not None:
+        weather = read_weather_csv(weather_file)
+        _require_one_year_weather(weather)
+    elif resolved.loc_key and weather_path.is_dir():
         try:
             weather = deps.load_weather(
                 location=resolved.loc_key,
@@ -402,6 +412,23 @@ def load_weather_for_simulation(
         # a full-year run computes for it.
         weather = cut_to_period(weather, period)
     return weather
+
+
+def _require_one_year_weather(weather: pd.DataFrame) -> None:
+    """Raise unless a ``weather_file`` holds timestamped weather spanning at most one year.
+
+    The App restamps the weather onto the simulated year, so a multi-year
+    file would put several years of weather on one calendar.
+    """
+    index = weather.index
+    if not isinstance(index, pd.DatetimeIndex) or index.empty:
+        raise ValueError(f"Weather from {_weather_source_label(weather)} has no timestamped rows")
+    if index.max() - index.min() >= pd.Timedelta(days=366):
+        raise ValueError(
+            f"Weather from {_weather_source_label(weather)} runs from {index.min()} to {index.max()}, more than "
+            "one year. 'weather_file' takes one year of weather, such as a TMY; sample multi-year historical "
+            "weather with breos.montecarlo."
+        )
 
 
 def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame) -> pd.Series:
@@ -497,6 +524,7 @@ def prepare_simulation_inputs(
         irradiance_resampling=cfg["irradiance_resampling"],
         weather_source=cfg["weather_source"],
         period=period,
+        weather_file=cfg["weather_file"],
     )
     pv_breakdown = build_pv_production_breakdown(cfg, resolved, weather)
     dc_system_base = pv_breakdown.dc_after_losses
@@ -520,6 +548,115 @@ def prepare_simulation_inputs(
     )
 
 
+def prepare_planner_forecast(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    deps: AppRuntimeDependencies,
+    inputs: PreparedSimulationInputs,
+    index: pd.DatetimeIndex,
+) -> Any:
+    """The ``daily_persistence`` planner's forecast (ADR 0002 A20), or None under persistence.
+
+    ``index`` is the simulation calendar the tariff was resolved on. Under
+    ``forecast = "weather"`` each forecast weather file runs through the
+    run's own weather preparation and PV model and is aligned onto that
+    calendar as the true PV is; under ``"perfect"`` the run's own aligned
+    PV, load and temperature are the forecast.
+    """
+    from breos._planner_forecast import (
+        PlannerForecast,
+        epoch_seconds,
+        resampling_reach_seconds,
+        source_times,
+    )
+    from breos.battery import align_simulation_inputs
+    from breos.weather import read_weather_csv
+
+    spec = resolved.smart_charging
+    if spec is None or spec.forecast in (None, "persistence"):
+        return None
+    freq = cfg["resolution"]
+    step_s = int(pd.Timedelta(get_hours_per_step(freq), unit="h").total_seconds())
+
+    def aligned(pv_dc: pd.Series) -> Any:
+        out = align_simulation_inputs(pv_dc, inputs.load_data, inputs.temperature_series, freq=freq)
+        if not out.index.equals(index):
+            raise ValueError("The planner forecast's calendar differs from the simulation calendar")
+        return out
+
+    epoch = epoch_seconds(index)
+    rate = float(cfg["pv_degradation_rate"])
+    if spec.forecast == "perfect":
+        truth = aligned(inputs.dc_system_base)
+        return PlannerForecast(
+            "perfect",
+            epoch,
+            step_s,
+            pv_degradation_rate=rate,
+            true_pv_dc_w=np.asarray(truth.pv_dc_w, dtype=np.float64),
+            true_load_w=np.asarray(truth.load_w, dtype=np.float64),
+            true_temperature_c=np.asarray(truth.temperature_c, dtype=np.float64),
+        )
+    start_year = int(cfg["start_date"][:4])
+    leads: list[np.ndarray] = []
+    files: list[dict[str, Any]] = []
+    source_year: int | None = None
+    for path in spec.forecast_weather_files:
+        raw = read_weather_csv(path)
+        years = pd.Series(pd.DatetimeIndex(raw.index).year)
+        year = int(years.mode().iloc[0])
+        if source_year is None:
+            source_year = year
+        elif year != source_year:
+            raise ValueError(
+                f"smart_charging.forecast_weather_files hold different years ({source_year} and {year} in {path}): "
+                "every lead file must cover the same weather year"
+            )
+        weather = load_weather_for_simulation(
+            resolved,
+            freq,
+            start_year,
+            deps,
+            horizon_profile=cfg["horizon_profile"],
+            solar_position=cfg["solar_position"],
+            irradiance_resampling=cfg["irradiance_resampling"],
+            period=resolved.period,
+            weather_file=path,
+        )
+        leads.append(np.asarray(aligned(build_pv_production_breakdown(cfg, resolved, weather).dc_after_losses).pv_dc_w))
+        metadata = weather.attrs.get(WEATHER_METADATA_KEY, {})
+        files.append({"lead_day": len(files) + 1, "path": metadata.get("path"), "sha256": metadata.get("sha256")})
+    assert source_year is not None and spec.forecast_publication_delay_hours is not None
+    # Every raw row's label in the weather's own time, carried through the
+    # App's own restamping onto the simulated year (dropped or filled days
+    # included), so forecast ages count real time.
+    raw_index = pd.DatetimeIndex(read_weather_csv(spec.forecast_weather_files[0]).index)
+    if raw_index.tz is None:
+        raw_index = raw_index.tz_localize("UTC")
+    labels = pd.DataFrame({"source_s": epoch_seconds(raw_index)}, index=raw_index)
+    restamped = remap_tmy_year(labels, start_year)
+    reach_s = resampling_reach_seconds(freq)
+    support, decision = source_times(
+        epoch_seconds(pd.DatetimeIndex(restamped.index)),
+        restamped["source_s"].to_numpy(dtype=np.int64),
+        epoch,
+        step_s,
+        reach_s,
+    )
+    return PlannerForecast(
+        "weather",
+        epoch,
+        step_s,
+        pv_degradation_rate=rate,
+        support_source_s=support,
+        decision_source_s=decision,
+        pv_dc_by_lead_w=np.vstack(leads),
+        publication_delay_s=int(round(spec.forecast_publication_delay_hours * 3600)),
+        resampling_reach_s=reach_s,
+        files=tuple(files),
+    )
+
+
 # Config keys that do not reach prepare_simulation_inputs, directly or through
 # the ResolvedAppConfig fields it reads (location, tilt, azimuth, tracking,
 # pv_arrays, pv_params). Each was traced and is pinned by a test that changes
@@ -537,7 +674,10 @@ INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
         "battery_max_discharge_power_w",
         "battery_power_limit_c_rate",
         "battery_eol_percentage",
+        "battery_enable_replacement",
         "battery_allow_terminal_replacement",
+        "battery_replacement_min_remaining_years",
+        "battery_skipped_replacement_action",
         "battery_rte",
         "enable_resistance_fade",
         "inverter_efficiency",
@@ -552,6 +692,7 @@ INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
         # Prices, valuation and dispatch strategy.
         "cost_preset",
         "costs",
+        "currency",
         "inflation_rate",
         "sell_price_inflation",
         "import_price_escalation",
@@ -559,6 +700,9 @@ INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
         "replacement_cost_learning",
         "discount_rate",
         "tariff",
+        # The no-system reference, with its annual network credit, prices
+        # only the household load.
+        "reference_tariff",
         "smart_charging",
         # Emissions and execution.
         "emissions_country",

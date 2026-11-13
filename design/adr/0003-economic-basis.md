@@ -1,9 +1,11 @@
 # 0003 — Economic basis, escalators, and currency-neutral results
 
-- **Status:** Accepted (E1–E10); implemented in 0.7.0
+- **Status:** Accepted (E1–E10); implemented in 0.7.0. E11–E13
+  Proposed, implemented for 0.7.1
 - **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26; E2–E5, E7, E9 and
   the E6 inflation default accepted 2026-09-27; E10 accepted 2026-10-01; E9
-  amended 2026-10-01
+  amended 2026-10-01; E11 and E12 proposed 2026-10-03; E13 proposed
+  2026-10-03
 
 ## Context
 
@@ -61,6 +63,9 @@ the design, not its implementation. All nine were then implemented for
 0.7.0 under #183: E6 in #271, E5 and E7 in #273, E8 and E9 in #283, E1, E2
 and E3 in #288, and E4 in #291. E10, accepted on 2026-10-01, was implemented
 in #352. The changelog carries the migration table below as shipped.
+E11, proposed on 2026-10-03, is implemented for 0.7.1 under #400, E12,
+proposed the same day, under #404, and E13, also proposed that day, under
+#376.
 
 ### E1. Nominal basis for the projection APIs — Accepted 2026-09-26
 
@@ -166,6 +171,11 @@ from `sum(energy × price)` over the steps. Storing each year's energy by
 tariff period, for revaluation without re-simulation, is a 0.7.x follow-up.
 *(Done in 0.7.0: a tariff run records its energy by period, and by season
 for a schedule with month seasons, and `App.revalue` re-prices from it.)*
+*(0.7.1, #393: an App run whose dispatch reads no tariff, greedy or PV-only,
+also keeps each year's priced flows step by step, so `App.revalue` prices it
+on a first or a different schedule with the year loop's own sums. Energy by
+period cannot serve there, and sums over the years cannot either, because
+each year is escalated and discounted on its own.)*
 The App `financial` rows gain the component cashflows the projection already
 computes: `Cost_Import`, `Revenue_Export`, `Cost_Operation`, `Cost_Daily`,
 `Cost_Replacement` and `Replacement_Time_Years`.
@@ -317,6 +327,240 @@ Projected optimization accepts but ignores `[terminal_value]`: evaluated
 designs do not report the credit and ranking continues on unadjusted NPV.
 Unadjusted NPV, cashflows, paybacks, LCOE, emissions, dispatch and aging are
 unchanged even when the sensitivity is enabled.
+
+### E11. Minimum service time of a replacement battery (#400) — Proposed 2026-10-03
+
+Adds a rule; it replaces no text. E3 and E4 book a replacement at its swap
+instant at full price, however little of the project is left for the new
+pack. `battery_allow_terminal_replacement = false` (#304) skips only the
+swap at the close of the horizon's final degradation period, the last day.
+A pack that reaches end of life on day 100 of year 20 is still bought and
+serves about nine months. In the time-of-use study for the upcoming
+publication this happens in 426 of 24 516 Porto R1 cases and in 4482 of
+17 700 fixed-target grid-charging runs, and a swap at 19.3 years costs
+about 3700 EUR. The study's rule is that a pack is replaced only if at least
+one project year remains for it.
+
+- **Key.** `battery_replacement_min_remaining_years` (App and Monte Carlo),
+  `[battery] replacement_min_remaining_years` (optimizer) and
+  `BatteryConfig.replacement_min_remaining_years`: a finite number of at
+  least 0, default 0. A swap is skipped when the project time left after
+  it is less than this. A minimum above the horizon skips every swap.
+- **Time basis.** The time left is the horizon less the swap's
+  `Replacement_Time_Years`: each project year is one simulated span, and a
+  swap at the end of step `k` (1-based) of an `n`-step year `y` is booked at
+  `y − 1 + k / n`. The horizon is the project's, not the span's: a
+  projection year passes the whole years after it to its battery
+  (`BatteryConfig.replacement_years_after_span`), so the test is
+  `years_after × n + (n − k) < minimum × n`, in steps. A swap with exactly
+  the minimum left is kept, which is what "at least one project year
+  remained" means at the close of year T − 1. A minimum that is a whole
+  number of steps per year has an exact boundary; any other is rounded once,
+  in the product.
+- **Skipped pack.** The skipped swap is not recorded and not priced. The
+  old pack stays installed and keeps ageing below its end-of-life
+  threshold, and its state is reported, as with the terminal guard. Every
+  later end-of-life check is skipped too, because less time is left.
+- **Old key.** `battery_allow_terminal_replacement` keeps its meaning. The
+  two are independent tests, and a swap must pass both. The final period
+  has no time left, so any positive minimum also skips it; the old key
+  matters only at minimum 0. Neither key is deprecated: the old one is the
+  exact last-day guard and needs no horizon.
+- **Where it is enforced.** At the same end-of-life check as the terminal
+  guard, between degradation windows in Python. The compiled dispatch
+  kernel is unchanged, so Python and Numba skip the same swaps.
+- **Provenance.** The resolved value is in `provenance.resolved_config`
+  (App and Monte Carlo), in the optimizer's
+  `battery_replacement_treatment` with a `minimum_service` description, and
+  in the `[terminal_value]` `replacement_policy` beside
+  `allow_terminal_replacement`.
+
+- **Reporting.** The final state of health does not say when a swap was
+  skipped or why, so every crossing of the threshold is recorded as an
+  event: a degradation period that closes with the installed pack at or
+  below `eol_percentage`. Each event holds the project `year`, `time_years`
+  (measured as `Replacement_Time_Years` books a swap, so a replaced
+  crossing's time is the booked one), the closing step's `date`, the
+  `action` (`"replaced"` or `"kept"`), the `reason` (`"end_of_life"` for a
+  swap; `"min_remaining_years"`, `"terminal_period"` or, with replacement off
+  (`battery_enable_replacement = false`, #377, or a direct `BatteryConfig`),
+  `"replacement_disabled"` for a skipped one) and the `soh_pct` the check compared with the threshold. A
+  pack that is kept crosses once, so it is recorded once, and a skipped
+  swap is always the last event. App results list the events in
+  `battery_end_of_life_events` and repeat the first in the scalar
+  `battery_first_end_of_life_*` fields, which a sweep CSV keeps. Monte
+  Carlo reports the first crossing per trajectory and the projected
+  optimizer per design. `SimulationSummary.end_of_life_events` carries
+  the span's `breos.battery.EndOfLifeEvent` records, and the detailed
+  degradation frame's `attrs` the same events as JSON-safe dicts (pandas
+  writes attrs as JSON), so the public return tuple keeps its shape. The
+  `date` moves the closing step's date forward by the project year, since
+  every year replays the first year's calendar; Monte Carlo restamps its
+  sampled weather years to `target_year`. `action` and `reason` are open vocabularies: a new end-of-life
+  action adds a value and renames none.
+
+With the default 0 no swap is skipped and results are bit-identical. The
+result format stays `"1"`; the key and the event fields add fields and
+rename none.
+
+### E12. Retire a battery whose replacement is skipped (#404) — Proposed 2026-10-03
+
+Adds a rule; it replaces no text. Under E11 a pack whose swap is skipped
+stays in service and keeps dispatching below its threshold to the end of
+the project. That assumes a worn battery is at least as good as none, and it
+is not always: a prescribed dispatch, such as grid charging whose conversion
+and round-trip losses exceed the tariff saving, loses money every day it
+runs. The time-of-use study for the upcoming publication compares three
+end-of-life policies for the final project year: replace, keep and retire.
+
+- **Key.** `battery_skipped_replacement_action` (App and Monte Carlo),
+  `[battery] skipped_replacement_action` (optimizer) and
+  `BatteryConfig.skipped_replacement_action`: `"keep"` (default) or
+  `"retire"`.
+- **Composition with E11.** The key says what happens at a crossing whose
+  replacement is skipped, by `battery_replacement_min_remaining_years`, by
+  `battery_allow_terminal_replacement = false`, or by
+  `battery_enable_replacement = false` (#377; `[battery] enable_replacement`
+  and `BatteryConfig.enable_replacement`), which skips every swap. Whether to buy stays with those rules;
+  the new key only chooses the alternative to buying. The three policies
+  are then: replace (minimum 0), keep (minimum `m`, `"keep"`) and retire
+  (minimum `m`, `"retire"`). A single `battery_end_of_life_action =
+  "replace" | "keep" | "retire"` was considered and rejected. Its
+  `"replace"` would mean "replace unless the minimum skips it, then keep",
+  which is `"keep"` under another name; and a policy that replaces early
+  swaps but retires in the final year, the study's case, would need the
+  minimum as well, so the three values would not be independent. Never
+  replacing is `battery_enable_replacement = false` with either action; a
+  minimum above the horizon gives the same run with the reason
+  `"min_remaining_years"`. With replacement on and the default minimum and
+  terminal guard no swap is skipped, so the key has no effect unless one of
+  them is set.
+- **Retirement instant.** The crossing: the close of the degradation period
+  whose health reached the threshold, the instant a replacement would have
+  been booked at (E3, E4). The closing step was dispatched as usual.
+- **Operation after it.** The battery neither charges nor discharges, from
+  PV or from the grid, whatever the dispatch instructions say. Each later
+  step is computed by the PV-only path with the same inverter, so its flows
+  equal the PV-only system's bit for bit, and Python and Numba agree. A
+  daily controller and a year planner still run, and their instructions are
+  recorded, but they move no energy. A retired pack stays off in every
+  later projection year (`CarryState.battery_retired`). The retired span's
+  degradation state holds `"battery_retired": True`, so a span continued
+  from it stays retired; `battery_retired=True` says the same explicitly,
+  and is refused with a state from a pack that was not retired. A fresh
+  pack that starts at or below its threshold crosses at its first period
+  close, so a skipped swap retires it there.
+- **Stored energy.** It leaves the system with the retired pack, as a
+  replaced pack's does: it is booked in `Battery_Replacement_Energy_Removed`
+  with its origins, nothing is added, and the ledger closes. Freezing it in
+  a disconnected pack was the alternative; it would report energy that can
+  never be used as stored, and as final stored energy by origin, and leave
+  it to the capacity window as the health changes. The pack's open
+  rainflow half cycles are counted at the crossing, as for a replaced pack.
+- **Money.** The investment and every cash flow before the crossing are
+  unchanged, and no replacement is bought or priced. The fixed charge and
+  O&M continue: BREOS has no separate battery O&M line, so retirement
+  saves none. The retired pack is at or below its threshold, so the E10
+  terminal health credit is zero, as for a kept pack; a retired pack is
+  never replaced later. `[terminal_value]`'s `replacement_policy` records
+  the action.
+- **Health.** The pack stays installed at zero charge and the aging model
+  still runs on it, with no cycles. At zero charge both the native and the
+  BLAST engines give little or no further fade: none for the native
+  engine, and under 1e-6 percentage points a day for BLAST in the tested
+  cases. It is reported as for a kept pack.
+- **Reporting.** The crossing is an E11 event with action `"retired"` and
+  the reason of the skip.
+- **Zero health (#413).** A kept pack whose state of health reaches 0 has
+  no capacity left, but under `"keep"` it stayed in service, and BLAST
+  restored it below 0 at the next project year, so it moved energy it did
+  not have. It is now retired at the close of the period that brings it to
+  0, by the same path and with the same money and reporting, as a second
+  E11 event with action `"retired"` and the reason `"zero_health"`; the
+  first crossing stays the `"kept"` one. A pack already retired records
+  nothing more. A BLAST state restored below 0 starts at 0, as each period
+  close floors it. No default run reaches zero health.
+
+The default `"keep"` is E11's behaviour, and results are bit-identical. The
+result format stays `"1"`.
+
+Follow-ups, not part of E12: a tariff switch from a given project year,
+independent of retirement (#402), and an economic rule that compares
+replace, keep and retire at each crossing (#403).
+
+### E13. Currency selection (#376) — Proposed 2026-10-03
+
+Adds a rule; it replaces E8's "the resolved currency" source, which in
+0.7.0 was the `[tariff]` currency or EUR, and `SUPPORTED_CURRENCIES =
+{"EUR"}`. The arithmetic never depended on the currency, but a study in
+another currency could only be run by labelling its inputs EUR, and the
+EUR cost presets and defaults then mixed silently with them.
+
+- **Key.** A top-level `currency` (App, Monte Carlo, `breos sweep`, CLI
+  `--currency`, and the optimizer's top level): an ISO 4217 code, upper-cased.
+  `SUPPORTED_CURRENCIES` becomes the active ISO 4217 codes without fund,
+  precious-metal, testing and no-currency codes. The check is of the label,
+  not of price realism.
+- **Resolution.** The run's currency is `currency`, else the `[tariff]`
+  currency, else EUR (`DEFAULT_CURRENCY`, the currency of the bundled cost
+  catalogue and the `CostParams` defaults). `breos.tariffs.run_currency`
+  replaces `result_currency`, which could not see the key.
+- **Consistency.** `[tariff].currency` and `[reference_tariff].currency`
+  must equal it. Each cost preset records its own `currency` in
+  `costs.json`; a preset in another currency than the run's is refused,
+  however many of its values `[costs]` overrides. No exchange rates exist.
+- **No relabelling.** In a run whose currency is not EUR, every cost the run
+  prices with whose `CostParams` default is not zero must be given in
+  `[costs]` (for the optimizer, the flat prices may come from
+  `[financials]`), or by a preset in the run's currency. The error names
+  every missing key. Which costs a run prices with follows
+  `calculate_costs`: a PV-only run (or a search whose
+  `constraints.max_battery_kwh` is 0) needs no battery costs, and a run with
+  a `[tariff]` needs no flat prices. Zero defaults (`land_cost`,
+  `other_costs`, `maintenance_cost`, `operation_cost`, a zero
+  `wear_cost_per_kwh`) are zero in any currency and stay. The optimizer's
+  `constraints.budget` defaults to 10000 EUR, so such a run sets it. The
+  tariff, the reference tariff, the annual network credit, an explicit
+  `battery.replacement_cost` and `wear_cost_per_kwh` are explicit inputs in
+  the run's currency.
+- **Carried.** `provenance.currency` (App, Monte Carlo, optimizer),
+  `attrs["currency"]` on the cost projection, Monte Carlo runs and the
+  optimizer's Pareto frame, as in E8. A CSV keeps no attrs, so the sweep
+  CSV, the Monte Carlo runs and yearly CSVs and `write_cost_projection` add
+  a `currency` column, and plots read it as they read `attrs["currency"]`.
+  `write_cost_projection` takes the label from `attrs["currency"]`, else
+  from the frame's own `currency` column, and writes none when the frame
+  records neither. `breos validate-config` reports the resolved currency,
+  and `breos list cost-presets` each preset's own. `currency` is an
+  economics key, so `App.revalue` accepts it, and it is one of the keys the
+  input stage never reads, so a sweep over it shares prepared inputs.
+  A revaluation that changes the run's currency must restate every money
+  input in the new one, since `App.revalue` merges tables key by key and
+  checks only the labels of the tariff and the reference tariff: each
+  non-zero cost the old `[costs]` set, and each non-zero price list, fixed
+  charge and `annual_network_credit` amount of a `[tariff]` or
+  `[reference_tariff]` the run keeps, is refused unless the change restates
+  it, sets it to None or removes its table. Zero amounts are zero in any
+  currency and stay. The cost preset must be removed or one in the new
+  currency. A non-zero `wear_cost_per_kwh` is not a revaluation key, so such
+  a run is refused; a new App states it in the new currency.
+- **Property.** Scaling every money input by k scales every money output by
+  k and leaves every physical output and the payback years unchanged. In
+  the optimizer, with the budget scaled too, the NPV ranking of the
+  evaluated designs and their budget feasibility are unchanged. The search
+  itself is not invariant: pymoo sums the positive parts of the budget
+  violation (money) and the area and ZEB violations (m² and a fraction)
+  unscaled, so k re-orders infeasible candidates against each other, and
+  the NSGA-II path, and so the front, can differ between currencies.
+  Normalising the constraints would change EUR searches and is left out.
+  The tests check the property with k a power of two, for which the floats
+  scale exactly, in App (flat, tariff with reference, network credit,
+  terminal value, fixed target and daily persistence with a wear weight),
+  Monte Carlo and the optimizer, where no candidate violates the area.
+
+A run that sets no `currency` resolves as before, and results are
+bit-identical. The result format stays `"1"`: the resolved config gains
+`currency`, the CSVs gain a column, and nothing is renamed or removed.
 
 ## Consequences
 
