@@ -6,6 +6,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- BREOS requires Python 3.11.5 or newer instead of 3.11. Every soupsieve
+  release that fixes its open denial-of-service advisories needs 3.11.5, and
+  soupsieve comes in through the `docs` extra. Python 3.11.0 to 3.11.4 date
+  from 2022 to mid-2023. The lock now holds soupsieve 4.1 alone.
 - CI runs less on PRs that cannot need it. Draft PRs run nothing until they
   are marked ready for review. A PR that changes only documentation runs the
   test suite, checks and docs build on Python 3.12 alone, and skips the other
