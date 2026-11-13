@@ -1,10 +1,10 @@
 {
  "case": "which_tariff",
- "title": "Which tariff after PV?",
- "breos_version": "0.7.0",
- "git_describe": "v0.6.2-610-gd29419b",
- "generated_utc": "2026-10-01T20:56:58+00:00",
- "runtime_s": 23.8,
+ "title": "Simple, bi-hourly and tri-hourly tariffs",
+ "breos_version": "0.7.1",
+ "git_describe": "v0.7.0-104-gba568a1",
+ "generated_utc": "2026-11-12T16:49:09+00:00",
+ "runtime_s": 33.2,
  "cheap": false,
  "configs": {
   "configs/examples/tariff-comparison.toml": "7ffde52188a4e89f76c91f3cc58225b558992cbb82df06ce55602487b6ee7540"
@@ -16,7 +16,7 @@
   }
  },
  "dependencies": {
-  "python": "3.12.13",
+  "python": "3.13.14",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",

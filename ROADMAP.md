@@ -47,7 +47,8 @@ set none of the new keys give the same results as 0.7.0.
 - East–West layouts in the optimizer search space.
 - An annual network credit capped at the household's own network charges.
 - Daily-target planner options: `overlap_policy = "hold_target"`, an optional
-  battery-wear cost, and planning at the start of each charging window.
+  battery-wear cost, planning at the start of each charging window, and
+  planning on a day-ahead weather forecast.
 - Battery replacement control in App: replacements can be turned off or
   skipped near the end of the project, and a battery at end of life can be
   retired so the project finishes PV-only. Results list the battery's state

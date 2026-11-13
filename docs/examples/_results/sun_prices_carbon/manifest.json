@@ -1,10 +1,10 @@
 {
  "case": "sun_prices_carbon",
- "title": "Sun, prices or grid carbon?",
- "breos_version": "0.7.0",
- "git_describe": "v0.6.2-610-gd29419b",
- "generated_utc": "2026-10-01T20:54:34+00:00",
- "runtime_s": 5.4,
+ "title": "Porto and Berlin compared",
+ "breos_version": "0.7.1",
+ "git_describe": "v0.7.0-104-gba568a1",
+ "generated_utc": "2026-11-12T16:35:18+00:00",
+ "runtime_s": 6.8,
  "cheap": true,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
@@ -20,7 +20,7 @@
   }
  },
  "dependencies": {
-  "python": "3.12.13",
+  "python": "3.13.14",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
