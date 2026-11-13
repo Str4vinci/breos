@@ -711,6 +711,19 @@ removed in 0.9.0.
   0.68 %. Weather that needs no cap, and every hourly run, are
   bit-identical.
 
+- The committed PVGIS TMY files for Berlin, Golden (Colorado), Melbourne,
+  Nairobi, New Delhi and São Paulo now have a metadata sidecar, as Porto
+  already had. Each records the irradiance time offset PVGIS reports for the
+  site: 0.1838 h (Berlin), 0.0975 h (Nairobi) and 0.0577 h (São Paulo) for
+  SARAH3, and 0.5 h for the three ERA5 files. With the default
+  `solar_position = "auto"` these files no longer warn and fall back to the
+  step labels; the sun is placed at the recorded instant. The DC yield of a
+  10-module system changes by −0.04 % (Berlin), −0.2 % (Nairobi) and
+  +0.1 % (São Paulo), and by +1.5 % to +3.0 % on the ERA5 files (Golden
+  hourly 9937.05 to 10233.99 kWh). Runs with an explicit `solar_position`,
+  Porto, and the validation suite, which pins its sun position, do not
+  change. The example-gallery tool no longer hides this fallback warning.
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.
