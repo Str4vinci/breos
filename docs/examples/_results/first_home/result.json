@@ -1097,6 +1097,7 @@
   },
   "execution": {
    "execution_backend": "python",
+   "requested_execution_backend": "python",
    "python": "3.12.13",
    "numpy": "2.4.6",
    "pandas": "3.0.5"
