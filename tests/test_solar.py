@@ -188,6 +188,8 @@ class TestPVModuleParams:
             ("T_Vmp_pct", float("nan")),
             ("Max_System_Voltage", 0.0),
             ("Max_System_Voltage", float("inf")),
+            ("Max_Series_Fuse_A", 0.0),
+            ("Max_Series_Fuse_A", float("nan")),
             ("bifaciality", float("nan")),
             ("celltype", ""),
         ],
