@@ -65,12 +65,13 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete list.
 
 - **0.8** — the 0.8.0 milestone on GitHub.
   - 15-minute irradiance from hourly data by quadrature reconstruction, with
-    GHI derived from DNI and DHI (#417).
+    GHI derived from DNI and DHI, as an option (#417).
   - The `solar_position` default changes from `"interval-start"` to
-    `"weather"`, which reads the representative time of each step from the
-    weather metadata (#418). This and the quadrature change both change
-    results and ship with one upgrade note, before the AC-coupled reference
-    cases are computed.
+    `"auto"`, which reads the representative time of each step from the
+    weather metadata when it states one, and otherwise keeps
+    `"interval-start"` with a warning (#418). This changes results for
+    weather files that state their time basis, and ships with an upgrade
+    note.
   - AC-coupled batteries as accepted in ADR 0004 (#419).
   - Vehicle-to-home (V2H), on top of the AC-coupled model (#420). An ADR
     comes first.
