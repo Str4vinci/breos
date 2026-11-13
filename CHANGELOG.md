@@ -694,6 +694,23 @@ removed in 0.9.0.
   saying the house load had no finite value. Hourly weather already stamped
   on the local hours is still accepted. Results do not change.
 
+- Hourly weather resampled to 15 minutes no longer gives direct normal
+  irradiance (DNI) above the extraterrestrial normal irradiance of its day
+  (1321 to 1413 W/m²). Near sunrise and sunset the clear-sky ratio divides
+  two small numbers, and the reconstructed DNI reached 2448 W/m² on the
+  committed Porto TMY file and 7264 W/m² on the New Delhi one. Every
+  `irradiance_resampling` policy now caps 15-minute DNI at that bound;
+  `"quadrature"` caps each one-minute sample before it derives GHI. The
+  removed energy is not redistributed, so a capped hour no longer keeps its
+  DNI mean under `"clear_sky_energy_conserving"` or `"quadrature"`. Weather
+  metadata and provenance record the number of capped quarter-hours in
+  `irradiance_resampling_capped_counts`. 15-minute results change: on the
+  Porto TMY file 13 quarter-hours are capped, annual 15-minute DNI falls
+  from 2009.40 to 2008.59 kWh/m², and the DC yield of a 10-module system
+  from 8674.75 to 8674.24 kWh (−0.006 %); on the New Delhi file it falls by
+  0.68 %. Weather that needs no cap, and every hourly run, are
+  bit-identical.
+
 - String electrical limits return zero when the voltage window is above
   open circuit, including mixed batches of feasible and infeasible steps.
   Current limits are checked against short-circuit current before inversion.

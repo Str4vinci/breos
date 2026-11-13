@@ -86,10 +86,18 @@ Without coordinates, direct interpolation replaces clear-sky reconstruction;
 the policy still controls hourly conservation. Already-quarter-hour weather
 is unchanged.
 
+Under every policy the resampled DNI is capped at the extraterrestrial normal
+irradiance of its step (1321 to 1413 W/m² over the year), which no beam can
+exceed. Near sunrise and sunset the clear-sky ratio divides two small numbers
+and can give DNI far above that bound. `"quadrature"` caps each one-minute
+sample before it derives GHI. The cap removes energy: a capped hour does not
+keep its DNI mean, even under the conserving policies.
+
 Apart from the per-sample closure of `"quadrature"`, no GHI/DNI/DHI closure is
 enforced, and DHI is never clipped to GHI. Weather metadata and result provenance record requested and resolved policy,
 interpolation method, the daylight quarter-hours filled by the dawn/dusk
-fallback and the zero-support hour counts, per component. With coordinates and all three components, `irradiance_closure`
+fallback and the zero-support hour counts, per component, and the capped DNI
+quarter-hours (`irradiance_resampling_capped_counts`). With coordinates and all three components, `irradiance_closure`
 records before/after conservation diagnostics over daylight quarter-hours:
 the GHI-weighted mean absolute residual in W/m² and the absolute residual
 energy divided by GHI energy. Solar position uses apparent zenith at the

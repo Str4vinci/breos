@@ -1,9 +1,11 @@
 """Hourly irradiance policy, dawn/dusk support and public runner wiring."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pvlib
 import pytest
 from pvlib.location import Location
 
@@ -11,7 +13,13 @@ from breos import App
 from breos.app_config import resolve_app_config
 from breos.app_inputs import resample_hourly_weather
 from breos.cli import build_parser
-from breos.weather import IRRADIANCE_RESAMPLING_POLICIES, WEATHER_METADATA_KEY, resample_to_15min
+from breos.weather import (
+    IRRADIANCE_RESAMPLING_POLICIES,
+    WEATHER_METADATA_KEY,
+    _representative_time_offset,
+    read_weather_csv,
+    resample_to_15min,
+)
 
 COORDINATES = {"latitude": 41.1579, "longitude": -8.6291, "altitude": 0.0}
 
@@ -490,7 +498,10 @@ def test_quadrature_step_means_do_not_close_with_one_cosine():
     cos_zenith, _ = _minute_geometry(result, pd.Timedelta(minutes=7.5))
     step_cos = cos_zenith.reshape(-1, 15).mean(axis=1)
     residual = np.abs(result.ghi - result.dni * step_cos - result.dhi)
-    assert residual.iloc[3] > 5.0
+    # The uncapped samples of this step averaged 1517 W/m² DNI and left 9.9
+    # W/m²; capped at the extraterrestrial normal irradiance they leave 3.9.
+    assert result.attrs[WEATHER_METADATA_KEY]["irradiance_resampling_capped_counts"] == {"dni": 1}
+    assert residual.iloc[3] > 3.0
 
 
 @pytest.mark.parametrize("policy", IRRADIANCE_RESAMPLING_POLICIES)
@@ -557,3 +568,84 @@ def test_committed_tmy_runs_at_15_minutes(name, no_fetch):
     )
     app.simulate()
     assert app.result()["pv_dc_generation_kwh"] > 0
+
+
+def _committed_tmy(name, *, interval_mean=False):
+    """A committed TMY file; ``interval_mean`` redeclares it so energy conservation applies."""
+    weather = read_weather_csv(COMMITTED_TMY_DIR / name)
+    if interval_mean:
+        weather.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
+    return weather
+
+
+def _dni_extra(source, result):
+    """Extraterrestrial normal irradiance at each quarter-hour's representative time."""
+    offset = _representative_time_offset(
+        source.attrs.get(WEATHER_METADATA_KEY) or {}, pd.Timedelta(minutes=15), require_metadata=False
+    )
+    return pvlib.irradiance.get_extra_radiation(result.index + offset).to_numpy()
+
+
+def _uncapped(monkeypatch):
+    """Lift the DNI cap: the resampler alone sees an infinite extraterrestrial irradiance."""
+    import breos.weather as weather_module
+
+    irradiance = SimpleNamespace(get_extra_radiation=lambda times: pd.Series(np.inf, index=times))
+    monkeypatch.setattr(weather_module, "pvlib", SimpleNamespace(irradiance=irradiance))
+
+
+# Near sunrise and sunset the clear-sky ratio divides two small numbers; the
+# reconstruction reached 7264 W/m² DNI on the New Delhi file before the cap.
+@pytest.mark.parametrize("policy", ["auto", "clear_sky_energy_conserving", "quadrature"])
+@pytest.mark.parametrize("name", list(COMMITTED_TMY_SITES))
+def test_committed_tmy_dni_stays_below_extraterrestrial(name, policy):
+    latitude, longitude, _ = COMMITTED_TMY_SITES[name]
+    source = _committed_tmy(name, interval_mean=policy == "clear_sky_energy_conserving")
+    result = resample_to_15min(source, latitude=latitude, longitude=longitude, irradiance_resampling=policy)
+    dni_extra = _dni_extra(source, result)
+    assert (result.dni.to_numpy() <= dni_extra).all()
+    capped = result.attrs[WEATHER_METADATA_KEY]["irradiance_resampling_capped_counts"]
+    if policy != "quadrature":
+        # Quadrature counts steps with a capped one-minute sample instead.
+        assert capped == {"dni": int(np.sum(result.dni.to_numpy() == dni_extra))}
+
+
+@pytest.mark.parametrize("policy", IRRADIANCE_RESAMPLING_POLICIES)
+def test_frame_needing_no_cap_is_unchanged(monkeypatch, policy):
+    source = _weather()
+    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 425]])
+    capped = resample_to_15min(source, irradiance_resampling=policy, **COORDINATES)
+    assert capped.attrs[WEATHER_METADATA_KEY]["irradiance_resampling_capped_counts"] == {"dni": 0}
+    _uncapped(monkeypatch)
+    uncapped = resample_to_15min(source, irradiance_resampling=policy, **COORDINATES)
+    pd.testing.assert_frame_equal(capped, uncapped, check_exact=True)
+    assert capped.attrs == uncapped.attrs
+
+
+def test_direct_interpolation_records_the_capped_count():
+    result = resample_to_15min(_weather(None))
+    assert result.attrs[WEATHER_METADATA_KEY]["irradiance_resampling_capped_counts"] == {"dni": 0}
+    without_dni = resample_to_15min(_weather(None).drop(columns="dni"))
+    assert without_dni.attrs[WEATHER_METADATA_KEY]["irradiance_resampling_capped_counts"] == {}
+
+
+@pytest.mark.parametrize("policy", ["auto", "clear_sky_energy_conserving", "quadrature"])
+def test_cap_leaves_ghi_and_dhi_untouched(monkeypatch, policy):
+    name = "new_delhi_tmy_2005_2023_pvgis-era5.csv.gz"
+    latitude, longitude, _ = COMMITTED_TMY_SITES[name]
+    source = _committed_tmy(name, interval_mean=policy == "clear_sky_energy_conserving")
+    capped = resample_to_15min(source, latitude=latitude, longitude=longitude, irradiance_resampling=policy)
+    dni_extra = _dni_extra(source, capped)
+    _uncapped(monkeypatch)
+    uncapped = resample_to_15min(source, latitude=latitude, longitude=longitude, irradiance_resampling=policy)
+    assert capped.attrs[WEATHER_METADATA_KEY]["irradiance_resampling_capped_counts"]["dni"] > 0
+    pd.testing.assert_series_equal(capped.dhi, uncapped.dhi, check_exact=True)
+    if policy == "quadrature":
+        # Quadrature derives GHI from the capped one-minute DNI samples.
+        assert (capped.ghi <= uncapped.ghi).all()
+        return
+    pd.testing.assert_series_equal(capped.ghi, uncapped.ghi, check_exact=True)
+    over = uncapped.dni.to_numpy() > dni_extra
+    np.testing.assert_array_equal(capped.dni.to_numpy()[~over], uncapped.dni.to_numpy()[~over])
+    np.testing.assert_array_equal(capped.dni.to_numpy()[over], dni_extra[over])
+    assert capped.attrs[WEATHER_METADATA_KEY]["irradiance_resampling_capped_counts"] == {"dni": int(over.sum())}
