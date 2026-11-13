@@ -74,8 +74,9 @@ notice, and pinned upstream provenance.
 
 Regenerate the example-gallery results *after* bumping the package version,
 so every page is stamped with the release: run
-`uv run python tools/regenerate_gallery_results.py` (all cases, about ten
-minutes; it fetches the Open-Meteo history for the Monte Carlo case), then
+`uv run python tools/regenerate_gallery_results.py` (all cases, more than an
+hour: the Monte Carlo case runs 10 000 trajectories and fetches the
+Open-Meteo history), then
 `uv run python tools/regenerate_gallery_results.py --check`, and commit
 `docs/examples/_results/`.
 
