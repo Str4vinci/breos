@@ -81,6 +81,9 @@ class PVModuleParams:
     # models never use them.
     T_Vmp_pct: Optional[float] = None  # %/°C - Vmp temperature coefficient
     Max_System_Voltage: Optional[float] = None  # V - IEC maximum system voltage rating
+    # A - the datasheet's maximum series fuse rating (IEC 61730 reverse
+    # current overload); None when unpublished.
+    Max_Series_Fuse_A: Optional[float] = None
     # Bypass diodes, each across one section of the module; read by
     # module-level shading (breos.pv.mismatch).
     bypass_diodes: int = 3
@@ -129,7 +132,7 @@ class PVModuleParams:
             self._validate_number(name, value)
             if float(value) >= 0:
                 raise ValueError("breakdown_voltage_v must be negative")
-        elif name == "Max_System_Voltage" and value is not None:
+        elif name in ("Max_System_Voltage", "Max_Series_Fuse_A") and value is not None:
             self._validate_number(name, value, minimum=0.0, minimum_strict=True)
         elif name == "NOCT" and value is not None:
             self._validate_number(name, value, minimum=0.0, maximum=100.0, minimum_strict=True)
