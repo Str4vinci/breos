@@ -523,6 +523,7 @@ def test_no_vehicle_provenance_is_null():
 
 @pytest.mark.parametrize("freq", ["h", "15min"])
 def test_app_vehicle_backend_parity(freq):
+    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     kwargs = {
         **CONFIG,
         "projection_years": 1,
