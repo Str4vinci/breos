@@ -103,6 +103,11 @@ WEEK_COLUMNS = (
     "PV_DC_Curtailed",
 )
 # Keys whose values describe the machine, not the run; --check ignores them.
+# Results do not depend on the dispatch backend, but the provenance names the
+# one that ran. The stored results pin the reference backend, so a result is the
+# same file whether or not Numba is installed. A case that names a backend keeps it.
+GALLERY_BACKEND = "python"
+
 VOLATILE_KEYS = frozenset({"breos_version", "python", "numpy", "pandas", "pvlib", "scipy", "numba", "pymoo"})
 
 
@@ -330,7 +335,7 @@ class Context:
         if isinstance(location, str) and location in TMY_FILES:
             self.stage_tmy(location)
         with self.inside():
-            app = breos.App(dict(config))
+            app = breos.App({"execution_backend": GALLERY_BACKEND, **config})
             app.simulate()
         provenance = app.result()["provenance"]
         self.currencies.add(provenance["currency"])
@@ -1215,7 +1220,7 @@ def montecarlo(ctx: Context) -> Output:
         "note": "fetched at regeneration time; not committed",
     }
     mc.update(n_runs=MC_RUNS, n_procs=ctx.options.procs)
-    settings = MonteCarloSettings(weather_file=str(history), **mc)
+    settings = MonteCarloSettings(weather_file=str(history), **{"execution_backend": GALLERY_BACKEND, **mc})
     with ctx.inside():
         study = run_montecarlo(config, settings)
     deterministic = ctx.simulate(with_overrides(config, {"start_date": f"{settings.target_year}-01-01"})).result()

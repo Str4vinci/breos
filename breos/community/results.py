@@ -88,6 +88,8 @@ def _site_provenance(site: SiteRun, account: ParticipantAccount | AssetAccount) 
     if isinstance(resolved, ResolvedAppConfig):
         cfg.update(tilt=resolved.tilt, azimuth=resolved.azimuth, axis_azimuth=resolved.axis_azimuth)
         cfg["pv_module"] = cfg["pv_module"] or resolved.pv_module_key
+        # The request, as in the App record; the execution block names what ran.
+        cfg["execution_backend"] = resolved.requested_execution_backend
     record = {
         **_json_record(site.provenance),
         "breos_version": package_version(),

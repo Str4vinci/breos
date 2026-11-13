@@ -11,6 +11,7 @@ import pytest
 import breos
 from breos.app_config import ALLOWED_CONFIG_KEYS, DEFAULTS, ResolvedAppConfig, resolve_app_config
 from breos.community.config import SHARED_APP_KEYS, HouseholdConfig, SharedSettings, parse_community_config
+from breos.execution import resolve_execution_backend
 from tests.offline_app import CREDIT, TOU
 
 EXAMPLE = """
@@ -406,8 +407,16 @@ def test_shared_economics_and_custom_location_are_injected_into_sites(config):
     )
     parsed = parse_community_config(config)
     for site in [*(p.site for p in parsed.participants), *(a.site for a in parsed.assets)]:
-        for key in SHARED_APP_KEYS:
+        for key in SHARED_APP_KEYS - {"execution_backend"}:
             assert site.cfg[key] == getattr(parsed.community.shared, key)
+        # The shared layer keeps the request; each PV site runs it resolved.
+        requested = parsed.community.shared.execution_backend
+        assert requested == "auto"
+        if isinstance(site, ResolvedAppConfig):
+            assert site.requested_execution_backend == requested
+            assert site.cfg["execution_backend"] == resolve_execution_backend(requested)
+        else:
+            assert site.cfg["execution_backend"] == requested
     layer = parsed.community.shared.app_payload()
     layer["location"]["latitude"] = 0
     assert parsed.community.shared.location["latitude"] == 41

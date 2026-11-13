@@ -494,6 +494,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- `execution_backend` defaults to the new value `"auto"` in App, the CLI,
+  Monte Carlo, community runs and the optimizer entry points: the compiled
+  dispatch when Numba is installed (the `breos[fast]` extra), the Python
+  dispatch otherwise. Results are identical, since the two backends are
+  bit-identical by test. Without Numba nothing changes and nothing is
+  warned. `"python"` and `"numba"` keep their meaning, and `"numba"` without
+  the extra still fails before the run starts. The `execution` provenance
+  block adds `requested_execution_backend`, the name asked for;
+  `execution_backend` there records the backend that ran, and
+  `resolved_config` keeps the request, so a stored config replays on a
+  machine without Numba. The first run in a fresh environment pays a
+  one-time compile of about 3 s; later processes load the kernels from the
+  on-disk cache. A one-year hourly run is about 0.2 s slower with Numba
+  than without; a 20-year 15-minute run is about 4.5 times faster.
 - The sun's position, about 80 % of a PV run's time, is computed once per
   site and time grid and kept for the next request, up to about 20 MB per
   process. A repeated PV run takes a fifth of the time, and the arrays of

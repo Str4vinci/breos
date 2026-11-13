@@ -2,7 +2,8 @@
 
 **Status:** Implemented. Added in 0.6.0 for Monte Carlo, App and projected
 optimization. In 0.7.0 the compiled kernel became the Python day loop itself
-and gained the smart-charging instruction arrays.
+and gained the smart-charging instruction arrays. On 2026-11-13 the default
+became `auto`; see [Default backend](#default-backend).
 
 BREOS keeps the Python battery simulation as its numerical reference. Repeated
 Monte Carlo and optimization runs can select an optional Numba backend for the
@@ -35,6 +36,35 @@ backend is selected.
 The removed `breos.numba_kernels` module (deleted in 0.6.0) compiled whole
 projects, including degradation and replacement. It is not coming back:
 it duplicated science that must stay in one place.
+
+### Default backend
+
+**Amended 2026-11-13.** The start of this section records the original
+decision: `python` by default, the compiled path selected only by name. The default is
+now `auto`, for App, the CLI, Monte Carlo, community runs and the optimizer
+entry points. `auto` runs `numba` when Numba can be imported and `python`
+otherwise. `python` and `numba` keep their meaning, and `numba` without the
+extra still fails before a run starts.
+
+The original reason, that the reference must not be replaced by ambient
+configuration, no longer outweighs the cost: the two backends are
+bit-identical by test on the same toolchain, so the choice changes run time
+and the recorded toolchain, never a result. A user without Numba sees no
+change and no warning.
+
+`auto` is resolved once, where a run's config is resolved
+(`resolve_app_config`, `run_montecarlo` for an explicit setting, and the
+optimizer entry points). Everything after that, the dispatch included, sees
+`python` or `numba`; the dispatch refuses an unresolved `auto`. The
+`execution` provenance block keeps `execution_backend` as the backend that ran
+and adds `requested_execution_backend`, the name asked for. The recorded
+`resolved_config` keeps the request, as it does for `solar_position`, so a
+stored config replays on a machine with or without Numba; Monte Carlo
+`settings` record the backend that ran, as before. The input caches
+do not key on the backend, as before. The backend is never picked by run size.
+The low-level `simulate_energy_balance` and `simulate_energy_balance_summary`
+keep `python` as their default and accept only a backend that runs: they
+write no provenance that could record a resolution.
 
 ## Numerical contract
 

@@ -32,7 +32,7 @@ from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
     limit_worker_threads,
     require_backend,
-    validate_execution_backend,
+    resolve_execution_backend,
 )
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.optimization_config import (
@@ -387,7 +387,7 @@ def _evaluate_projected_design_metrics(
     inverter_ac_capacity_w: Optional[float],
     emissions_params: Optional[EmissionsParams] = None,
     return_tables: bool = False,
-    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
+    execution_backend: str = "python",
     ac_output_scale: float = 1.0,
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
@@ -1078,7 +1078,7 @@ def evaluate_projected_design(
     # Before the PV production model runs, not after it. Computing a year of
     # irradiance and then failing on a missing import wastes the expensive part
     # and reports the cheap problem late.
-    require_backend(execution_backend)
+    execution_backend = require_backend(execution_backend)
 
     study = _DesignStudy.resolve(
         tmy_data,
@@ -1179,7 +1179,7 @@ try:
             # Candidate scoring is the hottest loop in the package, which makes
             # it exactly the place where a silently-inherited backend would be
             # hardest to notice and hardest to attribute afterwards.
-            backend = validate_execution_backend(execution_backend)
+            backend = resolve_execution_backend(execution_backend)
             # Checked and defaulted once, before any model preparation: an
             # unknown key raises, and every default is in the resolved config.
             config = resolve_optimization_config(config)
@@ -1562,7 +1562,7 @@ def optimize_system_multi_objective(
     # Before the worker pool exists. An NSGA-II run is long and a missing
     # optional dependency should not surface as a traceback from inside a pool
     # that then has to be torn down.
-    require_backend(execution_backend)
+    execution_backend = require_backend(execution_backend)
 
     # Invalid tariffs must fail before a worker pool is created.
     problem = SolarDesignProblem(
