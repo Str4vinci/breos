@@ -617,6 +617,14 @@ removed in 0.9.0.
   break and how many break it, and whose `evaluated` attribute holds the
   table of scored designs. It used to give a bare message. Results do not
   change.
+- Custom load profiles (#440). In a timezone whose clock moves by part of a
+  step, such as `Australia/Lord_Howe` (30 minutes), the rows are pinned at the
+  finer step and averaged back, so the winter load shape no longer flattens
+  into a constant. A profile with no energy and a positive
+  `annual_consumption_kwh` raises instead of returning 0 kWh. A numeric first
+  column is a row label only when it counts the rows; otherwise it is a value
+  column, so an undated file with two load columns asks for `load_profile_column`
+  instead of reading the second one.
 
 ### Documentation
 
