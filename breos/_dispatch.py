@@ -1358,16 +1358,16 @@ def _dispatch_vehicle_step(
     return energy, pv_ac, grid_ac, dc_in, dc_in - stored, draw, discharge_loss, charger_loss, ac_out, pv_stored
 
 
-def _vehicle_charge_ahead(steps_to_departure: np.ndarray, charge_period: np.ndarray) -> np.ndarray:
+def _vehicle_charge_ahead(steps_to_departure: np.ndarray, charge_period: np.ndarray | None) -> np.ndarray:
     """Whether a charge-period step remains before each step's departure.
 
-    The steps after this one and before the departure are checked. Without
-    charge periods, grid charging is not restricted to periods, so every
-    step counts. A departure past the end of the arrays counts as reachable.
+    The steps after this one and before the departure are checked. None
+    means no configured charge periods; an array restricts charging even
+    when no step matches. A departure past the arrays counts as reachable.
     """
+    if charge_period is None:
+        return np.ones(len(steps_to_departure), dtype=np.bool_)
     n = len(charge_period)
-    if not charge_period.any():
-        return np.ones(n, dtype=np.bool_)
     positions = np.arange(n, dtype=np.int64)
     # Earliest charge-period step at or after each position; n when none.
     following = np.minimum.accumulate(np.where(charge_period, positions, n)[::-1])[::-1]
