@@ -112,6 +112,7 @@ def _step(
         0.95,
         1e9,
         *NO_CONVERSION.kernel_arguments(1.0),
+        inverter_cap,
     )
 
 
