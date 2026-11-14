@@ -1226,6 +1226,7 @@ def _dispatch_vehicle_step(
     s_max: float,
     charge_period: bool,
     discharge_period: bool,
+    charge_ahead: bool,
     pow_two: float,
     flat_ac: np.ndarray,
     flat_eff: np.ndarray,
@@ -1235,6 +1236,8 @@ def _dispatch_vehicle_step(
     Modes are 0 uncontrolled, 1 V1G, 2 V2H. A zero departure countdown
     means no scheduled departure: PV/period charging may still run, but
     neither mandatory charging nor the discharge deadline binds.
+    Without a charge-period step before the departure (``charge_ahead``
+    false), V2H does not discharge below the departure target.
 
     Returns ending energy, PV AC in, grid AC in, DC charge input, battery
     charge loss, stored-energy discharge draw, battery discharge loss,
@@ -1279,7 +1282,7 @@ def _dispatch_vehicle_step(
         pv_stored = stored * pv_ac / ac_in
         energy = end
     elif mode == 2 and discharge_period:
-        guard = target - future if steps_to_departure > 0 else floor
+        guard = (target - future if charge_ahead else target) if steps_to_departure > 0 else floor
         bound = max(floor, guard)
         available = max(0.0, energy - bound)
         ac_target = min(deficit, rating_wh)
@@ -1287,14 +1290,36 @@ def _dispatch_vehicle_step(
         dc_out = min(available * eff_d, dc_needed)
         draw = dc_out / eff_d
         ac_out = min(ac_target, _dc_ac(dc_out, rating_wh, charger_eff, 1.0, pow_two, flat_ac, flat_eff, 0.0, 0.0)[0])
-        end = energy - draw
-        if available > 0.0 and dc_out >= available * eff_d:
-            end = bound
-            draw = energy - end
-        energy = end
-        discharge_loss = draw - dc_out
-        charger_loss = dc_out - ac_out
+        if ac_out > 0.0:
+            end = energy - draw
+            if available > 0.0 and dc_out >= available * eff_d:
+                end = bound
+                draw = energy - end
+            energy = end
+            discharge_loss = draw - dc_out
+            charger_loss = dc_out - ac_out
+        else:
+            # A draw too small for the charger to deliver AC is not taken.
+            draw = 0.0
     return energy, pv_ac, grid_ac, dc_in, dc_in - stored, draw, discharge_loss, charger_loss, ac_out, pv_stored
+
+
+def _vehicle_charge_ahead(steps_to_departure: np.ndarray, charge_period: np.ndarray) -> np.ndarray:
+    """Whether a charge-period step remains before each step's departure.
+
+    The steps after this one and before the departure are checked. Without
+    charge periods, grid charging is not restricted to periods, so every
+    step counts. A departure past the end of the arrays counts as reachable.
+    """
+    n = len(charge_period)
+    if not charge_period.any():
+        return np.ones(n, dtype=np.bool_)
+    positions = np.arange(n, dtype=np.int64)
+    # Earliest charge-period step at or after each position; n when none.
+    following = np.minimum.accumulate(np.where(charge_period, positions, n)[::-1])[::-1]
+    after = np.append(following[1:], n)
+    last = positions + steps_to_departure - 1
+    return (after <= last) | (last >= n)
 
 
 def _vehicle_drive(
@@ -1425,6 +1450,7 @@ def _dispatch_day(
     vehicle_countdown: np.ndarray,
     vehicle_charge_period: np.ndarray,
     vehicle_discharge_period: np.ndarray,
+    vehicle_charge_ahead: np.ndarray,
     vehicle_was_plugged: bool,
     vehicle_minimum: float,
     vehicle_drive_first: np.ndarray,
@@ -1800,6 +1826,7 @@ def _dispatch_day(
                     vehicle_s_max,
                     vehicle_charge_period[i],
                     vehicle_discharge_period[i],
+                    vehicle_charge_ahead[i],
                     pow_two,
                     flat_ac,
                     flat_eff,
@@ -2081,6 +2108,7 @@ def _day_arguments(
     vehicle_grid_origin_wh: float = 0.0,
     vehicle_charge_period: Optional[np.ndarray] = None,
     vehicle_discharge_period: Optional[np.ndarray] = None,
+    vehicle_charge_ahead: Optional[np.ndarray] = None,
     grid_import_limit_w: float = math.inf,
     vehicle_was_plugged: bool = True,
     vehicle_soh_fraction: float = 1.0,
@@ -2216,6 +2244,7 @@ def _day_arguments(
         _EMPTY_VEHICLE_COUNTDOWN if vehicle_schedule is None else vehicle_schedule.steps_to_departure,
         _EMPTY_VEHICLE_MASK if vehicle_charge_period is None else vehicle_charge_period,
         _EMPTY_VEHICLE_MASK if vehicle_discharge_period is None else vehicle_discharge_period,
+        _EMPTY_VEHICLE_MASK if vehicle_charge_ahead is None else vehicle_charge_ahead,
         bool(vehicle_was_plugged),
         0.0 if vehicle_config is None else float(vehicle_config.min_soc * vehicle_capacity_wh),
         _EMPTY_VEHICLE_FLOAT if vehicle_schedule is None else vehicle_schedule.drive_first_wh,

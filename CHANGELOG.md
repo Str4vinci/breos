@@ -678,6 +678,18 @@ removed in 0.9.0.
   hourly 9937.05 to 10233.99 kWh). Runs with an explicit `solar_position`,
   Porto, and the validation suite, which pins its sun position, do not
   change. The example-gallery tool no longer hides this fallback warning.
+- A V2H vehicle with `charge_periods` no longer discharges below its
+  departure target when no charge-period step remains before the departure.
+  It used to serve the house in the peak hours before a departure and then
+  buy the energy back from the grid at the peak price to meet the target.
+  Energy above the target is still discharged, and V2H without
+  `charge_periods` changes only where a discharge was too small for the
+  charger to deliver any AC: such a discharge is no longer taken. V2H
+  results change: on the bundled Portugal example, year-1 V2H to the house
+  falls from 137.1 to 118.2 kWh, R2's year-1 import cost from 524.64 to
+  522.47 EUR, and the vehicle benefit NPV rises from -2496.59 to
+  -2490.64 EUR. Runs without a vehicle and V1G runs do not change
+  (ADR 0005 A17).
 
 ### Documentation
 
