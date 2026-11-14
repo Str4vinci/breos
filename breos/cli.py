@@ -29,7 +29,7 @@ from breos.app_config import (
     validate_montecarlo_config,
 )
 from breos.app_inputs import _input_cache_key, reuse_prepared_inputs
-from breos.config_schema import MappingOf
+from breos.config_schema import MappingOf, unknown_keys_message
 from breos.constants import _ROUND_TRIP_EFFICIENCY
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.execution import EXECUTION_BACKENDS
@@ -450,8 +450,7 @@ def _check_sweep_key(key: str) -> None:
     parts = key.split(".")
     top_level = parts[0]
     if top_level not in ALLOWED_CONFIG_KEYS:
-        available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
-        raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+        raise ValueError(unknown_keys_message({key: None}, ALLOWED_CONFIG_KEYS, noun="sweep key"))
     if top_level == "costs" and len(parts) == 1:
         # A whole [costs] table per run would drop the file's other overrides.
         available = ", ".join(f"costs.{name}" for name in sorted(NESTED_TABLE_SPECS["costs"].keys))

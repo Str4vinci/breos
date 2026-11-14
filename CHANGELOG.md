@@ -438,6 +438,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   as before, byte for byte. With `--output` the file is unchanged and the
   terminal shows the summary and the file name. Warnings raised by BREOS
   print as one `breos: warning:` line, without the source path and code line.
+- Config errors are shorter and say what to fix. A misspelt key names the
+  nearest valid key (`'battery_capacty_kwh' (did you mean 'battery_kwh'?)`)
+  instead of listing all 91 keys, and a `[battery]` table points to the flat
+  `battery_kwh` key. A value out of range or of the wrong type is quoted
+  (`'tilt' must be between 0 and 90; got 95`), and SOC limits given in
+  percent say they are fractions. A community config given to `breos run` or
+  `App` says to run it with `breos.Community`. A missing external load
+  profile file says where to put it and links to the page on getting it.
+  A misspelt sweep key names the nearest valid key too. A `[tariff]` table
+  without a schedule says to set a flat price with `costs.electricity_cost`,
+  `costs.electricity_sold_cost` and `costs.daily_power_cost`, and a
+  `battery_indoor_model` that is not a table names its keys.
+  Exception types are unchanged.
 
 ### Deprecated
 
