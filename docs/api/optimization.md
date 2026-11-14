@@ -203,4 +203,5 @@ analysis and plots; BREOS does not require a particular visualization layer.
 
    breos.optimization.OptimizationResult
    breos.optimization.ProjectedDesignResult
+   breos.optimization.NoFeasibleDesignError
 ```

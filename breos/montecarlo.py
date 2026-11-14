@@ -1147,9 +1147,17 @@ def _initialize_pool_worker(study: _Study) -> None:
     _initialize_worker(study)
 
 
-def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame | None, str | None]:
-    """Evaluate one deterministic per-run random stream in a worker."""
-    study = _WORKER_STUDY
+def _run_trajectory_index(
+    run_idx: int, study: _Study | None = None
+) -> tuple[int, dict[str, Any], pd.DataFrame | None, str | None]:
+    """Evaluate one deterministic per-run random stream.
+
+    A serial study passes its own ``study``; a pool worker reads the one its
+    initializer installed. The process-wide context is only for pool workers,
+    so studies run at the same time from threads cannot read each other's.
+    """
+    if study is None:
+        study = _WORKER_STUDY
     if study is None:
         raise RuntimeError("Monte Carlo worker context was not initialized")
     settings = study.settings
@@ -1327,8 +1335,7 @@ def run_montecarlo(
         vehicle_schedule,
     )
     if settings.n_procs == 1:
-        _initialize_worker(study)
-        outputs = [_run_trajectory_index(run_idx) for run_idx in range(settings.n_runs)]
+        outputs = [_run_trajectory_index(run_idx, study) for run_idx in range(settings.n_runs)]
     else:
         with Pool(settings.n_procs, initializer=_initialize_pool_worker, initargs=(study,)) as pool:
             outputs = pool.map(_run_trajectory_index, range(settings.n_runs))
