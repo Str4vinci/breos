@@ -1,0 +1,30 @@
+{
+ "system_npv": -6497.63,
+ "household_adjusted_npv": {
+  "replacement_outlays_difference_npv": 0.0,
+  "wear_npv": 1.2708320799915782,
+  "study_mode": "v2h",
+  "reference_mode": "uncontrolled",
+  "comparable": true,
+  "reason": null,
+  "system_npv": -6497.627300964219,
+  "away_cost_difference_npv": 0.0,
+  "unserved_cost_difference_npv": 0.0,
+  "npv": -6498.898133044211
+ },
+ "vehicle_benefit": {
+  "replacement_outlays_difference_npv": 0.0,
+  "wear_npv": 8.028803156811136,
+  "study_mode": "v2h",
+  "reference_mode": "v1g",
+  "comparable": true,
+  "reason": null,
+  "operating_savings_npv": 11.435567311333216,
+  "charger_premium": 2500.0,
+  "home_bill_savings_npv": 11.435567311333216,
+  "export_revenue_gain_npv": 0.0,
+  "away_savings_npv": 0.0,
+  "unserved_savings_npv": 0.0,
+  "npv": -2496.593235845478
+ }
+}

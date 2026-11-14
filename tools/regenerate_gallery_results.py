@@ -689,6 +689,64 @@ def quarterly_berlin(ctx: Context) -> Output:
     return Output({"strategies.json": rows}, {"variants": strategies})
 
 
+@case("vehicle_to_home", "Vehicle-to-home on a bi-hourly tariff in Porto", cheap=True)
+def vehicle_to_home(ctx: Context) -> Output:
+    config = ctx.config("configs/examples/vehicle-to-home-portugal.toml")
+    result = ctx.simulate(config).result()
+    vehicle = result["vehicle"]
+    rows = []
+    for name, household in vehicle["households"].items():
+        year = household["yearly"][0]
+        rows.append(
+            {
+                "household": name,
+                "mode": household["mode"],
+                "grid_import_year1_kwh": year["grid_import_kwh"],
+                "grid_export_year1_kwh": year["grid_export_kwh"],
+                "home_bill_year1": year["home_import_cost_year1_prices"]
+                + year["fixed_charge_year1_prices"]
+                - year["network_credit_year1_prices"]
+                - year["export_revenue_year1_prices"],
+                **{
+                    key: year[key]
+                    for key in (
+                        "pv_ac_charge_kwh",
+                        "grid_ac_charge_kwh",
+                        "ac_to_load_kwh",
+                        "drive_served_kwh",
+                        "drive_unserved_kwh",
+                        "departures_short",
+                        "away_purchased_kwh",
+                    )
+                },
+                "final_soh_pct": household["final_soh_fraction"] * 100,
+                "replacements": household["totals"]["replacements"],
+                **{
+                    key: household[key]
+                    for key in (
+                        "replacement_outlays_npv",
+                        "terminal_pack_credit_npv",
+                        "operating_cost_npv",
+                    )
+                },
+            }
+        )
+    comparisons = {
+        "system_npv": result["npv_savings"],
+        "household_adjusted_npv": vehicle["household_adjusted_npv"],
+        "vehicle_benefit": vehicle["vehicle_benefit"],
+    }
+    return Output(
+        {"households.csv": pd.DataFrame(rows).sort_values("household"), "comparisons.json": comparisons},
+        {
+            "projection_years": config["projection_years"],
+            "resolution": config["resolution"],
+            "vehicle": config["vehicle"],
+            "tariff": config["tariff"],
+        },
+    )
+
+
 # The ageing page's degradation models: the native engine's two field fits and
 # three BLAST cell models, by key, label and the config keys that select them.
 AGEING_MODELS = (

@@ -911,11 +911,25 @@ def add_co2_projection(proj: pd.DataFrame, year_rows: pd.DataFrame, emissions_pa
     """
     from breos.emissions import calculate_co2_projection
 
+    vehicle_inputs = {}
+    if "Baseline_Import_kWh" in year_rows:
+        vehicle_inputs = {
+            "yearly_baseline_import_kwh": year_rows["Baseline_Import_kWh"].to_numpy(),
+            "yearly_baseline_away_kwh": year_rows["Baseline_Away_kWh"].to_numpy(),
+            "yearly_import_kwh": year_rows["Import_kWh"].to_numpy(),
+            "yearly_away_kwh": year_rows["Vehicle_Away_Charge_Purchased_kWh"].to_numpy(),
+            "yearly_unattributed_battery_kwh": (
+                year_rows["Battery_AC_To_Load_kWh"]
+                - year_rows["PV_Origin_Battery_AC_Load_kWh"]
+                - year_rows["Grid_Origin_Battery_AC_Load_kWh"]
+            ).to_numpy(),
+        }
     co2_proj = calculate_co2_projection(
         proj["PV_Production_kWh"].to_numpy(),
         proj["Export_kWh"].to_numpy(),
         emissions_params,
         _grid_shift_kwh(year_rows),
+        **vehicle_inputs,
     )
     for col in (
         "CO2_Avoided_Total_kg",

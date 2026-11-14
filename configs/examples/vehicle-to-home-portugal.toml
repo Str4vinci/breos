@@ -1,0 +1,50 @@
+# Illustrative V2H study, not a supplier offer or product specification.
+# Charger premium, efficiencies and pack price are user inputs, not BREOS presets.
+# Three hourly project years keep this gallery example quick to regenerate.
+# Use your measured equipment, prices and driving schedule for a study.
+#
+#   breos run --config configs/examples/vehicle-to-home-portugal.toml
+
+location = "porto"
+start_date = "2025-01-01"
+resolution = "h"
+projection_years = 3
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5
+cost_preset = "residential_pt"
+emissions_country = "PT"
+
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+export_prices = { all = 0.0500 }
+fixed_charge_per_day = 0.30
+
+[vehicle]
+mode = "v2h"
+reference_mode = "v1g"
+battery_kwh = 40
+min_soc = 0.10
+max_soc = 1.0
+departure_soc = 0.80
+v2h_min_soc = 0.30
+charger_ac_rating_kw = 7.4
+charger_efficiency = 0.94
+charge_efficiency = 0.95
+discharge_efficiency = 0.95
+charge_periods = ["off_peak"]
+discharge_periods = ["peak"]
+charger_cost = 2500                 # example installed premium, EUR
+battery_cost_per_kwh = 120          # example pack-only price, EUR/kWh
+battery_temperature = "weather"    # ambient proxy, no vehicle thermal model
+eol_percentage = 0.70              # study threshold, not a lifetime prediction
+enable_replacement = true
+allow_terminal_replacement = false
+replacement_min_remaining_years = 1
+skipped_replacement_action = "keep"
+
+[vehicle.schedule]
+weekday = { arrive = "18:30", depart = "07:45", trip_kwh = 9 }
+weekend = { arrive = "14:00", depart = "10:00", trip_kwh = 12 }

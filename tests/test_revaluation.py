@@ -258,6 +258,7 @@ def test_revaluation_keys_are_the_prices():
         "replacement_cost_learning",
         "sell_price_inflation",
         "tariff",
+        "vehicle",
     }
 
 

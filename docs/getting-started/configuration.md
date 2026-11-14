@@ -1397,6 +1397,230 @@ network_import_prices = { low = 0.0311, standard = 0.0888, high = 0.1659 }
 Results then carry each household's eligible network charges and credit;
 see [Year-1 money keys](interpreting-results.md#year-1-money-keys).
 
+## Vehicle-to-home
+
+A vehicle is a part-time AC-coupled store behind its own charger. PV serves
+the house and the stationary battery first. The vehicle then charges from
+the remaining PV surplus or the grid. In V2H mode it can serve the remaining
+house load while plugged in. It never exports, charges the stationary
+battery or receives energy from it. Idle PV inverters take their draw before
+surplus reaches the vehicle; the grid supplies any uncovered draw.
+
+Add `[vehicle]` to an App configuration. This minimal example uses
+illustrative equipment and prices, in the run's currency:
+
+```toml
+[vehicle]
+mode = "v2h"
+battery_kwh = 40
+departure_soc = 0.80
+charger_ac_rating_kw = 7.4
+charger_efficiency = 0.94
+charger_cost = 2500          # example installed premium over the reference charger
+battery_cost_per_kwh = 120   # example pack-only price per nominal kWh
+
+[vehicle.schedule]
+weekday = { arrive = "18:30", depart = "07:45", trip_kwh = 9 }
+weekend = { arrive = "14:00", depart = "10:00", trip_kwh = 12 }
+```
+
+Capacity, departure target, charger rating and charger efficiency have no
+defaults. The pack price is required for economics. `charger_cost` is
+required in V2H mode; it defaults to zero in the other modes. BREOS supplies
+no vehicle equipment or price preset. Use your own charger premium,
+efficiencies, away-charging price and pack price. Explicit zero prices are
+valid. The complete [vehicle key reference](config-reference.md#vehicle)
+lists defaults and accepted values. A runnable example is
+`configs/examples/vehicle-to-home-portugal.toml`.
+
+### Modes and departure target
+
+| `mode` | Home behaviour |
+|---|---|
+| `"uncontrolled"` | Charges at available full power toward the departure target, PV first and then grid |
+| `"v1g"` | Uses surplus PV up to `max_soc`; grid charging goes toward the departure target in allowed periods or when the deadline guard needs it |
+| `"v2h"` | V1G charging plus discharge to remaining house load, subject to its floor and deadline guard |
+
+SOC is a fraction of current capacity: nominal kWh times vehicle health.
+It is not a fraction of the usable window. `min_soc` defaults to 0.10,
+`max_soc` to 1.0. `v2h_min_soc` defaults to `min_soc` and applies only to
+V2H discharge; driving may use energy down to `min_soc`. The project starts
+at `departure_soc`, with unattributed energy. Arrival SOC is calculated from
+the trip and away charging, never supplied as an input.
+
+The deadline guard knows the schedule and current vehicle state. It uses no
+forecast of load, PV or prices. It starts charging when waiting another
+plugged step would make the departure target unreachable at full power. It
+also limits V2H discharge so that the target stays reachable. Reached
+targets land exactly on the requested energy. An impossible target does not
+stop the run: departure shortfall and later unserved driving are reported.
+
+With a `[tariff]`, `charge_periods = ["off_peak"]` permits opportunistic grid
+charging in those periods. The guard may charge outside them. Grid charging
+stops at `departure_soc`; surplus PV may charge V1G/V2H to `max_soc`.
+`discharge_periods = ["peak"]` limits V2H discharge. Omit it to allow discharge
+at any time. Charge and discharge periods must be disjoint. Uncontrolled
+mode refuses period controls. The vehicle uses one direction per step.
+
+The shared site limit is `[smart_charging].grid_import_limit_w`. It counts
+house demand and both stores' grid charging. Load is never cut; the vehicle
+uses the import room left after the stationary step. The key also works
+without a stationary battery. To set only the site limit, keep stationary
+smart charging disabled:
+
+```toml
+[smart_charging]
+mode = "disabled"
+grid_import_limit_w = 6900
+```
+
+A binding limit can leave V1G/V2H
+short where uncontrolled charging would succeed: the guard cannot know how
+much room future house loads will leave. Always inspect departure and driving
+shortfalls. `daily_persistence` is refused with a vehicle.
+
+### Schedule and driving
+
+The weekday rule applies Monday–Friday; the weekend rule applies Saturday
+and Sunday. The departure's local date selects the rule. Holidays are not
+modelled. An arrival time at or before departure means arrival the next day.
+`trip_kwh` is gross stored energy withdrawn for driving, including driving
+losses. Away charging does not reduce this input.
+
+The template withdraws half the trip energy in the first away step and half
+in the last. Intermediate steps are parked. A one-step absence has both
+legs and no parked charging time. This is a coarse commute template, not a
+measured driving profile. A file can describe other legs and charging stops:
+
+```toml
+[vehicle.schedule]
+file = "trips.csv"   # relative to the working directory; replaces both day rules
+```
+
+```text
+start,end,kind,energy_kwh,away_charging
+2025-01-06T07:45:00+00:00,2025-01-06T08:30:00+00:00,drive,4.5,
+2025-01-06T08:30:00+00:00,2025-01-06T17:45:00+00:00,park,,true
+2025-01-06T17:45:00+00:00,2025-01-06T18:30:00+00:00,drive,4.5,
+```
+
+| Field | Meaning |
+|---|---|
+| `start`, `end` | Ordered, non-overlapping segment timestamps; `end` must follow `start` |
+| `kind` | `drive` or `park`; contiguous segments form an absence, and gaps mean home |
+| `energy_kwh` | Gross energy of a drive, spread by its elapsed time in each step; blank for a park |
+| `away_charging` | `true` or `false` for each park; blank for a drive |
+
+The vehicle must be home for a whole step to plug in. Departures round down;
+arrivals round up. At hourly resolution, 07:45 leaves at 07:00 and 18:30
+plugs in at 19:00. Parked charging uses only the actual permitted parked
+hours within a step. A step processes driving, then parked charging, then
+the remaining driving. More alternations within one step collapse into
+that order. This approximation matters most at coarse resolution.
+
+Times use the configured location timezone. At a repeated DST hour, a
+template takes the first departure and last arrival. A nonexistent template
+time shifts forward to the transition. Naive file timestamps at ambiguous
+or nonexistent times are refused: give an explicit offset. The resolved
+calendar replays each project year, like tariffs. Multi-day and year-end
+absences carry energy, origins, health and lifecycle state across the seam.
+
+### Away charging and unmet driving
+
+Away charging requires its own table. All four keys are required; these
+values are examples, not supplied defaults:
+
+```toml
+[vehicle.away_charging]
+target_soc = 0.70
+power_kw = 3.7
+efficiency = 0.90
+price = 0.30       # run currency per kWh purchased away
+```
+
+Charging runs only in permitted parked windows. Template day rules permit
+it by default; set `away_charging = false` on a day rule to disable it.
+Stored energy is purchased energy times `efficiency`, limited by power,
+parked hours and room to the target. A vehicle already above `target_soc`
+keeps its energy. Away purchases stay separate from the home meter but
+enter household costs and emissions. They cannot repair a departure target
+that had to be met at home.
+
+Driving never takes energy below `min_soc` and never borrows from later
+charging. The remainder is unserved. Optional
+`vehicle.outside_charging_price` charges a money penalty per unserved kWh
+in every household. It restores no energy and changes no dispatch. Without
+it, unserved driving is reported and can make a comparison non-comparable.
+
+### Ageing and replacement policy
+
+The vehicle has its own degradation lifecycle on real on-board SOC, at home
+and away. `vehicle.degradation_engine` defaults to `"native"`, with
+`vehicle.calendar_model = "naumann_lam_field_calibrated"`. App also accepts
+`degradation_engine = "blast"` with an enabled `vehicle.blast_model` key.
+`vehicle.battery_temperature` accepts `"weather"` (the default),
+a fixed °C value or the same timestamped CSV format as
+[`battery_temperature`](#battery-capacity-and-the-soc-window). There is no indoor model.
+Daily capacity fade can remove energy above the new SOC ceiling; the ledger
+reports it as `Vehicle_Capacity_Window_Loss`.
+
+| Key | Study policy |
+|---|---|
+| `eol_percentage` | Health threshold for pack replacement; default 0.70 |
+| `enable_replacement` | Replace at the threshold; default true |
+| `allow_terminal_replacement` | Allow replacement at the final day close; default true |
+| `replacement_min_remaining_years` | Skip a swap with fewer project years left; default 0 |
+| `skipped_replacement_action` | `"keep"` the old pack (default) or `"retire"` it |
+| `battery_replacement_cost` | Optional invoice for one swap, including installation; otherwise nominal kWh times `battery_cost_per_kwh` |
+
+A replacement installs a new pack at the outgoing pack's SOC, including
+while away. Removed and added energy are explicit ledger transfers. A
+retired vehicle performs no charging or discharge and all later driving is
+unserved. A kept pack at zero health retires too. Each household follows
+the same policy but reaches its own swap dates. This is a study policy,
+not a prediction that owners replace packs at one universal health value.
+The model replaces the pack, not the whole car.
+
+### Households and model limits
+
+| Household | System and vehicle |
+|---|---|
+| R0 | No PV or stationary storage; uncontrolled vehicle charging |
+| R1 | Configured PV/storage system; vehicle in `reference_mode` |
+| R2 | Configured system and study vehicle mode |
+
+For V2H the default reference is V1G; for V1G it is uncontrolled. An
+uncontrolled study defaults to no R1. Set `reference_mode = "none"` to omit
+R1 explicitly. R0's charging is independent of the configured PV/storage.
+System NPV uses R0's actual home bill. Household-adjusted NPV compares R2
+with R0 and includes vehicle wear and differences in away and unserved-driving
+costs. Vehicle benefit compares R2 with R1 on the same system. Charger premium
+is counted once per comparison. See [Vehicle results](interpreting-results.md#vehicle-results)
+for replacement-aware wear, credits and `comparable`.
+
+App runs the households; Monte Carlo pairs them on each trajectory's sampled
+weather, house demand and PV factor. House-load uncertainty never scales
+driving. Python and Numba are supported. App permits several PV inverters
+with a vehicle, with any stationary pack AC-coupled. Monte Carlo still
+refuses several inverters. The optimizer refuses `[vehicle]`.
+
+The following assumptions limit interpretation:
+
+- Both charger directions use the PVWatts part-load curve at the stated
+  nominal efficiency. Applying this discharge curve to charging is an
+  assumption; no measured charger curve is used.
+- There is no vehicle thermal-management, self-heating, temperature-capacity
+  derating, standby or charger-replacement model. Ambient temperature is a
+  proxy for cell temperature and can misstate ageing.
+- Template legs and the within-step drive/park collapse approximate travel.
+  Use a suitable timestep and measured trip segments when available.
+- Native ageing is calibrated on LFP cells. A BLAST key names a cell model,
+  not a validated vehicle pack. App permits configured BLAST models; Monte
+  Carlo refuses them. Neither engine predicts a particular vehicle's life.
+- Fixed-threshold replacement, no warranty recovery, and no vehicle downtime
+  are study assumptions. Pack prices and charger premiums need sensitivity
+  analysis; BREOS supplies none.
+
 ## Smart charging
 
 A `[smart_charging]` table sets when the battery may discharge and when the

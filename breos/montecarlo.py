@@ -84,6 +84,14 @@ from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
 from breos.tariffs import ResolvedTariff
 from breos.utils import package_version
+from breos.vehicle import VehicleConfig, VehicleSchedule, resolve_vehicle_schedule
+from breos.vehicle.households import (
+    VehicleHouseholds,
+    household_configs,
+    run_vehicle_baseline,
+    value_vehicle_households,
+    vehicle_provenance,
+)
 from breos.weather import (
     _weather_file_sha256,
     _weather_metadata_sidecar_path,
@@ -110,6 +118,12 @@ _SUMMARY_METRICS = (
 )
 # A run without a payback year did not pay back within the horizon.
 _PAYBACK_METRICS = ("payback_year", "payback_year_interpolated")
+_VEHICLE_COMPARISON_METRICS = (
+    "npv_savings_household_adjusted",
+    "household_adjusted_comparable",
+    "vehicle_benefit_npv",
+    "vehicle_benefit_comparable",
+)
 
 
 @dataclass(frozen=True)
@@ -594,6 +608,11 @@ def _reject_planned_smart_charging(resolved: ResolvedAppConfig) -> None:
         )
 
 
+def _reject_vehicle_blast(resolved: ResolvedAppConfig) -> None:
+    if resolved.vehicle is not None and resolved.vehicle.degradation_engine == "blast":
+        raise ValueError("vehicle.degradation_engine=blast is not supported with Monte Carlo yet")
+
+
 def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> MonteCarloYearCache:
     """Prepare the per-year weather and PV inputs once, for many Monte Carlo studies.
 
@@ -610,6 +629,7 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
         run without it.
     """
     resolved = resolve_app_config(config)
+    _reject_vehicle_blast(resolved)
     cfg = resolved.cfg
     _reject_period(cfg)
     _reject_weather_file(cfg)
@@ -726,7 +746,9 @@ def _prepare_pv_chains(
     Returns ``None`` when the study is not shaped to benefit, in which case
     every run computes its own conversion exactly as before.
     """
-    if config_has_battery(cfg) or settings.model_uncertainty_pct:
+    if config_has_battery(cfg) or resolved.vehicle is not None or settings.model_uncertainty_pct:
+        # Vehicle households use the frame path to retain exchanges for App's
+        # valuation, rather than this aligned PV-only conversion memo.
         # A trajectory's model factor scales its PV, which a memoized
         # conversion cannot follow.
         return None
@@ -772,6 +794,77 @@ class _Study:
     # Prices each trajectory's no-system household on its own sampled load,
     # so the with- and without-system costs stay paired.
     reference_tariff: ResolvedTariff | None = None
+    vehicle_temperature_by_year: dict[int, pd.Series] | None = None
+    vehicle_schedule: VehicleSchedule | None = None
+
+
+def _vehicle_frame_year(year: ProjectionYear, schedule: VehicleSchedule, temperature: pd.Series) -> ProjectionYear:
+    """Present one sampled draw to App's retained-flow household path."""
+    aligned = year.aligned
+    assert aligned is not None and aligned.pv_chain is None
+    index = aligned.index
+    return replace(
+        year,
+        aligned=None,
+        pv_dc=pd.Series(aligned.pv_dc_w, index=index),
+        houseload=pd.DataFrame({"Load": aligned.load_w}, index=index),
+        temperature_series=pd.Series(aligned.temperature_c, index=index),
+        inverter_ac_derate=None
+        if aligned.inverter_ac_derate is None
+        else pd.Series(aligned.inverter_ac_derate, index=index),
+        inverter_curve_row=None
+        if aligned.inverter_curve_row is None
+        else pd.Series(aligned.inverter_curve_row, index=index),
+        vehicle_schedule=schedule,
+        vehicle_temperature_series=temperature,
+    )
+
+
+def _vehicle_run_metrics(block: dict[str, Any]) -> dict[str, Any]:
+    """Flatten App's numeric household results for runs tables and statistics."""
+    adjusted, benefit = block["household_adjusted_npv"], block["vehicle_benefit"]
+    metrics = {
+        "npv_savings_household_adjusted": adjusted["npv"],
+        "household_adjusted_comparable": adjusted["comparable"],
+        "vehicle_benefit_npv": math.nan if benefit is None else benefit["npv"],
+        "vehicle_benefit_comparable": None if benefit is None else benefit["comparable"],
+    }
+    for label, comparison in (("r2_r0", adjusted), ("r2_r1", benefit)):
+        for output, source in (
+            ("wear", "wear_npv"),
+            ("replacement_outlays_difference", "replacement_outlays_difference_npv"),
+        ):
+            metrics[f"vehicle_{output}_{label}_npv"] = math.nan if comparison is None else comparison[source]
+    for name in ("away_cost_difference_npv", "unserved_cost_difference_npv"):
+        metrics[f"vehicle_household_adjusted_{name}"] = adjusted[name]
+    if benefit is not None:
+        for name in (
+            "operating_savings_npv",
+            "home_bill_savings_npv",
+            "export_revenue_gain_npv",
+            "away_savings_npv",
+            "unserved_savings_npv",
+            "charger_premium",
+        ):
+            metrics[f"vehicle_benefit_{name}"] = benefit[name]
+    for key, household in block["households"].items():
+        prefix = f"vehicle_{key.lower()}_"
+        metrics.update({prefix + name: value for name, value in household["totals"].items()})
+        for name in (
+            "final_soh_fraction",
+            "retired",
+            "replacement_outlays_npv",
+            "terminal_pack_credit_npv",
+            "home_bill_npv",
+            "export_revenue_npv",
+            "away_purchases_npv",
+            "unserved_driving_cost_npv",
+            "operating_cost_npv",
+        ):
+            metrics[prefix + name] = household[name]
+        for name in ("grid_import_kwh", "grid_export_kwh"):
+            metrics[prefix + name] = sum(year[name] for year in household["yearly"])
+    return metrics
 
 
 def _simulate_trajectory(
@@ -813,20 +906,71 @@ def _simulate_trajectory(
             extra={"Weather_Year": year, "Load_Scale": load_scale},
         )
 
-    projection = run_projection(
-        cfg,
-        resolved,
-        study.years_per_run,
-        year_inputs,
-        has_battery=has_battery,
-        execution_backend=cast(str, settings.execution_backend),
-        tariff=study.tariff,
-        instructions=study.instructions,
-        reference_tariff=study.reference_tariff,
-    )
+    vehicle_result = None
+    if resolved.vehicle is None:
+        projection = run_projection(
+            cfg,
+            resolved,
+            study.years_per_run,
+            year_inputs,
+            has_battery=has_battery,
+            execution_backend=cast(str, settings.execution_backend),
+            tariff=study.tariff,
+            instructions=study.instructions,
+            reference_tariff=study.reference_tariff,
+        )
+        value = value_projection(cfg, resolved, projection)
+    else:
+        # Consume precisely the original year/scale draws, once. Household
+        # callbacks only read these materialised years; none resamples them.
+        sampled = tuple(year_inputs(i) for i in range(study.years_per_run))
+        assert study.vehicle_schedule is not None and study.vehicle_temperature_by_year is not None
+        years = tuple(
+            _vehicle_frame_year(
+                year, study.vehicle_schedule, study.vehicle_temperature_by_year[int(year.extra["Weather_Year"])]
+            )
+            for year in sampled
+        )
+        configs = household_configs(resolved.vehicle)
+        limit = (cfg.get("smart_charging") or {}).get("grid_import_limit_w")
+        grid_limit = math.inf if limit is None else float(limit)
+
+        def system_run(vehicle: VehicleConfig):
+            return run_projection(
+                cfg,
+                resolved,
+                study.years_per_run,
+                years.__getitem__,
+                has_battery=has_battery,
+                execution_backend=cast(str, settings.execution_backend),
+                tariff=study.tariff,
+                instructions=study.instructions,
+                reference_tariff=study.reference_tariff,
+                vehicle_config=vehicle,
+                grid_import_limit_w=grid_limit,
+                record_priced_flows=True,
+            )
+
+        projection = system_run(configs["R2"])
+        runs = {
+            "R0": run_vehicle_baseline(
+                study.years_per_run,
+                years.__getitem__,
+                configs["R0"],
+                freq=cfg["resolution"],
+                execution_backend=cast(str, settings.execution_backend),
+                grid_import_limit_w=grid_limit,
+            ),
+            "R2": projection,
+        }
+        if "R1" in configs:
+            runs["R1"] = system_run(configs["R1"])
+        value, vehicle_result = value_vehicle_households(
+            cfg, resolved, VehicleHouseholds(runs, study.vehicle_schedule), study.tariff, study.reference_tariff
+        )
+
     current_soh = projection.carry.soh_pct
     total_replacements = projection.total_replacements
-    value = value_projection(cfg, resolved, projection)
     cost_projection, lcoe, yearly_df = value.cost_projection, value.lcoe, value.yearly_df
     total_replacement_cost = value.total_replacement_cost
     payback_year = find_payback_year(cost_projection)
@@ -870,6 +1014,8 @@ def _simulate_trajectory(
     )
     if terminal is not None:
         metrics["_terminal_value_provenance"] = terminal.provenance
+    if vehicle_result is not None:
+        metrics.update(_vehicle_run_metrics(vehicle_result))
     return metrics, trajectory
 
 
@@ -890,12 +1036,17 @@ def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
     """
     summary: dict[str, dict[str, float]] = {}
     n_runs = len(runs)
-    for col in _SUMMARY_METRICS:
+    vehicle_metrics = tuple(
+        column for column in runs if column.startswith("vehicle_") or column in _VEHICLE_COMPARISON_METRICS
+    )
+    for col in (*_SUMMARY_METRICS, *vehicle_metrics):
         if col not in runs.columns:
             continue
         # A non-finite value (an infinite LCOE with no production) is no
         # value, like NaN: it would make the mean infinite and the spread NaN.
         values = pd.to_numeric(runs[col], errors="coerce")
+        if pd.api.types.is_bool_dtype(values.dtype):
+            values = values.astype(float)
         series = values[np.isfinite(values)]
         is_payback = col in _PAYBACK_METRICS
         if series.empty and not is_payback:
@@ -1055,6 +1206,7 @@ def run_montecarlo(
         A :class:`MonteCarloResult` with one row per run and summary statistics.
     """
     resolved = resolve_app_config(config)
+    _reject_vehicle_blast(resolved)
     cfg = resolved.cfg
     _reject_planned_smart_charging(resolved)
     _reject_several_string_inverters(resolved)
@@ -1075,7 +1227,7 @@ def run_montecarlo(
     # optional dependency stops a 10,000-trajectory study immediately rather
     # than hours into it.
     has_battery = config_has_battery(cfg)
-    execution = backend_provenance(settings.execution_backend, pv_only=not has_battery)
+    execution = backend_provenance(settings.execution_backend, pv_only=not has_battery and resolved.vehicle is None)
 
     # One "auto" fallback warning per study. A year cache that reuses its PV
     # layer builds nothing that warns, so the study warns from its weather
@@ -1084,17 +1236,21 @@ def run_montecarlo(
     with solar_position_warning_scope():
         if year_cache is None:
             runtime_weather: dict[str, Any] = {}
-            dc_by_year, temp_by_year, inverter_by_year = _precompute_year_caches(
-                cfg,
-                resolved,
-                settings,
-                runtime_weather=runtime_weather,
-                solver_by_year=solver_by_year,
-            )
+            if resolved.vehicle is None:
+                dc_by_year, temp_by_year, inverter_by_year = _precompute_year_caches(
+                    cfg, resolved, settings, runtime_weather=runtime_weather, solver_by_year=solver_by_year
+                )
+            else:
+                weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
+                dc_by_year, temp_by_year, inverter_by_year = _build_pv_years(
+                    cfg, resolved, weather_by_year, solver_by_year=solver_by_year
+                )
         else:
             dc_by_year, temp_by_year, inverter_by_year, runtime_weather = year_cache._years_for(
                 cfg, resolved, settings, solver_by_year=solver_by_year
             )
+            if resolved.vehicle is not None:
+                weather_by_year = year_cache._weather_by_year
         warn_solar_position_fallback(
             runtime_weather.get("solar_position_requested", ""), runtime_weather.get("solar_position_method", "")
         )
@@ -1115,6 +1271,24 @@ def run_montecarlo(
         inverter_by_year,
         has_battery=has_battery,
     )
+    vehicle_temperature_by_year = None
+    vehicle_schedule = None
+    if resolved.vehicle is not None:
+        vehicle_temperature_by_year = {
+            year: build_battery_temperature_series(
+                resolved.vehicle.battery_temperature,
+                index=dc_by_year[year].index,
+                weather_df=weather,
+                indoor_model={"enabled": False},
+            )
+            for year, weather in weather_by_year.items()
+        }
+        vehicle_schedule = resolve_vehicle_schedule(
+            resolved.vehicle,
+            _study_calendar(aligned_by_year),
+            timezone=resolved.timezone,
+            reference_year=settings.target_year,
+        )
     pv_chains = _prepare_pv_chains(cfg, resolved, aligned_by_year, settings, years_per_run)
     tariff = _resolve_study_tariff(resolved, aligned_by_year)
     reference_tariff = _resolve_study_reference_tariff(resolved, aligned_by_year)
@@ -1137,6 +1311,8 @@ def run_montecarlo(
         tariff,
         instructions,
         reference_tariff,
+        vehicle_temperature_by_year,
+        vehicle_schedule,
     )
     if settings.n_procs == 1:
         _initialize_worker(study)
@@ -1205,6 +1381,17 @@ def run_montecarlo(
                 else {}
             ),
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
+            **(
+                {
+                    "vehicle": {
+                        **vehicle_provenance(resolved.vehicle, vehicle_schedule),
+                        "pairing": "weather/load drawn once per project year; persistent trajectory PV factor; shared by R0/R1/R2",
+                        "load_scale_applies_to": "house load only",
+                    }
+                }
+                if resolved.vehicle is not None and vehicle_schedule is not None
+                else {}
+            ),
             **tariff_records(resolved, tariff, reference_tariff, calendar_year=settings.target_year),
             **(
                 {"smart_charging": smart_charging_provenance(spec, instructions, tariff)}

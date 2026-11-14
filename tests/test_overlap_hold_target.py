@@ -8,7 +8,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos._dispatch import _dispatch_dc_step, lfp_capacity_factor
+from breos._dispatch import (
+    _VEHICLE_LEDGER_COLUMNS,
+    _VEHICLE_STATE_COLUMNS,
+    _dispatch_dc_step,
+    lfp_capacity_factor,
+)
 from breos.app import App
 from breos.battery import BatteryConfig, _simulate_detailed_run, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
@@ -301,7 +306,13 @@ def test_default_reject_preserves_the_existing_ledger_bits(name, freq, digest):
     )[0]
     # No inverter night consumption is configured and the battery is DC-coupled:
     # the columns added since are 0 and the rest keep their bits.
-    added = ["Inverter_Night_Consumption", "PV_AC_To_Battery", "PV_Charge_Conversion_Loss"]
+    added = [
+        "Inverter_Night_Consumption",
+        "PV_AC_To_Battery",
+        "PV_Charge_Conversion_Loss",
+        *_VEHICLE_STATE_COLUMNS,
+        *_VEHICLE_LEDGER_COLUMNS,
+    ]
     assert (frame[added] == 0.0).all().all()
     ledger = frame.drop(columns=["Datetime", *added])
     assert hashlib.sha256(ledger.to_numpy(dtype=np.float64).tobytes()).hexdigest() == digest

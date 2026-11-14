@@ -1,0 +1,86 @@
+{
+ "case": "vehicle_to_home",
+ "title": "Vehicle-to-home on a bi-hourly tariff in Porto",
+ "breos_version": "0.7.0",
+ "git_describe": "v0.7.0-359-gc9f8fc5-dirty",
+ "generated_utc": "2026-10-28T14:41:47+00:00",
+ "runtime_s": 1.3,
+ "cheap": true,
+ "configs": {
+  "configs/examples/vehicle-to-home-portugal.toml": "69bb3558e986e4463f453d4afefcd2813364bee1871f180af8ee0f3db350801a"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
+ "projection_years": 3,
+ "resolution": "h",
+ "vehicle": {
+  "mode": "v2h",
+  "reference_mode": "v1g",
+  "battery_kwh": 40,
+  "min_soc": 0.1,
+  "max_soc": 1.0,
+  "departure_soc": 0.8,
+  "v2h_min_soc": 0.3,
+  "charger_ac_rating_kw": 7.4,
+  "charger_efficiency": 0.94,
+  "charge_efficiency": 0.95,
+  "discharge_efficiency": 0.95,
+  "charge_periods": [
+   "off_peak"
+  ],
+  "discharge_periods": [
+   "peak"
+  ],
+  "charger_cost": 2500,
+  "battery_cost_per_kwh": 120,
+  "battery_temperature": "weather",
+  "eol_percentage": 0.7,
+  "enable_replacement": true,
+  "allow_terminal_replacement": false,
+  "replacement_min_remaining_years": 1,
+  "skipped_replacement_action": "keep",
+  "schedule": {
+   "weekday": {
+    "arrive": "18:30",
+    "depart": "07:45",
+    "trip_kwh": 9
+   },
+   "weekend": {
+    "arrive": "14:00",
+    "depart": "10:00",
+    "trip_kwh": 12
+   }
+  }
+ },
+ "tariff": {
+  "schedule": "pt_mainland_2026_daily_bi",
+  "currency": "EUR",
+  "import_prices": {
+   "peak": 0.231,
+   "off_peak": 0.121
+  },
+  "export_prices": {
+   "all": 0.05
+  },
+  "fixed_charge_per_day": 0.3
+ },
+ "files": {
+  "households.csv": "6cbb23ded9beab1d12d06810f7fed87fae6b3e29b52fdf9a3bc9045d628a07fa",
+  "comparisons.json": "91c57c110bd8560d623b99c8f83d3f5fd5965d878757a33d0d3d4d97100b6309"
+ }
+}

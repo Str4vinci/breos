@@ -1,6 +1,6 @@
 # Energy balance
 
-Per-timestep energy-flow accounting for PV, load, battery, and grid. The
+Per-timestep energy-flow accounting for PV, load, stationary battery, vehicle and grid. The
 energy-balance engine runs the same way for PV-only and PV+battery systems —
 when no battery is configured, it simply skips the storage path.
 
@@ -209,7 +209,8 @@ operating point, and the DC is split in proportion to each source's AC.
 | `Battery_Energy_Beginning` / `Battery_Energy_End` | Wh | Stored energy at interval boundaries |
 | `Battery_Energy_Delta` | W-equivalent | End minus beginning, including explicit boundary adjustments |
 
-Ledger schema 3.1 adds `PV_AC_To_Battery` and `PV_Charge_Conversion_Loss`.
+Ledger schema 3.1 adds `PV_AC_To_Battery`, `PV_Charge_Conversion_Loss` and
+the vehicle columns below.
 With `"ac"`, `Battery_Charge_Input` is `PV_AC_To_Battery −
 PV_Charge_Conversion_Loss + Grid_DC_To_Battery`.
 
@@ -252,6 +253,120 @@ App and Monte Carlo projections carry total stored energy and both origin
 balances from one simulated year into the next. They do not reset the battery
 to a free full state at calendar boundaries.
 
+## Vehicle ledger
+
+The vehicle dispatches after the stationary battery, through its own AC
+charger. It can serve only the remaining house load. It neither exports
+nor transfers energy to another store. With no vehicle, all vehicle columns
+are zero and existing flows are unchanged. See the
+[configuration guide](../getting-started/configuration.md#vehicle-to-home)
+for schedules, limits and the model assumptions.
+
+States are end-of-step values. Energy states are **Wh**; SOC and SOH are
+fractions. All transfer and loss columns are **average W**, including
+departures, arrivals, driving, shortfalls and replacement transfers. Multiply
+a flow by `hours_per_step` to compare it with a stored-energy difference.
+A sum of flows times `hours_per_step / 1000` gives kWh.
+
+| Column | Unit | Meaning |
+|---|---|---|
+| `Vehicle_Plugged` | 0/1 | Home for the whole step |
+| `Vehicle_Energy_Onboard` | Wh | Energy in the pack, at home or away |
+| `Vehicle_Energy` | Wh | On-board energy while plugged in; zero away |
+| `Vehicle_SOC_Absolute`, `Vehicle_SOH` | fraction | On-board SOC against current capacity; pack health |
+| `Vehicle_PV_Origin_Energy_End`, `Vehicle_Grid_Origin_Energy_End` | Wh | On-board energy by origin, including while away |
+| `PV_AC_To_Vehicle`, `Grid_AC_To_Vehicle` | W | Home charger AC input by source; grid input is part of `Import_From_Grid` |
+| `Vehicle_Charge_Conversion_Loss`, `Vehicle_Charge_Input` | W | Charger charging loss and resulting DC input to the pack |
+| `Vehicle_Charge_Loss` | W | Pack charging loss; input minus this loss is stored |
+| `Vehicle_Discharge_DC`, `Vehicle_Discharge_Loss` | W | Withdrawal from stored energy and pack discharge loss |
+| `Vehicle_Charger_Loss`, `Vehicle_AC_To_Load` | W | Discharge conversion loss and AC delivered to the house |
+| `PV_Origin_Vehicle_AC_To_Load`, `Grid_Origin_Vehicle_AC_To_Load` | W | Home delivery by origin |
+| `Vehicle_Departure_Energy`, `Vehicle_Arrival_Energy` | W | Energy crossing the site boundary at departure/arrival, before that step's driving/home dispatch |
+| `Vehicle_Departure_Shortfall` | W | Missing departure-target energy, booked only at departure and only above `1e-9 × current capacity` |
+| `Vehicle_Drive_Energy`, `Vehicle_Drive_Unserved` | W | Driving served from the pack and scheduled driving left unserved |
+| `Vehicle_Away_Charge_Purchased`, `Vehicle_Away_Charge_Loss` | W | Purchased away energy and its loss; separate from the site meter |
+| `Vehicle_Capacity_Window_Loss` | W | Excess energy removed when daily ageing lowers the SOC ceiling |
+| `Vehicle_Replacement_Energy_Removed`, `Vehicle_Replacement_Energy_Added` | W | Outgoing and incoming pack energy, also for an away swap |
+| `PV_Origin_Vehicle_Charge_Stored`, `Grid_Origin_Vehicle_Charge_Stored` | W | Home charging stored after all charging losses, by source |
+| `PV_Origin_Vehicle_Discharge_DC`, `Grid_Origin_Vehicle_Discharge_DC` | W | Home withdrawal from each stored origin |
+| `PV_Origin_Vehicle_Drive_Energy`, `Grid_Origin_Vehicle_Drive_Energy` | W | Driving withdrawal by origin |
+| `PV_Origin_Vehicle_Capacity_Window_Loss`, `Grid_Origin_Vehicle_Capacity_Window_Loss` | W | Capacity-window removal by origin |
+| `PV_Origin_Vehicle_Replacement_Energy_Removed`, `Grid_Origin_Vehicle_Replacement_Energy_Removed` | W | Outgoing pack energy by origin |
+
+### Home balances
+
+All terms in these equations are average W. Let `N_pv` be idle-inverter
+draw supplied by surplus PV, as defined under [AC coupling](#ac-coupling),
+and `N_grid = Inverter_Night_Consumption − N_pv`.
+
+```text
+Houseload = PV_AC_To_Load + Battery_AC_To_Load + Vehicle_AC_To_Load
+          + Import_From_Grid − Grid_AC_To_Battery − Grid_AC_To_Vehicle − N_grid
+
+PV_DC_To_Inverter − PV_Direct_Inverter_Loss
+    = PV_AC_To_Load + PV_AC_To_Battery + PV_AC_To_Vehicle + PV_AC_Export + N_pv
+
+PV_AC_To_Vehicle + Grid_AC_To_Vehicle
+    = Vehicle_Charge_Conversion_Loss + Vehicle_Charge_Input
+
+Vehicle_Discharge_DC
+    = Vehicle_Discharge_Loss + Vehicle_Charger_Loss + Vehicle_AC_To_Load
+```
+
+The PV equation applies to AC coupling or no stationary pack. With DC
+coupling the stationary DC routing is unchanged; the vehicle reduces its
+remaining AC export. PV and grid AC share one charger operating point.
+Their sum cannot exceed `charger_ac_rating_kw × 1000`, nor can AC discharge.
+Home charge and discharge never occur together.
+
+### On-board and site balances
+
+Let `h = hours_per_step`. The on-board balance follows the vehicle everywhere:
+
+```text
+E_onboard,end − E_onboard,begin = h × (
+    Vehicle_Charge_Input − Vehicle_Charge_Loss − Vehicle_Discharge_DC
+    + Vehicle_Away_Charge_Purchased − Vehicle_Away_Charge_Loss
+    − Vehicle_Drive_Energy − Vehicle_Capacity_Window_Loss
+    − Vehicle_Replacement_Energy_Removed + Vehicle_Replacement_Energy_Added)
+```
+
+Departure and arrival change the site inventory, not on-board energy.
+`Vehicle_Energy = Vehicle_Plugged × Vehicle_Energy_Onboard`. The departure
+transfer is the beginning on-board energy divided by `h`; the arrival
+transfer is the same at arrival. The whole-site balance is:
+
+```text
+PV_DC + Import_From_Grid + Battery_Replacement_Energy_Added
+    + Vehicle_Arrival_Energy + plugged × Vehicle_Replacement_Energy_Added
+  = Houseload + PV_AC_Export + PV_DC_Curtailed + L_stationary + L_vehicle
+    + Battery_Energy_Delta + ΔVehicle_Energy / h + Vehicle_Departure_Energy
+    + plugged × (Vehicle_Capacity_Window_Loss + Vehicle_Replacement_Energy_Removed)
+```
+
+Here `plugged` is 0 or 1. `L_stationary` sums `Inverter_Loss`,
+`Inverter_Night_Consumption`, `Battery_Charge_Loss`, `Battery_Discharge_Loss`,
+`Grid_Charge_Conversion_Loss`, `PV_Charge_Conversion_Loss`, `Standby_Loss`,
+`Capacity_Window_Loss` and `Battery_Replacement_Energy_Removed`.
+`L_vehicle` sums the four home losses: charging conversion, pack charging,
+pack discharge and charger discharge. `Battery_Energy_Delta` is already
+average W; `ΔVehicle_Energy` is a Wh state difference. Driving and away
+charging do not enter this site equation. An away swap changes only the
+on-board balance.
+
+Driving served plus driving unserved equals the scheduled withdrawal.
+Driving stops at `min_soc × current capacity` and never borrows from later
+charging. Away energy stored equals purchases minus away loss, or purchases
+times away efficiency. It is bounded by power times permitted parked hours
+and stops at the target, without removing energy already above it.
+
+PV, grid and unattributed origins reconcile on board. Home charging adds its
+stored shares; away charging adds to the grid origin. Discharge, driving,
+capacity-window loss and replacement removal take from every origin in
+proportion at that operation. Initial and replacement energy are
+unattributed. Departure and arrival leave origins unchanged. Summing the
+origin balances therefore gives the on-board balance above.
+
 ## Compatibility fields and KPIs
 
 `PV_Production` is retained as an AC-equivalent compatibility field. With a
@@ -260,7 +375,9 @@ loss; lower-level callers that omit a nameplate retain the exact legacy
 `(PV_DC − PV_DC_Curtailed) × inverter_efficiency` calculation. It is not
 physical AC delivery through storage, and new KPIs do not derive from it.
 
-Self-consumed PV is `PV_AC_To_Load + PV_Origin_Battery_AC_To_Load`. Usable system AC
+Self-consumed PV is `PV_AC_To_Load + PV_Origin_Battery_AC_To_Load`, plus
+`PV_Origin_Vehicle_AC_To_Load` with a vehicle. PV-origin driving is reported
+separately, not counted as house self-consumption. Usable system AC
 generation is self-consumed PV plus `PV_AC_Export`. Grid independence is
 `1 − Import_From_Grid / Houseload`.
 

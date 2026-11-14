@@ -46,6 +46,7 @@ from breos.app_config import (  # noqa: E402
 )
 from breos.config_schema import TableSpec  # noqa: E402
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams  # noqa: E402
+from breos.vehicle.config import AWAY_CHARGING_TABLE, DAY_SCHEDULE_TABLE, VEHICLE_SCHEDULE_TABLE  # noqa: E402
 
 OUTPUT_PATH = REPO_ROOT / "docs" / "getting-started" / "config-reference.md"
 
@@ -158,9 +159,46 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "optional in both. "
         '`mode = "discharge_only"` '
         "takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from "
-        'the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; '
+        'the grid. `mode = "disabled"` takes no other key, except `grid_import_limit_w` when `[vehicle]` is present. '
+        '`overlap_policy` defaults to `"reject"`; '
         '`"hold_target"` permits overlapping periods for `fixed_target` and `daily_persistence`, retaining the target '
         "as the discharge floor.",
+    ),
+    (
+        "vehicle",
+        app_config.VEHICLE_TABLE,
+        "App and Monte Carlo simulate the no-system, reference and study households (ADR 0005); Monte Carlo pairs their sampled inputs and requires native vehicle ageing. "
+        "All prices use the run currency; equipment facts and the pack price have no defaults. "
+        "`daily_persistence` is refused with a vehicle. Without this table, existing behavior is unchanged.",
+    ),
+    (
+        "vehicle.away_charging",
+        AWAY_CHARGING_TABLE,
+        "Optional away charger. All four keys are required; purchases cross no site meter. "
+        "Charging occurs only during schedule charging windows.",
+    ),
+    (
+        "vehicle.schedule",
+        VEHICLE_SCHEDULE_TABLE,
+        "Set weekday and weekend rules, or a CSV file timestamped in the simulation's reference year. "
+        "A step is plugged in only when home for all of it: "
+        "departure rounds down, arrival up. The calendar replays across the year seam; departure counts "
+        "include steps beyond a period window. Times use the configured zone, including DST. "
+        "For a repeated template time, departure uses its first occurrence and arrival its last; nonexistent "
+        "times shift to the DST transition. Naive CSV times at DST transitions are refused; use explicit offsets. "
+        "CSV columns are `start`, `end`, `kind`, `energy_kwh` (drive) and `away_charging` (park, true/false). "
+        "Rows are ordered, non-overlapping segments; gaps mean home. Adjacent segments form one absence. "
+        "Driving is distributed by elapsed overlap; parked charging hours are never rounded up. "
+        "Multiple drive/park alternations within one step collapse into driving before the first park, "
+        "all eligible parked hours, then the remaining driving. A header-only CSV means always home with no departure target.",
+    ),
+    (
+        "vehicle.schedule.weekday",
+        DAY_SCHEDULE_TABLE,
+        "Weekday and weekend rules share these keys. The departure date selects the day type. "
+        "The coarse leg template withdraws half the gross trip energy in the first away step and half in the "
+        "last, with parked charging windows only between those steps. A one-step trip combines both legs "
+        "and has no parked time. This approximates driving; use segments for measured trips.",
     ),
     (
         "period",
@@ -176,6 +214,8 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
 # ``required`` would change the error a missing key raises.
 _ALSO_REQUIRED = {"pv_arrays": frozenset({"modules"})}
 _CONDITIONALLY_REQUIRED = {
+    "vehicle": {"charger_cost": '`mode = "v2h"`'},
+    "vehicle.schedule": {"weekday": "unless file is set", "weekend": "unless file is set"},
     "tariff": {
         "schedule": "exactly one of these",
         "custom_schedule": "exactly one of these",

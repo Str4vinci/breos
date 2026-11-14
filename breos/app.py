@@ -21,6 +21,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
+from dataclasses import asdict
 from typing import Any
 
 import pandas as pd
@@ -31,6 +32,7 @@ from breos.app_results import build_result as build_app_result
 from breos.load_profiles import load_profile
 from breos.repair import input_repair_records
 from breos.runners.app import SimulationArtifacts, revalue_app_simulation, run_app_simulation
+from breos.vehicle.economics import VEHICLE_MONEY_KEYS
 from breos.weather import build_battery_temperature_series, fetch_tmy_weather_data, load_weather, resample_to_15min
 
 # Nested tables App.revalue replaces whole: the entries of a price list
@@ -110,6 +112,13 @@ def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mappi
         credit, credit_change = table.get("annual_network_credit"), change.get("annual_network_credit", {})
         if isinstance(credit, Mapping) and credit_change is not None:
             kept += _kept_amounts(credit, credit_change, _CREDIT_MONEY_KEYS, f"{name}.annual_network_credit")
+    vehicle = old.cfg.get("vehicle")
+    if isinstance(vehicle, Mapping):
+        change = changes.get("vehicle") or {}
+        kept += _kept_amounts(vehicle, change, VEHICLE_MONEY_KEYS, "vehicle")
+        away, away_change = vehicle.get("away_charging"), change.get("away_charging", {})
+        if isinstance(away, Mapping) and away_change is not None:
+            kept += _kept_amounts(away, away_change, ("price",), "vehicle.away_charging")
     if kept:
         raise ValueError(
             f"{move}, but {', '.join(kept)} {'is an amount' if len(kept) == 1 else 'are amounts'} in "
@@ -190,11 +199,14 @@ class App:
         the economics keys in :data:`REVALUATION_KEYS` may change: ``costs``,
         ``cost_preset``, ``currency``, ``tariff``, ``reference_tariff``, the
         discount rate, the escalators, ``battery_replacement_cost`` and
-        ``terminal_value``. The estimated battery residual
+        ``terminal_value``. The ``vehicle`` table may change only its charger,
+        pack, replacement, away-charging and unserved-driving prices.
+        Vehicle equipment, schedules, modes and replacement policy stay fixed.
+        The estimated battery residual
         value is recomputed from retained final health without simulating again.
 
         A change of the run's currency must restate every money input in the
-        new currency, since tables merge key by key: each non-zero cost the
+        new currency, including every non-zero vehicle price, since tables merge key by key: each non-zero cost the
         old ``costs`` table set, a non-zero ``battery_replacement_cost``, and
         each non-zero price list, fixed charge
         and ``annual_network_credit`` amount of a ``tariff`` or
@@ -249,6 +261,22 @@ class App:
                 f"Build a new App for it. Keys revalue() accepts: {', '.join(sorted(REVALUATION_KEYS))}."
             )
         resolved = resolve_app_config(config)
+        if "vehicle" in changed:
+
+            def physical(config):
+                if config is None:
+                    return None
+                data = asdict(config)
+                for key in VEHICLE_MONEY_KEYS:
+                    data.pop(key, None)
+                if data.get("away_charging") is not None:
+                    data["away_charging"].pop("price", None)
+                return data
+
+            if physical(self._resolved.vehicle) != physical(resolved.vehicle):
+                raise ValueError(
+                    "revalue() changes vehicle prices only; build a new App to change vehicle equipment, controls, trips or replacement policy"
+                )
         _check_currency_change(self._resolved, resolved.currency, changes)
         artifacts, method = revalue_app_simulation(resolved, self._artifacts, self._runtime_dependencies())
         result = build_app_result(resolved, artifacts, input_repairs=self._input_repairs)

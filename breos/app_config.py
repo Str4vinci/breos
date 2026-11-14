@@ -144,6 +144,7 @@ from breos.tariffs import (
     validate_season_prices,
 )
 from breos.utils import get_hours_per_step
+from breos.vehicle.config import VEHICLE_TABLE, VehicleConfig, validate_vehicle
 from breos.weather import IRRADIANCE_RESAMPLING_POLICIES, validate_irradiance_resampling
 
 _NO_DEFAULT = object()
@@ -1043,6 +1044,12 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_doc="*unset*",
         summary="battery.smart_charging",
     ),
+    "vehicle": AppConfigField(
+        doc="Vehicle equipment, prices and schedule for App and paired Monte Carlo households. See [vehicle](#vehicle)",
+        affects_inputs=False,
+        revalue=True,
+        default_doc="*unset*",
+    ),
     "weather_file": AppConfigField(
         exclusive_with="weather_source",
         default=None,
@@ -1574,6 +1581,7 @@ class ResolvedAppConfig:
     # An AC-coupled battery's own inverter rating (W), resolved against the
     # nominal capacity, or None for a DC-coupled or PV-only system.
     battery_inverter_ac_capacity_w: float | None = None
+    vehicle: VehicleConfig | None = None
 
 
 def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -1974,6 +1982,7 @@ class ValidatedSpecs:
     reference_tariff: ReferenceTariffSpec | None
     smart_charging: SmartChargingSpec | None
     currency: str
+    vehicle: VehicleConfig | None = None
 
 
 def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
@@ -2008,11 +2017,18 @@ def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
     _validate_battery_and_degradation(cfg)
     _validate_battery_coupling(cfg)
     _validate_period(cfg)
+    vehicle = None
+    if "vehicle" in cfg:
+        periods = tuple(tariff_spec.definition.schedule.periods) if tariff_spec is not None else None
+        vehicle = validate_vehicle(cfg["vehicle"], periods=periods, montecarlo="montecarlo" in cfg)
+        smart = cfg.get("smart_charging")
+        if isinstance(smart, Mapping) and str(smart.get("mode")).strip().lower() == "daily_persistence":
+            raise ValueError("'smart_charging.mode' = 'daily_persistence' is not supported with [vehicle]")
     smart_charging = resolve_smart_charging_spec(cfg, tariff_spec)
     _electrical_inputs(cfg)
     if cfg["electrical_fidelity"] == "string" and cfg.get("inverters") is None:
         raise ValueError("electrical_fidelity = 'string' needs 'inverters', 'pv_strings' and 'electrical_environment'")
-    return ValidatedSpecs(tariff_spec, reference_spec, smart_charging, currency)
+    return ValidatedSpecs(tariff_spec, reference_spec, smart_charging, currency, vehicle)
 
 
 def _tariff_study_date(value: Any, where: str) -> date:
@@ -2550,7 +2566,8 @@ SMART_CHARGING_TABLE = TableSpec(
         ),
         "grid_import_limit_w": (
             "Site import limit in W for grid charging, which may import up to the limit minus the load's import. "
-            "Load import is never cut. Unset is unlimited. Not with `discharge_only`"
+            "Load import is never cut. Unset is unlimited. Not with `discharge_only`. With `[vehicle]`, "
+            'also accepted without a stationary battery alongside `mode = "disabled"`; stationary instructions stay disabled'
         ),
     },
 )
@@ -2583,6 +2600,7 @@ NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
     "reference_tariff": REFERENCE_TARIFF_TABLE,
     "terminal_value": TERMINAL_VALUE_TABLE,
     "smart_charging": SMART_CHARGING_TABLE,
+    "vehicle": VEHICLE_TABLE,
     "period": PERIOD_TABLE,
     "electrical_environment": ELECTRICAL_ENVIRONMENT_TABLE,
     "ac_cable": AC_CABLE_TABLE,
@@ -2639,9 +2657,20 @@ def resolve_smart_charging_spec(
     """
     if cfg.get("smart_charging") is None:
         return None
+    value = cfg["smart_charging"]
+    # Decision 18 adds only a site limit. Keep the stationary disabled spec
+    # and its instructions identical, and retain the limit in cfg for the
+    # future vehicle runner. Every other key still goes through the same
+    # table and mode checks.
+    if "vehicle" in cfg and isinstance(value, Mapping) and str(value.get("mode")).strip().lower() == "disabled":
+        if "grid_import_limit_w" in value:
+            SMART_CHARGING_TABLE.keys["grid_import_limit_w"](
+                value["grid_import_limit_w"], "smart_charging.grid_import_limit_w"
+            )
+            value = {key: item for key, item in value.items() if key != "grid_import_limit_w"}
     schedule = tariff_spec.definition.schedule if tariff_spec is not None else None
     coupling = cfg.get("battery_coupling", "dc")
-    table = _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"], battery_key, coupling)
+    table = _checked_smart_charging(value, schedule, cfg["battery_kwh"], battery_key, coupling)
     if table["mode"] == "disabled":
         return SmartChargingSpec(mode="disabled")
     return SmartChargingSpec(
@@ -3244,7 +3273,11 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
     capacity (ADR 0003 E4), the price the optimizer uses too, unless
     ``battery_replacement_cost`` states the price of one (ADR 0004 C9).
     """
-    return calculate_costs(
+    if resolved.vehicle is not None:
+        from breos.vehicle.economics import require_vehicle_prices
+
+        require_vehicle_prices(resolved.vehicle)
+    costs = calculate_costs(
         n_modules=cfg["n_modules"],
         module_power_w=resolved.avg_module_power_w,
         battery_capacity_wh=cfg["battery_kwh"] * 1000,
@@ -3257,6 +3290,11 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
         battery_coupling=cfg.get("battery_coupling", "dc"),
         battery_inverter_ac_capacity_w=resolved.battery_inverter_ac_capacity_w,
     )
+
+    if resolved.vehicle is not None:
+        costs["vehicle_charger_cost"] = float(resolved.vehicle.charger_cost or 0.0)
+        costs["total_initial_cost"] += costs["vehicle_charger_cost"]
+    return costs
 
 
 def resolve_period(cfg: dict[str, Any], timezone: str) -> SimulationPeriod | None:
@@ -3409,6 +3447,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         inverter_ac_capacity_w=ac_capacity_w,
         tariff=tariff,
         smart_charging=specs.smart_charging,
+        vehicle=specs.vehicle,
         cost_params=cost_params,
         emissions_params=resolve_emissions(cfg),
         period=resolve_period(cfg, timezone),

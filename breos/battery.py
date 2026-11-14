@@ -53,6 +53,7 @@ from breos.degradation.protocol import (
     DegradationLifecycle,
     NativeDegradationAdapter,
 )
+from breos.degradation.replacement import replacement_skip_reason
 from breos.dispatch_instructions import DispatchInstructions
 from breos.execution import is_pv_only_dispatch, single_thread_blas, validate_execution_backend
 from breos.inverter import (
@@ -63,6 +64,10 @@ from breos.inverter import (
     convert_units,
 )
 from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
+from breos.vehicle import VehicleCarry, VehicleConfig, VehicleSchedule
+
+if TYPE_CHECKING:
+    from breos.vehicle.lifecycle import VehicleLifecycle
 
 if TYPE_CHECKING:
     from breos.tariffs import ResolvedTariff
@@ -922,12 +927,13 @@ class _ResultBuffers:
     uninitialised.
     """
 
-    __slots__ = ("matrix", "replaced", "replaced_capacity", "columns")
+    __slots__ = ("matrix", "replaced", "replaced_capacity", "columns", "vehicle_events")
 
     def __init__(self, n_steps: int) -> None:
         # One row per per-step column, so a whole day of every output can be
         # handed to a compiled kernel as a single contiguous array. Each
         # column below is a view on its row, not a copy.
+        self.vehicle_events: List[Dict[str, Any]] = []
         self.matrix: np.ndarray = np.empty((_N_ROWS, n_steps))
         self.replaced: np.ndarray = np.zeros(n_steps, dtype=bool)
         self.replaced_capacity: np.ndarray = np.zeros(n_steps)
@@ -944,7 +950,10 @@ class _ResultBuffers:
 
     def to_frame(self, rng: pd.DatetimeIndex) -> pd.DataFrame:
         """Assemble the public per-timestep results frame."""
-        return pd.DataFrame({"Datetime": rng, **self.columns})
+        frame = pd.DataFrame({"Datetime": rng, **self.columns})
+        if self.vehicle_events:
+            frame.attrs["vehicle_end_of_life_events"] = list(self.vehicle_events)
+        return frame
 
 
 def _column_sums(columns: Dict[str, np.ndarray]) -> Dict[str, float]:
@@ -1636,11 +1645,12 @@ def _replacement_skipped_by(
     partial; a pack bought there would serve no step. Any positive minimum
     skips that period too, so it is named first.
     """
-    if remaining_steps < min_remaining_steps:
-        return "min_remaining_years"
-    if final_period and not battery_config.allow_terminal_replacement:
-        return "terminal_period"
-    return None
+    return replacement_skip_reason(
+        allow_terminal_replacement=battery_config.allow_terminal_replacement,
+        final_period=final_period,
+        remaining_steps=remaining_steps,
+        min_remaining_steps=min_remaining_steps,
+    )
 
 
 def _build_summary_row(
@@ -1743,6 +1753,9 @@ class _CoreRun:
     # A copy of the instructions a daily controller's decisions dispatched,
     # one per simulated step; None without a controller.
     controller_instructions: Optional[DispatchInstructions] = None
+    vehicle_carry: Optional[VehicleCarry] = None
+    vehicle_end_of_life_events: Tuple[EndOfLifeEvent, ...] = ()
+    vehicle_degradation_tracking: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1797,6 +1810,9 @@ class SimulationSummary:
     # The ledger schema the column sums follow; App and Monte Carlo report
     # the same version.
     ledger_schema_version: str = LEDGER_SCHEMA_VERSION
+    vehicle_carry: Optional[VehicleCarry] = None
+    vehicle_end_of_life_events: Tuple[EndOfLifeEvent, ...] = ()
+    vehicle_degradation_tracking: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def frame_replaced_capacity_wh(results_df: pd.DataFrame) -> float:
@@ -1890,6 +1906,9 @@ def _build_simulation_summary(
         replacement_steps=tuple(int(i) for i in np.flatnonzero(buffers.replaced)),
         fec_all_packs=aging.fec_lifetime,
         final_degradation_state=final_state,
+        vehicle_carry=core.vehicle_carry,
+        vehicle_end_of_life_events=core.vehicle_end_of_life_events,
+        vehicle_degradation_tracking=core.vehicle_degradation_tracking,
         end_of_life_events=tuple(aging.end_of_life_events),
         weighted_sums=weighted_column_sums(columns, weights),
         in_service_t_cell_sum=float(np.sum(columns["T_cell"][: retiring + 1])) if retiring is not None else None,
@@ -1944,6 +1963,17 @@ def _simulate_core(
     inverter_ac_derate: Optional[pd.Series] = None,
     inverter_curve_row: Optional[pd.Series] = None,
     inverter_units: Optional[InverterUnits] = None,
+    vehicle_config: Optional[VehicleConfig] = None,
+    vehicle_schedule: Optional[VehicleSchedule] = None,
+    vehicle_tariff: Optional["ResolvedTariff"] = None,
+    grid_import_limit_w: float = math.inf,
+    initial_vehicle_energy_wh: Optional[float] = None,
+    initial_vehicle_pv_origin_energy_wh: Optional[float] = None,
+    initial_vehicle_grid_origin_energy_wh: Optional[float] = None,
+    vehicle_carry: Optional[VehicleCarry] = None,
+    vehicle_temperature_series: Optional[pd.Series] = None,
+    vehicle_allow_terminal_replacement: Optional[bool] = None,
+    vehicle_replacement_years_after_span: int = 0,
 ) -> "_CoreRun":
     """
     Simulate energy balance with battery storage and degradation.
@@ -2042,12 +2072,68 @@ def _simulate_core(
             without this argument; True with a state from a pack that was not
             retired is refused.
 
+        vehicle_config, vehicle_schedule: Lower-level vehicle dispatch and
+            its resolved calendar. App remains gated until PR 4. Replacement
+            follows its own lifecycle, with same-SOC pack replacement.
+        vehicle_tariff: Resolved tariff for vehicle charge/discharge periods.
+        grid_import_limit_w: Site limit from [smart_charging], also usable
+            without stationary instructions. A vehicle uses the smaller of
+            this and an existing instruction limit, without modifying them.
+        initial_vehicle_energy_wh, initial_vehicle_pv_origin_energy_wh,
+            initial_vehicle_grid_origin_energy_wh: On-board starting energy
+            and attributed shares in Wh. Default: departure target, unattributed.
+        vehicle_carry: Previous span's energy, origins and last plug state.
+            Pass instead of initial_vehicle values. Without carry the first
+            step starts where its schedule says, with no synthetic boundary.
+        vehicle_temperature_series: Independently prepared vehicle cell/ambient
+            temperatures, without an indoor model. Otherwise weather.build_battery_temperature_series
+            resolves vehicle.battery_temperature (weather uses the input ambient
+            series, default 25 C if none; fixed and CSV use their own values).
+        vehicle_allow_terminal_replacement, vehicle_replacement_years_after_span:
+            The vehicle's horizon policy, as for BatteryConfig. project_years
+            allows earlier year-end swaps and supplies remaining project years.
+
     Returns:
         A :class:`_CoreRun` holding the filled result buffers, the calendar,
         the aging state and the lifecycle; the public entry points shape
         their results from it. With a ``day_controller`` it also holds the
         controller carry and a copy of the instructions the span dispatched.
     """
+    if (vehicle_config is None) != (vehicle_schedule is None):
+        raise ValueError("pass vehicle_config and its resolved vehicle_schedule together")
+    if vehicle_carry is not None:
+        if vehicle_config is None:
+            raise ValueError("vehicle_carry needs a vehicle_config and resolved vehicle_schedule")
+        if any(
+            value is not None
+            for value in (
+                initial_vehicle_energy_wh,
+                initial_vehicle_pv_origin_energy_wh,
+                initial_vehicle_grid_origin_energy_wh,
+            )
+        ):
+            raise ValueError("pass vehicle_carry or initial_vehicle energy/origin values, not both")
+        if not isinstance(vehicle_carry.plugged, (bool, np.bool_)):
+            raise ValueError("vehicle_carry.plugged must be a bool")
+        initial_vehicle_energy_wh = vehicle_carry.energy_wh
+        initial_vehicle_pv_origin_energy_wh = vehicle_carry.pv_origin_energy_wh
+        initial_vehicle_grid_origin_energy_wh = vehicle_carry.grid_origin_energy_wh
+    if vehicle_allow_terminal_replacement is None:
+        vehicle_allow_terminal_replacement = (
+            True if vehicle_config is None else vehicle_config.allow_terminal_replacement
+        )
+    if not isinstance(vehicle_allow_terminal_replacement, (bool, np.bool_)):
+        raise ValueError("vehicle_allow_terminal_replacement must be a bool")
+    if (
+        isinstance(vehicle_replacement_years_after_span, (bool, np.bool_))
+        or not isinstance(vehicle_replacement_years_after_span, (int, np.integer))
+        or vehicle_replacement_years_after_span < 0
+    ):
+        raise ValueError("vehicle_replacement_years_after_span must be a non-negative integer")
+    if math.isnan(grid_import_limit_w) or grid_import_limit_w <= 0.0:
+        raise ValueError("grid_import_limit_w must be positive, or math.inf")
+    if vehicle_config is not None and (day_controller is not None or instruction_planner is not None):
+        raise ValueError("daily_persistence controllers and planners are not supported with a vehicle")
     if battery_config is None:
         battery_config = BatteryConfig(nominal_energy_wh=0)
 
@@ -2150,7 +2236,7 @@ def _simulate_core(
     # most columns at zero, so it is the only one whose output can be served
     # from the reduced buffer -- and only when the caller wants a summary,
     # since the detailed frame must own a writable array per column.
-    pv_only_summary = summary_only and not has_battery
+    pv_only_summary = summary_only and not has_battery and vehicle_config is None
 
     # Pre-allocate result arrays (avoids per-timestep dict creation)
     out = _PvOnlySummaryBuffers(n_steps) if pv_only_summary else _ResultBuffers(n_steps)
@@ -2300,6 +2386,152 @@ def _simulate_core(
         )
     # No instructions is greedy dispatch; one no-op set serves every day.
     instructions = dispatch_instructions if dispatch_instructions is not None else DispatchInstructions.noop(n_steps)
+    # Vehicle ageing has its own lifecycle and raw temperature input; no
+    # stationary capacity-temperature factor, standby or resistance fade.
+    vehicle_state: Dict[str, Any] = {}
+    vehicle_lifecycle: Optional["VehicleLifecycle"] = None
+    vehicle_temp = np.empty(0)
+    vehicle_ticks = np.empty(0, dtype=np.int64)
+    vehicle_ticks_per_second = 1.0
+    if vehicle_config is not None:
+        assert vehicle_schedule is not None
+        if not vehicle_schedule.index.equals(rng) or vehicle_schedule.hours_per_step != hours_per_step:
+            raise ValueError("vehicle_schedule must match the simulation index and hours_per_step")
+        from breos.vehicle.lifecycle import VehicleLifecycle
+        from breos.weather import build_battery_temperature_series
+
+        vehicle_temp = build_battery_temperature_series(
+            vehicle_config.battery_temperature if vehicle_temperature_series is None else "weather",
+            rng,
+            weather_df=pd.DataFrame({"temp_air": _temp_vals}, index=rng)
+            if vehicle_temperature_series is None
+            else pd.DataFrame({"temp_air": vehicle_temperature_series}),
+            indoor_model={"enabled": False},
+        ).to_numpy(dtype=float)
+        vehicle_ticks, vehicle_ticks_per_second = _datetime_index_ticks(rng)
+        initial_vehicle_soh = 1.0 if vehicle_carry is None else vehicle_carry.soh_fraction
+        if not math.isfinite(initial_vehicle_soh) or not 0.0 <= initial_vehicle_soh <= 1.0:
+            raise ValueError("vehicle carried health must be finite and between 0 and 1")
+        retired_v = False if vehicle_carry is None else vehicle_carry.retired
+        capacity_v = vehicle_config.battery_kwh * 1000.0 * initial_vehicle_soh
+        energy_v = (
+            vehicle_config.departure_soc * capacity_v
+            if initial_vehicle_energy_wh is None
+            else float(initial_vehicle_energy_wh)
+        )
+        if (
+            not math.isfinite(energy_v)
+            or not (0.0 if retired_v else vehicle_config.min_soc * capacity_v)
+            <= energy_v
+            <= vehicle_config.max_soc * capacity_v
+            or (retired_v and energy_v != 0.0)
+        ):
+            raise ValueError("initial_vehicle_energy_wh must be within the vehicle SOC window")
+        pv_v = _carried_origin(
+            initial_vehicle_pv_origin_energy_wh, "initial_vehicle_pv_origin_energy_wh", energy_v, "vehicle energy"
+        )
+        grid_v = _carried_origin(
+            initial_vehicle_grid_origin_energy_wh,
+            "initial_vehicle_grid_origin_energy_wh",
+            energy_v - pv_v,
+            "vehicle energy less its PV origin",
+        )
+        vehicle_lifecycle = VehicleLifecycle(
+            vehicle_config,
+            vehicle_carry,
+            initial_soc=energy_v / capacity_v if capacity_v > 0.0 else 0.0,
+            initial_temperature=float(vehicle_temp[0]),
+        )
+        charge_v = np.zeros(n_steps, dtype=np.bool_)
+        discharge_v = np.ones(n_steps, dtype=np.bool_)
+        if vehicle_config.charge_periods or vehicle_config.discharge_periods:
+            if vehicle_tariff is None or not vehicle_tariff.index.equals(rng):
+                raise ValueError("vehicle charge/discharge periods need a vehicle_tariff on the simulation index")
+            unknown = (set(vehicle_config.charge_periods) | set(vehicle_config.discharge_periods)) - set(
+                vehicle_tariff.schedule.periods
+            )
+            if unknown:
+                raise ValueError(f"unknown vehicle tariff periods: {sorted(unknown)}")
+            charge_v = np.isin(vehicle_tariff.period_labels, vehicle_config.charge_periods)
+            if vehicle_config.discharge_periods:
+                discharge_v = np.isin(vehicle_tariff.period_labels, vehicle_config.discharge_periods)
+        charge_v.setflags(write=False)
+        discharge_v.setflags(write=False)
+        vehicle_state = dict(
+            vehicle_config=vehicle_config,
+            vehicle_schedule=vehicle_schedule,
+            vehicle_energy_wh=energy_v,
+            vehicle_pv_origin_wh=pv_v,
+            vehicle_grid_origin_wh=grid_v,
+            vehicle_soh_fraction=vehicle_lifecycle.soh,
+            vehicle_retired=vehicle_lifecycle.retired,
+            vehicle_was_plugged=bool(vehicle_schedule.plugged[0])
+            if vehicle_carry is None
+            else bool(vehicle_carry.plugged),
+            vehicle_charge_period=charge_v,
+            vehicle_discharge_period=discharge_v,
+            grid_import_limit_w=grid_import_limit_w,
+        )
+
+    def final_vehicle_carry() -> Optional[VehicleCarry]:
+        return None if vehicle_lifecycle is None else vehicle_lifecycle.carry(out.columns, n_steps)
+
+    def close_vehicle_day(lo: int, hi: int) -> None:
+        if vehicle_lifecycle is None:
+            return
+        vehicle_lifecycle.close(
+            out.columns,
+            lo=lo,
+            hi=hi,
+            time_ticks=vehicle_ticks,
+            ticks_per_second=vehicle_ticks_per_second,
+            temperature=vehicle_temp,
+            hours=hours_per_step,
+            step_time=rng[hi - 1],
+            finalize=finalize_degradation and hi == n_steps,
+            allow_terminal_replacement=vehicle_allow_terminal_replacement,
+            years_after_span=vehicle_replacement_years_after_span,
+            n_steps=n_steps,
+        )
+        assert isinstance(out, _ResultBuffers)
+        out.vehicle_events = [event.to_record() for event in vehicle_lifecycle.events]
+        last = hi - 1
+        vehicle_state.update(
+            vehicle_energy_wh=float(out.columns["Vehicle_Energy_Onboard"][last]),
+            vehicle_pv_origin_wh=float(out.columns["Vehicle_PV_Origin_Energy_End"][last]),
+            vehicle_grid_origin_wh=float(out.columns["Vehicle_Grid_Origin_Energy_End"][last]),
+            vehicle_was_plugged=bool(out.columns["Vehicle_Plugged"][last]),
+            vehicle_soh_fraction=vehicle_lifecycle.soh,
+            vehicle_retired=vehicle_lifecycle.retired,
+        )
+
+    def dispatch_vehicle_only(lo: int, hi: int) -> None:
+        # House rows have already been filled by the unchanged vectorised
+        # PV-only path. The shared day loop then dispatches only the vehicle.
+        dispatch_day(
+            out,
+            _pv_dc_vals,
+            _load_vals,
+            _temp_vals,
+            lo,
+            hi,
+            battery_config=battery_config,
+            battery_soh_decimal=battery_soh_decimal,
+            Battery_Energy_Wh=0.0,
+            Battery_PV_Origin_Energy_Wh=0.0,
+            Battery_Grid_Origin_Energy_Wh=0.0,
+            eff_charge=eff_charge,
+            eff_discharge=eff_discharge,
+            hours_per_step=hours_per_step,
+            standby_loss_per_step_wh=0.0,
+            cap_wh=cap_wh,
+            cap_charge_wh=cap_charge_wh,
+            cap_discharge_wh=cap_discharge_wh,
+            instructions=instructions,
+            stationary_active=False,
+            **vehicle_state,
+        )
+
     session: Optional[_ControllerSession] = None
     if day_controller is not None:
         if dispatch_instructions is not None:
@@ -2341,6 +2573,11 @@ def _simulate_core(
             curve_rows=_curve_rows,
             units=_units,
         )
+        if vehicle_config is not None:
+            for lo in range(0, n_steps, steps_per_day):
+                hi = min(lo + steps_per_day, n_steps)
+                dispatch_vehicle_only(lo, hi)
+                close_vehicle_day(lo, hi)
         return _CoreRun(
             buffers=out,
             rng=rng,
@@ -2348,6 +2585,9 @@ def _simulate_core(
             lifecycle=degradation_lifecycle,
             degradation_tracking=degradation_tracking,
             hours_per_step=hours_per_step,
+            vehicle_carry=final_vehicle_carry(),
+            vehicle_end_of_life_events=() if vehicle_lifecycle is None else tuple(vehicle_lifecycle.events),
+            vehicle_degradation_tracking=[] if vehicle_lifecycle is None else vehicle_lifecycle.tracking,
         )
 
     # An AC-coupled battery's PV inverter converts as in a PV-only run,
@@ -2412,6 +2652,8 @@ def _simulate_core(
                     span_chain=ac_pv_chain,
                 )
                 out.columns["Battery_SOH"][segment_start:segment_end] = aging.soh_percent
+                if vehicle_config is not None:
+                    dispatch_vehicle_only(segment_start, segment_end)
             else:
                 dispatch_day(
                     out,
@@ -2437,10 +2679,18 @@ def _simulate_core(
                     ac_derate=_full_rating if _derate_vals is None else _derate_vals,
                     curve_rows=_curve_rows,
                     pv_chain=ac_pv_chain,
+                    **vehicle_state,
                 )
             if session is not None:
                 session.complete_segment(_pv_dc_vals, _load_vals, _temp_vals)
             segment_last = segment_end - 1
+            if vehicle_config is not None:
+                vehicle_state["vehicle_was_plugged"] = bool(out.columns["Vehicle_Plugged"][segment_last])
+                vehicle_state["vehicle_energy_wh"] = float(out.columns["Vehicle_Energy_Onboard"][segment_last])
+                vehicle_state["vehicle_pv_origin_wh"] = float(out.columns["Vehicle_PV_Origin_Energy_End"][segment_last])
+                vehicle_state["vehicle_grid_origin_wh"] = float(
+                    out.columns["Vehicle_Grid_Origin_Energy_End"][segment_last]
+                )
             Battery_Energy_Wh = float(out.columns["Battery_Energy"][segment_last])
             Battery_PV_Origin_Energy_Wh = float(out.columns["Battery_PV_Origin_Energy_End"][segment_last])
             Battery_Grid_Origin_Energy_Wh = float(out.columns["Battery_Grid_Origin_Energy_End"][segment_last])
@@ -2478,6 +2728,8 @@ def _simulate_core(
                 min_remaining_steps=min_remaining_steps,
             ),
         )
+        if vehicle_lifecycle is not None:
+            close_vehicle_day(window_start, window_end)
         # Refresh the loop's hot copies of the daily-boundary state.
         battery_soh_decimal = aging.soh_fraction
         eff_charge = aging.eff_charge
@@ -2493,6 +2745,9 @@ def _simulate_core(
         lifecycle=degradation_lifecycle,
         degradation_tracking=degradation_tracking,
         hours_per_step=hours_per_step,
+        vehicle_carry=final_vehicle_carry(),
+        vehicle_end_of_life_events=() if vehicle_lifecycle is None else tuple(vehicle_lifecycle.events),
+        vehicle_degradation_tracking=[] if vehicle_lifecycle is None else vehicle_lifecycle.tracking,
         controller_carry=None if session is None else session.finish(),
         controller_instructions=None if session is None else session.executed_instructions(),
     )
@@ -2628,6 +2883,9 @@ class _DetailedRun:
     degradation_state: Dict[str, Any]
     controller_carry: Optional[ControllerCarry]
     controller_instructions: Optional[DispatchInstructions]
+    vehicle_carry: Optional[VehicleCarry] = None
+    vehicle_end_of_life_events: Tuple[EndOfLifeEvent, ...] = ()
+    vehicle_degradation_tracking: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def _simulate_detailed_run(
@@ -2653,6 +2911,9 @@ def _simulate_detailed_run(
         degradation_state=_build_final_degradation_state(core.lifecycle, core.aging),
         controller_carry=core.controller_carry,
         controller_instructions=core.controller_instructions,
+        vehicle_carry=core.vehicle_carry,
+        vehicle_end_of_life_events=core.vehicle_end_of_life_events,
+        vehicle_degradation_tracking=core.vehicle_degradation_tracking,
     )
 
 

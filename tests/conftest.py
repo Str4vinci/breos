@@ -426,3 +426,11 @@ def _fresh_solar_positions():
     from breos.pv import model_options
 
     model_options._SOLAR_POSITIONS.clear()
+
+
+@pytest.fixture
+def vehicle_full_health(monkeypatch):
+    """VH1–VH5 and dispatch-only invariants specify a fixed full-health pack."""
+    from breos.vehicle.lifecycle import VehicleLifecycle
+
+    monkeypatch.setattr(VehicleLifecycle, "close", lambda self, *args, **kwargs: None)

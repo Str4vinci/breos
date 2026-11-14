@@ -63,6 +63,12 @@ def calculate_co2_projection(
     yearly_export_kwh: np.ndarray,
     emissions_params: EmissionsParams,
     yearly_grid_shift_kwh: Optional[np.ndarray] = None,
+    *,
+    yearly_baseline_import_kwh: Optional[np.ndarray] = None,
+    yearly_baseline_away_kwh: Optional[np.ndarray] = None,
+    yearly_import_kwh: Optional[np.ndarray] = None,
+    yearly_away_kwh: Optional[np.ndarray] = None,
+    yearly_unattributed_battery_kwh: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
     """
     Calculate multi-year CO2 savings projection.
@@ -79,6 +85,13 @@ def calculate_co2_projection(
         yearly_grid_shift_kwh: Per year, grid-origin battery AC to load minus
             the grid AC imported to charge the battery; zero or negative.
             None without grid charging.
+        yearly_baseline_import_kwh, yearly_baseline_away_kwh: R0 purchases
+            in each year, replacing the house-only baseline with a vehicle.
+        yearly_import_kwh, yearly_away_kwh: The study household's site and
+            away purchases, kept apart at their respective meter boundaries.
+        yearly_unattributed_battery_kwh: Stationary unattributed AC to the
+            house, which earns no avoided emissions. All five household
+            arrays are required together; omitted, the original formula is unchanged.
 
     Returns:
         DataFrame with yearly and cumulative CO2 avoided columns.
@@ -90,6 +103,19 @@ def calculate_co2_projection(
     yearly_self_consumed = yearly_pv_kwh - yearly_export_kwh
     if yearly_grid_shift_kwh is not None:
         yearly_self_consumed = yearly_self_consumed + yearly_grid_shift_kwh
+    if yearly_baseline_import_kwh is not None:
+        if (
+            yearly_baseline_away_kwh is None
+            or yearly_import_kwh is None
+            or yearly_away_kwh is None
+            or yearly_unattributed_battery_kwh is None
+        ):
+            raise ValueError("vehicle emissions needs all household import, away and unattributed-energy inputs")
+        yearly_self_consumed = (
+            (yearly_baseline_import_kwh - yearly_import_kwh)
+            + (yearly_baseline_away_kwh - yearly_away_kwh)
+            - yearly_unattributed_battery_kwh
+        )
     co2_self = yearly_self_consumed * ci / 1000
     co2_export = yearly_export_kwh * export_ci / 1000
     co2_total = co2_self + co2_export
