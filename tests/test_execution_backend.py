@@ -52,17 +52,47 @@ def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch, w
 
 def test_provenance_records_the_python_backend_and_versions(tmp_path, write_multiyear_weather):
     weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=3)
+    settings = MonteCarloSettings(
+        weather_file=str(weather), n_runs=1, years_per_run=1, seed=3, execution_backend="python"
+    )
     result = run_montecarlo(_base_config(), settings)
 
     execution = result.provenance["execution"]
     assert execution["execution_backend"] == "python"
+    assert execution["requested_execution_backend"] == "python"
     assert execution["numpy"] == np.__version__
     assert execution["pandas"] == pd.__version__
     assert execution["python"].count(".") == 2
     # No compiler is involved on the reference path, so none is claimed.
     assert "numba" not in execution
     assert "jit_cache" not in execution
+
+
+@pytest.mark.parametrize("where", ["default", "settings", "config"])
+def test_auto_is_resolved_once_and_recorded_with_the_backend_that_ran(
+    tmp_path, write_multiyear_weather, monkeypatch, where
+):
+    """The "auto" request, from the default, the settings or the config, resolves once, before any trajectory.
+
+    numba_available is pinned to False so this runs without the extra; the
+    resolution with Numba installed is covered in test_execution_backend_propagation.
+    """
+    import breos._numba_dispatch as dispatch
+
+    monkeypatch.setattr(dispatch, "numba_available", lambda: False)
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    config = {**_base_config(), **({"execution_backend": "auto"} if where == "config" else {})}
+    backend = {"execution_backend": "auto"} if where == "settings" else {}
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=3, **backend)
+    result = run_montecarlo(config, settings)
+
+    execution = result.provenance["execution"]
+    assert execution["requested_execution_backend"] == "auto"
+    assert execution["execution_backend"] == "python"
+    # The settings record the backend that ran; the resolved config keeps the
+    # config's own request, so it replays on a machine with or without Numba.
+    assert result.settings.execution_backend == "python"
+    assert result.provenance["resolved_config"]["execution_backend"] == "auto"
 
 
 def test_provenance_records_the_compiler_versions_and_cache_state(tmp_path, write_multiyear_weather):

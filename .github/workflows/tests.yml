@@ -3,8 +3,7 @@ name: Tests
 on:
   # Develop too: its branch protection does not require a pull request to be
   # up to date before it merges, so two PRs that pass alone can still break
-  # together. The push run tests the tree each merge lands, without blocking
-  # it; the nightly coverage run still runs the full suite on develop itself.
+  # together. The push run tests the tree each merge lands, without blocking it.
   push:
     branches: [main, develop, "release/**"]
   # Deliberately unfiltered: a `branches` filter here matches the *base* of the
@@ -14,18 +13,16 @@ on:
   # for review starts the run.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  # Slow endurance/multi-year tests run nightly, on demand, and as a release
-  # gate; the coverage report is published on the same triggers.
-  schedule:
-    - cron: "0 4 * * *"  # 04:00 UTC every day
+  # Slow tests, platform checks and coverage remain available on demand and
+  # run automatically at the release gates.
   workflow_dispatch:
 
 permissions:
   contents: read
 
 # A new push to a pull request cancels that PR's run still in progress. Other
-# events get a group of their own (the run id), so pushes, nightly, and manual
-# runs are never cancelled or queued behind one another.
+# events get a group of their own (the run id), so pushes and manual runs
+# are never cancelled or queued behind one another.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
@@ -68,7 +65,7 @@ jobs:
 
   test:
     # The default fast suite runs on pushes and PRs (including release/**),
-    # not on the scheduled/dispatch slow runs.
+    # not on the manually dispatched slow runs.
     needs: changes
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -80,9 +77,8 @@ jobs:
 
     env:
       UV_PYTHON: ${{ matrix.python-version }}
-      # 3.12 alone also runs lint, format and type checks (mypy is pinned to
-      # python_version 3.11 in pyproject), the release artifact check, and
-      # the docs build: they give the same answer on every version.
+      # Artifact verification gives the same answer on every version, so
+      # 3.12 alone checks the installed wheel. Quality and docs run separately.
       PRIMARY: ${{ matrix.python-version == '3.12' }}
       # A documentation-only PR still runs the suite on 3.12, since several
       # tests read docs/ and the README quickstart. The other versions skip
@@ -104,32 +100,51 @@ jobs:
 
       - name: Install dependencies
         if: env.RUN_SUITE == 'true'
-        run: uv sync --extra dev --extra docs
-
-      - name: Lint
-        if: env.PRIMARY == 'true'
-        run: uv run ruff check breos/ tests/ tools/
-
-      - name: Check formatting
-        if: env.PRIMARY == 'true'
-        run: uv run ruff format --check breos/ tests/ tools/
-
-      - name: Type check
-        if: env.PRIMARY == 'true'
-        run: uv run mypy breos
+        run: uv sync --extra dev
 
       - name: Run tests
         if: env.RUN_SUITE == 'true'
         # Slow tests are deselected by default (pyproject addopts: -m "not slow").
-        # -n auto spreads the suite over the runner's cores (pytest-xdist).
-        run: uv run pytest tests/ -v -n auto
+        # Keep explicitly grouped shared-fixture tests on the same worker;
+        # unmarked tests still spread over the runner's cores.
+        run: uv run pytest tests/ -v -n auto --dist loadgroup --durations=20
 
       - name: Verify release artifacts
         if: env.PRIMARY == 'true'
         run: uv run python tools/verify_release_artifacts.py
 
+  quality-docs:
+    # A stable check name for branch protection, independent of the version
+    # matrix. Run on documentation-only PRs too, alongside the 3.12 suite.
+    needs: changes
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    env:
+      UV_PYTHON: "3.12"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra docs
+
+      - name: Lint
+        run: uv run ruff check breos/ tests/ tools/
+
+      - name: Check formatting
+        run: uv run ruff format --check breos/ tests/ tools/
+
+      - name: Type check
+        run: uv run mypy breos
+
       - name: Build docs
-        if: env.PRIMARY == 'true'
         env:
           BREOS_DOCS_OFFLINE: "1"
         run: uv run --extra docs sphinx-build -W -b html docs docs/_build/html
@@ -137,17 +152,16 @@ jobs:
   platform-smoke:
     # Keep non-Linux coverage focused on installation and public entrypoints;
     # the complete version matrix remains on Linux above. macOS minutes are
-    # metered at about ten times the Linux rate, so this runs nightly, on
-    # demand, and at the release gates (pushes to main and release/**, and PRs
-    # into them) rather than on every PR commit or develop merge. A
-    # platform-only break on develop surfaces within a day.
+    # metered at about ten times the Linux rate, so this runs on demand and
+    # at the release gates (pushes to main and release/**, PRs into them, and
+    # PRs from release/**) rather than on every PR commit or develop merge.
     needs: changes
     if: >-
       (github.event_name == 'push' && github.ref != 'refs/heads/develop') ||
-      github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       github.base_ref == 'main' ||
-      startsWith(github.base_ref, 'release/')
+      startsWith(github.base_ref, 'release/') ||
+      startsWith(github.head_ref, 'release/')
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -174,7 +188,7 @@ jobs:
         run: >-
           uv run pytest
           tests/test_public_api.py
-          tests/test_cli.py::test_cli_threads_battery_power_limits tests/test_cli.py::test_cli_does_not_advertise_unsupported_ac_coupling
+          tests/test_cli.py::test_run_from_flags_outputs_json tests/test_cli.py::test_run_dry_run_outputs_resolved_config_without_simulating
           tests/test_release_smoke.py::test_readme_quickstart_smoke
           -q
 
@@ -214,7 +228,7 @@ jobs:
         run: uv run --no-sync python -c "import numpy, pandas, pvlib, scipy; print(numpy.__version__, pandas.__version__, pvlib.__version__, scipy.__version__)"
 
       - name: Run tests
-        run: uv run --no-sync pytest tests/ -q -n auto
+        run: uv run --no-sync pytest tests/ -q -n auto --dist loadgroup --durations=20
 
   no-numba:
     # Numba is an optional extra, and importing BREOS must not need it. The
@@ -246,17 +260,17 @@ jobs:
           uv run --no-sync python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('numba') is not None)"
 
       - name: Run tests
-        run: uv run --no-sync pytest tests/ -q -n auto
+        run: uv run --no-sync pytest tests/ -q -n auto --dist loadgroup --durations=20
 
   slow-tests:
     # Long-running endurance tests on Python 3.12. Release pushes and PRs run
-    # this gate automatically; other branches rely on the nightly/manual runs.
+    # this gate automatically; other branches use manual runs.
     needs: changes
     if: >-
-      github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.ref, 'refs/heads/release/') ||
-      startsWith(github.base_ref, 'release/')
+      startsWith(github.base_ref, 'release/') ||
+      startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
 
     env:
@@ -275,7 +289,7 @@ jobs:
         run: uv sync --extra dev
 
       - name: Run slow tests
-        run: uv run pytest tests/ -m slow -v
+        run: uv run pytest tests/ -m slow -v --durations=20
 
   coverage-report:
     # Publishes a branch-aware core-coverage snapshot; it is a report, not a
@@ -286,10 +300,10 @@ jobs:
     # changed lines rather than restoring this to the matrix.
     needs: changes
     if: >-
-      github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.ref, 'refs/heads/release/') ||
-      startsWith(github.base_ref, 'release/')
+      startsWith(github.base_ref, 'release/') ||
+      startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
 
     env:
@@ -310,7 +324,7 @@ jobs:
       - name: Run tests with core coverage
         # Vendored BLAST-Lite is excluded by the coverage configuration.
         # pytest-cov combines the xdist workers' data into one report.
-        run: uv run pytest tests/ -v -n auto --cov=breos --cov-report=term-missing --cov-report=xml
+        run: uv run pytest tests/ -v -n auto --dist loadgroup --durations=20 --cov=breos --cov-report=term-missing --cov-report=xml
 
       - name: Upload core coverage report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

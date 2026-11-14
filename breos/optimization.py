@@ -32,13 +32,14 @@ from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
     limit_worker_threads,
     require_backend,
-    validate_execution_backend,
+    resolve_execution_backend,
 )
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.optimization_config import (
     DEFAULT_OBJECTIVE_BASIS,
     EARLY_STOP_DEFAULTS,
     LAYOUTS,
+    ORIENTATION_STEP_DEG,
     adjusted_max_tilt_deg,
     resolve_optimization_config,
     resolve_run_settings,
@@ -98,6 +99,22 @@ class OptimizationResult:
             stacklevel=2,
         )
         return float("nan")
+
+
+class NoFeasibleDesignError(RuntimeError):
+    """A search scored no design that meets its constraints.
+
+    ``evaluated`` is the table of every design the search scored, as
+    ``details["evaluated"]`` of a successful run.
+    """
+
+    def __init__(self, message: str, evaluated: pd.DataFrame) -> None:
+        super().__init__(message)
+        self.evaluated = evaluated
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # Pickled with its table, so a search run in a worker process can raise it.
+        return (type(self), (str(self), self.evaluated))
 
 
 @dataclass
@@ -387,7 +404,7 @@ def _evaluate_projected_design_metrics(
     inverter_ac_capacity_w: Optional[float],
     emissions_params: Optional[EmissionsParams] = None,
     return_tables: bool = False,
-    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
+    execution_backend: str = "python",
     ac_output_scale: float = 1.0,
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
@@ -1078,12 +1095,12 @@ def evaluate_projected_design(
     # Before the PV production model runs, not after it. Computing a year of
     # irradiance and then failing on a missing import wastes the expensive part
     # and reports the cheap problem late.
-    require_backend(execution_backend)
+    execution_backend = require_backend(execution_backend)
 
     study = _DesignStudy.resolve(
         tmy_data,
         houseload,
-        resolve_optimization_config(config),
+        resolve_optimization_config(config, battery_kwh=float(battery_kwh)),
         battery_kwh=float(battery_kwh),
         execution_backend=execution_backend,
         weather_by_year=weather_by_year,
@@ -1117,6 +1134,8 @@ def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, u
     """
     lowest = np.ceil(lower / step) * step
     highest = np.floor(upper / step) * step
+    if np.any(lowest > highest):
+        raise ValueError(f"the bounds {lower}–{upper} hold no multiple of {step:g}")
     return np.clip(np.round(values / step) * step, lowest, highest)
 
 
@@ -1179,7 +1198,7 @@ try:
             # Candidate scoring is the hottest loop in the package, which makes
             # it exactly the place where a silently-inherited backend would be
             # hardest to notice and hardest to attribute afterwards.
-            backend = validate_execution_backend(execution_backend)
+            backend = resolve_execution_backend(execution_backend)
             # Checked and defaulted once, before any model preparation: an
             # unknown key raises, and every default is in the resolved config.
             config = resolve_optimization_config(config)
@@ -1228,7 +1247,7 @@ try:
                         lower.append(-90.0)  # Search around North (0°)
                         upper.append(90.0)
                 self.single_orientation_genes = tuple(range(2, len(lower)))
-                self.gene_steps += (5.0,) * len(self.single_orientation_genes)
+                self.gene_steps += (ORIENTATION_STEP_DEG,) * len(self.single_orientation_genes)
             # The last gene picks the layout when more than one is searched:
             # its value is an index into self.layouts.
             self.layout_gene: Optional[int] = None
@@ -1470,6 +1489,33 @@ def _evaluated_designs(problem: Any) -> pd.DataFrame:
     return table
 
 
+# Each constraint column and the setting it checks.
+_CONSTRAINT_SETTINGS = {
+    "Constraint_Budget": "constraints.budget",
+    "Constraint_Area": "constraints.max_area_m2",
+    "Constraint_ZEB": "constraints.enforce_zeb",
+}
+
+
+def _no_feasible_message(evaluated: pd.DataFrame) -> str:
+    """Name the constraints the evaluated designs break, most often broken first, with counts."""
+    total = len(evaluated)
+    counts = {
+        setting: int((evaluated[column] > 0.0).sum())
+        for column, setting in _CONSTRAINT_SETTINGS.items()
+        if column in evaluated
+    }
+    broken = sorted((item for item in counts.items() if item[1]), key=lambda item: -item[1])
+    named = "; ".join(
+        f"{setting} by every design ({count} of {total})" if count == total else f"{setting} by {count} of {total}"
+        for setting, count in broken
+    )
+    return (
+        f"Multi-objective optimization found no feasible solutions among the {total} designs it scored. "
+        f"Constraints broken: {named or 'none'}."
+    )
+
+
 def optimize_system_multi_objective(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -1528,7 +1574,9 @@ def optimize_system_multi_objective(
 
     Raises:
         ImportError: If pymoo is not installed.
-        RuntimeError: If the optimizer returns no feasible solution.
+        NoFeasibleDesignError: If the optimizer returns no feasible solution. It
+            is a ``RuntimeError``; its message names the constraints the scored
+            designs break, and its ``evaluated`` attribute holds them.
     """
     if _PYMOO_IMPORT_ERROR is not None:
         raise ImportError(
@@ -1562,7 +1610,7 @@ def optimize_system_multi_objective(
     # Before the worker pool exists. An NSGA-II run is long and a missing
     # optional dependency should not surface as a traceback from inside a pool
     # that then has to be torn down.
-    require_backend(execution_backend)
+    execution_backend = require_backend(execution_backend)
 
     # Invalid tariffs must fail before a worker pool is created.
     problem = SolarDesignProblem(
@@ -1596,14 +1644,15 @@ def optimize_system_multi_objective(
             pool.close()
             pool.join()
 
+    evaluated = _evaluated_designs(problem)
     if result.X is None or result.F is None:
-        raise RuntimeError("Multi-objective optimization found no feasible solutions.")
+        evaluated.attrs["currency"] = problem.study.pricing.currency
+        raise NoFeasibleDesignError(_no_feasible_message(evaluated), evaluated)
 
     # pymoo stores every ``out`` value on the evaluated individual, so the
     # Pareto diagnostics are already available even when workers performed
     # the scoring.
     pareto = _design_table(problem, np.atleast_2d(result.X), [individual.data for individual in result.opt])
-    evaluated = _evaluated_designs(problem)
     evaluation_counts = {
         "evaluations": int(sum(problem.score_requests.values())),
         "simulations": len(problem.scored),

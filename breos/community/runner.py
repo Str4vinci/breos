@@ -196,7 +196,9 @@ def _run_household(site: HouseholdConfig, deps: AppRuntimeDependencies, index: p
 def _run_pv_site(site: ResolvedAppConfig, deps: AppRuntimeDependencies, *, retain_site_frames: bool) -> SiteRun:
     cfg = site.cfg
     has_battery = config_has_battery(cfg)
-    execution = backend_provenance(cfg["execution_backend"], pv_only=not has_battery)
+    execution = backend_provenance(
+        cfg["execution_backend"], pv_only=not has_battery, requested=site.requested_execution_backend
+    )
     inputs = prepare_simulation_inputs_cached(cfg, site, deps)
     index = pd.DatetimeIndex(inputs.dc_system_base.index)
     solar_position = solar_position_record(cfg["solar_position"], inputs.weather, cfg["resolution"])

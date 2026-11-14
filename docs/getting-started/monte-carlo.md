@@ -223,13 +223,13 @@ the time goes. The `fast` extra installs Numba for an optional dispatch kernel:
 pip install "breos[fast]"
 ```
 
+With the extra installed, the default `execution_backend = "auto"` uses the
+kernel; without it, Monte Carlo uses the Python path. To choose by name:
+
 ```toml
 [montecarlo]
 execution_backend = "numba"
 ```
-
-Installing the extra changes nothing on its own. Without
-`execution_backend = "numba"`, Monte Carlo uses the Python path.
 
 The kernel is the production BREOS dispatch and its energy ledger, compiled
 from the same functions the Python path runs rather than from a copy. The daily
@@ -240,8 +240,9 @@ backend accelerates part of the model rather than all of it. It has no public
 API of its own: select it with `execution_backend`, as a config key, with
 `--execution-backend`, or with `MonteCarloSettings(execution_backend=...)`.
 
-BREOS works fully without Numba. The Python path stays the default and remains
-the numerical reference that the backend is checked against. The same compiled
+BREOS works fully without Numba. The Python path remains the numerical
+reference that the backend is checked against, and the results do not depend
+on which one ran. The same compiled
 dispatch backend is also available to `breos.App` and multi-objective
 optimization through their `execution_backend` option.
 

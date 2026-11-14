@@ -267,6 +267,7 @@ def test_kept_refusals_before_weather(entry, reason, tmp_path, monkeypatch, trin
 
 @pytest.mark.parametrize("freq", ["h", "15min"])
 def test_backend_worker_and_year_cache_parity(weather, freq):
+    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     cfg = config(resolution=freq, battery_kwh=0)
     options = settings(weather)
     cache = mc.build_year_cache(cfg, options)

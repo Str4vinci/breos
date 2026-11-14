@@ -74,7 +74,7 @@ EXPECTED_DEFAULTS = {
     "horizon_profile": None,
     "battery_temperature": "weather",
     "battery_indoor_model": None,
-    "execution_backend": "python",
+    "execution_backend": "auto",
     "weather_file": None,
     "weather_source": None,
     "load_profile_file": None,

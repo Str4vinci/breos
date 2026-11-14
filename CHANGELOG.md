@@ -6,13 +6,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
-- Collective self-consumption (#421): `breos.Community` shares PV between
-  separately metered households at 15-minute steps, with fixed or
-  proportional allocation, home batteries behind each meter, and PV-only
-  assets. Participant and asset accounts report ownership, supplier bills,
-  shared payments, surplus income, NPVs against the no-system baseline and
-  benefit against each household alone. A settlement ledger, provenance,
-  Porto example and community guide explain the balances and assumptions.
 - Vehicle-to-home (#420): `[vehicle]` adds uncontrolled, V1G and V2H modes,
   weekday/weekend schedules or trip files, away charging, pack ageing and
   replacement policy. App and paired Monte Carlo compare three households
@@ -33,6 +26,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   inverter limits do not count as failures. Seeded convergence
   tests compare the string and parallel peak searches with dense searches of
   the same represented curves.
+- `PVModuleParams.Max_Series_Fuse_A`, the datasheet's maximum series fuse
+  rating in A, validated as positive and `None` when unpublished. Metadata
+  for a client's reverse-current check; no model reads it.
 - AC-coupled batteries ([#419](https://github.com/Str4vinci/breos/issues/419),
   ADR 0004). `battery_coupling = "ac"` gives the battery its own
   bidirectional inverter on the AC bus beside the PV inverter, sized by
@@ -81,6 +77,720 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   several inverters. The electrical check now warns when an inverter's DC/AC ratio
   lies outside 0.8 to 1.6. Runs with one inverter are unchanged, apart from
   that warning.
+- `breos.equipment.InverterSpec` separates `max_dc_power_w`, the maximum PV
+  generator power, from `recommended_dc_power_w`. Upper limits may be given as
+  `"inf"` in a configuration, and an unbounded limit is written `"inf"` in the
+  result's provenance, so results stay strict JSON.
+- `breos.equipment.InverterSpec` stores a specified inverter's validated AC
+  nameplate and optional datasheet limits. Each MPPT input is a
+  `breos.equipment.MpptSpec` with its own current and string limits, so
+  asymmetric inputs keep their published values, and
+  `isc_comparison_factor` records the manufacturer's Isc comparison rule.
+  `None` marks an unknown value, while `math.inf` for an upper limit or 0 for
+  a lower limit marks a limit the inverter does not have.
+  `InverterSpec.as_app_config()` supplies the rating and known efficiency to
+  App, keeping catalog identity, prices and certification outside BREOS.
+  DC/MPPT limits are metadata, not string-aware validation or simulation.
+- `breos.electrical.check_topology` checks a declared string topology against
+  module and inverter datasheet limits at the site's design temperatures: cold
+  Voc against the inverter and module voltage ratings, hot-cell Vmp and Voc
+  against the MPPT minimum and start-up voltage, Vmp against the MPPT maximum,
+  design Isc and operating current per input, string counts, parallel-string
+  matching, generator power, and that every module is strung exactly once.
+  Where a datasheet publishes them, it also checks each string connection's
+  current ratings, each input's generator power and the inverter's
+  short-circuit rating over all inputs. Parallel strings on one input may come
+  from different arrays when they share the module and the length.
+  Findings are errors (hard limits and wiring), warnings (yield and operating
+  limits) or missing datasheet values; a missing value is never replaced by a
+  default. Each finding carries its `unit` and the `limit_field` it was checked
+  against, and `breos.electrical.FINDING_CODES` publishes the codes. Callers may
+  state cell temperatures and the bifacial rear irradiance instead of the
+  screening defaults.
+- App takes `inverters`, `pv_strings` and `electrical_environment` together.
+  The inverters' nameplates replace `inverter_loading_ratio` and
+  `inverter_ac_rating_kw`, and the result gains an `electrical` block with the
+  energy model's `fidelity`, the check's `status` and its `findings`. Energy is
+  still modelled for the system as a whole; a failing design still simulates.
+  Every result carries the block, with `status = "not_evaluated"` and no
+  findings when no topology is configured.
+- `electrical_fidelity = "string"` makes energy depend on the wiring of one
+  inverter: each MPPT input moves along its strings' single-diode IV curve to
+  the best point its voltage range and its own and each string connection's
+  operating-current limits allow, then delivers at most its usable DC power,
+  and the inverter at most its own. Strings from different arrays on one input
+  run at the best point of their summed IV curve. The inverter starts each day
+  once an input's open-circuit voltage reaches the start-up voltage. The DC
+  this costs is the new `mppt_limits` stage of the PV loss waterfall, and a
+  design inside every limit gives the aggregate result. It refuses to run, rather
+  than fall back, without one inverter, the limits it needs, or a sound wiring.
+  `breos.solar.calculate_array_breakdowns` returns the per-array breakdowns
+  these functions take, each with its module operating point, for fixed and
+  tracking arrays alike.
+- Each `pv_arrays` entry may set its own `temperature_model`, since a rack and
+  a flush roof on one site run about 10 °C apart, and its own `mounting`,
+  `hot_cell_temp_c` and `cold_operating_cell_temp_c` for the string check
+  (`breos.electrical.ArrayMounting`). The most specific value wins: the
+  array's stated temperature, then its mounting's rise, then the
+  `electrical_environment` values. Without these keys every result is
+  unchanged.
+- DC cable losses from the string topology. A `pv_strings` entry may give
+  `cable_length_m`, `cable_cross_section_mm2` and `conductor` (copper or
+  aluminium), on every string or none, and `electrical_environment` may give
+  `conductor_temp_c`; 50 °C is assumed and reported when it is unstated. The
+  cables replace the flat `wiring` loss, whose default becomes 0. Aggregate
+  energy charges I²R at each string's maximum power current; string-level
+  energy solves the cable into the IV curve. The loss is the new `dc_wiring`
+  waterfall stage, and `electrical.dc_wiring` reports each string's resistance
+  and its STC loss. `breos.electrical.string_limited_dc` now also returns the
+  cable loss, and `string_cable_loss` gives the aggregate one. Without cable
+  data every result is unchanged.
+- Inverters may carry a measured `efficiency_curve` (efficiency against AC
+  output at one to three DC voltages, the CEC and OND shape) and a
+  `temperature_derating` (allowed AC output against ambient), and `[ac_cable]`
+  models the inverter-to-meter cable's I²R loss. The dispatch kernels, both
+  backends, and the PV-only path apply them to PV and battery discharge alike.
+  `electrical_environment.inverter_ambient_temp_c` states an indoor
+  inverter's ambient; otherwise the weather's air temperature applies. The
+  result's `inverter` block reports each when configured. Without them every
+  result is unchanged.
+- Monte Carlo reports P50, P75, P90 and P99 annual yield for one year and
+  the study horizon (`MonteCarloResult.yield_exceedance`, also in the
+  provenance and `--json`), from the weather years' variability and an
+  optional stated `model_uncertainty_pct` (`--model-uncertainty`), as PVsyst's
+  P50/P90 evaluation does. With it, each trajectory draws one persistent PV
+  yield factor (`pv_model_factor`), so the economics' quantiles include the
+  model uncertainty. The summary gains the `p10`, `p25`, `p75` and `p90`
+  quantiles. `breos.exceedance` computes the values. Without
+  `model_uncertainty_pct`, every trajectory is unchanged.
+- Near shading from a layout tool (ADR 0008, level 1). Each `pv_arrays`
+  entry may carry a `shading` table, the beam shaded fraction on a grid of
+  sun azimuth and elevation (pvlib's convention), with an optional
+  `sky_view_factor`; every array or none. BREOS reads it bilinearly at each
+  step's sun position, across north when the azimuth axis closes the circle,
+  and reduces the array's beam and sky diffuse before the incidence-angle
+  modifier. With Hay-Davies or a Perez model the circumsolar diffuse is
+  shaded with the beam. One table serves both resolutions and every weather
+  year. The flat `shading` loss defaults to 0 when the tables are given; a
+  stated one stays. The loss is the new `near_shading` waterfall stage, and
+  `pv_loss_waterfall.near_shading` reports each array's table. Without
+  tables every result is unchanged.
+- Module-level shading (ADR 0008, level 2). With string-level energy, a
+  `pv_strings` entry may carry `module_shading`: each module's shaded
+  fraction table, whole or per bypass-diode substring, where a substring may
+  also give the shaded fraction of its most-shaded cell. The substrings
+  follow the module's `bypass_diodes`, a new `PVModuleParams` field, 3 by
+  default (ADR 0009 M1). On a half-cut module, whose
+  `cell_strings_in_parallel` (also new, 1 by default; 2 on every bundled
+  module) puts two chains of half-cells on each diode, a substring may give
+  `halves`, each chain's own fractions, for shade that falls on one chain
+  only (ADR 0009 M2). A module whose `N_Cells` does not divide into whole
+  chains on every diode is refused. A module may state its cell's
+  `breakdown_voltage_v`, for cells that break down at a few volts, as some
+  back-contact cells do: a shaded part then passes the current at its
+  cells' breakdown voltage where that keeps its substring above the bypass
+  diode's clamp (ADR 0009 M3). Each chain's shade is concentrated: as many
+  cells as its mean allows at its most-shaded cell's fraction, one at the
+  remainder and the rest clear (ADR 0009 M6). Only the steps on which a
+  substring's halves differ are solved as two chains; on the others it is
+  one substring, on its exact curve rather than the two chains' tabled one
+  (string energy up to 0.01 % higher than before this was split).
+  Substrings lit alike on a step, by equal shading values rather than one
+  shared table, are solved once on it. Against a cell-level model of
+  a 144 half-cell module, portrait and landscape row shade came
+  within 0.05 % of module power, with or without breakdown, and soft shade
+  within 0.15 % without it; with breakdown, soft shade around a dark cell
+  is understated, by 15 % in the worst case tested. BREOS builds each
+  string's curve from its substrings and bypass diodes
+  (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated) and
+  runs each input at the curve's global maximum within its limits
+  (`breos.pv.mismatch`). A substring carries at most its most-shaded cell's
+  short-circuit current before its bypass diode conducts; the module's
+  forward-fit shunt resistance is not used as the cell's reverse
+  characteristic, and reverse breakdown is modelled only where the module
+  states it. The array's irradiance stage is its modules' mean, and the new
+  `shading_mismatch` waterfall stage takes the electrical effect;
+  `pv_loss_waterfall.shading_mismatch` reports each string's own.
+  `breos.electrical.string_limited_dc` now also returns the mismatch.
+- With string-level energy, what strings on different curves lose by sharing
+  an input's voltage is its own `parallel_mismatch` waterfall stage ("Strings
+  in parallel"), and `pv_loss_waterfall.parallel_mismatch` reports it per
+  input with the input's strings, so a stringing can be compared with one that
+  gives each string its own input. It is the gap between the strings' own
+  maximum powers and their summed curve's global maximum before any limit;
+  `mppt_limits` keeps what the limits cost beyond it, and the DC delivered is
+  unchanged. It applies to module-shaded strings and to strings from different
+  arrays, which until now counted it under `mppt_limits`.
+  `breos.electrical.string_limited_dc` returns a `StringEnergy` with the DC,
+  each loss and the shading and parallel mismatches.
+- With string-level energy, an inverter efficiency curve is read at each
+  step's operating DC voltage: the voltage each MPPT input runs at after its
+  window and current limits, weighted by the power it delivers. Steps
+  without PV keep the strings' STC voltage row. The run passes the row per
+  step as `inverter_curve_row` to `simulate_energy_balance`,
+  `simulate_energy_balance_summary` and `align_simulation_inputs`, beside
+  `inverter_ac_derate`, and Monte Carlo builds it for each weather year.
+  `pv_loss_waterfall.inverter.efficiency_curve` gains `voltage_basis` and,
+  when it is `"operating"`, `operating_voltage_v`.
+  `StringEnergy.voltage` and `PVProductionBreakdown.dc_voltage` report the
+  voltage.
+- `inverters[i].night_consumption_w`: what the inverter draws from the grid
+  while it converts nothing, with no PV DC and no battery charge or
+  discharge. It adds to `Import_From_Grid` and the import cost, the results
+  frame gains `Inverter_Night_Consumption`, and
+  `pv_loss_waterfall.inverter.night_consumption` reports it. Unset, it is not
+  modelled. `breos.app_inputs.build_dc_system_base` is removed; read
+  `build_pv_production_breakdown(...).dc_after_losses`.
+- `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
+  only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
+  coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.
+- The NSGA-II search returns every design it scored
+  ([#416](https://github.com/Str4vinci/breos/issues/416)).
+  `details["evaluated"]` has one row per distinct design, in the order first
+  scored, with the Pareto table's columns, the constraint values
+  `Constraint_Budget`, `Constraint_Area` and, with `enforce_zeb`,
+  `Constraint_ZEB` (zero or less meets the limit), `Feasible`, and
+  `Evaluations`, the number of times the search asked for the design, and
+  records its currency in `attrs` as the front does.
+  `details["evaluation_counts"]` gives the `evaluations`, `simulations` and
+  `distinct_designs` of the search. Counting evaluations or building a front
+  over every evaluated design no longer needs the private
+  `_serial_elementwise_runner`.
+- `irradiance_resampling = "quadrature"` reconstructs 15-minute irradiance
+  from hourly weather by one-minute quadrature
+  ([#417](https://github.com/Str4vinci/breos/issues/417)). DNI and DHI are
+  sampled every minute, GHI is derived in each sample as
+  DNI·max(cos(apparent zenith), 0) + DHI, and each quarter-hour is the mean
+  of its 15 samples. Closure is exact in every sample; a quarter-hour's GHI
+  is its DHI plus the step mean of DNI·cos(zenith). Interval-mean hours
+  spread DNI and DHI in proportion to their clear-sky values and keep both
+  hourly means; instant samples interpolate the clear-sky ratio at every
+  minute, as `"clear_sky"` does. GHI is derived, so its energy follows the
+  input's own closure: on 2023 Open-Meteo years at the seven bundled sites
+  it is 0.3% to 0.4% above the input GHI. Missing or non-finite irradiance
+  is refused. App, Monte Carlo and the optimizer
+  (`simulation.irradiance_resampling`) accept it, and weather provenance
+  gains `irradiance_quadrature`, with the derived GHI's difference from the
+  input. Resampling a year takes about 1.6 s instead of 0.2 s, and the year
+  cache of a 20-year Monte Carlo study about 29 s instead of 6 s, mostly for
+  the one-minute solar positions. The default stays `"auto"`, so results
+  are unchanged and the result format stays `"1"`.
+- Collective self-consumption (#421): `breos.Community` shares PV between
+  separately metered households at 15-minute steps, with fixed or
+  proportional allocation, home batteries behind each meter, and PV-only
+  assets. Participant and asset accounts report ownership, supplier bills,
+  shared payments, surplus income, NPVs against the no-system baseline and
+  benefit against each household alone. A settlement ledger, provenance,
+  Porto example and community guide explain the balances and assumptions.
+- `breos.cec_fit.fit_cec_params` records when it raised the short-circuit
+  current to make the fit feasible (SAM's heuristic: 1 % per step, up to
+  five steps). Its result is still the plain six-parameter tuple, now a
+  `CecFitParams` whose `isc_adjustment` holds the datasheet and fitted Isc
+  and the rise in percent, or None at the datasheet value; the Seraphim
+  SEG E11B 310 datasheet fits at 8.86 A × 1.01³ = 9.128 A, +3.03 %. No
+  fitted value changes, and no warning is raised.
+
+### Changed
+
+- The sun's position, about 80 % of a PV run's time, is computed once per
+  site and time grid and kept for the next request, up to about 20 MB per
+  process. A repeated PV run takes a fifth of the time, and the arrays of
+  one multi-array call share it. An optimizer search over a 5-year study is
+  6–8 % faster, since the dispatch dominates each design. Results are
+  unchanged.
+- App, the optimizer and `breos montecarlo` check scalar settings with the
+  same checkers, so the same bad value gets the same message, such as
+  `'discount_rate' must be > -1`. Some messages are worded differently from
+  0.7; the exception types are unchanged, and every message names its key.
+  A few values that 0.7 let through are now refused: a boolean `albedo`,
+  and a top-level `bifacial_model`, `pvrow_height` or `pvrow_pitch` that
+  every entry of `pv_arrays` overrides. The optimizer's integer settings,
+  such as `pop_size`, now take NumPy integers.
+- The plotting functions no longer print. `plot_breakeven` shows the
+  break-even point only in its figure's annotation, as before, and no longer
+  writes "Break-even point: …" to standard output. `weekly_graphs` for a
+  week with no data and `plot_battery_soh_timeseries` without a
+  `Battery_SOH` column raise a `UserWarning` instead of printing, and still
+  return None. `degradation_plots` with an empty frame and
+  `plot_breakeven_distribution` with no paid-back run return their empty
+  result silently. `plot_montecarlo_simulation(verbose=True)` still prints
+  where it saved the plots.
+- `plot_monthly_comparison` labels its bars "PV Production" and "Load", as
+  `yearly_graphs` and `plot_monthly_balance` do, instead of "PV Generation"
+  and "Load Demand".
+- `MonteCarloSettings` checks its values when it is made, instead of when
+  `run_montecarlo` starts. `build_year_cache` used to skip these checks, so
+  it took settings no study can run: `n_runs`, `years_per_run` or `n_procs`
+  below 1, a negative or non-finite `load_uncertainty`,
+  `model_uncertainty_pct` or `min_load_scale`, a non-finite
+  `max_load_scale` or one below `min_load_scale`, an unknown
+  `load_distribution` or `execution_backend`, and a `weather_start_year`
+  after `weather_end_year`. Such settings now raise the same `ValueError`
+  when made.
+- The optimizer builds the battery temperature series once per search
+  instead of once per candidate, with the same values. A battery
+  temperature it cannot build, such as a missing file, is now reported when
+  `SolarDesignProblem` is created, and by `evaluate_projected_design` before
+  the PV model runs.
+- The ledger schema is now "3.1" (`ledger_schema_version` in the results,
+  the PV loss waterfall and `SimulationSummary`). It adds without changing a
+  3.0 field: the `Inverter_Night_Consumption` column; the `near_shading`,
+  `shading_mismatch`, `dc_wiring`, `parallel_mismatch` and `mppt_limits`
+  waterfall stages, present only when their inputs are; the waterfall's
+  `near_shading`, `shading_mismatch`, `parallel_mismatch` and `dc_wiring`
+  blocks; the inverter block's AC cable, efficiency curve, temperature
+  derating and night consumption entries; and, for AC coupling, the
+  `PV_AC_To_Battery` and `PV_Charge_Conversion_Loss` columns (zero in a
+  DC-coupled run), the waterfall's `battery_inverter` block and
+  `energy_balance.ac_delivery.pv_to_battery_kwh`.
+- **`solar_position` defaults to the new `"auto"`**
+  ([#418](https://github.com/Str4vinci/breos/issues/418)), in App, Monte
+  Carlo, the optimizer and the solar-chain functions; the default was
+  `"interval-start"`. When the weather metadata states a
+  `radiation_time_basis`, `"auto"` is `"weather"`, bit for bit: the sun is
+  evaluated a PVGIS TMY's provider offset after each label (about 10 minutes
+  for PVGIS-SARAH3, 30 minutes for PVGIS-ERA5), or at the middle of each
+  interval for interval means such as Open-Meteo and EPW. The PVGIS fetch,
+  the Open-Meteo and EPW readers and every weather CSV with a
+  `.metadata.json` sidecar state it. When the metadata does not, as for most
+  user CSVs and injected weather frames, `"auto"` takes the sun at the step
+  labels, as `"interval-start"` did, and warns once per run (a
+  `UserWarning`; a Monte Carlo study or an optimizer search warns once, not
+  once per weather year or candidate, and a run warns on inputs reused by
+  `reuse_prepared_inputs` or a year cache too). Inside
+  `reuse_prepared_inputs`, a weather file or metadata sidecar that changes
+  between runs is now read again. Malformed metadata raises, as under
+  `"weather"`. Explicit `"weather"` still raises without the metadata, and
+  explicit `"interval-start"` and `"mid-interval"` are unchanged. **Results
+  change for weather that states its time basis.** To get the old results,
+  set `solar_position = "interval-start"` (CLI: `--solar-position
+  interval-start`). For 10 modules, 4000 kWh/yr and no battery at the seven
+  bundled locations, annual DC energy changes by −0.16 to +0.21% on the
+  PVGIS-SARAH3 TMYs (Porto, hourly: 8671.67 to 8662.34 kWh) and by +1.8% on
+  Melbourne's PVGIS-ERA5 TMY. On Open-Meteo 2023 interval means it changes by
+  −0.01 to +1.15% hourly, where the sun moves 30 minutes, and by −0.07 to
+  +0.20% at 15 minutes. AC energy changes within
+  0.05 percentage points of DC. The daily production centroid moves 3 to 5
+  minutes earlier on the SARAH3 TMYs, about 14 minutes earlier on the ERA5
+  TMY, 10 to 14 minutes earlier on hourly Open-Meteo and about 3 minutes
+  earlier on 15-minute Open-Meteo. With a 5 kWh battery over 20 years
+  (`residential_pt`), NPV changes by −21 to +10 € on the SARAH3 TMYs, +15 to
+  +45 € on the ERA5 TMY, −54 to +52 € on hourly Open-Meteo and −12 to +2 € at
+  15 minutes. `provenance.pv_model.solar_position` records the `requested`
+  method, the method it `resolved` to and the `offset_minutes`; Monte Carlo
+  adds `solar_position_requested` next to `solar_position_method`, now the
+  resolved method, in `runtime_weather`, and optimizer provenance gains a
+  `solar_position` record. The result format version is unchanged.
+- The NSGA-II search simulates each design once
+  ([#416](https://github.com/Str4vinci/breos/issues/416)). pymoo removes
+  duplicates only within a population and its offspring, so a design that
+  came back after leaving the population was simulated again. A repeat now
+  takes the scores of its first simulation, kept in the parent process. The
+  same seed gives the same search, front and values as before. On the
+  shipped `projected-optimization.toml` at Porto (population 40, 30
+  generations, 8 workers), 1200 evaluations took 661 simulations instead of
+  1200 with the azimuth fixed at 180 (376 s to 236 s), and 1001 with the
+  azimuth searched (386 s to 301 s).
+- BREOS requires Python 3.11.5 or newer instead of 3.11. Every soupsieve
+  release that fixes its open denial-of-service advisories needs 3.11.5, and
+  soupsieve comes in through the `docs` extra. Python 3.11.0 to 3.11.4 date
+  from 2022 to mid-2023. The lock now holds soupsieve 4.1 alone.
+- CI runs less on PRs that cannot need it. Draft PRs run nothing until they
+  are marked ready for review. A PR that changes only documentation runs the
+  test suite, checks and docs build on Python 3.12 alone, and skips the other
+  versions, `floors` and `no-numba`. The lint, format and type checks, the
+  release artifact check and the docs build run once, on 3.12, instead of on
+  all four versions.
+- `execution_backend` defaults to the new value `"auto"` in App, the CLI,
+  Monte Carlo, community runs and the optimizer entry points: the compiled
+  dispatch when Numba is installed (the `breos[fast]` extra), the Python
+  dispatch otherwise, and also when `NUMBA_DISABLE_JIT` is set. Results
+  are identical, since the two backends are
+  bit-identical by test. Without Numba nothing changes and nothing is
+  warned. `"python"` and `"numba"` keep their meaning, and `"numba"` without
+  the extra still fails before the run starts. The `execution` provenance
+  block adds `requested_execution_backend`, the name asked for;
+  `execution_backend` there records the backend that ran, and
+  `resolved_config` keeps the request, so a stored config replays on a
+  machine without Numba. The first run in a fresh environment pays a
+  one-time compile of about 3 s; later processes load the kernels from the
+  on-disk cache. A one-year hourly run is about 0.2 s slower with Numba
+  than without; a 20-year 15-minute run is about 4.5 times faster.
+- App builds the per-step results of its first project year only; later
+  years are reduced from the simulation's arrays, as Monte Carlo years are.
+  A 20-year App run is about 1.4 times faster (15-minute: 0.45 s to 0.32 s;
+  hourly: 0.25 s to 0.17 s with Numba) and the 15-minute run uses about
+  90 MiB less memory. `App.timeseries()` and `App.revalue` work as before,
+  and results are bit-identical.
+- `rainflow` is no longer a runtime dependency. BREOS counts battery cycles
+  with one ASTM E1049-85 counter of its own, in `breos._rainflow`, which gives
+  the same cycles, value for value, as `rainflow.extract_cycles` 3.2.0. The
+  energy balance, `update_battery_soh_cyclewise` and the vendored BLAST-Lite
+  models all use it; before, each had its own copy of the counting rules.
+  Results are unchanged. `rainflow` stays in the `dev` extra as the tests'
+  reference. Code that calls `rainflow.extract_cycles` itself, as an earlier
+  entry suggested for counting cycles outside a simulation, must now install
+  `rainflow` on its own.
+- `breos run` prints a short summary in a terminal instead of the full JSON
+  result: the system, the year 1 energy, the battery's health at the end and
+  the lifetime economics, one value per line with its unit. When the output
+  is piped or redirected, or with the new `--json` flag, it prints the JSON
+  as before, byte for byte. With `--output` the file is unchanged and the
+  terminal shows the summary and the file name. Warnings raised by BREOS
+  print as one `breos: warning:` line, without the source path and code line.
+
+### Deprecated
+
+These names still work in 0.8.0 and raise a `DeprecationWarning`. They will be
+removed in 0.9.0.
+- `breos.battery.update_battery_soh_cyclewise`. The simulation never calls
+  it: it ages the battery through its own incremental rainflow counter.
+- `breos.battery.lfp_capacity_factor`. Import it from `breos._dispatch`, where
+  the dispatch step uses it, if you need it at all.
+- `breos.battery.apply_indoor_temperature_model`. It moved to
+  `breos.weather`, which builds the battery temperature series; import it
+  from there or from `breos`.
+- `breos.utils.format_years_months`, which nothing in BREOS uses.
+- `breos.solar.calculate_pv_production_breakdown`. Call
+  `calculate_array_breakdowns` with one array: it returns the same loss
+  stages, also for a tracker, and takes near shading as the array's
+  `shading`.
+- `OptimizationResult.optimal_value` and `objective_value`, which are always
+  NaN for a multi-objective search; read the front in `details["pareto"]`.
+  They are no longer constructor arguments.
+- `optimization.objective_basis`. `"projected"` is the only basis, so remove
+  the key; 0.9.0 refuses it. The example optimizer config no longer sets it,
+  and the resolved config drops it, so worker processes do not warn again.
+
+### Removed
+
+- `breos.economics.YEAR_ROW_MONEY_COLUMNS`, the `calendar_epoch_seconds` alias
+  in the planner forecast module, the `prepare` keyword of
+  `prepare_simulation_inputs_cached`, and the `_LEDGER_COLUMNS` re-export from
+  `breos.battery`. Only the test suite used them.
+- The undocumented `SolarDesignProblem` attributes that copied the resolved
+  config: `budget_limit`, `area_limit`, `max_modules`, `max_battery_kwh`,
+  `min_tilt_deg`, `max_tilt_deg`, `enforce_zeb`, `constraints`, `location`,
+  `loc_obj`, `tmy_data`, `houseload`, `freq`, `model_options`, `opt_cfg`,
+  `projected_years`, `projected_degradation_rate`, `pv_params`,
+  `batt_temp_cfg`, `indoor_model`, `emissions_params`, `dc_ac_ratio`,
+  `inverter_efficiency`, `ac_output_scale`, `dc_output_scale` and
+  `execution_backend`. Read the settings from `problem.config`; the search
+  bounds are also `problem.xl` and `problem.xu`.
+- The undocumented `breos.solar.calculate_pv_production_tracking_breakdown`
+  and `calculate_multi_array_production_breakdown`. Every PV production
+  function now runs one internal PV model; `calculate_pv_production_dc_tracking`
+  and `calculate_multi_array_production` give the same production, and
+  `calculate_array_breakdowns` gives each array's loss stages.
+- The undocumented `breos.pv.model_options` checkers `resolve_transposition_model`,
+  `resolve_perez_model`, `resolve_iam_model`, `resolve_diffuse_iam_method`,
+  `resolve_temperature_model` and `resolve_bifacial_model`.
+  `resolve_pv_model_options` checks the same names with the same messages.
+
+### Fixed
+
+- Weather with gaps, non-finite GHI/DNI/DHI, or inconsistent GHI/DHI is now
+  refused before PV calculation, resampling or terrain-horizon shading. Errors
+  name the affected columns and first timestamp. Fill missing values and repair
+  inconsistent readings explicitly, preserving a regular time grid; small
+  measurement discrepancies remain accepted. Klucher also refuses zero GHI
+  with positive DHI, which would otherwise divide by zero during transposition
+  (#439).
+- Hourly weather that passes the GHI/DHI check no longer fails it at
+  15 minutes. The resampler reconstructs GHI and DHI separately, so its
+  output could exceed the tolerance on a few steps (one step for the
+  committed Berlin and São Paulo TMY files). PV extraction and
+  terrain-horizon shading now skip the GHI/DHI check for weather that
+  BREOS resampled, since the hourly source was checked before resampling.
+  Non-finite values are still refused, and source data, including a
+  15-minute file, is checked as before. Results do not change.
+- String electrical limits return zero when the voltage window is above
+  open circuit, including mixed batches of feasible and infeasible steps.
+  Current limits are checked against short-circuit current before inversion.
+  IV solves check a scaled diode residual as well as bounds, so finite but
+  incorrect roots are recovered and reported. Reverse-current fallback
+  brackets expand past endpoint roundoff. Represented convergence cases now
+  demonstrate why refining several peaks is necessary. Module photocurrent
+  below 1e-9 of its reference is treated as exactly dark. A dark string in
+  parallel retains its static current losses and reverse-current loading;
+  the lit input can still reach its start-up voltage. Shaded strings cache
+  their reverse branch and dark diode parameters, avoiding repeated exact
+  solves during the parallel peak search. Both caches are built on demand,
+  so strings on their own MPPT input pay no construction cost for them.
+  Half-chain reverse tables grow with the requested range; reverse-current
+  inversion checks its bracket and residual instead of returning a clipped,
+  unconverged value.
+- `plot_breakeven` finds the year-0 investment as
+  `find_payback_year_interpolated` does. A projection without
+  `attrs["total_investment"]` that has NPV cumulative costs but only nominal
+  annual costs was plotted with no investment, so its break-even point could
+  differ from the one the library reports for the same projection.
+- Weather files are read with one timestamp parser for App and Monte Carlo.
+  App (`load_weather`, `read_weather_csv`, `weather_file`) now reads
+  day-first `dd/mm/YYYY HH:MM` timestamps, with or without seconds, which
+  raised before. It finds a `date` column that follows a row-number column,
+  and drops the row numbers, instead of reading them as 1970 timestamps. A
+  file without timestamps raises `ValueError` instead of loading with a
+  1970 index. Both readers drop a leading row-number column. Monte Carlo
+  still refuses local timestamps whose UTC offset changes at DST, since it
+  splits the years on the file's clock, and now says so instead of passing
+  on the pandas error. On pandas 2, reading such a file in App no longer
+  emits pandas' mixed-time-zone `FutureWarning`.
+- The optimizer's `[financials]` rates are held to the App's bounds when the
+  configuration is read. `sell_price_inflation` must lie between -1 and 1
+  (exclusive), as App requires; the optimizer accepted 1.5 before. The
+  other rates were already refused before the search, and are now refused
+  by `resolve_optimization_config` too.
+- `breos montecarlo` checks each `[montecarlo]` setting's type and range
+  instead of converting it: `n_runs = 2.7` ran 2 trajectories and
+  `collect_yearly = "no"` turned yearly output on. App configs that carry a
+  `[montecarlo]` table get the same checks, and an unknown key is reported as
+  `Unknown key 'montecarlo.<key>'`.
+- The PVWatts v8 band of the PV validation suite runs again
+  ([#422](https://github.com/Str4vinci/breos/issues/422)). The API moved to
+  `developer.nlr.gov`; the references for all seven sites were refetched on
+  2026-10-22 (PVWatts 8.5.0, NSRDB at every site) and record the API version,
+  the weather source and a check that the API echoed every request input
+  back unchanged. The band now compares the performance ratio, annual AC per
+  unit of plane-of-array irradiation and DC nameplate, within ±8 %, instead
+  of annual AC within ±15 %: BREOS runs on PVGIS TMYs and PVWatts on NSRDB
+  TMYs, whose irradiance differs by −14 % to +18 % at these sites, while the
+  performance ratios agree within 4.2 %. No change to the PV model.
+- Idle PV inverter draw now uses the shared AC bus surplus after the house
+  load, before AC battery charging or export; only the uncovered draw is
+  imported (ADR 0004 M9). Several-inverter runs change by the netted draw,
+  typically a few Wh a year; single-inverter runs are unchanged.
+- `breos.cec_fit.fit_cec_params` reproduces `pvlib.ivtools.sdm.fit_cec_sam`
+  (#433). The open-circuit-voltage constraint is evaluated 5 °C above the
+  reference, as in SAM's `6par_solve.h`, instead of 2 °C; temperatures are
+  translated with SAM's `1/k = 11600 K/eV`, in the modeled `gamma_pmp` too,
+  which now does its own translation instead of going through
+  `calcparams_cec`. Together these removed the constant ~0.03 % offset in
+  maximum power. The inner solve works in `ln I_o` and the shunt conductance,
+  so the parameter scales are comparable and the branch followed in `Adjust`
+  can pass the infinite shunt resistance near `Adjust = 0`; it accepts a
+  solve only if the five reference residuals are within 1e-8 of Isc, and
+  exponents are capped against overflow. The `Adjust` search reaches ±100
+  instead of ±60, halves its step near a failed solve, down to 0.25, and
+  moves in the direction given by the gamma mismatch at `Adjust = 0`. A fit
+  must pass SAM's parameter ranges and I–V checks (power at Vmp within
+  1.5 %, current at Voc below 1.5 % of Imp, no positive slope); the comment
+  that attributed the old ranges to Dobos Table 5 is corrected. The ranges
+  are stricter than before (`a_ref` 0.01–15 instead of 0.05–50, `I_o_ref`
+  1e-16–1e-7 instead of 1e-20–1e-5, `R_s` 0.001–75 instead of 1e-4–100,
+  `R_sh_ref` ≤ 100001 instead of 1e7), so a candidate accepted before can be
+  rejected and trigger another fitting attempt. The search continues through
+  samples outside the ranges and, if no sample matches the datasheet gamma,
+  returns the closest one that passes the checks, with a warning, as
+  before. The initial
+  guesses count at most one cell per 0.6 V of Voc, because the CEC cell count
+  of shingled modules includes parallel strips, and the empirical guess uses
+  SAM's coefficients and clamps. On 1000 random CEC modules: no failures
+  (previously 4), maximum power within 1e-5 % of `fit_cec_sam` wherever SAM
+  keeps the datasheet Isc (previously 0.03 % typical and 2.4 % worst), and
+  5.7 times faster. **Fitted parameters change for every module**, by about
+  0.03 % in power for most of them.
+- Tariffs no longer crash in timezones whose DST change skips or repeats
+  local midnight, such as `Atlantic/Azores` and `America/Santiago`. Civil
+  day boundaries follow each step's local date, without constructing a
+  timezone-aware midnight. This also fixes App runs with a flat
+  `[tariff]` or `[reference_tariff]`. Weather year boundaries, the PVGIS
+  New Year offset lookup and battery plot date filters now handle missing
+  or repeated midnights too. Results in unaffected timezones are unchanged.
+- Weather and temperature timestamps (#438). A complete right-labelled
+  hourly year, such as an Open-Meteo file, now covers the simulated year at
+  every resolution; it was refused at hourly steps for a missing first hour.
+  `load_weather` selects historical years by the start of each interval, so a
+  year no longer gains the previous year's last hour and loses its own.
+  `preload_weather_by_year` (Monte Carlo) reads local times across a DST
+  change on the clock of the file's New Year offset, so every civil year stays
+  complete, and battery-temperature CSVs read such times as instants instead
+  of failing. Representative-year temperatures are restamped on their own
+  clock, as the App restamps a TMY, and repeat across the year edge, so
+  named-zone and UTC sources fit a civil calendar. `read_epw_file` puts a
+  typical-year EPW whose months come from several years on one year, so it
+  resamples to 15 minutes; `source_years` records the originals.
+- Battery ageing and its records (#436). Calendar resistance growth now runs
+  from each period's start; it started one period late, so `enable_resistance_fade`
+  runs grew about 1.7 % less resistance over 10 years. A load that already holds
+  every simulated instant is used as it is, instead of being shifted onto another
+  year's readings. The degradation row of a battery replacement reports the new
+  pack's round-trip efficiency. A BLAST run continued from its returned state
+  carries the FEC and calendar counters, so each span reports its own FEC.
+- Optimisation, Monte Carlo and the CLI (#441). Serial Monte Carlo studies no
+  longer share a process-wide context, so two studies run from threads keep
+  their own inputs. `evaluate_projected_design` checks the battery prices for
+  the battery it installs, not the search bound, so a USD design no longer
+  reports EUR battery defaults. Tilt bounds that hold no multiple of 5° are
+  refused instead of returning a tilt outside them. An array that sets
+  `albedo` or `surface_type` replaces the top-level other, which used to fail
+  at simulation. `breos validate-config` checks a sweep's points without
+  requiring the base, which the sweep never runs, and says how many points it
+  checked.
+- `evaluate_projected_design` checks only what the design reads (#441). A
+  design without a battery is no longer asked for battery prices or for
+  `constraints.budget` in a non-EUR run, whatever the search bounds say; a
+  fixed design reads no `[constraints]`. An AC-coupled design with a battery
+  is asked for its inverter keys even when `constraints.max_battery_kwh` is 0,
+  where it used to fail with a `TypeError`. Tilt bounds without a multiple of
+  5° are refused only for a search with a tilt gene, not for a fixed design or
+  an East-West search. Results do not change.
+- A search that finds no feasible design raises `NoFeasibleDesignError`, a
+  `RuntimeError`, whose message names each constraint the scored designs
+  break and how many break it, and whose `evaluated` attribute holds the
+  table of scored designs. It used to give a bare message. Results do not
+  change.
+- Custom load profiles (#440). In a timezone whose clock moves by part of a
+  step, such as `Australia/Lord_Howe` (30 minutes), the rows are pinned at the
+  finer step and averaged back, so the winter load shape no longer flattens
+  into a constant. A profile with no energy and a positive
+  `annual_consumption_kwh` raises instead of returning 0 kWh. A numeric first
+  column is a row label only when it counts the rows; otherwise it is a value
+  column, so an undated file with two load columns asks for `load_profile_column`
+  instead of reading the second one.
+- Tariff classification (#437). Known holidays now apply in every year the
+  index touches, including a year it covers for less than a day: the last UTC
+  hours of a year east of UTC, or a short window, priced 1 January as an
+  ordinary day. A step is in the `dst` season while the clock is on the larger
+  of its year's two UTC offsets, so Europe/Dublin, which the timezone database
+  gives a negative winter DST offset, now has a summer season.
+- `calculate_costs` returns `land_cost` with the other CAPEX components, so
+  `pv_cost`, `inverter_cost`, `battery_cost`, `battery_inverter_cost`,
+  `installation_cost`, `other_costs` and `land_cost` sum to
+  `total_initial_cost`. Before, `land_cost` was counted in the total but
+  missing from the returned components. `total_initial_cost` and every
+  other number are unchanged.
+- A free battery replacement (`battery_replacement_cost = 0`) reports the
+  instant of its swap. The financial rows' `replacement_time_years` was
+  None in every year because the booking time was tied to a positive
+  replacement cost; it is now set in every year with a swap. The money
+  columns stay 0 for a free swap, and runs with a priced replacement are
+  bit-identical.
+- An hourly App or Monte Carlo run in a timezone with a fractional-hour UTC
+  offset, such as `Asia/Kolkata` (UTC+5:30), on weather stamped on whole UTC
+  hours now fails when the weather is loaded, with an error that names the
+  timezone and its offset and suggests `resolution = "15min"`. Before, the
+  weather and the load profile shared no instant, and the run failed late,
+  saying the house load had no finite value. Hourly weather already stamped
+  on the local hours is still accepted. Results do not change.
+- Hourly weather resampled to 15 minutes no longer gives direct normal
+  irradiance (DNI) above the extraterrestrial normal irradiance of its day
+  (1321 to 1413 W/m²). Near sunrise and sunset the clear-sky ratio divides
+  two small numbers, and the reconstructed DNI reached 2448 W/m² on the
+  committed Porto TMY file and 7264 W/m² on the New Delhi one. Every
+  `irradiance_resampling` policy now caps 15-minute DNI at that bound;
+  `"quadrature"` caps each one-minute sample before it derives GHI. The
+  removed energy is not redistributed, so a capped hour no longer keeps its
+  DNI mean under `"clear_sky_energy_conserving"` or `"quadrature"`. Weather
+  metadata and provenance record the number of capped quarter-hours in
+  `irradiance_resampling_capped_counts`. 15-minute results change: on the
+  Porto TMY file 13 quarter-hours are capped, annual 15-minute DNI falls
+  from 2009.40 to 2008.59 kWh/m², and the DC yield of a 10-module system
+  from 8674.75 to 8674.24 kWh (−0.006 %); on the New Delhi file it falls by
+  0.68 %. Weather that needs no cap, and every hourly run, are
+  bit-identical.
+- The committed PVGIS TMY files for Berlin, Golden (Colorado), Melbourne,
+  Nairobi, New Delhi and São Paulo now have a metadata sidecar, as Porto
+  already had. Each records the irradiance time offset PVGIS reports for the
+  site: 0.1838 h (Berlin), 0.0975 h (Nairobi) and 0.0577 h (São Paulo) for
+  SARAH3, and 0.5 h for the three ERA5 files. With the default
+  `solar_position = "auto"` these files no longer warn and fall back to the
+  step labels; the sun is placed at the recorded instant. The DC yield of a
+  10-module system changes by −0.04 % (Berlin), −0.2 % (Nairobi) and
+  +0.1 % (São Paulo), and by +1.5 % to +3.0 % on the ERA5 files (Golden
+  hourly 9937.05 to 10233.99 kWh). Runs with an explicit `solar_position`,
+  Porto, and the validation suite, which pins its sun position, do not
+  change. The example-gallery tool no longer hides this fallback warning.
+- A V2H vehicle with `charge_periods` no longer discharges below its
+  departure target when no charge-period step remains before the departure.
+  It used to serve the house in the peak hours before a departure and then
+  buy the energy back from the grid at the peak price to meet the target.
+  Energy above the target is still discharged, and V2H without
+  `charge_periods` changes only where a discharge was too small for the
+  charger to deliver any AC: such a discharge is no longer taken. V2H
+  results change: on the bundled Portugal example, year-1 V2H to the house
+  falls from 137.1 to 118.2 kWh, R2's year-1 import cost from 524.64 to
+  522.47 EUR, and the vehicle benefit NPV rises from -2496.59 to
+  -2490.64 EUR. Runs without a vehicle and V1G runs do not change
+  (ADR 0005 A17).
+- Module-shaded strings in parallel on one input are now solved on their
+  exact curves. The input's best point was read off straight lines between
+  the points of each string's tabled curve, which lie below the curve, so
+  power read low and the shortfall was booked as parallel mismatch. Two
+  identical shaded strings now deliver twice one string; before, they fell
+  short on 279 of 297 test steps, by up to 0.34 %. Against a dense exact
+  search, two differently shaded strings read up to 0.23 % low per step and
+  0.06 % in energy; now within 3e-11. The input and string current limits
+  hold on the exact currents; before, the operating point could exceed them
+  slightly. Results for shaded strings in parallel change: in a year with
+  two shaded 10-module strings on one input, DC generation rises by
+  1.67 kWh (+0.025 %) and the parallel mismatch falls from 1.88 to
+  0.21 kWh, the gap to the same strings on separate inputs. Single strings,
+  unshaded strings and inputs with one string are unchanged.
+- Inverter temperature derating now only caps the AC output. It replaced
+  the inverter's rating by the derated rating everywhere, so the efficiency
+  curve and the PVWatts part-load ratio were read against the lower rating
+  and a derated inverter converted low power more efficiently than the same
+  inverter without derating: at 50 % derating on a 4 kW inverter, 200 W of
+  DC converted at 93.5 % instead of 88.9 % on a measured curve and at
+  91.9 % instead of 85.9 % with PVWatts. The curve and the part-load ratio
+  now stay on the nameplate, so below the derated limit AC output is the
+  same as without derating, and the DC above what the limit needs is
+  clipped. Results with temperature derating change: a 6.3 kWp Porto
+  system on a 5 kW inverter held to 80 % all year delivers 4.26 kWh less
+  AC in year 1 on a measured curve (−0.05 %) and 8.11 kWh less with
+  PVWatts (−0.09 %), with 6 to 7 kWh more clipped; with a 5 kWh battery,
+  15.68 kWh (−0.17 %) and 25.97 kWh (−0.29 %) less. In all four cases
+  self-consumption falls by 3.6 to 15.6 kWh, to its value without
+  derating. Runs without derating are unchanged.
+
+### Documentation
+
+- A new page, How BREOS models PV modules, explains string-level detail:
+  cells, bypass diodes and reverse bias; which module technologies it
+  represents (full-cell; half-cut; back-contact cells with a low
+  breakdown voltage, with overstated shading losses; shingled and thin film
+  not represented); strings, inverter inputs and the global-peak assumption;
+  bifacial rear losses; and one microinverter as a string-level inverter.
+  ADR 0008 records the same limits, ADR 0007 and
+  0008 the one-microinverter mapping, and the configuration page no longer
+  says that partial shading of single modules is not modelled.
+- A new example, `configs/examples/balcony-microinverter.toml`, runs a
+  two-module balcony system on one microinverter with an input for each,
+  with string-level energy and the PVWatts mismatch loss set to 0.
+
+### Acknowledgments
+
+- Thanks to @tomdacu for reporting and fixing the CEC fit's departures from
+  `fit_cec_sam` (#433, #434).
+
+## [0.7.1] - 2026-11-13
+
+0.7.1 adds the library features that tariff and battery studies need. Runs
+that set none of the new keys give the same results as 0.7.0, with two
+exceptions listed under Fixed: a 15-minute money total can move in its last
+digit on a multi-core machine, and a battery kept in service until its state
+of health reaches 0 is now retired. The main changes:
+
+- Currency selection: a top-level `currency` key takes any ISO 4217 code.
+  BREOS does not convert, so a run in another currency than EUR sets its own
+  costs.
+- `weather_file` names the App's weather file directly.
+- East–West layouts in the optimizer search space.
+- An annual network credit capped at the household's own network charges.
+- Daily-target planner options: `overlap_policy = "hold_target"`, an optional
+  battery-wear cost, planning at the start of each charging window, and
+  planning on a day-ahead weather forecast.
+- Battery replacement control in App and Monte Carlo: replacements can be
+  turned off or skipped near the end of the project, and a battery at end of
+  life can be retired so the project finishes PV-only. Results list the
+  battery's state at the end of each project year.
+- `App.revalue` re-prices a greedy battery run on another tariff schedule
+  without simulating again.
+- Monte Carlo and optimizer workers no longer oversubscribe the CPU.
+
+### Added
+
 - The experimental `daily_persistence` planner can plan on a day-ahead
   weather forecast ([#430](https://github.com/Str4vinci/breos/issues/430),
   ADR 0002 A20). `smart_charging.forecast = "weather"` reads
@@ -293,319 +1003,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   adds the budget violation, in money, to the area and ZEB violations
   unscaled, so infeasible candidates can rank differently. Runs that set no
   `currency` are bit-identical, and the result format stays `"1"`.
-- `breos.equipment.InverterSpec` separates `max_dc_power_w`, the maximum PV
-  generator power, from `recommended_dc_power_w`. Upper limits may be given as
-  `"inf"` in a configuration, and an unbounded limit is written `"inf"` in the
-  result's provenance, so results stay strict JSON.
-- `breos.equipment.InverterSpec` stores a specified inverter's validated AC
-  nameplate and optional datasheet limits. Each MPPT input is a
-  `breos.equipment.MpptSpec` with its own current and string limits, so
-  asymmetric inputs keep their published values, and
-  `isc_comparison_factor` records the manufacturer's Isc comparison rule.
-  `None` marks an unknown value, while `math.inf` for an upper limit or 0 for
-  a lower limit marks a limit the inverter does not have.
-  `InverterSpec.as_app_config()` supplies the rating and known efficiency to
-  App, keeping catalog identity, prices and certification outside BREOS.
-  DC/MPPT limits are metadata, not string-aware validation or simulation.
-- `breos.electrical.check_topology` checks a declared string topology against
-  module and inverter datasheet limits at the site's design temperatures: cold
-  Voc against the inverter and module voltage ratings, hot-cell Vmp and Voc
-  against the MPPT minimum and start-up voltage, Vmp against the MPPT maximum,
-  design Isc and operating current per input, string counts, parallel-string
-  matching, generator power, and that every module is strung exactly once.
-  Where a datasheet publishes them, it also checks each string connection's
-  current ratings, each input's generator power and the inverter's
-  short-circuit rating over all inputs. Parallel strings on one input may come
-  from different arrays when they share the module and the length.
-  Findings are errors (hard limits and wiring), warnings (yield and operating
-  limits) or missing datasheet values; a missing value is never replaced by a
-  default. Each finding carries its `unit` and the `limit_field` it was checked
-  against, and `breos.electrical.FINDING_CODES` publishes the codes. Callers may
-  state cell temperatures and the bifacial rear irradiance instead of the
-  screening defaults.
-- App takes `inverters`, `pv_strings` and `electrical_environment` together.
-  The inverters' nameplates replace `inverter_loading_ratio` and
-  `inverter_ac_rating_kw`, and the result gains an `electrical` block with the
-  energy model's `fidelity`, the check's `status` and its `findings`. Energy is
-  still modelled for the system as a whole; a failing design still simulates.
-  Every result carries the block, with `status = "not_evaluated"` and no
-  findings when no topology is configured.
-- `electrical_fidelity = "string"` makes energy depend on the wiring of one
-  inverter: each MPPT input moves along its strings' single-diode IV curve to
-  the best point its voltage range and its own and each string connection's
-  operating-current limits allow, then delivers at most its usable DC power,
-  and the inverter at most its own. Strings from different arrays on one input
-  run at the best point of their summed IV curve. The inverter starts each day
-  once an input's open-circuit voltage reaches the start-up voltage. The DC
-  this costs is the new `mppt_limits` stage of the PV loss waterfall, and a
-  design inside every limit gives the aggregate result. It refuses to run, rather
-  than fall back, without one inverter, the limits it needs, or a sound wiring.
-  `breos.solar.calculate_array_breakdowns` returns the per-array breakdowns
-  these functions take, each with its module operating point, for fixed and
-  tracking arrays alike.
-- Each `pv_arrays` entry may set its own `temperature_model`, since a rack and
-  a flush roof on one site run about 10 °C apart, and its own `mounting`,
-  `hot_cell_temp_c` and `cold_operating_cell_temp_c` for the string check
-  (`breos.electrical.ArrayMounting`). The most specific value wins: the
-  array's stated temperature, then its mounting's rise, then the
-  `electrical_environment` values. Without these keys every result is
-  unchanged.
-- DC cable losses from the string topology. A `pv_strings` entry may give
-  `cable_length_m`, `cable_cross_section_mm2` and `conductor` (copper or
-  aluminium), on every string or none, and `electrical_environment` may give
-  `conductor_temp_c`; 50 °C is assumed and reported when it is unstated. The
-  cables replace the flat `wiring` loss, whose default becomes 0. Aggregate
-  energy charges I²R at each string's maximum power current; string-level
-  energy solves the cable into the IV curve. The loss is the new `dc_wiring`
-  waterfall stage, and `electrical.dc_wiring` reports each string's resistance
-  and its STC loss. `breos.electrical.string_limited_dc` now also returns the
-  cable loss, and `string_cable_loss` gives the aggregate one. Without cable
-  data every result is unchanged.
-- Inverters may carry a measured `efficiency_curve` (efficiency against AC
-  output at one to three DC voltages, the CEC and OND shape) and a
-  `temperature_derating` (allowed AC output against ambient), and `[ac_cable]`
-  models the inverter-to-meter cable's I²R loss. The dispatch kernels, both
-  backends, and the PV-only path apply them to PV and battery discharge alike.
-  `electrical_environment.inverter_ambient_temp_c` states an indoor
-  inverter's ambient; otherwise the weather's air temperature applies. The
-  result's `inverter` block reports each when configured. Without them every
-  result is unchanged.
-- Monte Carlo reports P50, P75, P90 and P99 annual yield for one year and
-  the study horizon (`MonteCarloResult.yield_exceedance`, also in the
-  provenance and `--json`), from the weather years' variability and an
-  optional stated `model_uncertainty_pct` (`--model-uncertainty`), as PVsyst's
-  P50/P90 evaluation does. With it, each trajectory draws one persistent PV
-  yield factor (`pv_model_factor`), so the economics' quantiles include the
-  model uncertainty. The summary gains the `p10`, `p25`, `p75` and `p90`
-  quantiles. `breos.exceedance` computes the values. Without
-  `model_uncertainty_pct`, every trajectory is unchanged.
-- Near shading from a layout tool (ADR 0008, level 1). Each `pv_arrays`
-  entry may carry a `shading` table, the beam shaded fraction on a grid of
-  sun azimuth and elevation (pvlib's convention), with an optional
-  `sky_view_factor`; every array or none. BREOS reads it bilinearly at each
-  step's sun position, across north when the azimuth axis closes the circle,
-  and reduces the array's beam and sky diffuse before the incidence-angle
-  modifier. With Hay-Davies or a Perez model the circumsolar diffuse is
-  shaded with the beam. One table serves both resolutions and every weather
-  year. The flat `shading` loss defaults to 0 when the tables are given; a
-  stated one stays. The loss is the new `near_shading` waterfall stage, and
-  `pv_loss_waterfall.near_shading` reports each array's table. Without
-  tables every result is unchanged.
-- Module-level shading (ADR 0008, level 2). With string-level energy, a
-  `pv_strings` entry may carry `module_shading`: each module's shaded
-  fraction table, whole or per bypass-diode substring, where a substring may
-  also give the shaded fraction of its most-shaded cell. The substrings
-  follow the module's `bypass_diodes`, a new `PVModuleParams` field, 3 by
-  default (ADR 0009 M1). On a half-cut module, whose
-  `cell_strings_in_parallel` (also new, 1 by default; 2 on every bundled
-  module) puts two chains of half-cells on each diode, a substring may give
-  `halves`, each chain's own fractions, for shade that falls on one chain
-  only (ADR 0009 M2). A module whose `N_Cells` does not divide into whole
-  chains on every diode is refused. A module may state its cell's
-  `breakdown_voltage_v`, for cells that break down at a few volts, as some
-  back-contact cells do: a shaded part then passes the current at its
-  cells' breakdown voltage where that keeps its substring above the bypass
-  diode's clamp (ADR 0009 M3). Each chain's shade is concentrated: as many
-  cells as its mean allows at its most-shaded cell's fraction, one at the
-  remainder and the rest clear (ADR 0009 M6). Only the steps on which a
-  substring's halves differ are solved as two chains; on the others it is
-  one substring, on its exact curve rather than the two chains' tabled one
-  (string energy up to 0.01 % higher than before this was split).
-  Substrings lit alike on a step, by equal shading values rather than one
-  shared table, are solved once on it. Against a cell-level model of
-  a 144 half-cell module, portrait and landscape row shade came
-  within 0.05 % of module power, with or without breakdown, and soft shade
-  within 0.15 % without it; with breakdown, soft shade around a dark cell
-  is understated, by 15 % in the worst case tested. BREOS builds each
-  string's curve from its substrings and bypass diodes
-  (`electrical_environment.bypass_diode_voltage_v`, 0.5 V when unstated) and
-  runs each input at the curve's global maximum within its limits
-  (`breos.pv.mismatch`). A substring carries at most its most-shaded cell's
-  short-circuit current before its bypass diode conducts; the module's
-  forward-fit shunt resistance is not used as the cell's reverse
-  characteristic, and reverse breakdown is modelled only where the module
-  states it. The array's irradiance stage is its modules' mean, and the new
-  `shading_mismatch` waterfall stage takes the electrical effect;
-  `pv_loss_waterfall.shading_mismatch` reports each string's own.
-  `breos.electrical.string_limited_dc` now also returns the mismatch.
-- With string-level energy, what strings on different curves lose by sharing
-  an input's voltage is its own `parallel_mismatch` waterfall stage ("Strings
-  in parallel"), and `pv_loss_waterfall.parallel_mismatch` reports it per
-  input with the input's strings, so a stringing can be compared with one that
-  gives each string its own input. It is the gap between the strings' own
-  maximum powers and their summed curve's global maximum before any limit;
-  `mppt_limits` keeps what the limits cost beyond it, and the DC delivered is
-  unchanged. It applies to module-shaded strings and to strings from different
-  arrays, which until now counted it under `mppt_limits`.
-  `breos.electrical.string_limited_dc` returns a `StringEnergy` with the DC,
-  each loss and the shading and parallel mismatches.
-- With string-level energy, an inverter efficiency curve is read at each
-  step's operating DC voltage: the voltage each MPPT input runs at after its
-  window and current limits, weighted by the power it delivers. Steps
-  without PV keep the strings' STC voltage row. The run passes the row per
-  step as `inverter_curve_row` to `simulate_energy_balance`,
-  `simulate_energy_balance_summary` and `align_simulation_inputs`, beside
-  `inverter_ac_derate`, and Monte Carlo builds it for each weather year.
-  `pv_loss_waterfall.inverter.efficiency_curve` gains `voltage_basis` and,
-  when it is `"operating"`, `operating_voltage_v`.
-  `StringEnergy.voltage` and `PVProductionBreakdown.dc_voltage` report the
-  voltage.
-- `inverters[i].night_consumption_w`: what the inverter draws from the grid
-  while it converts nothing, with no PV DC and no battery charge or
-  discharge. It adds to `Import_From_Grid` and the import cost, the results
-  frame gains `Inverter_Night_Consumption`, and
-  `pv_loss_waterfall.inverter.night_consumption` reports it. Unset, it is not
-  modelled. `breos.app_inputs.build_dc_system_base` is removed; read
-  `build_pv_production_breakdown(...).dc_after_losses`.
-- `PVModuleParams` gains optional `T_Vmp_pct` and `Max_System_Voltage`, used
-  only by the string check, and `T_Vmp_pct_effective`, which derives the Vmp
-  coefficient as `T_Pmax_pct - T_Isc_pct` when it is unpublished.
-- The NSGA-II search returns every design it scored
-  ([#416](https://github.com/Str4vinci/breos/issues/416)).
-  `details["evaluated"]` has one row per distinct design, in the order first
-  scored, with the Pareto table's columns, the constraint values
-  `Constraint_Budget`, `Constraint_Area` and, with `enforce_zeb`,
-  `Constraint_ZEB` (zero or less meets the limit), `Feasible`, and
-  `Evaluations`, the number of times the search asked for the design, and
-  records its currency in `attrs` as the front does.
-  `details["evaluation_counts"]` gives the `evaluations`, `simulations` and
-  `distinct_designs` of the search. Counting evaluations or building a front
-  over every evaluated design no longer needs the private
-  `_serial_elementwise_runner`.
-- `irradiance_resampling = "quadrature"` reconstructs 15-minute irradiance
-  from hourly weather by one-minute quadrature
-  ([#417](https://github.com/Str4vinci/breos/issues/417)). DNI and DHI are
-  sampled every minute, GHI is derived in each sample as
-  DNI·max(cos(apparent zenith), 0) + DHI, and each quarter-hour is the mean
-  of its 15 samples. Closure is exact in every sample; a quarter-hour's GHI
-  is its DHI plus the step mean of DNI·cos(zenith). Interval-mean hours
-  spread DNI and DHI in proportion to their clear-sky values and keep both
-  hourly means; instant samples interpolate the clear-sky ratio at every
-  minute, as `"clear_sky"` does. GHI is derived, so its energy follows the
-  input's own closure: on 2023 Open-Meteo years at the seven bundled sites
-  it is 0.3% to 0.4% above the input GHI. Missing or non-finite irradiance
-  is refused. App, Monte Carlo and the optimizer
-  (`simulation.irradiance_resampling`) accept it, and weather provenance
-  gains `irradiance_quadrature`, with the derived GHI's difference from the
-  input. Resampling a year takes about 1.6 s instead of 0.2 s, and the year
-  cache of a 20-year Monte Carlo study about 29 s instead of 6 s, mostly for
-  the one-minute solar positions. The default stays `"auto"`, so results
-  are unchanged and the result format stays `"1"`.
 
 ### Changed
 
-- `breos run` prints a short summary in a terminal instead of the full JSON
-  result: the system, the year 1 energy, the battery's health at the end and
-  the lifetime economics, one value per line with its unit. When the output
-  is piped or redirected, or with the new `--json` flag, it prints the JSON
-  as before, byte for byte. With `--output` the file is unchanged and the
-  terminal shows the summary and the file name. Warnings raised by BREOS
-  print as one `breos: warning:` line, without the source path and code line.
-- The sun's position, about 80 % of a PV run's time, is computed once per
-  site and time grid and kept for the next request, up to about 20 MB per
-  process. A repeated PV run takes a fifth of the time, and the arrays of
-  one multi-array call share it. An optimizer search over a 5-year study is
-  6–8 % faster, since the dispatch dominates each design. Results are
-  unchanged.
-- App, the optimizer and `breos montecarlo` check scalar settings with the
-  same checkers, so the same bad value gets the same message, such as
-  `'discount_rate' must be > -1`. Some messages are worded differently from
-  0.7; the exception types are unchanged, and every message names its key.
-  A few values that 0.7 let through are now refused: a boolean `albedo`,
-  and a top-level `bifacial_model`, `pvrow_height` or `pvrow_pitch` that
-  every entry of `pv_arrays` overrides. The optimizer's integer settings,
-  such as `pop_size`, now take NumPy integers.
-- The plotting functions no longer print. `plot_breakeven` shows the
-  break-even point only in its figure's annotation, as before, and no longer
-  writes "Break-even point: …" to standard output. `weekly_graphs` for a
-  week with no data and `plot_battery_soh_timeseries` without a
-  `Battery_SOH` column raise a `UserWarning` instead of printing, and still
-  return None. `degradation_plots` with an empty frame and
-  `plot_breakeven_distribution` with no paid-back run return their empty
-  result silently. `plot_montecarlo_simulation(verbose=True)` still prints
-  where it saved the plots.
-- `plot_monthly_comparison` labels its bars "PV Production" and "Load", as
-  `yearly_graphs` and `plot_monthly_balance` do, instead of "PV Generation"
-  and "Load Demand".
-- `MonteCarloSettings` checks its values when it is made, instead of when
-  `run_montecarlo` starts. `build_year_cache` used to skip these checks, so
-  it took settings no study can run: `n_runs`, `years_per_run` or `n_procs`
-  below 1, a negative or non-finite `load_uncertainty`,
-  `model_uncertainty_pct` or `min_load_scale`, a non-finite
-  `max_load_scale` or one below `min_load_scale`, an unknown
-  `load_distribution` or `execution_backend`, and a `weather_start_year`
-  after `weather_end_year`. Such settings now raise the same `ValueError`
-  when made.
-- The optimizer builds the battery temperature series once per search
-  instead of once per candidate, with the same values. A battery
-  temperature it cannot build, such as a missing file, is now reported when
-  `SolarDesignProblem` is created, and by `evaluate_projected_design` before
-  the PV model runs.
-- The ledger schema is now "3.1" (`ledger_schema_version` in the results,
-  the PV loss waterfall and `SimulationSummary`). It adds without changing a
-  3.0 field: the `Inverter_Night_Consumption` column; the `near_shading`,
-  `shading_mismatch`, `dc_wiring`, `parallel_mismatch` and `mppt_limits`
-  waterfall stages, present only when their inputs are; the waterfall's
-  `near_shading`, `shading_mismatch`, `parallel_mismatch` and `dc_wiring`
-  blocks; the inverter block's AC cable, efficiency curve, temperature
-  derating and night consumption entries; and, for AC coupling, the
-  `PV_AC_To_Battery` and `PV_Charge_Conversion_Loss` columns (zero in a
-  DC-coupled run), the waterfall's `battery_inverter` block and
-  `energy_balance.ac_delivery.pv_to_battery_kwh`.
-- **`solar_position` defaults to the new `"auto"`**
-  ([#418](https://github.com/Str4vinci/breos/issues/418)), in App, Monte
-  Carlo, the optimizer and the solar-chain functions; the default was
-  `"interval-start"`. When the weather metadata states a
-  `radiation_time_basis`, `"auto"` is `"weather"`, bit for bit: the sun is
-  evaluated a PVGIS TMY's provider offset after each label (about 10 minutes
-  for PVGIS-SARAH3, 30 minutes for PVGIS-ERA5), or at the middle of each
-  interval for interval means such as Open-Meteo and EPW. The PVGIS fetch,
-  the Open-Meteo and EPW readers and every weather CSV with a
-  `.metadata.json` sidecar state it. When the metadata does not, as for most
-  user CSVs and injected weather frames, `"auto"` takes the sun at the step
-  labels, as `"interval-start"` did, and warns once per run (a
-  `UserWarning`; a Monte Carlo study or an optimizer search warns once, not
-  once per weather year or candidate, and a run warns on inputs reused by
-  `reuse_prepared_inputs` or a year cache too). Inside
-  `reuse_prepared_inputs`, a weather file or metadata sidecar that changes
-  between runs is now read again. Malformed metadata raises, as under
-  `"weather"`. Explicit `"weather"` still raises without the metadata, and
-  explicit `"interval-start"` and `"mid-interval"` are unchanged. **Results
-  change for weather that states its time basis.** To get the old results,
-  set `solar_position = "interval-start"` (CLI: `--solar-position
-  interval-start`). For 10 modules, 4000 kWh/yr and no battery at the seven
-  bundled locations, annual DC energy changes by −0.16 to +0.21% on the
-  PVGIS-SARAH3 TMYs (Porto, hourly: 8671.67 to 8662.34 kWh) and by +1.8% on
-  Melbourne's PVGIS-ERA5 TMY. On Open-Meteo 2023 interval means it changes by
-  −0.01 to +1.15% hourly, where the sun moves 30 minutes, and by −0.07 to
-  +0.20% at 15 minutes. AC energy changes within
-  0.05 percentage points of DC. The daily production centroid moves 3 to 5
-  minutes earlier on the SARAH3 TMYs, about 14 minutes earlier on the ERA5
-  TMY, 10 to 14 minutes earlier on hourly Open-Meteo and about 3 minutes
-  earlier on 15-minute Open-Meteo. With a 5 kWh battery over 20 years
-  (`residential_pt`), NPV changes by −21 to +10 € on the SARAH3 TMYs, +15 to
-  +45 € on the ERA5 TMY, −54 to +52 € on hourly Open-Meteo and −12 to +2 € at
-  15 minutes. `provenance.pv_model.solar_position` records the `requested`
-  method, the method it `resolved` to and the `offset_minutes`; Monte Carlo
-  adds `solar_position_requested` next to `solar_position_method`, now the
-  resolved method, in `runtime_weather`, and optimizer provenance gains a
-  `solar_position` record. The result format version is unchanged.
-- CI runs less on PRs that cannot need it. Draft PRs run nothing until they
-  are marked ready for review. A PR that changes only documentation runs the
-  test suite, checks and docs build on Python 3.12 alone, and skips the other
-  versions, `floors` and `no-numba`. The lint, format and type checks, the
-  release artifact check and the docs build run once, on 3.12, instead of on
-  all four versions.
-- The NSGA-II search simulates each design once
-  ([#416](https://github.com/Str4vinci/breos/issues/416)). pymoo removes
-  duplicates only within a population and its offspring, so a design that
-  came back after leaving the population was simulated again. A repeat now
-  takes the scores of its first simulation, kept in the parent process. The
-  same seed gives the same search, front and values as before. On the
-  shipped `projected-optimization.toml` at Porto (population 40, 30
-  generations, 8 workers), 1200 evaluations took 661 simulations instead of
-  1200 with the azimuth fixed at 180 (376 s to 236 s), and 1001 with the
-  azimuth searched (386 s to 301 s).
 - A change to `[reference_tariff]` no longer invalidates the App input cache
   or the Monte Carlo year cache: it prices only the household load.
 - Tariff period classification finds each step's day type and season once
@@ -625,158 +1025,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `resolve_reference_tariff_spec` takes the run's currency instead of the
   system tariff (#376).
 
-### Deprecated
-
-These names still work in 0.8.0 and raise a `DeprecationWarning`. They will be
-removed in 0.9.0.
-
-- `breos.battery.update_battery_soh_cyclewise`. The simulation never calls
-  it: it ages the battery through its own incremental rainflow counter.
-- `breos.battery.lfp_capacity_factor`. Import it from `breos._dispatch`, where
-  the dispatch step uses it, if you need it at all.
-- `breos.battery.apply_indoor_temperature_model`. It moved to
-  `breos.weather`, which builds the battery temperature series; import it
-  from there or from `breos`.
-- `breos.utils.format_years_months`, which nothing in BREOS uses.
-- `breos.solar.calculate_pv_production_breakdown`. Call
-  `calculate_array_breakdowns` with one array: it returns the same loss
-  stages, also for a tracker, and takes near shading as the array's
-  `shading`.
-- `OptimizationResult.optimal_value` and `objective_value`, which are always
-  NaN for a multi-objective search; read the front in `details["pareto"]`.
-  They are no longer constructor arguments.
-- `optimization.objective_basis`. `"projected"` is the only basis, so remove
-  the key; 0.9.0 refuses it. The example optimizer config no longer sets it,
-  and the resolved config drops it, so worker processes do not warn again.
-
-### Removed
-
-- `breos.economics.YEAR_ROW_MONEY_COLUMNS`, the `calendar_epoch_seconds` alias
-  in the planner forecast module, the `prepare` keyword of
-  `prepare_simulation_inputs_cached`, and the `_LEDGER_COLUMNS` re-export from
-  `breos.battery`. Only the test suite used them.
-- The undocumented `SolarDesignProblem` attributes that copied the resolved
-  config: `budget_limit`, `area_limit`, `max_modules`, `max_battery_kwh`,
-  `min_tilt_deg`, `max_tilt_deg`, `enforce_zeb`, `constraints`, `location`,
-  `loc_obj`, `tmy_data`, `houseload`, `freq`, `model_options`, `opt_cfg`,
-  `projected_years`, `projected_degradation_rate`, `pv_params`,
-  `batt_temp_cfg`, `indoor_model`, `emissions_params`, `dc_ac_ratio`,
-  `inverter_efficiency`, `ac_output_scale`, `dc_output_scale` and
-  `execution_backend`. Read the settings from `problem.config`; the search
-  bounds are also `problem.xl` and `problem.xu`.
-- The undocumented `breos.solar.calculate_pv_production_tracking_breakdown`
-  and `calculate_multi_array_production_breakdown`. Every PV production
-  function now runs one internal PV model; `calculate_pv_production_dc_tracking`
-  and `calculate_multi_array_production` give the same production, and
-  `calculate_array_breakdowns` gives each array's loss stages.
-- The undocumented `breos.pv.model_options` checkers `resolve_transposition_model`,
-  `resolve_perez_model`, `resolve_iam_model`, `resolve_diffuse_iam_method`,
-  `resolve_temperature_model` and `resolve_bifacial_model`.
-  `resolve_pv_model_options` checks the same names with the same messages.
-
 ### Fixed
 
-- Weather with gaps, non-finite GHI/DNI/DHI, or inconsistent GHI/DHI is now
-  refused before PV calculation, resampling or terrain-horizon shading. Errors
-  name the affected columns and first timestamp. Fill missing values and repair
-  inconsistent readings explicitly, preserving a regular time grid; small
-  measurement discrepancies remain accepted. Klucher also refuses zero GHI
-  with positive DHI, which would otherwise divide by zero during transposition
-  (#439).
-
-- String electrical limits return zero when the voltage window is above
-  open circuit, including mixed batches of feasible and infeasible steps.
-  Current limits are checked against short-circuit current before inversion.
-  IV solves check a scaled diode residual as well as bounds, so finite but
-  incorrect roots are recovered and reported. Reverse-current fallback
-  brackets expand past endpoint roundoff. Represented convergence cases now
-  demonstrate why refining several peaks is necessary. Module photocurrent
-  below 1e-9 of its reference is treated as exactly dark. A dark string in
-  parallel retains its static current losses and reverse-current loading;
-  the lit input can still reach its start-up voltage. Shaded strings cache
-  their reverse branch and dark diode parameters, avoiding repeated exact
-  solves during the parallel peak search. Both caches are built on demand,
-  so strings on their own MPPT input pay no construction cost for them.
-  Half-chain reverse tables grow with the requested range; reverse-current
-  inversion checks its bracket and residual instead of returning a clipped,
-  unconverged value.
-- `plot_breakeven` finds the year-0 investment as
-  `find_payback_year_interpolated` does. A projection without
-  `attrs["total_investment"]` that has NPV cumulative costs but only nominal
-  annual costs was plotted with no investment, so its break-even point could
-  differ from the one the library reports for the same projection.
-- Weather files are read with one timestamp parser for App and Monte Carlo.
-  App (`load_weather`, `read_weather_csv`, `weather_file`) now reads
-  day-first `dd/mm/YYYY HH:MM` timestamps, with or without seconds, which
-  raised before. It finds a `date` column that follows a row-number column,
-  and drops the row numbers, instead of reading them as 1970 timestamps. A
-  file without timestamps raises `ValueError` instead of loading with a
-  1970 index. Both readers drop a leading row-number column. Monte Carlo
-  still refuses local timestamps whose UTC offset changes at DST, since it
-  splits the years on the file's clock, and now says so instead of passing
-  on the pandas error. On pandas 2, reading such a file in App no longer
-  emits pandas' mixed-time-zone `FutureWarning`.
-- The optimizer's `[financials]` rates are held to the App's bounds when the
-  configuration is read. `sell_price_inflation` must lie between -1 and 1
-  (exclusive), as App requires; the optimizer accepted 1.5 before. The
-  other rates were already refused before the search, and are now refused
-  by `resolve_optimization_config` too.
-- `breos montecarlo` checks each `[montecarlo]` setting's type and range
-  instead of converting it: `n_runs = 2.7` ran 2 trajectories and
-  `collect_yearly = "no"` turned yearly output on. App configs that carry a
-  `[montecarlo]` table get the same checks, and an unknown key is reported as
-  `Unknown key 'montecarlo.<key>'`.
-- The PVWatts v8 band of the PV validation suite runs again
-  ([#422](https://github.com/Str4vinci/breos/issues/422)). The API moved to
-  `developer.nlr.gov`; the references for all seven sites were refetched on
-  2026-10-22 (PVWatts 8.5.0, NSRDB at every site) and record the API version,
-  the weather source and a check that the API echoed every request input
-  back unchanged. The band now compares the performance ratio, annual AC per
-  unit of plane-of-array irradiation and DC nameplate, within ±8 %, instead
-  of annual AC within ±15 %: BREOS runs on PVGIS TMYs and PVWatts on NSRDB
-  TMYs, whose irradiance differs by −14 % to +18 % at these sites, while the
-  performance ratios agree within 4.2 %. No change to the PV model.
-- `breos.cec_fit.fit_cec_params` reproduces `pvlib.ivtools.sdm.fit_cec_sam`
-  (#433). The open-circuit-voltage constraint is evaluated 5 °C above the
-  reference, as in SAM's `6par_solve.h`, instead of 2 °C; temperatures are
-  translated with SAM's `1/k = 11600 K/eV`, in the modeled `gamma_pmp` too,
-  which now does its own translation instead of going through
-  `calcparams_cec`. Together these removed the constant ~0.03 % offset in
-  maximum power. The inner solve works in `ln I_o` and the shunt conductance,
-  so the parameter scales are comparable and the branch followed in `Adjust`
-  can pass the infinite shunt resistance near `Adjust = 0`; it accepts a
-  solve only if the five reference residuals are within 1e-8 of Isc, and
-  exponents are capped against overflow. The `Adjust` search reaches ±100
-  instead of ±60, halves its step near a failed solve, down to 0.25, and
-  moves in the direction given by the gamma mismatch at `Adjust = 0`. A fit
-  must pass SAM's parameter ranges and I–V checks (power at Vmp within
-  1.5 %, current at Voc below 1.5 % of Imp, no positive slope); the comment
-  that attributed the old ranges to Dobos Table 5 is corrected. The ranges
-  are stricter than before (`a_ref` 0.01–15 instead of 0.05–50, `I_o_ref`
-  1e-16–1e-7 instead of 1e-20–1e-5, `R_s` 0.001–75 instead of 1e-4–100,
-  `R_sh_ref` ≤ 100001 instead of 1e7), so a candidate accepted before can be
-  rejected and trigger another fitting attempt. The search continues through
-  samples outside the ranges and, if no sample matches the datasheet gamma,
-  returns the closest one that passes the checks, with a warning, as
-  before. The initial
-  guesses count at most one cell per 0.6 V of Voc, because the CEC cell count
-  of shingled modules includes parallel strips, and the empirical guess uses
-  SAM's coefficients and clamps. On 1000 random CEC modules: no failures
-  (previously 4), maximum power within 1e-5 % of `fit_cec_sam` wherever SAM
-  keeps the datasheet Isc (previously 0.03 % typical and 2.4 % worst), and
-  5.7 times faster. **Fitted parameters change for every module**, by about
-  0.03 % in power for most of them.
-- Idle PV inverter draw now uses the shared AC bus surplus after the house
-  load, before AC battery charging or export; only the uncovered draw is
-  imported (ADR 0004 M9). Several-inverter runs change by the netted draw,
-  typically a few Wh a year; single-inverter runs are unchanged.
-- Tariffs no longer crash in timezones whose DST change skips or repeats
-  local midnight, such as `Atlantic/Azores` and `America/Santiago`. Civil
-  day boundaries follow each step's local date, without constructing a
-  timezone-aware midnight. This also fixes App runs with a flat
-  `[tariff]` or `[reference_tariff]`. Weather year boundaries, the PVGIS
-  New Year offset lookup and battery plot date filters now handle missing
-  or repeated midnights too. Results in unaffected timezones are unchanged.
 - Monte Carlo and optimizer workers no longer oversubscribe the CPU at
   15-minute resolution (#382). Each worker process limits its BLAS and
   OpenMP pools to one thread; the parent process keeps its own. On a
@@ -810,22 +1060,13 @@ removed in 0.9.0.
   Runs whose pack never reaches zero health, every default run among them,
   are bit-identical.
 
-### Documentation
-- A new page, How BREOS models PV modules, explains string-level detail:
-  cells, bypass diodes and reverse bias; which module technologies it
-  represents (full-cell; half-cut; back-contact cells with a low
-  breakdown voltage, with overstated shading losses; shingled and thin film
-  not represented); strings, inverter inputs and the global-peak assumption;
-  bifacial rear losses; and one microinverter as a string-level inverter.
-  ADR 0008 records the same limits, ADR 0007 and
-  0008 the one-microinverter mapping, and the configuration page no longer
-  says that partial shading of single modules is not modelled.
-- A new example, `configs/examples/balcony-microinverter.toml`, runs a
-  two-module balcony system on one microinverter with an input for each,
-  with string-level energy and the PVWatts mismatch loss set to 0.
-### Acknowledgments
-- Thanks to @tomdacu for reporting and fixing the CEC fit's departures from
-  `fit_cec_sam` (#433, #434).
+### Security
+
+- The lock file pins Pillow 13.0.0 instead of 12.3.0, which clears its open
+  security advisories, and certifi 2026.10.23, which drops the compromised
+  emSign intermediate certificates. Both are lock-only changes: Pillow comes
+  in only through the plotting, optimization, docs and dev extras, BREOS does
+  not import it, and the declared dependency ranges do not change.
 
 ## [0.7.0] - 2026-10-02
 
