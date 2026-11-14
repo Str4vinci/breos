@@ -74,19 +74,19 @@ def _tri_tariff(index):
             {**FIXED, "target_soc": 0.5},
             {},
             ValueError,
-            r"Unknown key 'smart_charging\.target_soc'\. Available: smart_charging\.charge_periods",
+            r"Unknown key 'smart_charging\.target_soc' \(did you mean 'smart_charging\.target_levels'\?\)",
         ),
         (
             {**FIXED, "target_usable_fraction": 1.2},
             {},
             ValueError,
-            r"'smart_charging\.target_usable_fraction' must be between 0 and 1$",
+            r"'smart_charging\.target_usable_fraction' must be between 0 and 1; got 1\.2$",
         ),
         (
             {**FIXED, "target_usable_fraction": -0.1},
             {},
             ValueError,
-            r"'smart_charging\.target_usable_fraction' must be between 0 and 1$",
+            r"'smart_charging\.target_usable_fraction' must be between 0 and 1; got -0\.1$",
         ),
         (
             {**FIXED, "target_usable_fraction": "half"},

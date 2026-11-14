@@ -95,6 +95,7 @@ PROFILES: dict[str, ProfileSpec] = {
     )
 }
 PROFILE_KEYS: tuple[str, ...] = tuple(PROFILES)
+EXTERNAL_PROFILE_HELP = "How to get it: https://breos.readthedocs.io/en/latest/how-to/external-load-profile.html"
 
 # Keys removed in 0.7.0. They are not accepted; they only make the error say
 # which key replaces them.
@@ -218,7 +219,21 @@ def resolve_profile_file(
         if matches:
             return ProfileSource(key, matches[0], packaged=False, native_freq=resolution)
     patterns = " or ".join(repr(spec.files[resolution]) for resolution in resolutions)
-    raise FileNotFoundError(f"Load profile {key!r}: no file in {root} matches {patterns}.")
+    if root.is_dir():
+        state = ""
+    elif root.exists():
+        state = ", which is not a directory"
+    else:
+        state = f", which does not exist yet ({os.path.abspath(root)})"
+    if spec.bundled:
+        raise FileNotFoundError(
+            f"Load profile {key!r}: no file matching {patterns} in rlp_directory {str(root)!r}{state}. "
+            "Remove rlp_directory to use the copy BREOS ships."
+        )
+    raise FileNotFoundError(
+        f"Load profile {key!r} needs a file BREOS does not ship: put one matching {patterns} in "
+        f"rlp_directory {str(root)!r}{state}. {EXTERNAL_PROFILE_HELP}"
+    )
 
 
 def validate_profile_options(profile_type: Any, column: Any = None, unit: Any = None) -> None:

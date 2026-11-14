@@ -187,6 +187,69 @@ class TestAppValidation:
             # A typo such as `batery_kwh` must fail loudly instead of being silently
             # dropped by merge_defaults (which would default the battery to 0).
             pytest.param({"batery_kwh": 5.0}, ValueError, "Unknown config key.*batery_kwh", id="unknown-key"),
+            pytest.param(
+                {"batery_kwh": 5.0},
+                ValueError,
+                r"^Unknown config key 'batery_kwh' \(did you mean 'battery_kwh'\?\)\.$",
+                id="unknown-key-suggests",
+            ),
+            pytest.param(
+                {"battery": {"kwh": 5.0}},
+                ValueError,
+                r"'battery' \(not a table: write 'battery_kwh'\)",
+                id="unknown-table-points-to-flat-key",
+            ),
+            pytest.param(
+                {"zzz_qqq": 1},
+                ValueError,
+                r"^Unknown config key 'zzz_qqq'\. Every key is listed at https://",
+                id="unknown-key-without-match",
+            ),
+            pytest.param(
+                {"community": {}, "participants": []},
+                ValueError,
+                r"energy community config .* breos\.Community\(config\)\.simulate\(\)",
+                id="community-config",
+            ),
+            pytest.param(
+                {"location": {"latitde": 41.1, "longitude": -8.6, "timezone": "Europe/Lisbon"}},
+                ValueError,
+                r"must include 'latitude' \(found 'location\.latitde'",
+                id="location-field-typo",
+            ),
+            pytest.param({"location": "oporto"}, ValueError, r"did you mean 'porto'\?", id="location-key-typo"),
+            pytest.param(
+                {"battery_indoor_model": "weather"},
+                TypeError,
+                r"^'battery_indoor_model' must be a table with the optional keys enabled, setpoint_c, coupling_alpha, "
+                r"floor_c and ceiling_c, such as battery_indoor_model = \{ enabled = false \}$",
+                id="indoor-model-text-names-keys",
+            ),
+            pytest.param(
+                {"tariff": {"currency": "EUR", "import_prices": {"all": 0.20}, "export_prices": {"all": 0.05}}},
+                ValueError,
+                r"\[tariff\] is for time-of-use prices; for one flat price, remove it and set costs\.electricity_cost, "
+                r"costs\.electricity_sold_cost and costs\.daily_power_cost$",
+                id="flat-tariff-points-to-costs",
+            ),
+            pytest.param(
+                {"battery_kwh": 5.0, "battery_min_soc": 10, "battery_max_soc": 90},
+                ValueError,
+                r"got 10 and 90 \(they are fractions: 0\.1 means 10 %\)$",
+                id="soc-limits-in-percent",
+            ),
+            pytest.param(
+                {"battery_kwh": 5.0, "battery_min_soc": 0.1, "battery_max_soc": 1.0000001},
+                ValueError,
+                r"got 0\.1 and 1\.0000001 \(they are fractions",
+                id="soc-limit-just-above-one",
+            ),
+            pytest.param(
+                {"n_modules": "ten"},
+                ValueError,
+                r"^'n_modules' must be a whole number >= 1; got 'ten'$",
+                id="n_modules-text",
+            ),
             pytest.param({"degradation_engine": "magic"}, ValueError, "degradation_engine", id="degradation_engine"),
             *[
                 pytest.param(
@@ -244,6 +307,20 @@ class TestAppValidation:
         with pytest.raises(error, match=match):
             App({**self.BASE, **overrides})
 
+    def test_soc_limit_with_a_failing_repr_keeps_the_value_error(self):
+        class BrokenFloat(float):
+            def __repr__(self):
+                raise RuntimeError("no repr")
+
+        with pytest.raises(ValueError, match=r"got 0\.1 and a BrokenFloat"):
+            App({**self.BASE, "battery_kwh": 5.0, "battery_min_soc": 0.1, "battery_max_soc": BrokenFloat(1.1)})
+
+    def test_custom_location_still_ignores_extra_keys(self):
+        # Only a missing field reports a near miss; an extra key is not refused,
+        # so configs that carry a name or an altitude keep validating.
+        location = {"latitude": 41.1, "longitude": -8.6, "timezone": "Europe/Lisbon", "name": "home", "latitde": 0}
+        App({**self.BASE, "location": location})
+
     @pytest.mark.parametrize("start_date", ["2025-07-01", "2025-01-15", "2025-12-31"])
     def test_start_date_other_than_1_january_fails_early(self, start_date):
         """Weather starts on 1 January, so a later start used to misplace the load.
@@ -260,25 +337,33 @@ class TestAppValidation:
             (
                 {"location": {"latitude": 91, "longitude": 0, "timezone": "UTC"}},
                 ValueError,
-                "'location.latitude' must be between -90 and 90",
+                "'location.latitude' must be between -90 and 90; got 91",
             ),
-            ({"pv_arrays": [{"modules": 0}]}, ValueError, "'pv_arrays[0].modules' must be >= 1"),
+            ({"pv_arrays": [{"modules": 0}]}, ValueError, "'pv_arrays[0].modules' must be >= 1; got 0"),
             (
                 {"inverter_efficiency": 0},
                 ValueError,
-                "'inverter_efficiency' must be between 0 and 1 (exclusive of the lower bound)",
+                "'inverter_efficiency' must be between 0 and 1 (exclusive of the lower bound); got 0",
             ),
             ({"resolution": "30min"}, ValueError, "'resolution' must be one of: h, 15min; got '30min'"),
-            ({"discount_rate": -1}, ValueError, "'discount_rate' must be > -1"),
+            ({"discount_rate": -1}, ValueError, "'discount_rate' must be > -1; got -1"),
             (
                 {"battery_min_soc": 0.9, "battery_max_soc": 0.2},
                 ValueError,
-                "'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1",
+                "'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1; got 0.9 and 0.2",
             ),
             # With a battery, a bad SOC limit is refused by its key, before
             # any check reads the limits.
-            ({"battery_kwh": 5.0, "battery_min_soc": "0.1"}, TypeError, "'battery_min_soc' must be a finite number"),
-            ({"battery_kwh": 5.0, "battery_max_soc": None}, TypeError, "'battery_max_soc' must be a finite number"),
+            (
+                {"battery_kwh": 5.0, "battery_min_soc": "0.1"},
+                TypeError,
+                "'battery_min_soc' must be a finite number; got '0.1'",
+            ),
+            (
+                {"battery_kwh": 5.0, "battery_max_soc": None},
+                TypeError,
+                "'battery_max_soc' must be a finite number; got None",
+            ),
         ],
     )
     def test_validation_subsystems_preserve_public_error_contract(self, overrides, error_type, message):
