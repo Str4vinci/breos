@@ -34,6 +34,14 @@ accepts that and nothing more. A field's precision is the most decimal
 places written for it in either file, so 0.01 for a value rounded to cents
 and 0.0001 for a state of charge; a sum of rounded values may move by one
 unit per term. Integers, counts, years, text and booleans compare exactly.
+
+On x86-64 the tool limits numpy to its AVX2 kernels (``X86_V3``) before
+numpy loads. numpy chooses its SIMD kernels for the CPU at import, and its
+AVX-512 kernels round some sums differently. Most such differences stay in
+the last decimal place, but a battery cycle count can cross a threshold and
+move a replacement cost by several cents. Every x86-64 machine with AVX2,
+GitHub's runners included, then computes the same numbers. Other
+architectures do not get the limit, and their results can differ.
 """
 
 from __future__ import annotations
@@ -49,6 +57,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -62,8 +71,16 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import pandas as pd
+# Before numpy loads; see the module docstring. A numpy loaded earlier (a test
+# that imports this module) keeps its kernels, and main() refuses to run cases.
+NUMPY_CPU_FEATURES = "X86_V3"
+X86_64 = platform.machine().lower() in {"x86_64", "amd64"}
+if X86_64 and "numpy" not in sys.modules:
+    os.environ.pop("NPY_DISABLE_CPU_FEATURES", None)  # numpy refuses both variables at once
+    os.environ["NPY_ENABLE_CPU_FEATURES"] = NUMPY_CPU_FEATURES
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 RESULTS_DIR = REPO / "docs" / "examples" / "_results"
@@ -103,10 +120,30 @@ WEEK_COLUMNS = (
     "PV_DC_Curtailed",
 )
 # Keys whose values describe the machine, not the run; --check ignores them.
+# Results do not depend on the dispatch backend, but the provenance names the
+# one that ran. The stored results pin the reference backend, so a result is the
+# same file whether or not Numba is installed. A case that names a backend keeps it.
+GALLERY_BACKEND = "python"
+
 VOLATILE_KEYS = frozenset({"breos_version", "python", "numpy", "pandas", "pvlib", "scipy", "numba", "pymoo"})
 
 
 # --------------------------------------------------------------------------- helpers
+
+
+def numpy_cpu_problem() -> str | None:
+    """Why numpy's kernels here would not reproduce the stored results, or None."""
+    if not X86_64:
+        return None
+    from numpy._core._multiarray_umath import __cpu_dispatch__, __cpu_features__
+
+    extra = [name for name in __cpu_dispatch__ if __cpu_features__.get(name) and name != NUMPY_CPU_FEATURES]
+    if not extra:
+        return None
+    return (
+        f"numpy uses {', '.join(extra)} kernels; the gallery needs {NUMPY_CPU_FEATURES} only. "
+        "Run this tool as a script, so that it can limit numpy before numpy loads."
+    )
 
 
 def sha256(path: Path) -> str:
@@ -320,6 +357,9 @@ class Context:
     def inside(self) -> Iterator[None]:
         with contextlib.chdir(self.work), warnings.catch_warnings():
             warnings.simplefilter("ignore")
+            # Every staged weather file has a timing sidecar; show the solar_position = "auto"
+            # fallback warning so a file without one is noticed.
+            warnings.filterwarnings("default", message="solar_position = 'auto': the weather does not state")
             yield
 
     def simulate(self, config: Mapping[str, Any]) -> Any:
@@ -330,7 +370,7 @@ class Context:
         if isinstance(location, str) and location in TMY_FILES:
             self.stage_tmy(location)
         with self.inside():
-            app = breos.App(dict(config))
+            app = breos.App({"execution_backend": GALLERY_BACKEND, **config})
             app.simulate()
         provenance = app.result()["provenance"]
         self.currencies.add(provenance["currency"])
@@ -1215,7 +1255,7 @@ def montecarlo(ctx: Context) -> Output:
         "note": "fetched at regeneration time; not committed",
     }
     mc.update(n_runs=MC_RUNS, n_procs=ctx.options.procs)
-    settings = MonteCarloSettings(weather_file=str(history), **mc)
+    settings = MonteCarloSettings(weather_file=str(history), **{"execution_backend": GALLERY_BACKEND, **mc})
     with ctx.inside():
         study = run_montecarlo(config, settings)
     deterministic = ctx.simulate(with_overrides(config, {"start_date": f"{settings.target_year}-01-01"})).result()
@@ -1546,6 +1586,10 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         parser.error(f"unknown case(s): {', '.join(unknown)}; see --list")
 
+    problem = numpy_cpu_problem()
+    if problem:
+        print(problem, file=sys.stderr)
+        return 2
     git_describe()  # before writing: a rewritten result file would mark the tree dirty
     if options.check:
         names = options.cases or [entry.name for entry in CASES.values() if entry.cheap]

@@ -128,7 +128,9 @@ def test_the_pv_only_path_runs_the_kernels_conversion():
     conversion = _conversion(0.6, cable_k=1e-6)
     ac, loss, clipped = _calculate_dc_ac_power_arrays(dc, NAMEPLATE, 0.96, conversion=conversion, ac_derate=derate)
     for i in range(len(dc)):
-        expected = _dc_ac(float(dc[i]), NAMEPLATE * derate[i], 0.96, 1.0, 2.0, *conversion.kernel_arguments(1.0))
+        expected = _dc_ac(
+            float(dc[i]), NAMEPLATE, 0.96, 1.0, 2.0, *conversion.kernel_arguments(1.0), NAMEPLATE * derate[i]
+        )
         assert (ac[i], loss[i], clipped[i]) == expected
     # A per-step row replaces the conversion's own row, step by step.
     rows = np.linspace(0.0, 2.0, 211)
@@ -142,6 +144,76 @@ def test_the_pv_only_path_runs_the_kernels_conversion():
     np.testing.assert_array_equal(
         _calculate_dc_ac_power_arrays(dc, NAMEPLATE, 0.96, conversion=NO_CONVERSION)[0], plain[0]
     )
+
+
+_MODELS = {"curve": _conversion(1.0), "pvwatts": NO_CONVERSION}
+
+
+@pytest.mark.parametrize("model", _MODELS)
+def test_derating_caps_the_ac_output_without_moving_the_efficiency_curve(model):
+    # A derated inverter is the same hardware with a lower AC ceiling: below
+    # the ceiling it converts each DC input exactly as without derating.
+    arguments = _MODELS[model].kernel_arguments(1.0)
+    for fraction in (0.8, 0.5, 0.3):
+        cap = fraction * NAMEPLATE
+        cap_dc = _dc_for_ac(cap, NAMEPLATE, 0.96, 1.0, *arguments)
+        for dc in np.linspace(10.0, 0.999 * cap_dc, 41):
+            assert _dc_ac(dc, NAMEPLATE, 0.96, 1.0, 2.0, *arguments, cap) == _dc_ac(
+                dc, NAMEPLATE, 0.96, 1.0, 2.0, *arguments
+            )
+        # At and above the ceiling the output is the ceiling; the DC above
+        # what the ceiling needs is clipped, and the energy still balances.
+        for dc in (cap_dc, cap_dc + 1.0, 1.4 * NAMEPLATE):
+            ac, loss, clipped = _dc_ac(dc, NAMEPLATE, 0.96, 1.0, 2.0, *arguments, cap)
+            assert ac == pytest.approx(cap, rel=1e-12)
+            assert clipped == pytest.approx(dc - cap_dc, abs=1e-9)
+            assert loss == pytest.approx(cap_dc - cap, rel=1e-9)
+            assert ac + loss + clipped == pytest.approx(dc, rel=1e-12)
+
+
+@pytest.mark.parametrize("model", _MODELS)
+def test_the_inverse_round_trips_under_derating(model):
+    arguments = _MODELS[model].kernel_arguments(1.0)
+    cap = 0.6 * NAMEPLATE
+    for dc in np.linspace(200.0, 3000.0, 57):
+        ac = _dc_ac(dc, NAMEPLATE, 0.96, 1.0, 2.0, *arguments, cap)[0]
+        assert ac < cap
+        assert _dc_for_ac(ac, NAMEPLATE, 0.96, 1.0, *arguments, cap) == pytest.approx(dc, rel=1e-12)
+    # A request at or above the ceiling needs exactly the DC that reaches it.
+    cap_dc = _dc_for_ac(cap, NAMEPLATE, 0.96, 1.0, *arguments, cap)
+    assert _dc_for_ac(2.0 * NAMEPLATE, NAMEPLATE, 0.96, 1.0, *arguments, cap) == cap_dc
+    assert _dc_ac(cap_dc, NAMEPLATE, 0.96, 1.0, 2.0, *arguments, cap)[0] == pytest.approx(cap, rel=1e-12)
+    assert _dc_ac(cap_dc, NAMEPLATE, 0.96, 1.0, 2.0, *arguments, cap)[2] == 0.0
+
+
+def test_the_pv_only_path_keeps_the_nameplate_efficiency_below_the_derated_cap():
+    dc = np.linspace(0.0, 2000.0, 101)
+    for conversion in _MODELS.values():
+        plain = _calculate_dc_ac_power_arrays(dc, NAMEPLATE, 0.96, conversion=conversion, curve_rows=np.ones(101))
+        derated = _calculate_dc_ac_power_arrays(dc, NAMEPLATE, 0.96, conversion=conversion, ac_derate=np.full(101, 0.5))
+        for column in range(3):
+            np.testing.assert_array_equal(derated[column], plain[column])
+
+
+def test_numba_matches_python_for_the_derated_conversion():
+    numba = pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
+    import breos._numba_dispatch_kernels  # noqa: F401  (registers the helpers with Numba)
+
+    @numba.njit(fastmath=False)
+    def compiled(dc, rating, curve_ac, curve_eff, row, cable_k, cap):
+        return _dc_ac(dc, rating, 0.96, 1.0, 2.0, curve_ac, curve_eff, row, cable_k, cap), _dc_for_ac(
+            dc, rating, 0.96, 1.0, curve_ac, curve_eff, row, cable_k, cap
+        )
+
+    for conversion in (_conversion(1.3, cable_k=2e-6), InverterConversion(ac_cable_k_per_w=2e-6)):
+        arguments = conversion.kernel_arguments(1.0)
+        for fraction in (1.0, 0.7, 0.4):
+            for dc in np.linspace(0.0, 1.3 * NAMEPLATE, 53):
+                expected = (
+                    _dc_ac(dc, NAMEPLATE, 0.96, 1.0, 2.0, *arguments, fraction * NAMEPLATE),
+                    _dc_for_ac(dc, NAMEPLATE, 0.96, 1.0, *arguments, fraction * NAMEPLATE),
+                )
+                assert compiled(dc, NAMEPLATE, *arguments, fraction * NAMEPLATE) == expected
 
 
 def _battery_run(backend: str, *, conversion=None, derate: bool = False, rows: bool = False):

@@ -1538,3 +1538,63 @@ def test_repeating_the_year_edge_does_not_fill_a_gap_inside_the_data():
 
     with pytest.raises(ValueError, match=r"houseload has no finite value for 10 of 8760"):
         align_simulation_inputs(pd.Series(0.0, index=rng), load, freq="h")
+
+
+class TestAgingClockAndContinuation:
+    def test_calendar_resistance_growth_runs_from_the_period_start(self):
+        # Idle at constant temperature and SOC, calendar resistance growth goes
+        # as sqrt(elapsed time): after four days it is twice the first day's,
+        # which only holds if each day ages from its own start.
+        config = BatteryConfig(
+            nominal_energy_wh=5000,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+            enable_resistance_fade=True,
+            initial_resistance_growth=0.0,
+        )
+        *_, degradation = _simulate(0.0, 0.0, config, periods=96)
+
+        growth = degradation["Resistance_Growth"].to_numpy()
+        assert growth[3] / growth[0] == pytest.approx(2.0, rel=1e-12)
+        first_day, _ = battery_module.update_battery_resistance_calendar(
+            0.0,
+            T_cell_C=25.0,
+            cumulative_cal_seconds=0.0,
+            dt_days=1.0,
+            mean_soc_absolute=float(degradation["Mean_SOC_Absolute"].iloc[0]),
+        )
+        assert growth[0] == pytest.approx(first_day, rel=1e-12)
+
+    def test_the_replacement_row_reports_the_new_packs_efficiency(self):
+        pv = ([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 3
+        load = ([400.0] * 8 + [0.0] * 8 + [400.0] * 8) * 3
+        config = BatteryConfig(
+            nominal_energy_wh=5000,
+            standby_loss_wh=0.0,
+            enable_replacement=True,
+            enable_resistance_fade=True,
+            initial_resistance_growth=0.4,
+            initial_soh=70.02,
+        )
+        _, _, _, replacements, degradation = _simulate(pv, load, config)
+
+        assert replacements == 1
+        swap = degradation.iloc[0]
+        assert swap["SOH"] == 100.0
+        assert swap["Resistance_Growth"] == 0.0
+        assert swap["Effective_RTE"] == pytest.approx(config.charge_efficiency * config.discharge_efficiency)
+
+    def test_a_multi_year_load_keeps_its_own_readings_for_the_simulated_year(self):
+        index = pd.date_range("2024-01-01", "2025-01-01 23:00", freq="h", tz="UTC")
+        load = pd.DataFrame({"Load": np.where(index.year == 2024, 100.0, 900.0)}, index=index)
+        pv = pd.Series(0.0, index=pd.date_range("2025-01-01 10:00", periods=2, freq="h", tz="UTC"))
+
+        assert align_simulation_inputs(pv, load).load_w.tolist() == [900.0, 900.0]
+
+    def test_an_annual_load_from_another_year_is_still_shifted_onto_the_simulated_year(self):
+        index = pd.date_range("2024-01-01", periods=8784, freq="h", tz="UTC")
+        load = pd.DataFrame({"Load": np.arange(8784, dtype=float)}, index=index)
+        pv = pd.Series(0.0, index=pd.date_range("2025-03-01", periods=3, freq="h", tz="UTC"))
+
+        expected = load["Load"].loc["2024-03-01 00:00":"2024-03-01 02:00"].tolist()
+        assert align_simulation_inputs(pv, load).load_w.tolist() == expected

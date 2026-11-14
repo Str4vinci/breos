@@ -1,10 +1,10 @@
 [project]
 name = "breos"
-version = "0.7.0"
+version = "0.7.1"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
-requires-python = ">=3.11"
+requires-python = ">=3.11.5"
 authors = [
     {name = "Leonardo Rodrigues", email = "lrodrigues@fe.up.pt"},
 ]
@@ -95,8 +95,8 @@ docs = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Slow endurance/multi-year tests are deselected by default so the normal suite
-# stays fast. Run them explicitly with `pytest -m slow` (the scheduled CI job
-# and the release verification both do this); `-m slow` on the command line
+# stays fast. Run them explicitly with `pytest -m slow` (manual CI runs
+# and release gates both do this); `-m slow` on the command line
 # overrides this default marker expression.
 addopts = ["-m", "not slow"]
 # Nothing in BREOS or its tests may call an API deprecated for removal in

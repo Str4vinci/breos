@@ -149,3 +149,29 @@ def test_a_leap_year_without_its_last_day_raises():
     """8,760 rows from 1 January are one day short of a leap year."""
     with pytest.raises(ValueError, match=r"trailing 1 days 00:00:00 \(24 steps"):
         require_full_year_weather(_year("2028-01-01"), 2028, "h", "UTC")
+
+
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+def test_a_complete_right_labelled_year_covers_the_year_at_every_resolution(
+    tmp_path, monkeypatch, synthetic_weather, resolution
+):
+    # Interval means labelled at the end of their hour run from 01:00 to the
+    # next midnight. They move to the start of their hour before the coverage
+    # check, as the 15-minute resampler already moved them, so hourly runs
+    # are no longer refused for a missing first hour.
+    from breos.weather import save_weather_csv
+
+    weather = synthetic_weather.copy()
+    weather.index = pd.date_range("2025-01-01 01:00", periods=len(weather), freq="h", tz="UTC")
+    weather.attrs["breos_weather_metadata"] = {
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "right",
+    }
+    path = tmp_path / "right.csv"
+    save_weather_csv(weather.rename_axis("date"), path)
+    monkeypatch.chdir(tmp_path)
+
+    app = App({**_PORTO, "weather_file": str(path), "resolution": resolution})
+    app.simulate()
+
+    assert len(app.timeseries()) == (8760 if resolution == "h" else 35040)

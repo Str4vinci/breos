@@ -12,22 +12,20 @@ supply is None, never 0.
 from __future__ import annotations
 
 import copy
-from unittest import mock
 
 import numpy as np
 import pandas as pd
 import pytest
 
 import breos.optimization as optimization_module
-import breos.projection as projection_module
 from breos.app import App
 from breos.app_config import resolve_app_config
 from breos.app_results import degradation_history_to_dicts
-from breos.battery import END_OF_LIFE_EVENTS_ATTR
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization import evaluate_projected_design
 from tests.conftest import _build_open_meteo_weather
 from tests.offline_app import serve_app_inputs
+from tests.project_year_runs import record_project_years
 from tests.test_terminal_replacement import BLAST, EVERY_PERIOD_EOL, _app, _mc_config
 
 pytestmark = pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
@@ -68,18 +66,11 @@ def disabled():
 
 
 def _app_with_frames(**overrides):
-    """An App run, with each project year's results and degradation frames."""
-    frames = []
-    simulate = projection_module.simulate_energy_balance
-
-    def record(**kwargs):
-        output = simulate(**kwargs)
-        frames.append((output[0], output[4]))
-        return output
-
-    with mock.patch.object(projection_module, "simulate_energy_balance", record):
+    """An App run, with each project year's run: its results frame and end-of-life events."""
+    with pytest.MonkeyPatch.context() as patch:
+        runs = record_project_years(patch)
         app = _app(**overrides)
-    return app, frames
+    return app, runs
 
 
 def _without_replacement_keys(result):
@@ -223,13 +214,14 @@ def test_a_retired_pack_is_out_of_service_and_keeps_its_last_state():
     assert history[2]["fec"] == history[2]["discharge_throughput_kwh"] == 0.0
 
     # The means cover the steps the pack served, through the step that retired it.
-    results, degradation = frames[1]
-    retiring = degradation.attrs[END_OF_LIFE_EVENTS_ATTR][0]["step"]
+    assert len(frames) == 3
+    results = frames[1].results_df
+    retiring = frames[1].end_of_life_records[0]["step"]
     served = results.iloc[: retiring + 1]
     assert 0 < retiring < len(results) - 1
     assert history[1]["mean_soc_pct"] == pytest.approx(served["Battery_SOC_Absolute"].mean() * 100, abs=0.006)
     assert history[1]["mean_cell_temperature_c"] == pytest.approx(served["T_cell"].mean(), abs=0.006)
-    first = frames[0][0]
+    first = frames[0].results_df
     assert history[0]["mean_soc_pct"] == pytest.approx(first["Battery_SOC_Absolute"].mean() * 100, abs=0.006)
     # A year the pack never serves has no means.
     assert history[2]["mean_soc_pct"] is None and history[2]["mean_cell_temperature_c"] is None
@@ -268,7 +260,9 @@ def test_a_kept_pack_at_zero_health_is_retired(model, years, zero_year):
         assert entry["soh_pct"] == entry["fec"] == entry["discharge_throughput_kwh"] == 0.0
         assert entry["mean_soc_pct"] is None and entry["mean_cell_temperature_c"] is None
     # Stored energy and per-step health never go below zero.
-    for results, _ in frames:
+    assert len(frames) == years
+    for run in frames:
+        results = run.results_df
         assert (results["Battery_Energy"] >= 0.0).all() and (results["Battery_SOH"] >= 0.0).all()
     assert [entry["soh_pct"] for entry in history] == [row["soh_pct"] for row in result["yearly"]]
 

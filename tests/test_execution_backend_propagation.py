@@ -2,8 +2,8 @@
 
 These are propagation and configuration tests, not numerical ones. Parity lives
 in ``test_numba_dispatch_parity.py``; what is checked here is that the choice
-travels explicitly, defaults to the reference implementation everywhere, is
-validated in one place, and is recorded wherever results are written.
+travels explicitly, defaults to "auto" everywhere, is validated and resolved in
+one place, and is recorded wherever results are written.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import pickle
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,7 +27,9 @@ from breos.execution import (
     PV_ONLY_DISPATCH_PATH,
     backend_provenance,
     is_pv_only_dispatch,
+    resolve_execution_backend,
     validate_execution_backend,
+    validate_requested_backend,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +92,8 @@ def _spy_on_dispatch(monkeypatch, record):
 
     monkeypatch.setattr(battery, "_resolve_dispatch_day", _resolve)
     monkeypatch.setattr(_numba_dispatch, "require_numba_dispatch_day", lambda: reference)
+    # The numba backend also compiles the rainflow day scan; None is the reference scan.
+    monkeypatch.setattr(battery, "_resolve_rainflow_kernel", lambda execution_backend: None)
 
 
 @pytest.fixture
@@ -140,15 +145,15 @@ def test_the_chosen_backend_reaches_the_dispatch_kernel(
 ):
     """Every simulating entry point hands its backend to the kernel.
 
-    Without an explicit choice, the reference kernel is what arrives. With
-    one, a choice dropped on the way would fall back to that default and
-    arrive as python, so the compiled case is the one that proves the
-    argument travels.
+    Without an explicit choice, "auto" is resolved before the kernel is
+    reached, so the kernel sees "numba" or "python", never "auto". With a
+    choice, one dropped on the way would fall back to the default, so the
+    compiled case is the one that proves the argument travels.
     """
     run(_optimization_inputs, request, **({} if backend is None else {"execution_backend": backend}))
 
     assert _dispatch_backends, "no simulated span resolved a dispatch kernel"
-    assert set(_dispatch_backends) == {backend or DEFAULT_EXECUTION_BACKEND}
+    assert set(_dispatch_backends) == {resolve_execution_backend(backend or DEFAULT_EXECUTION_BACKEND)}
 
 
 def test_the_chosen_backend_survives_pickling_to_a_worker(_optimization_inputs, _dispatch_backends):
@@ -226,11 +231,14 @@ def test_app_records_the_backend_and_its_toolchain(backend, _patch_weather):
     app = App({**BASE_CONFIG, "execution_backend": backend})
     app.simulate()
 
+    ran = resolve_execution_backend(backend)
     execution = app.result()["provenance"]["execution"]
-    assert execution["execution_backend"] == backend
+    assert execution["execution_backend"] == ran
+    assert execution["requested_execution_backend"] == backend
+    assert app.result()["provenance"]["resolved_config"]["execution_backend"] == backend
     for key in ("python", "numpy", "pandas"):
         assert key in execution
-    if backend == "numba":
+    if ran == "numba":
         # A bit-identity claim is unverifiable after the fact without these.
         assert "numba" in execution and "llvmlite" in execution
         assert execution["jit_cache"] in {"warm", "cold", "unknown"}
@@ -249,8 +257,108 @@ def test_app_and_monte_carlo_record_the_same_execution_keys(_patch_weather):
 def test_unknown_backend_names_are_rejected_once_and_the_same_way(bad):
     with pytest.raises(ValueError, match="execution_backend must be one of"):
         validate_execution_backend(bad)
-    with pytest.raises(ValueError, match="execution_backend must be one of"):
+    # The message a user sees lists every name they may ask for.
+    listed = r"must be one of \('auto', 'python', 'numba'\)"
+    with pytest.raises(ValueError, match=listed):
+        validate_requested_backend(bad)
+    with pytest.raises(ValueError, match=listed):
         resolve_app_config({**BASE_CONFIG, "execution_backend": bad})
+    with pytest.raises(ValueError, match=listed):
+        resolve_execution_backend(bad)
+
+
+def test_the_default_is_auto():
+    assert DEFAULT_EXECUTION_BACKEND == "auto"
+    assert EXECUTION_BACKENDS == ("auto", "python", "numba")
+    assert resolve_app_config(BASE_CONFIG).requested_execution_backend == "auto"
+
+
+@pytest.mark.parametrize(("available", "expected"), [(True, "numba"), (False, "python")])
+def test_auto_resolves_to_numba_only_when_it_can_be_imported(monkeypatch, available, expected):
+    from breos import _numba_dispatch
+
+    monkeypatch.setattr(_numba_dispatch, "numba_available", lambda: available)
+    monkeypatch.setattr(_numba_dispatch, "numba_jit_enabled", lambda: available)
+    assert resolve_execution_backend("auto") == expected
+    resolved = resolve_app_config(BASE_CONFIG)
+    assert resolved.cfg["execution_backend"] == expected
+    assert resolved.requested_execution_backend == "auto"
+    # An explicit name is kept whatever is installed.
+    assert resolve_execution_backend("python") == "python"
+    assert resolve_execution_backend("numba") == "numba"
+
+
+def test_the_dispatch_refuses_an_unresolved_auto():
+    """The "auto" request is resolved where the config is; the dispatch never decides it."""
+    with pytest.raises(ValueError, match="resolve 'auto'"):
+        validate_execution_backend("auto")
+    with pytest.raises(ValueError, match="resolve 'auto'"):
+        backend_provenance("auto")
+
+
+_BLOCK_NUMBA = """
+import importlib.abc, sys, warnings
+
+class _Block(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name == "numba" or name.startswith("numba.") or name == "llvmlite" or name.startswith("llvmlite."):
+            raise ModuleNotFoundError(f"No module named {name!r}")
+        return None
+
+sys.meta_path.insert(0, _Block())
+warnings.simplefilter("error")
+
+from breos.execution import resolve_execution_backend
+from breos.app_config import resolve_app_config
+
+assert resolve_execution_backend("auto") == "python"
+resolved = resolve_app_config({"location": "porto", "n_modules": 4, "annual_consumption_kwh": 5000, "battery_kwh": 5})
+assert resolved.cfg["execution_backend"] == "python"
+assert resolved.requested_execution_backend == "auto"
+try:
+    resolve_execution_backend("numba")
+    from breos.execution import require_backend
+    require_backend("numba")
+except ImportError as exc:
+    assert "breos[fast]" in str(exc)
+else:
+    raise AssertionError("numba was asked for by name and did not fail")
+assert sys.modules.get("numba") is None
+print("ok")
+"""
+
+
+def test_auto_resolves_to_python_without_a_warning_when_numba_cannot_be_imported():
+    """The no-numba install: "auto" runs Python, silently; "numba" by name still fails with the hint."""
+    completed = subprocess.run(
+        [sys.executable, "-c", _BLOCK_NUMBA], capture_output=True, text=True, cwd=PROJECT_ROOT, check=False
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "ok"
+
+
+def test_resolved_config_replays_the_same_run(_patch_weather):
+    """The resolved config keeps the request, so App replays the same run from it on any machine."""
+    first = App(BASE_CONFIG)
+    first.simulate()
+    provenance = first.result()["provenance"]
+    replay = App(provenance["resolved_config"])
+    replay.simulate()
+    replayed = replay.result()["provenance"]
+
+    ran = resolve_execution_backend("auto")
+    assert provenance["resolved_config"]["execution_backend"] == "auto"
+    assert provenance["execution"]["requested_execution_backend"] == "auto"
+    assert replayed["execution"] == provenance["execution"]
+    assert provenance["execution"]["execution_backend"] == ran
+    # The location table drops its preset name on a replay, whatever the backend.
+    assert {key: value for key, value in replayed["resolved_config"].items() if key != "location"} == {
+        key: value for key, value in provenance["resolved_config"].items() if key != "location"
+    }
+    pd.testing.assert_frame_equal(replay.timeseries(), first.timeseries())
+    assert {key: value for key, value in replay.result().items() if key != "provenance"} == {
+        key: value for key, value in first.result().items() if key != "provenance"
+    }
 
 
 def test_missing_numba_is_reported_before_app_prepares_inputs(monkeypatch):

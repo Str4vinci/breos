@@ -798,7 +798,8 @@ by feature:
 - **Irradiance resampling.** App `provenance.weather` and Monte Carlo
   `settings` and `runtime_weather.metadata` record `irradiance_resampling`
   (requested) and `irradiance_resampling_resolved`, with per-component
-  fallback and zero-support counts and the observational
+  fallback and zero-support counts, the count of quarter-hours whose DNI was
+  capped (`irradiance_resampling_capped_counts`) and the observational
   `irradiance_closure` residuals, and under `"quadrature"` the
   `irradiance_quadrature` record. `irradiance_resampling` is in
   `resolved_config` and in the optimizer's `simulation` config, and

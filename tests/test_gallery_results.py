@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from importlib import metadata
 from pathlib import Path
@@ -145,24 +146,46 @@ def _same_stack(manifest) -> bool:
     return True
 
 
-# The stored results come from another machine. BREOS does not promise bit
-# identity across machines: a rounded value can move by one unit in the last
-# decimal place it is written with (CI runners without AVX-512 move 24 of
-# first_home's values by 0.01). --cross-machine accepts that and nothing more;
-# the maintainer's own --check runs at 1e-9.
-def test_check_reproduces_the_quickstart_case(capsys):
+# The stored results come from another machine. The tool limits numpy to its
+# AVX2 kernels on x86-64, so any x86-64 machine with AVX2 should compute the
+# same numbers; --cross-machine still accepts one unit in the last decimal
+# place it is written with, and nothing more. The check runs in a fresh
+# process: this module has loaded numpy already, too late for the limit.
+# Other architectures do not get the limit, so the check is skipped there.
+def _check(*cases: str) -> None:
     manifest = json.loads((RESULTS / "first_home" / "manifest.json").read_text(encoding="utf-8"))
     if not _same_stack(manifest):
         pytest.skip("the stored results were made with other numpy/pandas/pvlib/scipy versions")
-    assert TOOL.main(["--check", "first_home", "--cross-machine"]) == 0, capsys.readouterr().out
+    if not TOOL.X86_64:
+        pytest.skip("the stored results use numpy's x86-64 AVX2 kernels")
+    tool = PROJECT_ROOT / "tools" / "regenerate_gallery_results.py"
+    result = subprocess.run(
+        [sys.executable, str(tool), "--check", *cases, "--cross-machine"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_check_reproduces_the_quickstart_case():
+    _check("first_home")
 
 
 @pytest.mark.slow
-def test_check_reproduces_every_cheap_case(capsys):
-    manifest = json.loads((RESULTS / "first_home" / "manifest.json").read_text(encoding="utf-8"))
-    if not _same_stack(manifest):
-        pytest.skip("the stored results were made with other numpy/pandas/pvlib/scipy versions")
-    assert TOOL.main(["--check", "--cross-machine"]) == 0, capsys.readouterr().out
+def test_check_reproduces_every_cheap_case():
+    _check()
+
+
+def test_cases_refuse_a_numpy_loaded_before_the_limit(capsys):
+    if not TOOL.X86_64:
+        pytest.skip("numpy is only limited on x86-64")
+    from numpy._core._multiarray_umath import __cpu_features__
+
+    if not __cpu_features__.get("X86_V4"):
+        pytest.skip("this CPU has no kernels beyond the limit")
+    assert TOOL.main(["--check", "first_home"]) == 2
+    assert "X86_V4" in capsys.readouterr().err
 
 
 def test_montecarlo_case_stores_every_run_compactly():

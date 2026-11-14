@@ -1,6 +1,6 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted; amendments A1–A17 Accepted, A18–A20 Proposed.
+- **Status:** Accepted; amendments A1–A20 Accepted.
   Implemented in 0.7.0, A15–A20 in 0.7.1,
   with two additions that no amendment accepted: discharge-only mode and
   calendar-month seasons (see
@@ -8,7 +8,8 @@
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
   A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
   A13 and A14 accepted 2026-10-01; A15–A17 accepted 2026-10-02; A18 and
-  A19 proposed 2026-10-03; A20 proposed 2026-10-14
+  A19 proposed 2026-10-03; A20 proposed 2026-10-14; A18–A20 accepted
+  2026-11-12
 
 ## Context
 
@@ -500,12 +501,12 @@ degradation still closes once on its existing positional window. A controller
 at a shared boundary observes the post-aging/post-replacement state. The
 window close uses the `Battery_Energy_Beginning` ledger value from the
 subcall containing its last step.
-*(Extended by A19, proposed 2026-10-03: a controller may also decide on
+*(Extended by A19, accepted 2026-11-12: a controller may also decide on
 steps it marks inside a civil day.)*
 
 ### A12. Daily persistence: warm start and forecast-terminal value — Accepted 2026-09-30
 
-*(Extended by A20, proposed 2026-10-14: the planner may forecast PV from
+*(Extended by A20, accepted 2026-11-12: the planner may forecast PV from
 day-ahead forecast weather instead of repeating the day before.)*
 
 The experimental App mode `daily_persistence` is a daily controller under
@@ -527,7 +528,7 @@ the current or a future day's PV, load or temperature.
   and a clipped `[period]` edge are not observations. The observation and
   any day decision in progress carry across the A2 year seam; a standalone
   `[period]` never joins its end to its start.
-  *(Amended by A18, proposed 2026-10-03: under `hold_target` a step in both
+  *(Amended by A18, accepted 2026-11-12: under `hold_target` a step in both
   period lists has no floor, reserve 0, while there is no grid target.)*
 - **Rolling solve.** Each day builds a fresh daily-target problem on the
   forecast from the measured stored energy, the current state of health and
@@ -619,7 +620,7 @@ shared periods under `mode = "fixed_target"`:
   replaces targets while retaining fixed reserves; it cannot plan and replay
   the same held-target instructions. Supporting it later requires the floor
   to follow each candidate and executed daily target, including warm start.
-  *(Replaced by A18, proposed 2026-10-03: the floor follows each daily
+  *(Replaced by A18, accepted 2026-11-12: the floor follows each daily
   target, and `daily_persistence` accepts `hold_target`.)*
 - App, Monte Carlo and projected optimization accept `hold_target` for
   `fixed_target`. Python and Numba execute the same kernel source. Results
@@ -789,7 +790,7 @@ planner setting, adds one:
   resolved value of every `daily_persistence` run, 0 included.
   `planner_version` stays `"1"`: the default planner decides as before.
 
-### A18. Daily targets hold the floor on shared periods (#398) — Proposed 2026-10-03
+### A18. Daily targets hold the floor on shared periods (#398) — Accepted 2026-11-12
 
 Replaces A14's refusal of `hold_target` under `daily_persistence`; the
 rest of A14 stands. A14 made the grid target the discharge floor on a step
@@ -844,7 +845,7 @@ period, charge off-peak, hold the target) could not be planned.
   kernel is unchanged; Python and Numba run the same held-target step as
   under `fixed_target`. The result format stays `"1"`.
 
-### A19. Daily targets can be decided at the start of each charge window (#406) — Proposed 2026-10-03
+### A19. Daily targets can be decided at the start of each charge window (#406) — Accepted 2026-11-12
 
 Extends A11 and A12 and replaces neither. Under A12 `daily_persistence`
 picks one target per civil day, decided at local midnight. Off-peak windows
@@ -927,7 +928,7 @@ when charging starts.
   decides, dispatches and reports as before, apart from the new
   `decision_boundary` provenance key; App goldens are bit-identical.
 
-### A20. Daily targets can be planned on a day-ahead weather forecast (#430) — Proposed 2026-10-14
+### A20. Daily targets can be planned on a day-ahead weather forecast (#430) — Accepted 2026-11-12
 
 Extends A12 and A19 and replaces neither. A12's forecast repeats the day
 before the decision: the standard naive baseline, and the only causal
