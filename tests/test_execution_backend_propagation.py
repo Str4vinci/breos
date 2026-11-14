@@ -278,6 +278,7 @@ def test_auto_resolves_to_numba_only_when_it_can_be_imported(monkeypatch, availa
     from breos import _numba_dispatch
 
     monkeypatch.setattr(_numba_dispatch, "numba_available", lambda: available)
+    monkeypatch.setattr(_numba_dispatch, "numba_jit_enabled", lambda: available)
     assert resolve_execution_backend("auto") == expected
     resolved = resolve_app_config(BASE_CONFIG)
     assert resolved.cfg["execution_backend"] == expected
