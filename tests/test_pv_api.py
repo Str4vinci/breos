@@ -6,7 +6,7 @@ import pytest
 from pvlib.location import Location
 
 from breos.solar import (
-    calculate_multi_array_production_breakdown,
+    calculate_multi_array_production,
     calculate_pv_production_ac,
     calculate_pv_production_dc,
     dc_to_ac,
@@ -18,18 +18,16 @@ _LOCATION = Location(41.15, -8.61, tz="UTC")
 @pytest.mark.parametrize("freq", ["h", "15min"])
 def test_empty_multi_array_system_is_zero_on_the_same_grid(synthetic_weather, synthetic_weather_15min, freq):
     weather = synthetic_weather if freq == "h" else synthetic_weather_15min
-    empty = calculate_multi_array_production_breakdown(weather, _LOCATION, [{"modules": 0}], freq=freq)
-    one = calculate_multi_array_production_breakdown(weather, _LOCATION, [{"modules": 2}], freq=freq)
+    empty = calculate_multi_array_production(weather, _LOCATION, [{"modules": 0}], freq=freq)
+    one = calculate_multi_array_production(weather, _LOCATION, [{"modules": 2}], freq=freq)
 
-    assert empty.dc_after_losses.index.equals(one.dc_after_losses.index)
-    assert (empty.dc_after_losses == 0.0).all()
+    assert empty.index.equals(one.index)
+    assert (empty == 0.0).all()
 
 
 def _grid_or_error(weather, arrays):
     try:
-        return calculate_multi_array_production_breakdown(
-            weather, _LOCATION, arrays, freq="15min"
-        ).dc_after_losses.index
+        return calculate_multi_array_production(weather, _LOCATION, arrays, freq="15min").index
     except ValueError as exc:
         return type(exc)
 
@@ -60,15 +58,15 @@ def test_ac_production_keeps_its_positional_parameters(synthetic_weather, pv_par
 
 def test_zero_module_array_contributes_nothing(synthetic_weather):
     arrays = [{"modules": 2, "tilt": 30, "azimuth": 180}]
-    with_empty = calculate_multi_array_production_breakdown(synthetic_weather, _LOCATION, [*arrays, {"modules": 0}])
-    alone = calculate_multi_array_production_breakdown(synthetic_weather, _LOCATION, arrays)
+    with_empty = calculate_multi_array_production(synthetic_weather, _LOCATION, [*arrays, {"modules": 0}])
+    alone = calculate_multi_array_production(synthetic_weather, _LOCATION, arrays)
 
-    pd.testing.assert_series_equal(with_empty.dc_after_losses, alone.dc_after_losses)
+    pd.testing.assert_series_equal(with_empty, alone)
 
 
 def test_negative_module_count_raises(synthetic_weather):
     with pytest.raises(ValueError, match="Array 2: modules must be zero or positive, got -1"):
-        calculate_multi_array_production_breakdown(synthetic_weather, _LOCATION, [{"modules": 2}, {"modules": -1}])
+        calculate_multi_array_production(synthetic_weather, _LOCATION, [{"modules": 2}, {"modules": -1}])
 
 
 def test_ac_production_forwards_loss_overrides(synthetic_weather, pv_params):

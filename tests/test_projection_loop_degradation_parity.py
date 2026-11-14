@@ -20,9 +20,10 @@ from breos.app_config import resolve_app_config
 from breos.app_inputs import PreparedSimulationInputs
 from breos.battery import align_simulation_inputs
 from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
-from breos.montecarlo import MonteCarloSettings, _simulate_trajectory
+from breos.montecarlo import MonteCarloSettings, _simulate_trajectory, _Study
 from breos.runners import app as app_runner
 from breos.solar import PVProductionBreakdown
+from tests.conftest import declare_instant_at_labels
 
 # The rates resolve_optimization_config fills in; the private evaluator reads
 # them from the resolved financials rather than defaulting them again.
@@ -117,13 +118,13 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
     # App: its own year loop over the prepared inputs.
     app_records, app_calls = [], []
     inputs = PreparedSimulationInputs(
-        weather=pd.DataFrame(index=pv.index),
+        weather=declare_instant_at_labels(pd.DataFrame(index=pv.index)),
         dc_system_base=pv,
         load_data=load,
         temperature_series=temperature,
         pv_breakdown=_pv_breakdown(pv),
     )
-    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
     # App and the optimizer both run the shared loop's simulate_energy_balance,
     # so each run gets its own spy.
     with monkeypatch.context() as patch:
@@ -135,15 +136,16 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
     mc_records, mc_calls = [], []
     _spy(monkeypatch, projection_module, "simulate_energy_balance_summary", mc_records, mc_calls)
     mc_metrics, _trajectory = _simulate_trajectory(
-        cfg,
-        resolved,
-        np.array([2025]),
-        PROJECTION_YEARS,
-        # run_montecarlo resolves an unset backend; this calls the trajectory directly.
-        MonteCarloSettings(weather_file="unused.csv", load_uncertainty=0.0, execution_backend="python"),
+        _Study(
+            cfg,
+            resolved,
+            np.array([2025]),
+            PROJECTION_YEARS,
+            # run_montecarlo resolves an unset backend; this calls the trajectory directly.
+            MonteCarloSettings(weather_file="unused.csv", load_uncertainty=0.0, execution_backend="python"),
+            {2025: align_simulation_inputs(pv, load, temperature, freq="h")},
+        ),
         np.random.default_rng(0),
-        {2025: align_simulation_inputs(pv, load, temperature, freq="h")},
-        None,
     )
 
     # Projected optimization: the year loop behind evaluate_projected_design.

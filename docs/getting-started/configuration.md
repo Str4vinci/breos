@@ -58,6 +58,27 @@ optimization reads the same values from `simulation.irradiance_resampling`:
   to reproduce that hour's mean, independently for GHI, DNI and DHI. It
   raises for instantaneous or undeclared input. Positive source hours with
   no reconstructed support receive a flat fill, recorded in provenance.
+- `"quadrature"` samples DNI and DHI every minute and derives GHI in each
+  sample as GHI = DNI·max(cos(apparent zenith), 0) + DHI. Each quarter-hour
+  is the mean of the 15 one-minute samples centred on its representative
+  time. Closure is exact in every sample, so a quarter-hour's GHI is its DHI
+  plus the step mean of DNI·cos(zenith); it is not the step's mean DNI times
+  the cosine of one zenith, whether taken at one time or averaged over the
+  step, because DNI and the zenith both vary inside the step. An interval-mean source hour spreads DNI and DHI over its 60
+  minutes in proportion to their clear-sky values, which conserves both
+  hourly means; the shape inside the hour is the clear-sky shape, and steps
+  may jump at hour boundaries. Instant samples interpolate each component's
+  clear-sky ratio at every minute as `"clear_sky"` does, without
+  conservation. GHI is derived, so its hourly mean is the input's only as
+  far as the input itself closes; `irradiance_quadrature` records the
+  difference. It needs coordinates and all three components, and refuses
+  missing or non-finite irradiance instead of filling it. The minute
+  solar positions make it slower: about 1.6 s a weather year against 0.2 s.
+  Against measured 1-minute irradiance at five stations, its quarter-hours
+  were slightly less accurate than `"clear_sky_energy_conserving"`'s (0.6 to
+  1.6 points more RMSE on a tilted plane), better in clear hours and worse
+  in broken cloud; annual energy differed by under 0.2 %. Choose it when
+  GHI, DNI and DHI must agree in every step, not for accuracy.
 
 PVGIS TMY is instantaneous with a provider offset, so `"auto"` resolves to
 `"clear_sky"`. Open-Meteo interval means and EPW use hourly conservation.
@@ -65,14 +86,23 @@ Without coordinates, direct interpolation replaces clear-sky reconstruction;
 the policy still controls hourly conservation. Already-quarter-hour weather
 is unchanged.
 
-No GHI/DNI/DHI closure is enforced, and DHI is never clipped to GHI.
-Weather metadata and result provenance record requested and resolved policy,
+Apart from the per-sample closure of `"quadrature"`, no GHI/DNI/DHI closure is
+enforced, and DHI is never clipped to GHI. Weather metadata and result provenance record requested and resolved policy,
 interpolation method, the daylight quarter-hours filled by the dawn/dusk
 fallback and the zero-support hour counts, per component. With coordinates and all three components, `irradiance_closure`
 records before/after conservation diagnostics over daylight quarter-hours:
 the GHI-weighted mean absolute residual in W/m² and the absolute residual
 energy divided by GHI energy. Solar position uses apparent zenith at the
-same representative times as reconstruction.
+same representative times as reconstruction. Under `"quadrature"` there is
+no separate conservation step, so `before` and `after` agree. Their residual
+is not zero: it compares the step means with the zenith at the
+representative time, while the step's beam is the mean of DNI·cos(zenith)
+over its samples. `irradiance_quadrature` records the sampling, the
+conserved and derived components, and `ghi_reconciliation`: the derived GHI
+against the input GHI at the source steps (the hour's mean for interval
+means, the quarter-hour centred on the sample for instant samples), as the
+change in GHI energy and the absolute residual energy, both divided by input
+GHI energy. Both are `null` when the input GHI energy is zero.
 
 ## Battery capacity and the SOC window
 
@@ -120,6 +150,64 @@ takes the latest reading within the file's own sampling interval, so hourly
 readings can drive a 15-minute run. A file that is missing or unreadable, that
 comes from another calendar year, or that has gaps raises an error instead of
 falling back to a default temperature.
+
+## AC-coupled batteries
+
+By default a battery is DC-coupled: PV and the battery share one hybrid
+inverter. `battery_coupling = "ac"` gives the battery its own inverter on the
+AC bus, beside the PV inverter, as in a retrofit:
+
+```toml
+battery_kwh = 10
+battery_coupling = "ac"
+battery_inverter_kw_per_kwh = 0.5   # or battery_inverter_ac_rating_kw = 5
+battery_inverter_efficiency = 0.96  # from the product's datasheet; no default
+
+[costs]
+battery_inverter_cost_per_kw = 150  # no default; 0 if the battery price includes it
+```
+
+- The PV inverter converts exactly as in a system without a battery, and
+  `inverter_ac_rating_kw`, `inverter_loading_ratio`, `inverter_efficiency`,
+  `inverters` and `[ac_cable]` describe it alone. PV AC that the load does not use
+  charges the battery through the battery inverter before it is exported.
+- The battery inverter is sized by one of `battery_inverter_ac_rating_kw` and
+  `battery_inverter_kw_per_kwh`. The per-kWh form resolves against the nominal
+  capacity, so a capacity sweep keeps one ratio. No rating is derived from
+  `battery_power_limit_c_rate`.
+- `battery_inverter_efficiency` is the battery inverter's nominal efficiency.
+  Both directions run the PVWatts part-load curve; the charging direction is
+  an assumption.
+- With `"dc"` every battery inverter key, and its price, is refused. A system
+  without a battery accepts `"ac"` and needs none of them, so a capacity
+  sweep from 0 keeps one config.
+- `[smart_charging]` refuses `grid_charge_efficiency` with `"ac"`: the
+  battery inverter converts grid charge. `fixed_target`, `discharge_only` and
+  `daily_persistence` all run (the planner with one PV inverter); the planner
+  converts its PV forecast through the PV inverter at full rating, without
+  the night draw.
+- A battery beside several inverters must be AC-coupled; see
+  [Several inverters](#several-inverters).
+- The prices follow the topology; see
+  [Cost and emissions presets](#cost-and-emissions-presets).
+  `battery_replacement_cost` prices a replacement as one unit, such as a pack
+  sold with its inverter, in either topology.
+- The results report the PV inverter in the loss waterfall's `inverter`
+  block, and the battery inverter in a `battery_inverter` block with its
+  rating, efficiency and conversion losses; `energy_balance.ac_delivery`
+  gains `pv_to_battery_kwh`. Year rows have `PV_AC_To_Battery_kWh` and
+  `PV_Charge_Conversion_Loss_kWh`.
+- Not modelled: inverter replacement on its own schedule, for the PV, hybrid
+  and battery inverters alike, and the battery inverter's standby
+  consumption while the battery idles. A PV or hybrid inverter's stated
+  `night_consumption_w` is modelled. The omissions matter most for low
+  loads, long idle periods and studies of inverter lifetime cost.
+
+The optimizer takes the same settings in its `[battery]` table: `coupling`,
+`inverter_ac_rating_kw` or `inverter_kw_per_kwh`, and `inverter_efficiency`,
+with `[costs] battery_inverter_cost_per_kw`. The coupling is fixed for a
+study; with `inverter_kw_per_kwh` each candidate's rating follows its
+capacity, and its CAPEX includes the battery inverter.
 
 ## Battery degradation calibration
 
@@ -356,14 +444,15 @@ percentage after applying any `pv_loss_overrides`.
 
 ## Recommended PV-model starting point
 
-BREOS keeps historical defaults stable so existing studies remain reproducible.
-For a new hourly study using interval-averaged weather, the explicit profile in
+BREOS keeps most historical defaults stable so existing studies remain
+reproducible; the solar-position default changed in 0.8.0. For a new hourly
+study using interval-averaged weather, the explicit profile in
 `configs/examples/recommended-pv.toml` is a stronger starting point:
 
-| Choice | Compatible default | Recommended starting point |
+| Choice | Default | Recommended starting point |
 |---|---|---|
 | Sky transposition | `isotropic` | `perez` |
-| Solar position | `interval-start` | `weather` when the input has content-bound timing metadata; otherwise choose a label-aware explicit method |
+| Solar position | `auto` (see [Solar position](#solar-position)) | `weather` when the input has content-bound timing metadata; otherwise choose a label-aware explicit method |
 | Beam IAM | `ashrae` | `physical` |
 | Diffuse IAM | `none` | `marion` |
 | Cell temperature | `faiman` open rack | A mount-appropriate PVsyst or SAPM preset |
@@ -375,6 +464,46 @@ interval start. Match the temperature preset to the physical construction.
 The example uses a close rooftop mount and a catalog module with sourced
 efficiency; a free-standing array should select a free-standing/open-rack
 thermal model instead.
+
+## Solar position
+
+`solar_position` (CLI: `--solar-position`) sets where within each timestep
+the sun position is evaluated, for transposition, tracking and terrain
+shading alike. Weather timestamps follow different conventions: PVGIS TMY
+values are instantaneous samples taken a provider offset after the label
+(about 10 minutes for PVGIS-SARAH3, 30 minutes for PVGIS-ERA5), Open-Meteo
+radiation is the mean of the hour that ends at the label, and EPW radiation
+is the mean of the hour that starts at it.
+
+- `"auto"` (default) reads the time basis from the weather metadata, as
+  `"weather"` does, when the metadata states a `radiation_time_basis`. When
+  it does not, the sun is taken at the step labels, as with
+  `"interval-start"`, and the run warns once.
+- `"weather"` reads the time basis from the weather metadata: the provider
+  offset of instantaneous samples, or the midpoint of left- or right-labelled
+  interval means. It raises when the metadata states no
+  `radiation_time_basis`.
+- `"interval-start"` takes the sun at the step label. It was the default
+  before 0.8.0 and reproduces those results bit for bit.
+- `"mid-interval"` takes the sun half a timestep after the label, the
+  PVWatts/SAM convention for interval means labelled at the start of their
+  interval.
+
+The PVGIS fetch, the Open-Meteo and EPW readers, and every weather CSV BREOS
+writes with its `.metadata.json` sidecar carry the metadata. A weather CSV
+of your own, or an injected weather frame, usually does not: `"auto"` then
+warns and uses the labels. To silence the warning, set `solar_position`
+explicitly to the convention of your file, or write the file a sidecar that
+states its `radiation_time_basis`. With interval means at 15-minute
+resolution, `"auto"` evaluates the sun at the middle of each quarter-hour,
+the representative time of the resampled values.
+
+`provenance.pv_model.solar_position` records the method asked for
+(`requested`), the method it resolved to on the run's weather (`resolved`)
+and the offset after each label (`offset_minutes`). Monte Carlo records the
+same in `runtime_weather` (`solar_position_requested`,
+`solar_position_method`, `solar_position_offset_minutes`), and the optimizer
+in the `solar_position` record of its provenance.
 
 ## Incidence-angle modifier (IAM)
 
@@ -517,6 +646,357 @@ unless the array sets `tracking = "fixed"`. An array entry accepts only the
 keys named in this section and the sky, ground, and bifacial keys; any other
 key, such as a misspelled `tlt`, is rejected.
 
+## String topology checks
+
+With specified inverters and a string topology, BREOS checks whether the
+design is electrically buildable: string voltages against the inverter and
+module ratings at the site's design temperatures, and currents and string
+counts against each MPPT input. Three keys go together:
+
+```toml
+[[pv_arrays]]
+modules = 7
+module = "MyModule_450W"
+tilt = 20
+azimuth = 90
+
+[[pv_arrays]]
+modules = 7
+module = "MyModule_450W"
+tilt = 20
+azimuth = 270
+
+[[inverters]]
+nominal_power_w = 6000
+inverter_efficiency = 0.982
+max_dc_voltage_v = 1000
+min_mppt_voltage_v = 80
+max_mppt_voltage_v = 800
+startup_voltage_v = 80
+
+[[inverters.mppts]]
+max_input_current_a = 25
+max_short_circuit_current_a = 40
+max_strings = 2
+
+[[inverters.mppts]]
+max_input_current_a = 12.5
+max_short_circuit_current_a = 20
+max_strings = 1
+
+[[pv_strings]]
+inverter = 0
+mppt = 0
+array = 0
+modules = 7
+
+[[pv_strings]]
+inverter = 0
+mppt = 1
+array = 1
+modules = 7
+
+[electrical_environment]
+min_design_temp_c = -5
+max_ambient_temp_c = 40
+mounting = "tilted_rack"
+```
+
+`inverter`, `mppt` and `array` are 0-based positions. Each `pv_strings`
+entry is `parallel` identical strings (1 by default) of `modules` modules in
+series, all from one array, on one input. Every module of every array must be
+in exactly one string; to leave modules out, lower the array's `modules`.
+Without `pv_arrays`, the single array is `array = 0`. Strings on one input
+share its voltage, so they need the same module and the same length; they may
+come from different arrays, such as an east and a west face.
+
+A datasheet value you omit is unknown, and the check reports it rather than
+assuming one. A limit the equipment does not have is `inf` for an upper limit
+and 0 for a lower limit: TOML's `inf`, `math.inf` in Python, or the string
+`"inf"` in JSON, which has no infinity. The result's provenance writes it as
+`"inf"`, so results stay strict JSON.
+
+`max_dc_power_w` is the maximum PV generator power the manufacturer permits,
+and exceeding it is an error; `recommended_dc_power_w` is guidance, and
+exceeding it is a warning. Neither is reported missing when omitted, as many
+datasheets publish only one. `isc_comparison_factor` is the multiplier the
+manufacturer applies to the array's STC short-circuit current, such as 1.25;
+give 1 where the manufacturer compares Isc as it is. Omitted, it is reported
+missing, and the hot-cell Isc alone is compared.
+
+Some datasheets publish further limits, and the check applies them when set:
+on an input, `max_string_input_current_a` and
+`max_string_short_circuit_current_a` for each string connection, and
+`max_dc_power_w` for the PV generator power it may carry; on the inverter,
+`max_short_circuit_current_a` over all its inputs. `max_usable_dc_power_w`, on
+an input or on the inverter, is the DC power it converts; only string-level
+energy applies it. None of these is reported missing when omitted.
+
+`min_design_temp_c` is the extreme annual minimum ambient on the basis your
+jurisdiction or the manufacturer requires, not a heating-design percentile:
+cold Voc is taken at it, before appreciable solar heating. The mounting rises
+are screening values. Where a thermal study or local practice gives other cell
+temperatures, state `hot_cell_temp_c` and `cold_operating_cell_temp_c`.
+
+Arrays on one site may be mounted differently, such as a flush pitched roof and
+a tilted rack on a flat roof. A `pv_arrays` entry may set its own `mounting`,
+`hot_cell_temp_c` and `cold_operating_cell_temp_c` for the strings it feeds.
+The most specific value wins: a temperature the array states, then the rise of
+the array's `mounting`, then a temperature `electrical_environment` states,
+then the rise of its `mounting`. So an array that sets `mounting` takes its
+cell temperatures from that rise and not from the site's stated ones. These
+keys need a string topology. The energy model's `temperature_model` may also
+be set per array; it is separate from `mounting`, so set both when an array's
+mounting differs.
+
+The inverters replace `inverter_loading_ratio` and `inverter_ac_rating_kw`:
+the AC rating is the sum of `nominal_power_w`. When every inverter sets
+`inverter_efficiency`, their nameplate-weighted mean replaces the top-level
+`inverter_efficiency`. Modules may set `T_Vmp_pct` and `Max_System_Voltage`
+(see {py:class}`~breos.pv_modules.PVModuleParams`). The check derives an
+unpublished Vmp coefficient from `T_Pmax_pct - T_Isc_pct`, and reports a
+missing module voltage rating.
+
+By default the check does not change simulated energy: energy is modelled for
+the system as a whole, as `electrical.fidelity = "aggregate"` in the result
+says, and a design that fails the check still simulates, as a diagnostic. See
+[Electrical check](interpreting-results.md#electrical-check) for the result
+and {py:func}`breos.electrical.check_topology` for the rules.
+
+### String-level energy
+
+`electrical_fidelity = "string"` makes energy depend on the wiring. Each MPPT
+input runs its strings at their maximum power point when that point lies inside
+the MPPT voltage range and under the input's and each string connection's
+operating-current limit. Otherwise it moves along the strings' IV curve, from
+the module's single-diode model, to the best point the limits allow. Strings
+from different arrays on one input run at the best point of their summed IV
+curve, which lies a little below the sum of their own maximum power points when
+their irradiance or temperature differ; the same holds for module-shaded strings
+on one input. That gap is the `parallel_mismatch` stage of the waterfall, and
+`pv_loss_waterfall.parallel_mismatch` reports it per input: limits aside, it is
+what giving each string its own input would save. An input then delivers at most its
+`max_usable_dc_power_w`, and the inverter at most its own. The inverter starts
+each day at the first step on which an input's open-circuit voltage reaches
+`startup_voltage_v`, and runs while it produces. The DC the limits cost appears
+as the `mppt_limits` stage of the
+[PV loss waterfall](interpreting-results.md#pv-loss-waterfall), and where no
+limit binds and no input holds strings on different curves the result equals
+the aggregate run.
+
+String-level energy needs, for each inverter that strings feed, the MPPT
+voltage range, the start-up voltage (0 for none) and each used input's
+`max_input_current_a`, and a wiring without structural errors (every
+reference resolves, every module is strung once, and parallel strings match).
+A battery beside several inverters must be AC-coupled; see
+[Several inverters](#several-inverters).
+It refuses to run otherwise rather than fall back to the aggregate model. Hard
+limits such as an overvoltage do not stop it; they remain errors in the check.
+
+When no point of the IV curve is both inside the range and under the current
+limit, the input delivers nothing for that step. The static PVWatts losses,
+including `mismatch` between modules, still apply: they scale each string's
+current before the limits, except `availability`, which is time out of service
+and applies after them. Later years reuse the
+first year's limited production scaled by module degradation, so a limit that
+binds in year 1 is assumed to bind as much later. Partial shading of single
+modules and bypass diodes are modelled when strings carry `module_shading`
+(see [Model shading module by module](../how-to/sky-model-and-horizon.md#model-shading-module-by-module)).
+[How BREOS models PV modules](../modeling/pv-modules.md) explains the physics
+and its limits.
+
+### Several inverters
+
+An inverter clips at its own nameplate and converts at its own part-load
+point, so two inverters are not one inverter of their combined rating: an
+east inverter that clips at noon cannot lend its surplus to a west one with
+room to spare. With string-level energy, each inverter runs its own inputs,
+its own `max_usable_dc_power_w` cap and its own start-up, and converts its
+DC with its own nameplate, `inverter_efficiency` (the App's
+`inverter_efficiency` when unset), `efficiency_curve` read at its own inputs'
+voltage, and `temperature_derating`. Each draws its `night_consumption_w` on
+the steps it receives no DC. Their AC outputs then add up into one energy
+balance with the household's load, the grid and the tariff.
+
+```toml
+[[inverters]]
+nominal_power_w = 3000
+# ... the first inverter's limits and inputs
+
+[inverters.ac_cable]
+length_m = 15
+cross_section_mm2 = 4
+phases = 1
+voltage_v = 230
+
+[[inverters]]
+nominal_power_w = 5000
+# ... the second inverter's
+
+[ac_cable]
+length_m = 10
+cross_section_mm2 = 10
+phases = 3
+voltage_v = 400
+```
+
+Each inverter may carry its own `ac_cable`, its run to the point where the
+outputs join; `[ac_cable]` is then the run they share to the meter, and loses
+on their summed output. With one inverter, its cable goes in either place,
+not both. The `inverter` block of the PV loss waterfall lists each inverter's
+year-1 DC input, clipping, conversion loss, cable loss, AC output and night
+draw, and `parallel_mismatch` names each input by its inverter and MPPT. The
+electrical check warns when an inverter's DC/AC ratio, its modules' STC power
+over its nameplate, lies outside 0.8 to 1.6.
+
+A battery beside several inverters must be AC-coupled
+(`battery_coupling = "ac"`): it has its own inverter on the AC bus, which
+every PV inverter's output can reach, and each PV inverter converts as in a
+system without a battery. A DC-coupled battery sits behind one hybrid
+inverter, so string-level energy with several inverters refuses it. The
+daily-target planner (`smart_charging.mode = "daily_persistence"`) plans
+through one PV inverter, so it is refused with several; `fixed_target` and
+`discharge_only` work. Monte Carlo refuses several inverters. Aggregate energy
+keeps treating several inverters as one of their combined nameplate, with
+their nameplate-weighted efficiency, and refuses their curves, derating and
+own cables.
+
+### DC cables
+
+The flat PVWatts `wiring` loss (2 %) stands in for cable resistance. With
+cable data, BREOS models the DC cables instead. Each `pv_strings` entry may
+give `cable_length_m`, the one-way length of each of its strings' cables from
+the array to the inverter input, and `cable_cross_section_mm2`. Give both on
+every string or on none. `conductor` is `"copper"` by default, or
+`"aluminium"`.
+
+```toml
+[[pv_strings]]
+inverter = 0
+mppt = 0
+array = 0
+modules = 7
+cable_length_m = 15
+cable_cross_section_mm2 = 4
+
+[electrical_environment]
+min_design_temp_c = -5
+max_ambient_temp_c = 40
+conductor_temp_c = 40
+```
+
+Each string's cable has two conductors, out and back, so its loop resistance
+is ρ(T) × 2 × length / cross-section. The resistivity at 20 °C and its
+temperature coefficient are the material's: annealed copper per IEC 60028,
+aluminium per IEC 60889. `electrical_environment.conductor_temp_c` is the
+conductors' operating temperature. When it is not stated, 50 °C is assumed,
+the temperature PVsyst evaluates wire resistivity at by default, and the
+result reports the assumption. A cable manufacturer's flexible, tinned
+conductors measure somewhat above the material's resistance for the nominal
+cross-section, so the model is the lower bound of a real cable's loss.
+
+The cables then replace the default `wiring` loss, which becomes 0. A
+`pv_loss_overrides.wiring` you state stays, for the AC wiring that is not
+yet modelled. With aggregate energy, each string loses I²R at its array's
+maximum power current, as PVsyst evaluates array wiring. With
+[string-level energy](#string-level-energy), the cable is a series resistance
+between the string and the input: the input sees the string's voltage less
+the cable's drop, so the cable moves the operating point and can push it out
+of the MPPT window, and the loss follows from the IV curve. The two agree to
+within a few hundredths of the loss. The loss appears as the `dc_wiring` stage
+of the [PV loss waterfall](interpreting-results.md#pv-loss-waterfall), and
+`electrical.dc_wiring` reports each string's resistance and the share of its
+STC power its cable dissipates.
+
+### Inverter efficiency curve
+
+By default the inverter converts DC to AC on the PVWatts part-load curve,
+scaled to `inverter_efficiency`. An inverter in `inverters` may carry its
+measured curve instead: efficiency against AC output, at one to three DC
+voltages. This is the shape of the CEC test data and of a PVsyst OND file.
+
+```toml
+[inverters.efficiency_curve]
+output_fraction = [0.1, 0.2, 0.3, 0.5, 0.75, 1.0]
+voltages_v = [250, 400, 550]
+efficiency = [
+    [0.950, 0.966, 0.971, 0.974, 0.973, 0.970],
+    [0.955, 0.970, 0.975, 0.978, 0.977, 0.975],
+    [0.948, 0.965, 0.971, 0.975, 0.975, 0.973],
+]
+
+[inverters.temperature_derating]
+ambient_temp_c = [40, 50, 60]
+max_output_fraction = [1.0, 0.85, 0.6]
+```
+
+The numbers above show the shape only; take yours from the manufacturer's
+datasheet or test report. `output_fraction` is the AC output over the
+nameplate, and each `efficiency` row belongs to the DC voltage in
+`voltages_v` at the same position. Efficiency is linear in output between the
+points. Below the first point the inverter loses that point's loss in watts,
+its self-consumption, and above the last it keeps that point's efficiency.
+Each segment is solved exactly in both directions, so dispatch sizes and
+delivers against the same curve. Aggregate energy reads the curve at its
+middle row, the nominal voltage of a three-row curve. String-level energy
+reads it, between the rows, at each step's operating DC voltage: the voltage
+each MPPT input runs at, after its window and current limits, weighted by
+the power it delivers. A step without PV, when only the battery discharges,
+reads the row of the strings' STC maximum power voltage, weighted by their
+STC power. With a DC-coupled battery the curve applies to PV and battery
+discharge alike, as they share the inverter; beside an AC-coupled battery it
+is the PV inverter's alone, and the battery inverter keeps its PVWatts curve.
+`inverter_efficiency` is then not used for the conversion.
+
+`temperature_derating` lowers the AC rating in hot ambients: the allowed
+output as a fraction of the nameplate at each ambient, linear between the
+points and held beyond them. The ambient is the weather's air temperature,
+for an inverter outdoors, or `electrical_environment.inverter_ambient_temp_c`
+when you state it, for one indoors. DC above the derated rating is clipped;
+a DC-coupled battery may still store it, an AC-coupled one cannot. With several inverters, both keys need
+string-level energy, which applies each to its own inverter. The planned
+charging targets of `daily_persistence` are chosen on one row, the row of
+the strings' STC maximum power voltage with string-level energy, and the
+full rating; dispatch then applies the per-step row and the derating.
+
+`night_consumption_w` is what the inverter draws from the AC bus while it
+converts nothing: a step with no PV DC and, with a DC-coupled battery, no
+battery charge or discharge. Beside an AC-coupled battery the PV inverter
+draws on every step without PV DC, whatever the battery does.
+Take it from the datasheet; unset, it is not modelled. The results frame
+reports the whole draw as `Inverter_Night_Consumption`. With several
+inverters, PV AC surplus after the house load serves the draw before AC
+battery charging or export. Only the uncovered part adds to
+`Import_From_Grid` and the import cost; the battery never serves the draw.
+The planned charging targets are chosen without it. Aggregate energy adds
+the stated values up, and string-level energy has each inverter draw its
+own on the steps it receives no DC. Single-inverter results are unchanged.
+
+### AC cable
+
+`[ac_cable]` models the cable from the inverter to the meter. Its loss is I²R
+on the inverter's AC output, so it grows with the square of the output. With
+a DC-coupled battery it applies to PV and battery discharge alike; beside an
+AC-coupled battery it carries the PV inverter's output, including the AC it
+sends the battery.
+
+```toml
+[ac_cable]
+length_m = 20
+cross_section_mm2 = 6
+phases = 3
+voltage_v = 400
+```
+
+`length_m` is one-way and `cross_section_mm2` each conductor's. With
+`phases = 1`, `voltage_v` is line to neutral and two conductors carry the
+current; with 3, it is line to line and three do. `conductor` is copper by
+default, `power_factor` 1, and `conductor_temp_c` 50 °C when unstated, which
+the result reports as assumed. Grid charging through the same cable is not
+charged. Without `[ac_cable]` the AC side has no cable loss beyond any
+`wiring` loss you keep (see [DC cables](#dc-cables)). With several inverters
+it is the run they share; see [Several inverters](#several-inverters).
+
 ## Sky-diffusion (transposition) model
 
 To compute plane-of-array (POA) irradiance, BREOS transposes the horizontal
@@ -610,6 +1090,22 @@ The accepted keys follow the packaged cost-catalogue names; the
 [key reference](config-reference.md#costs) lists them with their defaults.
 Unknown keys and negative or non-finite values are rejected before simulation.
 
+The inverter price depends on the battery's coupling:
+
+| System | PV inverter | Battery inverter |
+|---|---|---|
+| PV only | `inverter_cost_per_kw_simple` | none |
+| `battery_coupling = "dc"` with a battery | `inverter_cost_per_kw_hybrid` | none; the hybrid inverter serves both |
+| `battery_coupling = "ac"`, battery or not | `inverter_cost_per_kw_simple` | `battery_inverter_cost_per_kw` × its AC rating, with a battery |
+
+Each price is per kW of the inverter's AC rating. `battery_inverter_cost_per_kw`
+has no default: an AC-coupled battery without it is refused before
+simulation. Set it to 0 when another price, such as `storage_cost_per_kwh`,
+already includes the inverter. A replacement prices the pack at
+`storage_cost_per_kwh` unless `battery_replacement_cost` gives the price of
+one replacement, such as a unit sold as pack and inverter. The terminal
+health credit always values the pack alone.
+
 For full control, build a {py:class}`~breos.economics.CostParams` and
 {py:class}`~breos.emissions.EmissionsParams` yourself and call the lower-level
 functions documented in the [Cost and emissions API](../api/cost-analysis.md).
@@ -661,8 +1157,8 @@ maintenance_cost_per_panel = 12
   sets it; see [Optimization](optimization.md).
 - `App.revalue` can move a run to another currency, but only with every
   money input restated in it, because it changes a table only in the keys
-  you give. Restate each non-zero key the run set under `[costs]`, and each
-  non-zero `import_prices`, `export_prices`, `fixed_charge_per_day` and
+  you give. Restate each non-zero key the run set under `[costs]`, a
+  non-zero `battery_replacement_cost`, and each non-zero `import_prices`, `export_prices`, `fixed_charge_per_day` and
   `annual_network_credit` amount of a `[tariff]` or `[reference_tariff]` the
   run keeps, or set it to None to remove it; a new `currency` label alone is
   refused. The cost preset must be removed or one in the new currency. A
@@ -914,7 +1410,7 @@ mode = "fixed_target"               # or "disabled", "discharge_only", or the ex
 target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
 charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
-grid_charge_efficiency = 0.95       # required: AC-to-DC conversion of the grid-charging path
+grid_charge_efficiency = 0.95       # required with a DC-coupled battery; refused with battery_coupling = "ac"
 grid_import_limit_w = 5000          # optional: grid charging keeps total import below this
 overlap_policy = "reject"           # default; "hold_target" permits overlap
 ```
@@ -937,14 +1433,18 @@ overlap_policy = "reject"           # default; "hold_target" permits overlap
   The floor holds the energy up to the target, not all the stored energy:
   to keep the battery from discharging in a period at all, leave that period
   out of `discharge_periods`.
-- `grid_charge_efficiency` has no default, because the inverter model has no
-  AC-to-DC path to derive one from. Stored energy then also passes through
-  the battery's own charge efficiency.
+- `grid_charge_efficiency` is required with a DC-coupled battery and has no
+  default, because the hybrid inverter model has no AC-to-DC path to derive
+  one from. With `battery_coupling = "ac"` it is refused: the battery
+  inverter converts grid charge at `battery_inverter_efficiency` on its
+  part-load curve. Stored energy then also passes through the battery's own
+  charge efficiency.
 - `grid_import_limit_w` limits grid charging only: in each step it may import
   up to the limit minus what the load already imports. Load import is never
   cut, so a load above the limit still imports in full. Omit it for no site
   limit. Grid charging is also bounded by the battery's charge power and by
-  the inverter's AC rating, which PV output uses first.
+  an inverter's AC rating, which PV uses first: the hybrid inverter's with
+  `"dc"`, the battery inverter's with `"ac"`.
 - `mode = "disabled"` accepts no other key. Unknown keys are errors.
 - Grid charging runs after PV in each step and never while PV is exported,
   so it never takes PV self-consumption. The grid-charge import is part of
@@ -1008,7 +1508,7 @@ the configuration. It is experimental and runs in `App` only:
 mode = "daily_persistence"
 charge_periods = ["off_peak"]
 discharge_periods = ["peak"]
-grid_charge_efficiency = 0.95       # required, as for fixed_target
+grid_charge_efficiency = 0.95       # as for fixed_target: required with "dc", refused with "ac"
 grid_import_limit_w = 5000          # optional
 # Optional planner settings, shown at their defaults:
 forecast_horizon_days = 2           # days the planner looks ahead, today included

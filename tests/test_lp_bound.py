@@ -11,6 +11,8 @@ import pytest
 from breos._dispatch import _dc_ac, _dc_for_ac, _dispatch_day_python
 from breos.battery import BatteryConfig, _ResultBuffers, _step_energy_cap
 from breos.dispatch_instructions import DispatchInstructions
+from breos.inverter import NO_CONVERSION
+from tests.offline_app import TOU
 from tools.oracles.daily_target_dp import run_daily_target_oracle
 from tools.oracles.lp_bound import (
     LP_BOUND_SCHEMA,
@@ -28,14 +30,9 @@ from tools.oracles.lp_bound import (
 )
 from tools.oracles.replay import prepare_replay, reference_dispatch, replay_instructions
 
+PVWATTS_CONVERSION = NO_CONVERSION.kernel_arguments(1.0)
+
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 1}
-TOU = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.28, "off_peak": 0.11},
-    "export_prices": {"all": 0.05},
-    "fixed_charge_per_day": 0.25,
-}
 FIXED = {
     "mode": "fixed_target",
     "target_usable_fraction": 0.5,
@@ -82,7 +79,7 @@ def test_the_hull_cuts_lie_on_or_above_the_inverter_curve(efficiency, scale):
     ac_rating = 3520.0
     intercepts, slopes = inverter_hull_cuts(efficiency, ac_rating, scale)
     dc = np.linspace(0.0, 1.5 * ac_rating / efficiency, 20001)
-    delivered = np.array([_dc_ac(x, ac_rating, efficiency, scale, 2.0)[0] for x in dc])
+    delivered = np.array([_dc_ac(x, ac_rating, efficiency, scale, 2.0, *PVWATTS_CONVERSION)[0] for x in dc])
 
     def bound(x):
         return np.minimum((intercepts[:, None] + slopes[:, None] * np.atleast_1d(x)).min(axis=0), scale * ac_rating)
@@ -90,7 +87,9 @@ def test_the_hull_cuts_lie_on_or_above_the_inverter_curve(efficiency, scale):
     assert (bound(dc) >= delivered - 1e-9).all()
     # The bound is tight at the rated point, where the curve meets the rating.
     rated = ac_rating / efficiency
-    assert bound(rated)[0] == pytest.approx(_dc_ac(rated, ac_rating, efficiency, scale, 2.0)[0], rel=1e-9)
+    assert bound(rated)[0] == pytest.approx(
+        _dc_ac(rated, ac_rating, efficiency, scale, 2.0, *PVWATTS_CONVERSION)[0], rel=1e-9
+    )
     # And no looser than the peak ratio anywhere: about 1.003 of the nominal efficiency.
     assert (bound(dc[1:]) / dc[1:]).max() <= scale * min(1.0, efficiency * 1.0027)
 
@@ -103,9 +102,12 @@ def test_the_load_secants_hold_for_every_output_up_to_and_past_the_load():
     for load, per_ac, per_export in zip(loads, dc_per_ac, dc_per_export):
         # Any AC up to the load, and any export past it with the load served.
         for ac in np.linspace(0.0, min(load, ac_rating), 41)[1:]:
-            assert _dc_for_ac(ac, ac_rating, efficiency, 1.0) >= per_ac * ac
+            assert _dc_for_ac(ac, ac_rating, efficiency, 1.0, *PVWATTS_CONVERSION) >= per_ac * ac
         for export in np.linspace(0.0, ac_rating - load, 41) if load < ac_rating else []:
-            assert _dc_for_ac(load + export, ac_rating, efficiency, 1.0) >= per_ac * load + per_export * export
+            assert (
+                _dc_for_ac(load + export, ac_rating, efficiency, 1.0, *PVWATTS_CONVERSION)
+                >= per_ac * load + per_export * export
+            )
     # A light load converts worse than the peak, so its secant is the tighter cut.
     assert dc_per_ac[1] > dc_per_ac[4] > peak
     assert (dc_per_export[[0, -2, -1]] == 0.0).all() and (dc_per_ac[[0, -2, -1]] == peak).all()
@@ -441,3 +443,18 @@ def test_an_invalid_floor_health_is_a_usage_error(tmp_path, capsys):
             main(["--config", str(config), "--floor-soh", value])
         assert exit_info.value.code == 2
         assert "--floor-soh" in capsys.readouterr().err
+
+
+def test_an_ac_coupled_battery_is_refused_rather_than_bounded_as_dc():
+    config = BatteryConfig(nominal_energy_wh=5000.0, coupling="ac", battery_inverter_efficiency=0.95)
+    with pytest.raises(NotImplementedError, match="DC-coupled battery only"):
+        LpBoundProblem(
+            pv_dc_w=np.zeros(24),
+            load_w=np.full(24, 500.0),
+            temperature_c=np.full(24, 25.0),
+            import_price_per_kwh=np.full(24, 0.2),
+            export_price_per_kwh=np.full(24, 0.05),
+            battery_config=config,
+            hours_per_step=1.0,
+            grid_charge_efficiency=None,
+        )

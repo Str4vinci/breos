@@ -62,6 +62,10 @@ def test_15min_epw_keeps_the_basis_and_resampling_provenance(tmp_path):
     assert metadata["timestamp_label_basis"] == "left"
     assert metadata["input_resolution"] == "h"
     assert metadata["output_resolution"] == "15min"
+    # The EPW site coordinates reach the resampler: without them it falls back
+    # to direct interpolation instead of the clear-sky ratio.
+    assert metadata["irradiance_resampling_reconstruction"] == "clear_sky_ratio"
+    assert metadata["horizon"] == {"status": "unknown", "provider": "epw", "profile": None}
     # On a clear day, clear-sky scaling at the interval midpoints reproduces
     # the true 15-minute means. Evaluated at the labels, every hour was skewed
     # toward its start: a mean error of 27 W/m², and up to 77 W/m².

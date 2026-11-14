@@ -1,6 +1,5 @@
 """The daily charge-target planner behind daily-persistence smart charging (plan step 7)."""
 
-import importlib.util
 import itertools
 import math
 from dataclasses import replace
@@ -22,13 +21,8 @@ from breos.app_config import resolve_tariff_spec
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
 from breos.smart_charging import SmartChargingSpec, period_layout, resolve_instructions
+from tests.backend_parity import BACKENDS
 
-_BACKENDS = [
-    "python",
-    pytest.param(
-        "numba", marks=pytest.mark.skipif(not importlib.util.find_spec("numba"), reason="numba not installed")
-    ),
-]
 OFF_PEAK, PEAK, EXPORT = 0.10, 0.30, 0.05
 
 
@@ -117,7 +111,7 @@ def _priced_run(problem, instructions, **kwargs):
         (68, [0.9, 0.1, 0.0], 2.5598835185905546, 0.3235974145891044, 1425.8245614035086),
     ],
 )
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_the_plan_matches_the_legacy_dynamic_program(
     n_steps, targets, objective, terminal_cost, end_energy_wh, backend
 ):
@@ -369,20 +363,21 @@ def test_a_planner_holds_the_given_health_for_its_window():
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "message"),
+    ("kwargs", "error", "message"),
     [
-        ({"target_levels": 0}, "at least 1"),
-        ({"target_levels": [0.5, 0.2]}, "strictly increasing"),
-        ({"target_levels": [0.5, 1.2]}, "between 0 and 1"),
-        ({"soc_states": 1}, "at least 2"),
-        ({"initial_energy_wh": math.nan}, "must be finite"),
-        ({"wear_cost_per_kwh": -0.01}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
-        ({"wear_cost_per_kwh": math.inf}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
-        ({"wear_cost_per_kwh": math.nan}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"target_levels": 0}, ValueError, "at least 1"),
+        ({"target_levels": [0.5, 0.2]}, ValueError, "strictly increasing"),
+        ({"target_levels": [0.5, 1.2]}, ValueError, "between 0 and 1"),
+        ({"soc_states": 1}, ValueError, "at least 2"),
+        ({"initial_energy_wh": math.nan}, ValueError, "must be finite"),
+        ({"wear_cost_per_kwh": -0.01}, ValueError, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": math.inf}, ValueError, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": math.nan}, ValueError, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": True}, TypeError, "'wear_cost_per_kwh' must be a finite number"),
     ],
 )
-def test_bad_planner_settings_are_rejected(kwargs, message):
-    with pytest.raises(ValueError, match=message):
+def test_bad_planner_settings_are_rejected(kwargs, error, message):
+    with pytest.raises(error, match=message):
         solve_daily_targets(_problem(1), **kwargs)
 
 
@@ -455,11 +450,6 @@ def test_a_higher_wear_cost_never_plans_more_discharge():
     ]
     assert all(later <= earlier + 1e-9 for earlier, later in zip(discharged, discharged[1:]))
     assert discharged[-1] < discharged[0]
-
-
-def test_a_wear_cost_is_a_number():
-    with pytest.raises(TypeError, match="'wear_cost_per_kwh' must be a finite number"):
-        solve_daily_targets(_problem(1), wear_cost_per_kwh=True)
 
 
 # --- held targets (ADR 0002 A18) ----------------------------------------------
@@ -554,3 +544,13 @@ def test_python_and_numba_plan_a_held_target_alike(steps_per_day):
     numba = solve_daily_targets(problem, initial_energy_wh=900.0, execution_backend="numba")
     np.testing.assert_array_equal(python.targets, numba.targets)
     assert (python.objective, python.end_energy_wh) == (numba.objective, numba.end_energy_wh)
+
+
+def test_the_inverters_night_consumption_does_not_move_the_targets():
+    from breos.inverter import InverterConversion
+
+    night = _pack(inverter_conversion=InverterConversion(night_consumption_w=6.0))
+    plain = solve_daily_targets(_problem(), initial_energy_wh=1200.0)
+    drawn = solve_daily_targets(_problem(config=night), initial_energy_wh=1200.0)
+    np.testing.assert_array_equal(drawn.targets, plain.targets)
+    assert drawn.objective == plain.objective

@@ -25,6 +25,7 @@ from breos.montecarlo import (
     build_year_cache,
     run_montecarlo,
 )
+from breos.pv import model_options
 from breos.weather import _weather_file_sha256 as _file_sha256
 from tests.test_input_cache import CHANGES as INPUT_INDEPENDENT_CHANGES
 
@@ -178,46 +179,40 @@ def test_a_module_count_sweep_rebuilds_the_pv_layer_from_the_cached_weather(weat
 
 
 @pytest.mark.parametrize(
-    ("change", "field"),
+    ("settings_change", "config_change", "fields"),
     [
-        ({"weather_start_year": 2022}, "weather_start_year"),
-        ({"weather_end_year": 2021}, "weather_end_year"),
-        ({"target_year": 2024}, "target_year"),
+        ({"weather_start_year": 2022}, {}, "weather_start_year"),
+        ({"weather_end_year": 2021}, {}, "weather_end_year"),
+        ({"target_year": 2024}, {}, "target_year"),
+        ({}, {"resolution": "15min"}, "resolution"),
+        ({}, {"location": "lisbon"}, "latitude, longitude"),
+        ({}, {"solar_position": "mid-interval"}, "solar_position"),
+        ({}, {"irradiance_resampling": "clear_sky"}, "irradiance_resampling"),
     ],
 )
-def test_a_cache_for_other_weather_settings_is_refused(weather, change, field):
+def test_a_cache_for_other_weather_settings_a_site_or_a_resolution_is_refused(
+    weather, settings_change, config_change, fields
+):
     cache = build_year_cache(BASE, _settings(weather))
-    with pytest.raises(ValueError, match=f"year_cache was built for other weather inputs \\({field} differ"):
-        run_montecarlo(BASE, _settings(weather, **change), year_cache=cache)
-
-
-@pytest.mark.parametrize(
-    ("change", "fields"),
-    [
-        ({"resolution": "15min"}, "resolution"),
-        ({"location": "lisbon"}, "latitude, longitude"),
-        ({"solar_position": "mid-interval"}, "solar_position"),
-        ({"irradiance_resampling": "clear_sky"}, "irradiance_resampling"),
-    ],
-)
-def test_a_cache_for_another_site_or_resolution_is_refused(weather, change, fields):
-    cache = build_year_cache(BASE, _settings(weather))
-    with pytest.raises(ValueError, match=f"\\({fields} differ"):
-        run_montecarlo({**BASE, **change}, _settings(weather), year_cache=cache)
+    with pytest.raises(ValueError, match=f"year_cache was built for other weather inputs \\({fields} differ"):
+        run_montecarlo({**BASE, **config_change}, _settings(weather, **settings_change), year_cache=cache)
 
 
 def test_a_cache_is_refused_for_another_weather_file_or_once_its_file_changes(tmp_path, write_multiyear_weather):
     path = write_multiyear_weather(tmp_path / "multi.csv")
     cache = build_year_cache(BASE, _settings(path))
 
-    # The same contents at another path are still another file.
+    # The same contents at another path are still another file, even with
+    # the same metadata sidecar beside it.
     copy = tmp_path / "copy.csv"
     shutil.copyfile(path, copy)
+    shutil.copyfile(f"{path}.metadata.json", f"{copy}.metadata.json")
     with pytest.raises(ValueError, match="\\(weather_file differ"):
         run_montecarlo(BASE, _settings(copy), year_cache=cache)
 
+    # The rewritten sidecar records the new CSV digest, so it differs too.
     write_multiyear_weather(path, years=(2021, 2022, 2023))
-    with pytest.raises(ValueError, match="\\(weather_file_sha256 differ"):
+    with pytest.raises(ValueError, match="\\(weather_file_sha256, weather_metadata_sidecar_sha256 differ"):
         run_montecarlo(BASE, _settings(path), year_cache=cache)
 
 
@@ -266,6 +261,7 @@ def test_a_battery_temperature_file_rewritten_in_place_rebuilds_the_pv_layer(tmp
 def test_a_cache_built_through_a_symlink_is_refused_for_the_real_file(tmp_path, weather):
     link = tmp_path / "link.csv"
     link.symlink_to(weather)
+    Path(f"{link}.metadata.json").symlink_to(f"{weather}.metadata.json")
     cache = build_year_cache(BASE, _settings(link))
     # Provenance records the path as given, so the link and its target are
     # two weather files, and reusing one for the other would record the wrong one.
@@ -285,9 +281,12 @@ def test_every_year_cache_independent_key_is_a_registry_key_with_a_pinning_chang
 
 def _year_layers(config, settings):
     """The PV layer and weather record a fresh study builds, pickled."""
+    # Each build computes the sun afresh: the pickles compare bytes, and
+    # pandas fills private caches on the objects a computation touches.
+    model_options._SOLAR_POSITIONS.clear()
     resolved = resolve_app_config(config)
     runtime_weather = {}
-    dc_by_year, temp_by_year = montecarlo_module._precompute_year_caches(
+    dc_by_year, temp_by_year, _derate = montecarlo_module._precompute_year_caches(
         resolved.cfg, resolved, settings, runtime_weather=runtime_weather
     )
     return pickle.dumps((dc_by_year, temp_by_year, runtime_weather))

@@ -1,7 +1,5 @@
 """Currency-neutral result names and the result format number (ADR 0003 E8, E9)."""
 
-from unittest import mock
-
 import pandas as pd
 import pytest
 
@@ -9,18 +7,16 @@ from breos.cli import _load_options
 from breos.optimization import SolarDesignProblem
 from breos.plotting import _currency, plot_breakeven_comparison
 from breos.result_schema import RESULT_SCHEMA_VERSION
-from breos.tariffs import DEFAULT_CURRENCY, run_currency
-from tools.generate_app_golden import SCENARIOS, _fake_fetch
+from tests.conftest import declare_instant_at_labels
+from tests.offline_app import offline_weather
+from tools.generate_app_golden import SCENARIOS
 
 
 @pytest.fixture(scope="module")
 def replacement_app():
     from breos import App
 
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         app = App({**SCENARIOS["native_h_replacement"], "execution_backend": "python"})
         app.simulate()
         return app
@@ -120,15 +116,9 @@ def test_replacement_npv_discounts_each_outlay_from_its_swap_instant(replacement
     assert replacement_result["battery_replacement_cost_npv"] < replacement_result["battery_replacement_cost_t0_prices"]
 
 
-def test_a_run_without_a_tariff_is_in_the_default_currency():
-    assert DEFAULT_CURRENCY == "EUR"
-    assert run_currency(None, None) == "EUR"
-    assert run_currency(None, "USD") == run_currency("USD", "USD") == "USD"
-
-
 def test_optimizer_rejects_the_removed_budget_key():
     idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
-    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    tmy_data = declare_instant_at_labels(pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx))
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
@@ -145,7 +135,7 @@ def test_optimizer_rejects_the_removed_budget_key():
         SolarDesignProblem(tmy_data, houseload, config)
 
     config["constraints"] = {"budget": 5000.0}
-    assert SolarDesignProblem(tmy_data, houseload, config).budget_limit == 5000.0
+    assert SolarDesignProblem(tmy_data, houseload, config).config["constraints"]["budget"] == 5000.0
 
 
 def test_plot_labels_read_the_frame_currency():

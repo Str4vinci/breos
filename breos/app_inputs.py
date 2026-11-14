@@ -6,30 +6,47 @@ import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, TypeVar, cast
+from typing import Any, Callable, Iterator, NamedTuple, TypeVar, cast
 
 import numpy as np
 import pandas as pd
 from pvlib.location import Location
 
-from breos.app_config import ResolvedAppConfig, SimulationPeriod, resolve_app_config
+from breos.app_config import (
+    APP_CONFIG_FIELDS,
+    ResolvedAppConfig,
+    SimulationPeriod,
+    default_module_key,
+    resolve_app_config,
+)
+from breos.electrical import string_cable_loss, string_limited_dc
+from breos.inverter import AcCable, InverterConversion, InverterUnits, ac_derate
+from breos.pv import _solver
 from breos.pv.horizon import apply_terrain_horizon_profile
-from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs
+from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs, solar_position_warning_scope
+from breos.pv.shading import ModuleMeanShading
+from breos.pv_modules import catalogue_snapshot, get_module
 from breos.solar import (
     PVProductionBreakdown,
-    calculate_multi_array_production_breakdown,
-    calculate_pv_production_breakdown,
-    calculate_pv_production_tracking_breakdown,
+    _array_breakdown,
+    _configured_array,
+    _prepare_solarpos_and_weather,
+    _PVArray,
+    _sum_pv_breakdowns,
 )
 from breos.utils import _has_fixed_utc_offset, get_hours_per_step, remap_datetime_index_years
 from breos.weather import (
     WEATHER_METADATA_KEY,
     AmbiguousWeatherError,
     _normalised_horizon_metadata,
+    _weather_file_sha256,
+    _weather_metadata_sidecar_path,
+    build_battery_temperature_series,
     fill_leap_day,
+    parse_weather_filename,
     read_weather_csv,
     warn_if_naive_weather_timestamps,
 )
@@ -57,6 +74,15 @@ class PreparedSimulationInputs:
     pv_breakdown: PVProductionBreakdown
     load_data: pd.DataFrame
     temperature_series: pd.Series
+    # The inverter's AC rating per step as a fraction of its nameplate, from
+    # its temperature derating; None for an inverter without one.
+    inverter_ac_derate: pd.Series | None = None
+    # The efficiency curve's row position per step, from the operating DC
+    # voltage; None where the curve is read at one row.
+    inverter_curve_row: pd.Series | None = None
+    # With string-level energy and several inverters, each inverter's share
+    # of the DC and its own conversion; None otherwise.
+    inverter_units: InverterUnits | None = None
 
 
 def unknown_source_metadata(provider: str) -> dict[str, Any]:
@@ -431,60 +457,96 @@ def _require_one_year_weather(weather: pd.DataFrame) -> None:
         )
 
 
-def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame) -> pd.Series:
-    """Build undegraded system-level DC production for one simulation year."""
-    return build_pv_production_breakdown(cfg, resolved, weather).dc_after_losses
+def arrays_with_module_shading(resolved: ResolvedAppConfig) -> list[dict[str, Any]]:
+    """The resolved arrays, each whose strings carry module shading with their mean as its ``shading``."""
+    arrays = [dict(arr) for arr in resolved.pv_arrays or []]
+    electrical = resolved.electrical
+    if electrical is None:
+        return arrays
+    for index, arr in enumerate(arrays):
+        strings = tuple(
+            s.module_shading for s in electrical.strings if s.array == index and s.module_shading is not None
+        )
+        if strings:
+            arr["shading"] = ModuleMeanShading(strings)
+    return arrays
 
 
 def build_pv_production_breakdown(
     cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame
 ) -> PVProductionBreakdown:
+    """Build PV production with recovery counts retained when inputs are reused."""
+    diagnostics = _solver.SolverDiagnostics()
+    with _solver.solver_scope(diagnostics=diagnostics, steps=weather.index):
+        result = _build_pv_production_breakdown(cfg, resolved, weather)
+    return replace(result, solver_diagnostics=diagnostics.result())
+
+
+def _build_pv_production_breakdown(
+    cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame
+) -> PVProductionBreakdown:
     """Build undegraded system-level PV production and loss-stage details."""
     location = Location(resolved.lat, resolved.lon, tz=resolved.timezone)
-    freq = cfg["resolution"]
-    loss_overrides = cfg["pv_loss_overrides"]
-    model_kwargs = configured_pv_model_kwargs(cfg)
-
+    options = configured_pv_model_kwargs(cfg)
+    grid = _prepare_solarpos_and_weather(weather, location, cfg["resolution"], options.pop("solar_position"))
     if resolved.pv_arrays:
-        return calculate_multi_array_production_breakdown(
-            weather_data=weather,
-            location=location,
-            arrays=resolved.pv_arrays,
-            freq=freq,
-            loss_overrides=loss_overrides,
-            **model_kwargs,
-        )
-
-    if resolved.tracking == "fixed":
-        breakdown = calculate_pv_production_breakdown(
-            weather_data=weather,
-            location=location,
-            tilt=resolved.tilt,
-            surface_azimuth=resolved.azimuth,
-            n_modules=cfg["n_modules"],
-            pv_params=resolved.pv_params,
-            freq=freq,
-            loss_overrides=loss_overrides,
-            **model_kwargs,
-        )
+        models = [
+            _configured_array(i, arr, location, options) for i, arr in enumerate(arrays_with_module_shading(resolved))
+        ]
     else:
-        breakdown = calculate_pv_production_tracking_breakdown(
-            weather_data=weather,
-            location=location,
-            n_modules=cfg["n_modules"],
-            tracking=resolved.tracking,
-            axis_tilt=cfg["axis_tilt"],
-            axis_azimuth=resolved.axis_azimuth,
-            max_angle=cfg["max_angle"],
-            backtrack=cfg["backtrack"],
-            cross_axis_tilt=cfg["cross_axis_tilt"],
-            dual_axis_max_tilt=cfg["dual_axis_max_tilt"],
-            pv_params=resolved.pv_params,
-            freq=freq,
-            loss_overrides=loss_overrides,
-            **model_kwargs,
+        models = [
+            _PVArray(
+                cfg["n_modules"],
+                resolved.pv_params,
+                options,
+                tracking=resolved.tracking,
+                tilt=resolved.tilt,
+                azimuth=resolved.azimuth,
+                axis_tilt=cfg["axis_tilt"],
+                axis_azimuth=resolved.axis_azimuth,
+                max_angle=cfg["max_angle"],
+                backtrack=cfg["backtrack"],
+                cross_axis_tilt=cfg["cross_axis_tilt"],
+                dual_axis_max_tilt=cfg["dual_axis_max_tilt"],
+            )
+        ]
+    arrays = []
+    for index, model in enumerate(models):
+        with _solver.solver_scope(array=index):
+            arrays.append(_array_breakdown(grid, model, loss_overrides=cfg["pv_loss_overrides"]))
+    total = _sum_pv_breakdowns(arrays) if len(arrays) > 1 else arrays[0]
+
+    electrical = resolved.electrical
+    string_level = electrical is not None and electrical.fidelity == "string"
+    cabled = electrical is not None and any(string.has_cable for string in electrical.strings)
+    if string_level:
+        assert electrical is not None
+        energy = string_limited_dc(electrical, arrays)
+        parallel, shading = energy.parallel_mismatch, energy.shading
+        return replace(
+            total,
+            dc_after_losses=energy.dc,
+            mppt_limit_loss=energy.limit_loss,
+            dc_wiring_loss=energy.wiring_loss if cabled else None,
+            module_operating=None,
+            shading_mismatch_loss=None if shading is None else shading.total,
+            string_shading_mismatch=None if shading is None else shading.strings,
+            parallel_mismatch_loss=None if parallel is None else parallel.total,
+            input_parallel_mismatch=None if parallel is None else parallel.inputs,
+            dc_voltage=energy.voltage,
+            inverter_dc=energy.inverter_dc if len(energy.inverter_dc) > 1 else None,
+            inverter_dc_voltage=energy.inverter_voltage if len(energy.inverter_voltage) > 1 else None,
         )
-    return breakdown
+    if cabled:
+        assert electrical is not None
+        wiring_loss = string_cable_loss(electrical, arrays)
+        return replace(
+            total,
+            dc_after_losses=(total.dc_after_losses - wiring_loss).rename("dc_power_W"),
+            dc_wiring_loss=wiring_loss,
+            module_operating=None,
+        )
+    return total
 
 
 def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies, timezone: str) -> pd.DataFrame:
@@ -507,6 +569,9 @@ def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies, 
     )
 
 
+# Terrain shading and every PV array compute the sun position: one
+# solar_position = "auto" fallback warning for them all.
+@solar_position_warning_scope()
 def prepare_simulation_inputs(
     cfg: dict[str, Any], resolved: ResolvedAppConfig, deps: AppRuntimeDependencies
 ) -> PreparedSimulationInputs:
@@ -545,6 +610,133 @@ def prepare_simulation_inputs(
         pv_breakdown=pv_breakdown,
         load_data=load_data,
         temperature_series=temperature_series,
+        inverter_ac_derate=build_inverter_ac_derate(resolved, weather, pd.DatetimeIndex(dc_system_base.index)),
+        inverter_curve_row=build_inverter_curve_row(resolved, pv_breakdown),
+        inverter_units=build_inverter_units(cfg, resolved, weather, pv_breakdown),
+    )
+
+
+class InverterSteps(NamedTuple):
+    """The inverter's per-step inputs for one weather year: its AC rating fraction and its curve row, or None."""
+
+    ac_derate: pd.Series | None
+    curve_row: pd.Series | None
+
+
+def build_inverter_curve_row(resolved: ResolvedAppConfig, pv_breakdown: PVProductionBreakdown) -> pd.Series | None:
+    """The efficiency curve's row position at each step's operating DC voltage, or None.
+
+    With string-level energy and a curve of several voltage rows, each step
+    reads the curve at the inputs' operating voltage, weighted by the power
+    each delivers. A step without PV, when only the battery discharges, keeps
+    the row of the strings' STC maximum power voltage.
+    """
+    voltage = pv_breakdown.dc_voltage
+    if voltage is None:
+        return None
+    electrical = resolved.electrical
+    conversion = resolved.inverter_conversion
+    if electrical is None or conversion is None or len(electrical.inverters) != 1:
+        return None
+    curve = electrical.inverters[0].efficiency_curve
+    if curve is None or curve.voltages_v is None or len(curve.voltages_v) < 2:
+        return None
+    values = voltage.to_numpy(dtype=float)
+    position = np.interp(values, curve.voltages_v, np.arange(len(curve.voltages_v), dtype=float))
+    rows = np.where(values > 0, position, conversion.curve_row)
+    return pd.Series(rows, index=voltage.index, name="inverter_curve_row")
+
+
+def build_inverter_ac_derate(
+    resolved: ResolvedAppConfig, weather: pd.DataFrame, index: pd.DatetimeIndex
+) -> pd.Series | None:
+    """The inverter's AC rating per step as a fraction of its nameplate, or None without temperature derating.
+
+    The ambient is ``electrical_environment.inverter_ambient_temp_c`` when
+    stated, for an inverter indoors, and otherwise the weather's air
+    temperature, for one outdoors.
+    """
+    electrical = resolved.electrical
+    if electrical is None or len(electrical.inverters) != 1:
+        return None
+    derating = electrical.inverters[0].temperature_derating
+    if derating is None:
+        return None
+    ambient = build_battery_temperature_series(
+        electrical.environment.inverter_ambient_temp_c,
+        index=pd.DatetimeIndex(index),
+        weather_df=weather,
+        indoor_model={"enabled": False},
+    )
+    return pd.Series(ac_derate(derating, ambient.to_numpy(dtype=float)), index=index, name="inverter_ac_derate")
+
+
+def build_inverter_units(
+    cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame, pv_breakdown: PVProductionBreakdown
+) -> InverterUnits | None:
+    """Each inverter's share of the DC and its own conversion, with string-level energy and several inverters.
+
+    None otherwise. Each inverter converts with its own nameplate, its
+    ``inverter_efficiency`` (the App's ``inverter_efficiency`` when unset),
+    its efficiency curve read at its own inputs' operating voltage, its
+    temperature derating, its own AC cable and its night draw. ``[ac_cable]``
+    is the run the inverters share (ADR 0007 D10).
+    """
+    electrical = resolved.electrical
+    if electrical is None or len(electrical.inverters) < 2 or pv_breakdown.inverter_dc is None:
+        return None
+    assert pv_breakdown.inverter_dc_voltage is not None
+    index = pd.DatetimeIndex(pv_breakdown.dc_after_losses.index)
+    total = pv_breakdown.dc_after_losses.to_numpy(dtype=float)
+    modules = [get_module(arr["module"]) for arr in resolved.pv_arrays] or [resolved.pv_params]
+    ambient = None
+    conversions, shares, derates, rows = [], {}, {}, {}
+    for number, inverter in enumerate(electrical.inverters):
+        own = None if inverter.ac_cable is None else AcCable(**dict(inverter.ac_cable))
+        curve = inverter.efficiency_curve
+        voltage = None
+        if curve is not None:
+            weighted = [
+                (s.modules * s.parallel * modules[s.array].Mpp, s.modules * modules[s.array].Vmp)
+                for s in electrical.strings
+                if s.inverter == number and s.array < len(modules)
+            ]
+            power = sum(p for p, _ in weighted)
+            voltage = sum(p * v for p, v in weighted) / power if power > 0 else None
+        conversion = InverterConversion.build(
+            curve, voltage_v=voltage, ac_cable=own, night_consumption_w=inverter.night_consumption_w
+        )
+        conversions.append(conversion)
+        dc = pv_breakdown.inverter_dc[number].to_numpy(dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            shares[number] = np.where(total > 0, dc / total, 0.0)
+        derates[number] = np.ones(len(index))
+        if inverter.temperature_derating is not None:
+            if ambient is None:
+                ambient = build_battery_temperature_series(
+                    electrical.environment.inverter_ambient_temp_c,
+                    index=index,
+                    weather_df=weather,
+                    indoor_model={"enabled": False},
+                ).to_numpy(dtype=float)
+            derates[number] = ac_derate(inverter.temperature_derating, ambient)
+        rows[number] = np.full(len(index), conversion.curve_row)
+        if curve is not None and curve.voltages_v is not None and len(curve.voltages_v) > 1:
+            values = pv_breakdown.inverter_dc_voltage[number].to_numpy(dtype=float)
+            position = np.interp(values, curve.voltages_v, np.arange(len(curve.voltages_v), dtype=float))
+            rows[number] = np.where(values > 0, position, conversion.curve_row)
+    return InverterUnits(
+        ac_capacity_w=tuple(float(i.nominal_power_w) for i in electrical.inverters),
+        # Unstated efficiencies stay None: the run's inverter_efficiency is not part of
+        # the prepared inputs' cache key, so the dispatch supplies it.
+        efficiency=tuple(
+            None if i.inverter_efficiency is None else float(i.inverter_efficiency) for i in electrical.inverters
+        ),
+        conversions=tuple(conversions),
+        shares=pd.DataFrame(shares, index=index),
+        ac_derate=pd.DataFrame(derates, index=index),
+        curve_rows=pd.DataFrame(rows, index=index),
+        feeder_cable_k_per_w=0.0 if resolved.ac_cable is None else resolved.ac_cable.loss_coefficient_per_w,
     )
 
 
@@ -657,61 +849,13 @@ def prepare_planner_forecast(
     )
 
 
-# Config keys that do not reach prepare_simulation_inputs, directly or through
-# the ResolvedAppConfig fields it reads (location, tilt, azimuth, tracking,
-# pv_arrays, pv_params). Each was traced and is pinned by a test that changes
-# it and compares the prepared inputs. They feed dispatch, degradation,
-# valuation, emissions or the backend, all of which run after this stage.
-# A key not listed here is part of the cache key, so a new key is safe until
-# it is shown not to matter.
+# Config keys that do not reach prepare_simulation_inputs; see
+# AppConfigField.affects_inputs. A key not listed here is part of the cache key.
 INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
-    {
-        # Battery sizing and dispatch.
-        "battery_kwh",
-        "battery_min_soc",
-        "battery_max_soc",
-        "battery_max_charge_power_w",
-        "battery_max_discharge_power_w",
-        "battery_power_limit_c_rate",
-        "battery_eol_percentage",
-        "battery_enable_replacement",
-        "battery_allow_terminal_replacement",
-        "battery_replacement_min_remaining_years",
-        "battery_skipped_replacement_action",
-        "battery_rte",
-        "enable_resistance_fade",
-        "inverter_efficiency",
-        "inverter_loading_ratio",
-        "inverter_ac_rating_kw",
-        # Degradation.
-        "calendar_model",
-        "degradation_engine",
-        "blast_model",
-        "pv_degradation_rate",
-        "projection_years",
-        # Prices, valuation and dispatch strategy.
-        "cost_preset",
-        "costs",
-        "currency",
-        "inflation_rate",
-        "sell_price_inflation",
-        "import_price_escalation",
-        "om_escalation",
-        "replacement_cost_learning",
-        "discount_rate",
-        "tariff",
-        # The no-system reference, with its annual network credit, prices
-        # only the household load.
-        "reference_tariff",
-        "smart_charging",
-        # Emissions and execution.
-        "emissions_country",
-        "export_emissions_factor_gco2_kwh",
-        "execution_backend",
-    }
+    key for key, field in APP_CONFIG_FIELDS.items() if not field.affects_inputs
 )
 
-# The block's one cached preparation, by (input key, dependencies, prepare).
+# The block's one cached preparation, by input key, weather contents, dependencies and preparation.
 _PREPARED_INPUTS_CACHE: ContextVar[dict[tuple[Any, ...], PreparedSimulationInputs] | None] = ContextVar(
     "breos_prepared_inputs_cache", default=None
 )
@@ -728,10 +872,12 @@ def reuse_prepared_inputs() -> Iterator[None]:
     configuration its own deep copy. It holds one preparation, the latest,
     so memory stays at one run's inputs however many configurations the
     block sees; run the Apps grouped by :func:`input_configuration_key` to
-    reuse each preparation fully. The cache lives only for the block. Files
-    are read once per preparation, so a file changed meanwhile is not re-read,
-    and a warning the input stage raises appears only for the run that
-    prepared those inputs.
+    reuse each preparation fully. The cache lives only for the block. A
+    weather file, or its metadata sidecar, changed between two runs is read
+    again; other files are read once per preparation, so a load profile
+    changed meanwhile is not re-read. A warning the input stage raises
+    appears only for the run that prepared those inputs, except the
+    ``solar_position = "auto"`` fallback warning, which every run gives.
     """
     token = _PREPARED_INPUTS_CACHE.set({})
     try:
@@ -741,21 +887,49 @@ def reuse_prepared_inputs() -> Iterator[None]:
 
 
 def config_cache_key(cfg: dict[str, Any], independent_keys: frozenset[str]) -> str | None:
-    """A resolved config without ``independent_keys``, as canonical JSON.
+    """A resolved config without ``independent_keys``, as canonical JSON, with the parameters of its modules.
 
+    A module is named by its catalogue key, and a registered module's
+    parameters can change under the same name, so the key carries them.
     None when a value is not plain JSON data (an in-memory frame or series),
     which the key could not represent faithfully; that run is not cached.
     """
     relevant = {key: value for key, value in cfg.items() if key not in independent_keys}
     try:
-        return json.dumps(relevant, sort_keys=True)
+        return json.dumps([relevant, _module_parameters(cfg)], sort_keys=True)
     except (TypeError, ValueError):
         return None
 
 
-def _input_cache_key(cfg: dict[str, Any]) -> str | None:
-    """The resolved config without the input-independent keys, as canonical JSON, or None."""
-    return config_cache_key(cfg, INPUT_INDEPENDENT_KEYS)
+def _module_parameters(cfg: dict[str, Any]) -> list[Any]:
+    """The parameters of each module the config names, by name, as plain JSON values."""
+    default = cfg.get("pv_module") or default_module_key()
+    arrays = [arr for arr in cfg.get("pv_arrays") or [] if isinstance(arr, dict)]
+    names = {default} | {arr.get("module", default) for arr in arrays}
+    out = []
+    for name in sorted(n for n in names if isinstance(n, str)):
+        try:
+            module = get_module(name)
+        except (KeyError, ValueError):
+            continue
+        out.append([name, json.loads(json.dumps(asdict(module), default=str))])
+    return out
+
+
+def _input_cache_key(cfg: dict[str, Any], resolved: ResolvedAppConfig | None = None) -> str | None:
+    """The resolved config without the input-independent keys, as canonical JSON, or None.
+
+    ``resolved`` carries what an App took from the module catalogue when it
+    was built, which preparation uses even if the catalogue changed since:
+    each array's module, the bypass diodes its shading is bound to, and the
+    inverter curve's row for steps without PV. The catalogue as it was then
+    stands for all of them, and the catalogue now for the modules
+    preparation reads again by those names.
+    """
+    key = config_cache_key(cfg, INPUT_INDEPENDENT_KEYS)
+    if key is None or resolved is None:
+        return key
+    return json.dumps([key, resolved.module_catalogue, catalogue_snapshot()], sort_keys=True)
 
 
 def input_configuration_key(config: dict[str, Any]) -> str | None:
@@ -763,36 +937,72 @@ def input_configuration_key(config: dict[str, Any]) -> str | None:
 
     Two configs with the same key get the same prepared inputs.
     """
-    return _input_cache_key(resolve_app_config(config).cfg)
+    resolved = resolve_app_config(config)
+    return _input_cache_key(resolved.cfg, resolved)
+
+
+def _weather_files_fingerprint(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> tuple[tuple[str, ...], ...]:
+    """The weather files a preparation may read, each with its digest and its metadata sidecar's.
+
+    The sidecar carries the weather's timing, which decides where
+    ``solar_position = "auto"`` puts the sun, and it is bound to the CSV's
+    digest, so both are part of what the inputs depend on. The files are the
+    ``weather_file``, or else the cached TMY files in ``weather/`` that
+    :func:`load_weather_for_simulation` would choose from. A weather fetch
+    reads no file and adds nothing.
+    """
+    if cfg["weather_file"] is not None:
+        paths = [Path(cfg["weather_file"])]
+    else:
+        directory = Path.cwd() / "weather"
+        paths = []
+        if resolved.loc_key and directory.is_dir():
+            for path in sorted(directory.iterdir()):
+                parsed = parse_weather_filename(path.name)
+                if (
+                    parsed is not None
+                    and parsed["location"] == resolved.loc_key
+                    and parsed["type"] == "tmy"
+                    and cfg["weather_source"] in (None, parsed["source"])
+                ):
+                    paths.append(path)
+    fingerprint = []
+    for path in paths:
+        sidecar = _weather_metadata_sidecar_path(path)
+        fingerprint.append(
+            (
+                str(path.resolve()),
+                _weather_file_sha256(path) if path.is_file() else "",
+                _weather_file_sha256(sidecar) if sidecar.is_file() else "",
+            )
+        )
+    return tuple(fingerprint)
 
 
 def prepare_simulation_inputs_cached(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     deps: AppRuntimeDependencies,
-    *,
-    prepare: Callable[..., PreparedSimulationInputs] = prepare_simulation_inputs,
 ) -> PreparedSimulationInputs:
     """:func:`prepare_simulation_inputs`, reused inside :func:`reuse_prepared_inputs`.
 
     ``resolved`` is derived from ``cfg`` alone, so the resolved config
     without :data:`INPUT_INDEPENDENT_KEYS`, with the runtime dependencies,
     identifies the inputs. Outside the block this prepares afresh, as before.
-    ``prepare`` is the preparation to reuse; the App runner passes its own
-    reference, which tests replace.
     """
     cache = _PREPARED_INPUTS_CACHE.get()
-    key = _input_cache_key(cfg) if cache is not None else None
+    key = _input_cache_key(cfg, resolved) if cache is not None else None
     if cache is None or key is None:
-        return prepare(cfg, resolved, deps)
-    entry = (key, deps, prepare)
+        return prepare_simulation_inputs(cfg, resolved, deps)
+    entry = (key, _weather_files_fingerprint(cfg, resolved), deps, prepare_simulation_inputs)
     try:
         hit = entry in cache
     except TypeError:
         # A replaced dependency that cannot be hashed; prepare afresh.
-        return prepare(cfg, resolved, deps)
+        return prepare_simulation_inputs(cfg, resolved, deps)
     if not hit:
         cache.clear()
-        cache[entry] = prepare(cfg, resolved, deps)
+        # Copy the provider frame too, so later mutations cannot change cached metadata.
+        cache[entry] = deepcopy(prepare_simulation_inputs(cfg, resolved, deps))
     # A copy per run, so nothing a run does to its inputs reaches the next.
     return deepcopy(cache[entry])

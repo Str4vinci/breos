@@ -39,6 +39,7 @@ COST_CONFIG_KEY_TO_PARAM: dict[str, str] = {
     "storage_cost_per_kwh": "battery_cost_per_kwh",
     "inverter_cost_per_kw_hybrid": "inverter_cost_per_kw",
     "inverter_cost_per_kw_simple": "inverter_cost_per_kw_nobatt",
+    "battery_inverter_cost_per_kw": "battery_inverter_cost_per_kw",
     "installation_cost_per_module": "installation_cost_per_module",
     "installation_cost_battery": "battery_installation_cost",
     "other_cost_per_module": "other_cost_per_module",
@@ -57,27 +58,35 @@ BATTERY_COST_KEYS: tuple[str, ...] = (
     "storage_cost_per_kwh",
     "installation_cost_battery",
     "inverter_cost_per_kw_hybrid",
+    "battery_inverter_cost_per_kw",
 )
 PV_ONLY_COST_KEYS: tuple[str, ...] = ("inverter_cost_per_kw_simple",)
 
 
-def default_amount_cost_keys(*, tariff: bool, battery: bool | None) -> tuple[str, ...]:
+def default_amount_cost_keys(*, tariff: bool, battery: bool | None, coupling: str = "dc") -> tuple[str, ...]:
     """The cost keys a run prices with whose :class:`CostParams` default is an amount of money.
 
     Those defaults are amounts in the default currency, EUR; a zero default
     is zero in any currency and is left out. ``tariff`` drops the flat energy
     prices a tariff replaces. ``battery`` keeps the keys priced with a
     battery (True), without one (False), or both (None, for a search that
-    may install either).
+    may install either). With ``coupling = "ac"`` the PV inverter is priced
+    at the simple rate, battery or not, and the hybrid rate never (ADR 0004
+    C9).
     """
     defaults = CostParams()
     skipped = set(FLAT_PRICE_COST_KEYS if tariff else ())
-    if battery is True:
-        skipped.update(PV_ONLY_COST_KEYS)
-    elif battery is False:
+    if battery is False:
         skipped.update(BATTERY_COST_KEYS)
+    elif coupling == "ac":
+        skipped.add("inverter_cost_per_kw_hybrid")
+    elif battery is True:
+        skipped.update(PV_ONLY_COST_KEYS)
+    # A key with no default (None) is never read from a default.
     return tuple(
-        key for key, param in COST_CONFIG_KEY_TO_PARAM.items() if key not in skipped and getattr(defaults, param) != 0
+        key
+        for key, param in COST_CONFIG_KEY_TO_PARAM.items()
+        if key not in skipped and getattr(defaults, param) not in (0, None)
     )
 
 
@@ -120,6 +129,20 @@ class CostParams:
     discount_rate: float = DEFAULT_DISCOUNT_RATE
     pv_degradation_rate: float = 0.005
 
+    # An AC-coupled battery's own inverter, currency/kW of its AC rating (ADR
+    # 0004 C9). It comes last so positional construction keeps its order. No
+    # default: BREOS has no sourced price, and a missing price must never
+    # price as zero. An explicit 0 states that another price, such as a
+    # bundled battery price per kWh, already includes it.
+    battery_inverter_cost_per_kw: Optional[float] = None
+
+
+# The error for the 0.6 cost key, in App and the optimizer.
+PANEL_WP_REMOVED = (
+    "costs.panel_wp was removed in 0.7.0: CAPEX is priced at the selected module's own "
+    "rating. Remove the key, or select a module with the wattage you meant."
+)
+
 
 def cost_params_from_config(
     costs_config: Optional[Dict[str, Any]] = None,
@@ -133,10 +156,7 @@ def cost_params_from_config(
     costs_config = costs_config or {}
     financials_config = financials_config or {}
     if "panel_wp" in costs_config:
-        raise ValueError(
-            "costs.panel_wp was removed in 0.7.0: CAPEX is priced at the selected module's own "
-            "rating. Remove the key, or select a module with the wattage you meant."
-        )
+        raise ValueError(PANEL_WP_REMOVED)
     defaults = CostParams()
 
     params = {
@@ -192,6 +212,8 @@ def calculate_costs(
     cost_params: Optional[CostParams] = None,
     replacement_cost_each: Optional[float] = None,
     inverter_ac_capacity_w: Optional[float] = None,
+    battery_coupling: str = "dc",
+    battery_inverter_ac_capacity_w: Optional[float] = None,
 ) -> Dict[str, float]:
     """
     Calculate system costs (CAPEX) and return cost dictionary.
@@ -207,13 +229,30 @@ def calculate_costs(
         inverter_ac_capacity_w: The inverter AC rating to price, in W, the one
             the dispatch clips at. ``None`` sizes it as the DC peak over
             ``cost_params.dc_ac_ratio``.
+        battery_coupling: ``"dc"`` for a hybrid inverter, priced at
+            ``inverter_cost_per_kw`` with a battery; ``"ac"`` for a battery
+            inverter of its own (ADR 0004 C9). With ``"ac"`` the PV inverter
+            is priced at ``inverter_cost_per_kw_nobatt``, battery or not.
+        battery_inverter_ac_capacity_w: The AC-coupled battery inverter's AC
+            rating, in W, priced at
+            ``cost_params.battery_inverter_cost_per_kw``. Required with
+            ``"ac"`` and a battery, priced at nothing without one, and
+            refused with ``"dc"``.
 
     Returns:
         Dictionary with cost breakdown and totals. ``replacement_cost_each``
-        is what the projection prices each simulated replacement at.
+        is what the projection prices each simulated replacement at, and
+        ``battery_inverter_cost``, part of ``total_initial_cost``, is 0 unless
+        an AC-coupled battery is priced.
+
+    Raises:
+        ValueError: If an AC-coupled battery has no battery inverter price or
+            rating, or a value is not a finite non-negative number.
     """
     if cost_params is None:
         cost_params = CostParams()
+    if battery_coupling not in ("dc", "ac"):
+        raise ValueError(f"battery_coupling must be 'dc' or 'ac', got {battery_coupling!r}")
 
     total_power_kw = n_modules * module_power_w / 1000
     if inverter_ac_capacity_w is not None:
@@ -233,12 +272,37 @@ def calculate_costs(
         installation_cost += cost_params.battery_installation_cost
 
     # Battery costs
+    ac_battery = has_battery and battery_coupling == "ac"
     if has_battery:
         battery_cost = (battery_capacity_wh / 1000) * cost_params.battery_cost_per_kwh
-        inverter_cost = cost_params.inverter_cost_per_kw * inverter_power_kw
     else:
         battery_cost = 0.0
+    if has_battery and not ac_battery:
+        inverter_cost = cost_params.inverter_cost_per_kw * inverter_power_kw
+    else:
+        # A PV-only system's inverter, and an AC-coupled system's PV inverter.
         inverter_cost = cost_params.inverter_cost_per_kw_nobatt * inverter_power_kw
+    battery_inverter_cost = 0.0
+    if ac_battery:
+        price = cost_params.battery_inverter_cost_per_kw
+        if price is None:
+            raise ValueError(
+                "an AC-coupled battery needs battery_inverter_cost_per_kw, the price of its own inverter per kW of "
+                "AC rating; it has no default. Set 0 if another price already includes it"
+            )
+        if battery_inverter_ac_capacity_w is None:
+            raise ValueError("an AC-coupled battery needs battery_inverter_ac_capacity_w to price its inverter")
+        for name, value in (
+            ("battery_inverter_cost_per_kw", price),
+            ("battery_inverter_ac_capacity_w", battery_inverter_ac_capacity_w),
+        ):
+            if isinstance(value, bool) or not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be a finite non-negative number")
+        battery_inverter_cost = float(price) * float(battery_inverter_ac_capacity_w) / 1000
+    elif battery_coupling == "dc" and battery_inverter_ac_capacity_w is not None:
+        raise ValueError(
+            "battery_inverter_ac_capacity_w prices an AC-coupled battery's inverter; this one is DC-coupled"
+        )
 
     # Other costs
     other_costs = (cost_params.other_cost_per_module * n_modules) + cost_params.other_cost_fixed
@@ -254,6 +318,8 @@ def calculate_costs(
     total_initial_cost = (
         pv_cost + inverter_cost + battery_cost + installation_cost + cost_params.land_cost + other_costs
     )
+    if ac_battery:
+        total_initial_cost += battery_inverter_cost
 
     return {
         "electricity_cost": cost_params.electricity_cost,
@@ -264,6 +330,7 @@ def calculate_costs(
         "pv_cost": pv_cost,
         "inverter_cost": inverter_cost,
         "battery_cost": battery_cost,
+        "battery_inverter_cost": battery_inverter_cost,
         "installation_cost": installation_cost,
         "other_costs": other_costs,
         "replacement_cost_each": (
@@ -316,6 +383,11 @@ def replacement_booking_time(
     return np.where(np.asarray(has_replacement, dtype=bool), booked, np.nan)
 
 
+def _discount_factor(discount_rate: float, years: Any) -> Any:
+    """``1 / (1 + r) ** t`` for a number, an array or a Series of times ``years`` (years from t = 0)."""
+    return 1 / ((1 + discount_rate) ** years)
+
+
 def _booking_exponents(replacement_time: np.ndarray, relative_years) -> np.ndarray:
     """Fill the NaN of non-replacement years so the power is finite.
 
@@ -358,7 +430,7 @@ def _discount_annual_with_replacement(
     back.
     """
     exponents = np.asarray(replacement_exponents, dtype=float)
-    replacement_discount = 1.0 / ((1.0 + discount_rate) ** exponents)
+    replacement_discount = _discount_factor(discount_rate, exponents)
     outlay = pd.Series(np.asarray(replacement, dtype=float), index=annual.index)
     return (annual - outlay) * discount_factors + outlay * replacement_discount
 
@@ -366,20 +438,8 @@ def _discount_annual_with_replacement(
 def _replacement_npv(replacement: pd.Series, replacement_exponents: np.ndarray, discount_rate: float) -> float:
     """The replacement outlays discounted from their swap instants, as the system NPV counts them."""
     outlay = np.asarray(replacement, dtype=float)
-    discount = 1.0 / ((1.0 + discount_rate) ** np.asarray(replacement_exponents, dtype=float))
+    discount = _discount_factor(discount_rate, np.asarray(replacement_exponents, dtype=float))
     return float(np.sum(outlay * discount))
-
-
-# Year-row money columns at year-1 prices (ADR 0003 E7). The projection
-# escalates, times and discounts them; TOU valuation fills them from per-step
-# energy and prices in the year loop.
-YEAR_ROW_MONEY_COLUMNS = (
-    "Import_Cost",
-    "Export_Revenue",
-    "Fixed_Charge",
-    "Baseline_Import_Cost",
-    "Baseline_Fixed_Charge",
-)
 
 
 def _replacement_outlays_t0(counts: Any, each: float) -> np.ndarray:
@@ -803,7 +863,7 @@ def discount_cashflows(
     """
     proj = flows.copy()
     years = proj["Year"]
-    discount_factors = 1 / ((1 + discount_rate) ** years)
+    discount_factors = _discount_factor(discount_rate, years)
     replacement_exponents = _booking_exponents(
         proj["Replacement_Time_Years"].to_numpy(dtype=float), years.to_numpy(dtype=float)
     )
@@ -1018,6 +1078,13 @@ def _initial_investment(cost_projection: pd.DataFrame) -> Optional[float]:
     return float(investment)
 
 
+def _from_year_zero(years: np.ndarray, values: np.ndarray, year_zero: float) -> Tuple[np.ndarray, np.ndarray]:
+    """``years`` and ``values`` with a year-0 point holding ``year_zero`` when they start after year 0."""
+    if len(years) and years[0] > 0.0:
+        return np.concatenate(([0.0], years)), np.concatenate(([float(year_zero)], values))
+    return years, values
+
+
 def _payback_points(
     cost_projection: pd.DataFrame, initial_investment: Optional[float]
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
@@ -1042,9 +1109,8 @@ def _payback_points(
     savings = cost_projection["Savings_Cumulative_NPV"].to_numpy(dtype=float)
     if initial_investment is None:
         initial_investment = _initial_investment(cost_projection)
-    if initial_investment is not None and years[0] > 0.0:
-        years = np.concatenate(([0.0], years))
-        savings = np.concatenate(([-float(initial_investment)], savings))
+    if initial_investment is not None:
+        years, savings = _from_year_zero(years, savings, -float(initial_investment))
     if not (np.isfinite(years).all() and np.isfinite(savings).all()):
         raise ValueError(
             "Payback needs finite years, Savings_Cumulative_NPV and initial investment; "
@@ -1190,7 +1256,7 @@ def calculate_lcoe_from_projection(
         if "Year" in cost_projection.columns
         else pd.Series(range(1, len(cost_projection) + 1), index=cost_projection.index)
     )
-    discount_factors = 1 / ((1 + discount_rate) ** years)
+    discount_factors = _discount_factor(discount_rate, years)
 
     production = pd.to_numeric(cost_projection["PV_Production_kWh"], errors="coerce").fillna(0.0)
     operation = (
@@ -1208,7 +1274,8 @@ def calculate_lcoe_from_projection(
     # carries it, matching how the NPV above books the same outlay.
     if "Replacement_Time_Years" in cost_projection.columns:
         replacement_time = pd.to_numeric(cost_projection["Replacement_Time_Years"], errors="coerce")
-        replacement_discount_factors = 1 / ((1 + discount_rate) ** replacement_time.fillna(years))
+        # Filled in the Series, so a float32 time keeps its dtype in the power.
+        replacement_discount_factors = _discount_factor(discount_rate, replacement_time.fillna(years))
     else:
         replacement_discount_factors = discount_factors
 

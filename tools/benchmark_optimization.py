@@ -692,6 +692,7 @@ def _search_counts(result: Any) -> dict[str, int]:
     constraint_values = np.atleast_2d(pymoo_result.opt.get("G"))
     return {
         "evaluations": int(pymoo_result.algorithm.evaluator.n_eval),
+        "simulations": int(result.details["evaluation_counts"]["simulations"]),
         "generations": int(result.iterations),
         "pareto_designs": int(len(result.details["pareto"])),
         "feasible_pareto_designs": int((constraint_values <= 0.0).all(axis=1).sum()),

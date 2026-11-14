@@ -3,18 +3,35 @@
 from __future__ import annotations
 
 import math
+import os
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import date, datetime
+from functools import partial
 from numbers import Real
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 
-from breos.config_schema import TableSpec, anything, boolean, choice, integer, list_of, mapping_of, number, text
+from breos.config_schema import (
+    Checker,
+    Choice,
+    TableSpec,
+    anything,
+    boolean,
+    choice,
+    integer,
+    list_of,
+    mapping_of,
+    number,
+    optional,
+    table,
+    text,
+)
 from breos.constants import (
+    BATTERY_COUPLINGS,
     DEFAULT_CHARGE_EFFICIENCY,
     DEFAULT_DISCHARGE_EFFICIENCY,
     DEFAULT_EOL_PERCENTAGE,
@@ -25,8 +42,11 @@ from breos.constants import (
     DEFAULT_INDOOR_SETPOINT_C,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
+    DEGRADATION_ENGINES,
+    RESOLUTIONS,
     SKIPPED_REPLACEMENT_ACTIONS,
 )
+from breos.degradation.native import CALENDAR_PARAMETERS
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
 from breos.economics import (
     COST_CONFIG_KEY_TO_PARAM,
@@ -37,20 +57,38 @@ from breos.economics import (
     default_amount_cost_keys,
     replacement_event_cost,
 )
+from breos.electrical import (
+    DEFAULT_CONDUCTOR_TEMP_C,
+    MOUNTING_TEMPERATURE_RISE_C,
+    ArrayMounting,
+    ElectricalEnvironment,
+    ElectricalSetup,
+    PVString,
+    cable_summary,
+    check_topology,
+    string_model_problems,
+)
 from breos.emissions import EmissionsParams
-from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
-from breos.inverter import inverter_ac_capacity_w
+from breos.equipment import InverterSpec, MpptSpec
+from breos.execution import (
+    DEFAULT_EXECUTION_BACKEND,
+    EXECUTION_BACKENDS,
+    config_has_battery,
+    validate_execution_backend,
+)
+from breos.inverter import AcCable, InverterConversion, inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
 from breos.pv.horizon import normalise_horizon_profile
-from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
+from breos.pv.mismatch import DEFAULT_BYPASS_DIODE_VOLTAGE_V
+from breos.pv.model_options import PER_ARRAY_MODEL_OPTION_KEYS, is_valid_albedo, normalise_model_name
+from breos.pv.shading import ShadingTable
 from breos.pv.temperature import validate_temperature_inputs
-from breos.pv_modules import MODULES, PVModuleParams, get_module
+from breos.pv_modules import MODULES, PVModuleParams, catalogue_snapshot, get_module
 from breos.resources import load_config_json
 from breos.smart_charging import (
     DECISION_BOUNDARIES,
     DECISION_BOUNDARY_KEY,
     DEFAULT_PUBLICATION_DELAY_HOURS,
-    DISCHARGE_ONLY_MODES,
     FORECAST_FILES_KEY,
     FORECAST_KEY,
     FORECASTS,
@@ -63,7 +101,9 @@ from breos.smart_charging import (
     WEAR_COST_KEY,
     SmartChargingSpec,
     check_charge_windows,
+    check_mode_settings,
     check_overlap_policy,
+    check_period_overlap,
 )
 from breos.solar import (
     BIFACIAL_MODELS,
@@ -107,7 +147,65 @@ from breos.utils import get_hours_per_step
 from breos.weather import IRRADIANCE_RESAMPLING_POLICIES, validate_irradiance_resampling
 
 _NO_DEFAULT = object()
+# Checks several keys share: a growth or discount rate, and an efficiency.
+_RATE = number(minimum=-1, min_exclusive=True)
+_EFFICIENCY = number(minimum=0, maximum=1, min_exclusive=True)
+_EFFICIENCY_OR_NONE = number(minimum=0, maximum=1, min_exclusive=True, allow_none=True)
 _TRACKING_MODES = ("fixed", "single_axis", "dual_axis")
+
+
+def _count(value: Any, where: str) -> int:
+    """A whole number of at least 1, such as a module count."""
+    if not _is_int(value) or value < 1:
+        raise ValueError(f"'{where}' must be >= 1")
+    return value
+
+
+def _module_key(value: Any, where: str) -> str:
+    """A key of the PV module catalogue, read when checked, so a module added at run time counts."""
+    if value not in MODULES:
+        raise ValueError(f"Unknown PV module {value!r} for '{where}'. Available: {', '.join(sorted(MODULES))}")
+    return value
+
+
+def _albedo(value: Any, where: str) -> float:
+    """A ground reflectance in [0, 1]."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not is_valid_albedo(value):
+        raise ValueError(f"'{where}' must be a number between 0 and 1")
+    return float(value)
+
+
+def _angle(low: float, high: float) -> Checker:
+    return number(minimum=low, maximum=high, allow_none=True)
+
+
+# The PV keys an array may set as well as the top level, checked alike in
+# both places. None leaves a key unset, except where noted.
+_PV_CHECKS: dict[str, Checker] = {
+    "tilt": _angle(0, 90),
+    "azimuth": _angle(0, 360),
+    # Not optional: the top level always resolves a mode. An array takes optional(...).
+    "tracking": choice(_TRACKING_MODES, case_insensitive=False),
+    "axis_tilt": _angle(0, 90),
+    "axis_azimuth": _angle(0, 360),
+    "max_angle": _angle(0, 90),
+    # A string such as "no" is truthy and would leave backtracking on.
+    "backtrack": optional(boolean),
+    "cross_axis_tilt": _angle(-90, 90),
+    "dual_axis_max_tilt": _angle(0, 90),
+    "temperature_model": choice(TEMPERATURE_MODELS),
+    # gcr feeds the infinite_sheds view factors and the backtracking schedule;
+    # pvlib takes any ratio and quietly computes a different rotation.
+    "gcr": number(minimum=0, maximum=1, min_exclusive=True),
+    "transposition_model": optional(choice(TRANSPOSITION_MODELS)),
+    "albedo": optional(_albedo),
+    "surface_type": optional(choice(SURFACE_TYPES, case_insensitive=False)),
+    "model_perez": optional(choice(PEREZ_MODELS, case_insensitive=False)),
+    # None reads as "none", as the model name does.
+    "bifacial_model": optional(choice(BIFACIAL_MODELS)),
+    "pvrow_height": number(minimum=0, min_exclusive=True, allow_none=True),
+    "pvrow_pitch": number(minimum=0, min_exclusive=True, allow_none=True),
+}
 
 
 @dataclass(frozen=True)
@@ -127,6 +225,23 @@ class AppConfigField:
     ``summary`` is the key's ``"section.name"`` place in the resolved-config
     summary that ``breos validate-config`` and ``breos run --dry-run`` print.
     Only the runner sections have none.
+
+    ``check`` checks the value on its own, after the ``normalizer``; it is
+    not written back. Rules that span keys stay in the validators. A
+    :func:`~breos.config_schema.choice` check also gives ``cli_choices``.
+
+    ``affects_inputs=False`` marks a key that does not reach
+    :func:`breos.app_inputs.prepare_simulation_inputs`, directly or through
+    the resolved location, orientation, tracking, arrays or module: it feeds
+    dispatch, degradation, valuation, emissions or the backend, which run
+    later, so the input cache leaves it out. Each such key is pinned by a
+    test that changes it and compares the prepared inputs. The default is
+    True, so a new key is part of the cache key until shown not to matter.
+
+    ``revalue`` marks a price key that :meth:`breos.App.revalue` may change.
+    ``exclusive_with`` names a key that sets the same thing, so one config
+    layer may set only one of the two; a later layer that sets this key drops
+    the other (:func:`override_config`).
     """
 
     default: Any = _NO_DEFAULT
@@ -138,6 +253,14 @@ class AppConfigField:
     doc: str = ""
     default_doc: str | None = None
     summary: str | None = None
+    check: Checker | None = None
+    affects_inputs: bool = True
+    revalue: bool = False
+    exclusive_with: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.cli_choices is None and isinstance(self.check, Choice):
+            object.__setattr__(self, "cli_choices", self.check.options)
 
     @property
     def has_default(self) -> bool:
@@ -164,13 +287,7 @@ def _model_key(value: Any) -> Any:
     return value.strip().lower().replace("-", "_") if isinstance(value, str) else value
 
 
-CALENDAR_MODELS: tuple[str, ...] = (
-    "naumann",
-    "naumann_lam",
-    "naumann_lam_field_calibrated",
-    "naumann_lam_field_calibrated_v1",
-    "naumann_lam_field_calibrated_v2",
-)
+CALENDAR_MODELS: tuple[str, ...] = tuple(CALENDAR_PARAMETERS)
 
 
 def check_calendar_model(value: Any, where: str) -> str:
@@ -210,6 +327,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.n_modules",
     ),
     "annual_consumption_kwh": AppConfigField(
+        check=number(minimum=0, min_exclusive=True),
         cli_flags=("--annual-consumption-kwh",),
         cli_type=float,
         cli_help="Annual electricity demand in kWh.",
@@ -218,6 +336,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="load.annual_consumption_kwh",
     ),
     "battery_kwh": AppConfigField(
+        affects_inputs=False,
+        check=number(minimum=0),
         default=0.0,
         cli_flags=("--battery-kwh",),
         cli_type=float,
@@ -229,6 +349,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.capacity_kwh",
     ),
     "battery_max_charge_power_w": AppConfigField(
+        affects_inputs=False,
+        check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--battery-max-charge-power-w",),
         cli_type=float,
@@ -237,6 +359,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.max_charge_power_w",
     ),
     "battery_max_discharge_power_w": AppConfigField(
+        affects_inputs=False,
+        check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--battery-max-discharge-power-w",),
         cli_type=float,
@@ -245,6 +369,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.max_discharge_power_w",
     ),
     "battery_power_limit_c_rate": AppConfigField(
+        affects_inputs=False,
+        check=number(minimum=0, min_exclusive=True, allow_none=True),
         default=None,
         cli_flags=("--battery-power-limit-c-rate",),
         cli_type=float,
@@ -260,7 +386,74 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         ),
         summary="battery.power_limit_c_rate",
     ),
+    "battery_coupling": AppConfigField(
+        check=choice(BATTERY_COUPLINGS, case_insensitive=False),
+        default="dc",
+        cli_flags=("--battery-coupling",),
+        cli_help="Battery topology: 'dc' for a hybrid inverter, 'ac' for a battery inverter of its own.",
+        doc=(
+            '`"dc"` for a hybrid inverter that PV and the battery share, `"ac"` for a battery with its own '
+            'bidirectional inverter on the AC bus beside the PV inverter. With `"ac"` the `inverter_*` keys '
+            "describe the PV inverter only"
+        ),
+        summary="battery.coupling",
+    ),
+    "battery_inverter_ac_rating_kw": AppConfigField(
+        exclusive_with="battery_inverter_kw_per_kwh",
+        check=number(minimum=0, min_exclusive=True, allow_none=True),
+        default=None,
+        cli_flags=("--battery-inverter-ac-rating-kw",),
+        cli_type=float,
+        cli_help="AC-coupled battery inverter's AC rating in kW.",
+        doc=(
+            "The AC-coupled battery inverter's AC rating in kW: its AC output discharging and AC input charging. "
+            'With `battery_coupling = "ac"` and a battery, set this or `battery_inverter_kw_per_kwh`'
+        ),
+        summary="battery.inverter_ac_rating_kw",
+    ),
+    "battery_inverter_kw_per_kwh": AppConfigField(
+        exclusive_with="battery_inverter_ac_rating_kw",
+        check=number(minimum=0, min_exclusive=True, allow_none=True),
+        default=None,
+        cli_flags=("--battery-inverter-kw-per-kwh",),
+        cli_type=float,
+        cli_help="AC-coupled battery inverter's AC rating per kWh of nominal battery capacity.",
+        doc=(
+            "The AC-coupled battery inverter's AC rating per kWh of nominal capacity, so a capacity sweep keeps one "
+            "ratio. Instead of `battery_inverter_ac_rating_kw`"
+        ),
+        summary="battery.inverter_kw_per_kwh",
+    ),
+    "battery_inverter_efficiency": AppConfigField(
+        check=_EFFICIENCY_OR_NONE,
+        default=None,
+        cli_flags=("--battery-inverter-efficiency",),
+        cli_type=float,
+        cli_help="AC-coupled battery inverter's nominal efficiency (no default).",
+        doc=(
+            "The AC-coupled battery inverter's nominal efficiency, from a source for the product. It has no default "
+            'and is required with `battery_coupling = "ac"` and a battery. Both directions use the PVWatts '
+            "part-load curve; the charging direction is an assumption"
+        ),
+        summary="battery.inverter_efficiency",
+    ),
+    "battery_replacement_cost": AppConfigField(
+        revalue=True,
+        check=number(minimum=0, allow_none=True),
+        default=None,
+        cli_flags=("--battery-replacement-cost",),
+        cli_type=float,
+        cli_help="Price of one battery replacement at t = 0 (default: the pack at storage_cost_per_kwh).",
+        doc=(
+            "The price of one battery replacement at t = 0, such as a unit sold as pack and inverter. `None` prices "
+            "the pack at `storage_cost_per_kwh`. The terminal credit stays the pack's"
+        ),
+        # A price, so App.revalue may change it.
+        summary="economics.battery_replacement_cost",
+    ),
     "cost_preset": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         default=None,
         cli_flags=("--cost-preset",),
         cli_help="Cost preset key, for example 'residential-pt'.",
@@ -272,6 +465,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.cost_preset",
     ),
     "currency": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         default=None,
         cli_flags=("--currency",),
         cli_help="ISO 4217 code of the run's money, for example 'USD' (default: the tariff's, else EUR).",
@@ -285,6 +480,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.currency",
     ),
     "emissions_country": AppConfigField(
+        affects_inputs=False,
         default=None,
         cli_flags=("--emissions-country",),
         cli_help="Country code for emissions, for example 'pt'.",
@@ -296,6 +492,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="emissions.country",
     ),
     "pv_module": AppConfigField(
+        check=optional(_module_key),
         default=None,
         cli_flags=("--pv-module",),
         cli_help="PV module catalogue key.",
@@ -358,6 +555,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="load.load_profile_unit",
     ),
     "tilt": AppConfigField(
+        check=_PV_CHECKS["tilt"],
         default=None,
         cli_flags=("--tilt",),
         cli_type=float,
@@ -366,6 +564,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.tilt",
     ),
     "azimuth": AppConfigField(
+        check=_PV_CHECKS["azimuth"],
         default=None,
         cli_flags=("--azimuth",),
         cli_type=float,
@@ -374,6 +573,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.azimuth",
     ),
     "transposition_model": AppConfigField(
+        check=_PV_CHECKS["transposition_model"],
         default=DEFAULT_TRANSPOSITION_MODEL,
         cli_flags=("--transposition-model", "--sky-model"),
         cli_choices=tuple(TRANSPOSITION_MODELS),
@@ -385,6 +585,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.transposition_model",
     ),
     "albedo": AppConfigField(
+        check=_PV_CHECKS["albedo"],
         default=None,
         cli_flags=("--albedo",),
         cli_type=float,
@@ -396,6 +597,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.albedo",
     ),
     "surface_type": AppConfigField(
+        check=_PV_CHECKS["surface_type"],
         default=None,
         cli_flags=("--surface-type",),
         cli_choices=tuple(SURFACE_TYPES),
@@ -404,6 +606,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.surface_type",
     ),
     "model_perez": AppConfigField(
+        check=_PV_CHECKS["model_perez"],
         default=DEFAULT_PEREZ_MODEL,
         cli_flags=("--perez-model",),
         cli_choices=tuple(PEREZ_MODELS),
@@ -415,33 +618,41 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default="auto",
         cli_flags=("--irradiance-resampling",),
         cli_choices=IRRADIANCE_RESAMPLING_POLICIES,
-        cli_help="Hourly irradiance to 15 minutes: auto conserves interval means; clear_sky reconstructs instant samples.",
+        cli_help=(
+            "Hourly irradiance to 15 minutes: auto conserves interval means; clear_sky reconstructs instant samples; "
+            "quadrature derives GHI from one-minute DNI and DHI."
+        ),
         doc=(
             'Hourly-to-15-minute irradiance policy: `"auto"` conserves declared interval means and uses '
             '`"clear_sky"` otherwise. `"clear_sky_energy_conserving"` requires interval-mean weather metadata. '
-            "Each component is conserved independently; no GHI/DNI/DHI closure is enforced"
+            "Each component is conserved independently; no GHI/DNI/DHI closure is enforced. "
+            '`"quadrature"` derives GHI from DNI and DHI in every one-minute sample and averages the samples '
+            "into quarter-hours, conserving interval-mean DNI and DHI"
         ),
         summary="simulation.irradiance_resampling",
     ),
     "solar_position": AppConfigField(
+        check=choice(SOLAR_POSITION_METHODS),
         default=DEFAULT_SOLAR_POSITION,
         cli_flags=("--solar-position",),
-        cli_choices=tuple(SOLAR_POSITION_METHODS),
         cli_help=(
-            "Where within each timestep the sun position is evaluated. 'mid-interval' matches "
-            "PVWatts/SAM for interval-averaged weather (default: interval-start)."
+            "Where within each timestep the sun position is evaluated (default: auto, which reads the "
+            "weather metadata and falls back to interval-start with a warning when it has no time basis)."
         ),
         doc=(
-            'Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. '
-            '`"weather"` reads the representative-time offset from content-bound weather metadata, including provider '
-            "offsets for instantaneous irradiance and left- or right-labelled interval means"
+            'Where within each timestep the sun position is evaluated. `"weather"` reads the representative-time '
+            "offset from content-bound weather metadata, including provider offsets for instantaneous irradiance "
+            "and left- or right-labelled interval means, and raises when the metadata has no `radiation_time_basis`. "
+            '`"auto"` is `"weather"` when the metadata states a `radiation_time_basis` and `"interval-start"`, '
+            'with a warning, when it does not. `"interval-start"` takes the sun at the step label (the default '
+            'before 0.8.0) and `"mid-interval"` half a timestep later'
         ),
         summary="pv.solar_position",
     ),
     "iam_model": AppConfigField(
+        check=choice(IAM_MODELS),
         default=DEFAULT_IAM_MODEL,
         cli_flags=("--iam-model",),
-        cli_choices=tuple(IAM_MODELS),
         cli_help="Beam incidence-angle modifier (default: ashrae, historical compatibility).",
         doc=(
             'Beam incidence-angle modifier. `"physical"` uses pvlib\'s physical optics model and `"martin_ruiz"` its '
@@ -450,9 +661,11 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.iam_model",
     ),
     "diffuse_iam": AppConfigField(
+        # None reads as "none": the PV model resolves the name with str().
+        check=optional(choice(DIFFUSE_IAM_METHODS)),
         default=DEFAULT_DIFFUSE_IAM,
-        cli_flags=("--diffuse-iam",),
         cli_choices=tuple(DIFFUSE_IAM_METHODS),
+        cli_flags=("--diffuse-iam",),
         cli_help=(
             "Whether IAM is also applied to the diffuse POA components. 'marion' weighs sky- and "
             "ground-diffuse with the view-factor-integrated selected IAM model (default: none, beam-only)."
@@ -465,9 +678,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.diffuse_iam",
     ),
     "temperature_model": AppConfigField(
+        check=_PV_CHECKS["temperature_model"],
         default=DEFAULT_TEMPERATURE_MODEL,
         cli_flags=("--temperature-model",),
-        cli_choices=tuple(TEMPERATURE_MODELS),
         cli_help=(
             "Cell-temperature model / mounting preset. The pvsyst-* and sapm-* presets use documented "
             "mounting coefficients; noct-sam additionally requires sourced module NOCT and efficiency "
@@ -476,11 +689,12 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         doc=(
             'Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting '
             'coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module '
-            "has yet. The default is Faiman, open rack"
+            "has yet. The default is Faiman, open rack. A `pv_arrays` entry may set its own"
         ),
         summary="pv.temperature_model",
     ),
     "bifacial_model": AppConfigField(
+        check=_PV_CHECKS["bifacial_model"],
         default=DEFAULT_BIFACIAL_MODEL,
         cli_flags=("--bifacial-model",),
         cli_choices=tuple(BIFACIAL_MODELS),
@@ -494,6 +708,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.bifacial_model",
     ),
     "pvrow_height": AppConfigField(
+        check=_PV_CHECKS["pvrow_height"],
         default=None,
         cli_flags=("--pvrow-height",),
         cli_type=float,
@@ -505,6 +720,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.pvrow_height",
     ),
     "pvrow_pitch": AppConfigField(
+        check=_PV_CHECKS["pvrow_pitch"],
         default=None,
         cli_flags=("--pvrow-pitch",),
         cli_type=float,
@@ -513,6 +729,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.pvrow_pitch",
     ),
     "gcr": AppConfigField(
+        check=_PV_CHECKS["gcr"],
         default=0.35,
         cli_flags=("--gcr",),
         cli_type=float,
@@ -521,14 +738,16 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.gcr",
     ),
     "resolution": AppConfigField(
+        check=choice(RESOLUTIONS, case_insensitive=False),
         default="h",
         cli_flags=("--resolution",),
-        cli_choices=("h", "15min"),
         cli_help="Simulation time resolution.",
         doc="Simulation time resolution",
         summary="load.resolution",
     ),
     "projection_years": AppConfigField(
+        affects_inputs=False,
+        check=_count,
         default=20,
         cli_flags=("--projection-years",),
         cli_type=int,
@@ -537,6 +756,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.projection_years",
     ),
     "inflation_rate": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
+        check=_RATE,
         default=DEFAULT_INFLATION_RATE,
         cli_flags=("--inflation-rate",),
         cli_type=float,
@@ -553,6 +775,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     # ADR 0003 E2: separate escalators. None inherits inflation_rate, so a run
     # that sets none of them prices exactly as before.
     "import_price_escalation": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
+        check=optional(_RATE),
         default=None,
         cli_flags=("--import-price-escalation",),
         cli_type=float,
@@ -561,6 +786,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.import_price_escalation",
     ),
     "om_escalation": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
+        check=optional(_RATE),
         default=None,
         cli_flags=("--om-escalation",),
         cli_type=float,
@@ -569,6 +797,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.om_escalation",
     ),
     "replacement_cost_learning": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
+        check=number(minimum=0, maximum=1, max_exclusive=True),
         default=0.0,
         cli_flags=("--replacement-cost-learning",),
         cli_type=float,
@@ -580,6 +811,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.replacement_cost_learning",
     ),
     "sell_price_inflation": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
+        check=number(minimum=-1, maximum=1, min_exclusive=True, max_exclusive=True),
         default=0.0,
         cli_flags=("--sell-price-inflation",),
         cli_type=float,
@@ -588,6 +822,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.sell_price_inflation",
     ),
     "export_emissions_factor_gco2_kwh": AppConfigField(
+        affects_inputs=False,
+        check=number(minimum=0, allow_none=True),
         default=None,
         cli_flags=("--export-emissions-factor-gco2-kwh",),
         cli_type=float,
@@ -599,6 +835,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="emissions.export_factor_gco2_kwh",
     ),
     "discount_rate": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
+        check=_RATE,
         default=DEFAULT_DISCOUNT_RATE,
         cli_flags=("--discount-rate",),
         cli_type=float,
@@ -607,6 +846,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.discount_rate",
     ),
     "pv_degradation_rate": AppConfigField(
+        affects_inputs=False,
+        check=number(minimum=0, maximum=1, max_exclusive=True),
         default=0.005,
         cli_flags=("--pv-degradation-rate",),
         cli_type=float,
@@ -618,6 +859,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.degradation_rate",
     ),
     "calendar_model": AppConfigField(
+        affects_inputs=False,
         default="naumann_lam_field_calibrated",
         cli_flags=("--calendar-model",),
         cli_help="Battery calendar aging model.",
@@ -629,14 +871,16 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.calendar_model",
     ),
     "degradation_engine": AppConfigField(
+        affects_inputs=False,
         default="native",
         cli_flags=("--degradation-engine",),
-        cli_choices=("native", "blast"),
+        cli_choices=DEGRADATION_ENGINES,
         cli_help="Battery degradation engine (default: native Naumann/Lam).",
         doc='`"native"` keeps Naumann/Lam; `"blast"` opts into a vendored BLAST cell model',
         summary="battery.degradation_engine",
     ),
     "blast_model": AppConfigField(
+        affects_inputs=False,
         default=None,
         cli_flags=("--blast-model",),
         cli_help="Stable BLAST battery-model key; requires --degradation-engine blast.",
@@ -644,6 +888,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.blast_model",
     ),
     "inverter_efficiency": AppConfigField(
+        affects_inputs=False,
+        check=_EFFICIENCY,
         default=0.96,
         cli_flags=("--inverter-efficiency",),
         cli_type=float,
@@ -652,6 +898,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="inverter.efficiency",
     ),
     "inverter_loading_ratio": AppConfigField(
+        exclusive_with="inverter_ac_rating_kw",
+        affects_inputs=False,
         default=1.25,
         cli_flags=("--inverter-loading-ratio",),
         cli_type=float,
@@ -663,6 +911,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="inverter.loading_ratio",
     ),
     "inverter_ac_rating_kw": AppConfigField(
+        exclusive_with="inverter_loading_ratio",
+        affects_inputs=False,
+        check=number(minimum=0, min_exclusive=True, allow_none=True),
         default=None,
         cli_flags=("--inverter-ac-rating-kw",),
         cli_type=float,
@@ -672,6 +923,52 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "CAPEX prices it. Not with `inverter_loading_ratio`"
         ),
         summary="inverter.ac_rating_kw",
+    ),
+    "inverters": AppConfigField(
+        default=None,
+        doc=(
+            "Specified inverters, checked with `pv_strings` against `electrical_environment`; see "
+            "[`[[inverters]]`](#inverters). Their summed `nominal_power_w` replaces `inverter_loading_ratio` and "
+            "`inverter_ac_rating_kw`. Set with `pv_strings` and `electrical_environment`"
+        ),
+        summary="inverter.specs",
+    ),
+    "pv_strings": AppConfigField(
+        default=None,
+        doc=(
+            "String topology: which modules of which array connect to which inverter input; see "
+            "[`[[pv_strings]]`](#pv_strings). Set with `inverters` and `electrical_environment`"
+        ),
+        summary="inverter.strings",
+    ),
+    "electrical_environment": AppConfigField(
+        default=None,
+        doc=(
+            "Design temperatures and mounting for the string check; see "
+            "[`[electrical_environment]`](#electrical_environment). Set with `inverters` and `pv_strings`"
+        ),
+        summary="inverter.electrical_environment",
+    ),
+    "ac_cable": AppConfigField(
+        default=None,
+        doc=(
+            "The AC cable from the inverter to the meter, whose I²R loss the dispatch takes from the inverter's "
+            "output; see [`[ac_cable]`](#ac_cable) and [AC cable](configuration.md#ac-cable)"
+        ),
+        summary="inverter.ac_cable",
+    ),
+    "electrical_fidelity": AppConfigField(
+        check=choice(("aggregate", "string"), case_insensitive=False),
+        default="aggregate",
+        normalizer=_lower,
+        doc=(
+            'How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT '
+            "input's voltage, current and power limits, the inverter's power limit and its start-up voltage. "
+            '`"string"` needs `inverters`, `pv_strings` and '
+            "`electrical_environment`, a wiring without structural errors, and one inverter, or several with no "
+            'battery or an AC-coupled one (`battery_coupling = "ac"`)'
+        ),
+        summary="inverter.electrical_fidelity",
     ),
     "start_date": AppConfigField(
         default="2023-01-01",
@@ -696,6 +993,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     # The [tariff] table (ADR 0002). Omitted: flat prices from the cost preset.
     "tariff": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         default=None,
         doc=(
             "Time-of-use import and export prices on a bundled or custom schedule, replacing the flat "
@@ -709,6 +1008,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     # The [reference_tariff] table. Omitted: the no-system household pays the
     # system's own prices, the [tariff] or the flat costs.
     "reference_tariff": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         default=None,
         doc=(
             "What the household would pay without the system: an import price, by period or flat, and a fixed "
@@ -720,6 +1021,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="economics.reference_tariff",
     ),
     "terminal_value": AppConfigField(
+        revalue=True,
         default=None,
         doc=(
             "Optional estimate of the final battery pack's residual value from its capacity health; see "
@@ -731,6 +1033,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     # The [smart_charging] table (ADR 0002). Omitted: greedy self-consumption.
     "smart_charging": AppConfigField(
+        affects_inputs=False,
         default=None,
         doc=(
             "Battery dispatch by tariff period: grid charging toward a fixed target or, experimentally, a daily "
@@ -741,6 +1044,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.smart_charging",
     ),
     "weather_file": AppConfigField(
+        exclusive_with="weather_source",
         default=None,
         cli_flags=("--weather-file",),
         cli_type=Path,
@@ -759,6 +1063,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="simulation.weather_file",
     ),
     "weather_source": AppConfigField(
+        exclusive_with="weather_file",
         default=None,
         cli_flags=("--weather-source",),
         cli_help=(
@@ -774,6 +1079,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     # Config-file/API-only fields.
     "costs": AppConfigField(
+        revalue=True,
+        affects_inputs=False,
         doc="Cost overrides layered over the selected preset and the built-in defaults; see [`[costs]`](#costs)",
         default_doc="*unset*",
         summary="economics.costs",
@@ -788,32 +1095,43 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="pv.arrays",
     ),
     "tracking": AppConfigField(
+        check=_PV_CHECKS["tracking"],
         default="fixed",
-        doc="Tracking mode: " + ", ".join(f'`"{mode}"`' for mode in _TRACKING_MODES),
+        doc="Tracking mode",
         summary="pv.tracking",
     ),
-    "axis_tilt": AppConfigField(default=0.0, doc="Single-axis tracker axis tilt (degrees)", summary="pv.axis_tilt"),
+    "axis_tilt": AppConfigField(
+        check=_PV_CHECKS["axis_tilt"],
+        default=0.0,
+        doc="Single-axis tracker axis tilt (degrees)",
+        summary="pv.axis_tilt",
+    ),
     "axis_azimuth": AppConfigField(
+        check=_PV_CHECKS["axis_azimuth"],
         default=None,
         doc="Tracker axis azimuth (degrees). `None` sets it from the latitude",
         summary="pv.axis_azimuth",
     ),
     "max_angle": AppConfigField(
+        check=_PV_CHECKS["max_angle"],
         default=60.0,
         doc="Single-axis tracker maximum rotation angle (degrees)",
         summary="pv.max_angle",
     ),
     "backtrack": AppConfigField(
+        check=_PV_CHECKS["backtrack"],
         default=True,
         doc="Whether single-axis trackers backtrack to avoid row shading",
         summary="pv.backtrack",
     ),
     "cross_axis_tilt": AppConfigField(
+        check=_PV_CHECKS["cross_axis_tilt"],
         default=0.0,
         doc="Cross-axis terrain slope for single-axis tracking (degrees)",
         summary="pv.cross_axis_tilt",
     ),
     "dual_axis_max_tilt": AppConfigField(
+        check=_PV_CHECKS["dual_axis_max_tilt"],
         default=90.0,
         doc="Maximum panel tilt for dual-axis tracking (degrees)",
         summary="pv.dual_axis_max_tilt",
@@ -821,16 +1139,20 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     # The BatteryConfig defaults, so the App and the optimizer, which leaves
     # unset battery settings to BatteryConfig, resolve the same window.
     "battery_min_soc": AppConfigField(
+        affects_inputs=False,
         default=DEFAULT_MIN_SOC,
         doc="Battery SOC floor, as a fraction of nominal SOH-derated capacity",
         summary="battery.min_soc",
     ),
     "battery_max_soc": AppConfigField(
+        affects_inputs=False,
         default=DEFAULT_MAX_SOC,
         doc="Battery SOC ceiling, on the same basis as `battery_min_soc`",
         summary="battery.max_soc",
     ),
     "battery_eol_percentage": AppConfigField(
+        affects_inputs=False,
+        check=number(minimum=0, maximum=1, min_exclusive=True, max_exclusive=True),
         default=DEFAULT_EOL_PERCENTAGE,
         doc=(
             "SOH fraction at which the battery reaches end of life: it is replaced, or, when the replacement is "
@@ -839,6 +1161,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.eol_percentage",
     ),
     "battery_enable_replacement": AppConfigField(
+        affects_inputs=False,
+        check=boolean,
         default=True,
         doc=(
             "Whether a battery that reaches end of life is replaced. `false` skips every replacement: the battery "
@@ -848,6 +1172,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.enable_replacement",
     ),
     "battery_allow_terminal_replacement": AppConfigField(
+        affects_inputs=False,
+        check=boolean,
         default=True,
         doc=(
             "Whether a battery that reaches end of life in the horizon's final degradation period is replaced. That "
@@ -859,6 +1185,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.allow_terminal_replacement",
     ),
     "battery_replacement_min_remaining_years": AppConfigField(
+        affects_inputs=False,
+        check=number(minimum=0),
         default=0.0,
         doc=(
             "Fewest project years a replacement battery must have left to serve. A battery that reaches end of "
@@ -870,6 +1198,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.replacement_min_remaining_years",
     ),
     "battery_skipped_replacement_action": AppConfigField(
+        affects_inputs=False,
+        check=choice(SKIPPED_REPLACEMENT_ACTIONS, case_insensitive=False),
         default="keep",
         doc=(
             'What happens to a battery whose end-of-life replacement is skipped. `"keep"` leaves it in service '
@@ -882,6 +1212,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.skipped_replacement_action",
     ),
     "battery_rte": AppConfigField(
+        affects_inputs=False,
+        check=_EFFICIENCY_OR_NONE,
         default=None,
         doc=(
             "Battery round-trip efficiency, split evenly across charge and discharge; `None` is "
@@ -890,6 +1222,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.round_trip_efficiency",
     ),
     "enable_resistance_fade": AppConfigField(
+        affects_inputs=False,
+        check=boolean,
         default=False,
         doc=(
             "Grow the battery's internal resistance as it ages (Naumann), which lowers its charge and discharge "
@@ -928,6 +1262,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.indoor_model",
     ),
     "execution_backend": AppConfigField(
+        affects_inputs=False,
         default=DEFAULT_EXECUTION_BACKEND,
         cli_flags=("--execution-backend",),
         cli_choices=EXECUTION_BACKENDS,
@@ -975,9 +1310,22 @@ COSTS_TABLE = TableSpec(
         "electricity_sold_cost": "Flat export price, per kWh at year-1 prices",
         "daily_power_cost": "Fixed grid-connection charge per day, at year-1 prices",
         "module_cost_per_w": "PV module price per W of module rating",
-        "storage_cost_per_kwh": "Battery price per kWh of nominal capacity; also the t = 0 price of each replacement",
-        "inverter_cost_per_kw_hybrid": "Hybrid inverter price per kW of AC rating, for a system with a battery",
-        "inverter_cost_per_kw_simple": "Inverter price per kW of AC rating, for a PV-only system",
+        "storage_cost_per_kwh": (
+            "Battery price per kWh of nominal capacity; also the t = 0 price of each replacement, unless "
+            "`battery_replacement_cost` sets one"
+        ),
+        "inverter_cost_per_kw_hybrid": (
+            'Hybrid inverter price per kW of AC rating, for a DC-coupled system with a battery (`battery_coupling = "dc"`)'
+        ),
+        "inverter_cost_per_kw_simple": (
+            'PV inverter price per kW of AC rating, for a PV-only system and, with `battery_coupling = "ac"`, for '
+            "the PV inverter whether or not there is a battery"
+        ),
+        "battery_inverter_cost_per_kw": (
+            'An AC-coupled battery inverter\'s price per kW of its AC rating, required with `battery_coupling = "ac"` '
+            "and a battery. It has no default; 0 states that another price, such as `storage_cost_per_kwh`, "
+            "already includes it"
+        ),
         "installation_cost_per_module": "Installation cost per PV module",
         "installation_cost_battery": "Fixed battery installation cost, for a system with a battery",
         "other_cost_per_module": "Other cost per PV module, such as cabling",
@@ -1131,40 +1479,46 @@ def _validate_period(cfg: dict[str, Any]) -> None:
     cfg["period"] = {"start": start.isoformat(), "end": end.isoformat()}
 
 
-# Keep runner-table keys explicit until the shared configuration schema from
-# #181 can describe these sections alongside App fields.
-MONTECARLO_CONFIG_KEYS: frozenset[str] = frozenset(
-    {
-        "weather_file",
-        "n_runs",
-        "years_per_run",
-        "load_uncertainty",
-        "load_distribution",
-        "target_year",
-        "weather_start_year",
-        "weather_end_year",
-        "seed",
-        "min_load_scale",
-        "max_load_scale",
-        "collect_yearly",
-        "n_procs",
-        "execution_backend",
-    }
+def _path(value: Any, where: str) -> str:
+    """A file path, as a string or a path object; returned as a string."""
+    return os.fspath(value) if isinstance(value, os.PathLike) else text(value, where)
+
+
+# The [montecarlo] table: the MonteCarloSettings fields, checked for type
+# and range before the settings are made. MonteCarloSettings makes the
+# range checks again for Python callers, with those that span settings
+# (max_load_scale >= min_load_scale, the weather years); run_montecarlo
+# checks what needs the App config.
+MONTECARLO_TABLE = TableSpec(
+    "montecarlo",
+    keys={
+        "weather_file": _path,
+        "n_runs": integer(minimum=1),
+        "years_per_run": optional(integer(minimum=1)),
+        "load_uncertainty": number(minimum=0),
+        "load_distribution": choice(("normal", "uniform")),
+        "target_year": integer(),
+        "weather_start_year": optional(integer()),
+        "weather_end_year": optional(integer()),
+        "seed": optional(integer(minimum=0)),
+        "min_load_scale": number(minimum=0),
+        "max_load_scale": number(allow_none=True),
+        "collect_yearly": boolean,
+        "n_procs": integer(minimum=1),
+        "execution_backend": optional(choice(EXECUTION_BACKENDS)),
+        "model_uncertainty_pct": number(minimum=0, allow_none=True),
+    },
 )
 
 
-def validate_montecarlo_config(cfg: dict[str, Any]) -> None:
-    """Reject unknown Monte Carlo settings before runner setup or weather access."""
+def validate_montecarlo_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """The checked ``[montecarlo]`` table, empty when the config has none.
+
+    Run before runner setup or weather access, so a typo is reported first.
+    """
     if "montecarlo" not in cfg:
-        return
-    montecarlo = cfg["montecarlo"]
-    if not isinstance(montecarlo, dict):
-        raise TypeError("'montecarlo' must be a table/dict of Monte Carlo settings")
-    unknown_mc = set(montecarlo) - MONTECARLO_CONFIG_KEYS
-    if unknown_mc:
-        available = ", ".join(sorted(f"montecarlo.{key}" for key in MONTECARLO_CONFIG_KEYS))
-        unknown_text = ", ".join(sorted(f"montecarlo.{key}" for key in unknown_mc))
-        raise ValueError(f"Unknown Monte Carlo config key(s): {unknown_text}. Available: {available}")
+        return {}
+    return MONTECARLO_TABLE.validate(cfg["montecarlo"])
 
 
 @dataclass(frozen=True)
@@ -1205,6 +1559,21 @@ class ResolvedAppConfig:
     # The configured [reference_tariff], or None: the no-system baseline is
     # then priced at the system's own prices.
     reference_tariff: ReferenceTariffSpec | None = None
+    # The specified inverters, strings and site with their check, or None
+    # without a string topology.
+    electrical: ElectricalSetup | None = None
+    # The configured [ac_cable], or None.
+    ac_cable: AcCable | None = None
+    # The inverter's efficiency curve and AC cable as the dispatch runs them,
+    # or None for the PVWatts curve and no cable.
+    inverter_conversion: InverterConversion | None = None
+    # The module catalogue when the configuration was resolved
+    # (:func:`breos.pv_modules.catalogue_snapshot`): every field above that
+    # names or describes a module was taken from it.
+    module_catalogue: str = ""
+    # An AC-coupled battery's own inverter rating (W), resolved against the
+    # nominal capacity, or None for a DC-coupled or PV-only system.
+    battery_inverter_ac_capacity_w: float | None = None
 
 
 def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -1256,38 +1625,6 @@ def default_module_key() -> str:
     return next(iter(MODULES))
 
 
-def _validate_sky_settings(
-    transposition_model: Any,
-    albedo: Any,
-    surface_type: Any,
-    model_perez: Any,
-    where: str = "",
-) -> None:
-    """Validate the sky-diffusion settings shared by the top level and arrays.
-
-    ``where`` prefixes the key name in error messages (e.g. ``pv_arrays[0]``);
-    ``None`` values are treated as "not set" and skipped, so per-array overrides
-    only validate the keys they actually provide.
-
-    The rules come from :mod:`breos.pv.model_options`; only the config-key
-    phrasing and the None-means-unset handling are this layer's own.
-    """
-    prefix = f"{where}." if where else ""
-    if transposition_model is not None and not is_known_model(transposition_model, TRANSPOSITION_MODELS):
-        valid = ", ".join(TRANSPOSITION_MODELS)
-        raise ValueError(f"'{prefix}transposition_model' must be one of: {valid}")
-    if albedo is not None and surface_type is not None:
-        raise ValueError(f"Set either '{prefix}albedo' or '{prefix}surface_type', not both.")
-    if albedo is not None and (not isinstance(albedo, (int, float)) or not is_valid_albedo(albedo)):
-        raise ValueError(f"'{prefix}albedo' must be a number between 0 and 1")
-    if surface_type is not None and surface_type not in SURFACE_TYPES:
-        valid = ", ".join(SURFACE_TYPES)
-        raise ValueError(f"'{prefix}surface_type' must be one of: {valid}")
-    if model_perez is not None and model_perez not in PEREZ_MODELS:
-        valid = ", ".join(PEREZ_MODELS)
-        raise ValueError(f"'{prefix}model_perez' must be one of: {valid}")
-
-
 # Tracker geometry, inherited by every tracking array that does not set it.
 _TRACKER_GEOMETRY_KEYS = (
     "axis_tilt",
@@ -1297,83 +1634,305 @@ _TRACKER_GEOMETRY_KEYS = (
     "cross_axis_tilt",
     "dual_axis_max_tilt",
 )
-_TRACKER_ANGLE_RANGES = {
-    "axis_tilt": (0.0, 90.0),
-    "axis_azimuth": (0.0, 360.0),
-    "max_angle": (0.0, 90.0),
-    "cross_axis_tilt": (-90.0, 90.0),
-    "dual_axis_max_tilt": (0.0, 90.0),
-}
-# Per-array settings passed through to the PV model when an array sets them.
-_PV_ARRAY_OPTION_KEYS = (
-    "gcr",
-    "transposition_model",
-    "albedo",
-    "surface_type",
-    "model_perez",
-    "bifacial_model",
-    "pvrow_height",
-    "pvrow_pitch",
-)
+# Per-array overrides of electrical_environment for the string check.
+_PV_ARRAY_MOUNTING_KEYS = tuple(f.name for f in fields(ArrayMounting))
 _PV_ARRAY_KEYS = frozenset(
-    ("modules", "module", "tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *_PV_ARRAY_OPTION_KEYS)
+    (
+        "modules",
+        "module",
+        "tilt",
+        "azimuth",
+        "tracking",
+        *_TRACKER_GEOMETRY_KEYS,
+        *PER_ARRAY_MODEL_OPTION_KEYS,
+        *_PV_ARRAY_MOUNTING_KEYS,
+        "shading",
+    )
 )
+
+
+def _check_albedo_or_surface(settings: Mapping[str, Any], where: str) -> None:
+    prefix = f"{where}." if where else ""
+    if settings.get("albedo") is not None and settings.get("surface_type") is not None:
+        raise ValueError(f"Set either '{prefix}albedo' or '{prefix}surface_type', not both.")
+
+
+def _shading_table(value: Any, where: str) -> Any:
+    _validate_shading_table(value, where)
+    return value
+
+
 PV_ARRAY_TABLE = TableSpec(
     "pv_arrays[i]",
-    keys=dict.fromkeys(_PV_ARRAY_KEYS, anything),
+    keys={
+        **dict.fromkeys(_PV_ARRAY_KEYS, anything),
+        **{key: optional(check) for key, check in _PV_CHECKS.items()},
+        # An array that sets these must give a value.
+        "temperature_model": _PV_CHECKS["temperature_model"],
+        "gcr": _PV_CHECKS["gcr"],
+        "modules": _count,
+        "module": optional(_module_key),
+        "shading": _shading_table,
+    },
+    check=_check_albedo_or_surface,
     docs={
         "modules": "Number of PV modules in this array, at least 1",
         "module": "Module catalogue key for this array; inherits `pv_module`",
         # Every other key is its top-level namesake, for this array only.
         **{
             key: f"`{key}` for this array; inherits the top-level value"
-            for key in ("tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *_PV_ARRAY_OPTION_KEYS)
+            for key in ("tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *PER_ARRAY_MODEL_OPTION_KEYS)
         },
+        "mounting": "String-check mounting for this array; inherits `electrical_environment.mounting`",
+        "hot_cell_temp_c": "Hottest cell temperature (°C) for this array's strings, instead of any mounting rise",
+        "cold_operating_cell_temp_c": (
+            "Coldest cell temperature while producing (°C) for this array's strings, instead of any mounting rise"
+        ),
+        "shading": (
+            "Near-shading table: `azimuth_deg`, `elevation_deg`, `beam_shaded_fraction` (one row per elevation) "
+            "and optional `sky_view_factor`; every array or none"
+        ),
     },
 )
 
 
-def _validate_tracker_settings(settings: dict[str, Any], where: str = "") -> None:
-    """Validate the tracker keys shared by the top level and arrays.
+INVERTER_TABLE = TableSpec(
+    "inverters[i]",
+    keys=dict.fromkeys((f.name for f in fields(InverterSpec)), anything),
+    required=frozenset({"nominal_power_w"}),
+    docs={
+        "nominal_power_w": "AC nameplate (W)",
+        "inverter_efficiency": (
+            "Efficiency fraction. When every inverter sets it, their nameplate-weighted mean replaces "
+            "`inverter_efficiency`"
+        ),
+        "is_hybrid": "Whether the inverter also connects a battery; metadata",
+        "max_dc_voltage_v": "Maximum DC input voltage (V), or `inf` for none",
+        "max_dc_power_w": "Maximum PV generator power the manufacturer permits (W), or `inf` for none",
+        "recommended_dc_power_w": "Recommended PV generator power (W), or `inf` for none",
+        "min_mppt_voltage_v": "Lower end of the MPPT voltage range (V), or 0 for none",
+        "max_mppt_voltage_v": "Upper end of the MPPT voltage range (V), or `inf` for none",
+        "startup_voltage_v": "Start-up voltage (V), or 0 for none",
+        "mppts": "One table per MPPT input, in datasheet order; see [`mppts`](#mppts)",
+        "isc_comparison_factor": (
+            "Multiplier the manufacturer applies to the array's STC Isc before comparing it with an input's "
+            "short-circuit rating, at least 1; 1 where Isc is compared as it is. Unset is reported as missing"
+        ),
+        "max_short_circuit_current_a": (
+            "Maximum array short-circuit current over all inputs (A), or `inf` for none; checked when set"
+        ),
+        "max_usable_dc_power_w": (
+            "DC power the inverter converts over all inputs (W), or `inf` for none; string-level energy applies it"
+        ),
+        "efficiency_curve": (
+            "Measured efficiency against AC output, replacing the single efficiency: `output_fraction` (AC "
+            "output over the nameplate, increasing), `efficiency` (one row per DC voltage) and `voltages_v` "
+            "(one per row, increasing; optional with one row). See "
+            "[Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
+        ),
+        "temperature_derating": (
+            "Allowed AC output against ambient: `ambient_temp_c` (°C, increasing) and `max_output_fraction` "
+            "(of the nameplate). See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
+        ),
+        "night_consumption_w": (
+            "What the inverter draws from the AC bus while it converts nothing (W), as its datasheet states; "
+            "PV surplus after the house load serves it before charging or export, and only the remainder is imported. "
+            "Unset, it is not modelled. See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve)"
+        ),
+        "ac_cable": (
+            "The inverter's own AC cable, with the keys of [`[ac_cable]`](#ac_cable); with several inverters it "
+            "needs string-level energy, and `[ac_cable]` is then the run they share. See "
+            "[Several inverters](configuration.md#several-inverters)"
+        ),
+    },
+)
 
-    ``None`` means "not set" and is skipped, so an array only validates the
-    keys it provides; the rest are inherited from the already-checked top
-    level. ``backtrack`` must be a real bool, because a string such as
-    ``"no"`` is truthy and would leave backtracking on.
-    """
-    prefix = f"{where}." if where else ""
-    tracking = settings.get("tracking")
-    if tracking is not None and tracking not in _TRACKING_MODES:
-        raise ValueError(f"'{prefix}tracking' must be 'fixed', 'single_axis', or 'dual_axis', got {tracking!r}")
-    for key, (low, high) in _TRACKER_ANGLE_RANGES.items():
-        value = settings.get(key)
-        if value is not None and not low <= _finite_real(value, f"{prefix}{key}") <= high:
-            raise ValueError(f"'{prefix}{key}' must be between {low:g} and {high:g}")
-    backtrack = settings.get("backtrack")
-    if backtrack is not None and not isinstance(backtrack, bool):
-        raise TypeError(f"'{prefix}backtrack' must be true or false, got {backtrack!r}")
+MPPT_TABLE = TableSpec(
+    "inverters[i].mppts[j]",
+    keys=dict.fromkeys((f.name for f in fields(MpptSpec)), anything),
+    docs={
+        "max_input_current_a": "Maximum operating input current (A), or `inf` for none",
+        "max_short_circuit_current_a": "Maximum array short-circuit current (A), or `inf` for none",
+        "max_strings": "Strings the input takes in parallel",
+        "max_string_input_current_a": (
+            "Maximum operating current of each string connection (A), or `inf` for none; checked when set"
+        ),
+        "max_string_short_circuit_current_a": (
+            "Maximum short-circuit current of each string connection (A), or `inf` for none; checked when set"
+        ),
+        "max_dc_power_w": "Maximum PV generator power on the input (W), or `inf` for none; checked when set",
+        "max_usable_dc_power_w": ("DC power the input converts (W), or `inf` for none; string-level energy applies it"),
+    },
+)
+
+PV_STRING_TABLE = TableSpec(
+    "pv_strings[i]",
+    keys=dict.fromkeys((f.name for f in fields(PVString)), anything),
+    required=frozenset({"inverter", "mppt", "array", "modules"}),
+    docs={
+        "inverter": "0-based position of the inverter in `inverters`",
+        "mppt": "0-based position of the input in that inverter's `mppts`",
+        "array": "0-based position of the array in `pv_arrays`; 0 without `pv_arrays`",
+        "modules": "Modules in series in each string",
+        "parallel": "Identical strings in parallel on the input; 1 by default",
+        "cable_length_m": (
+            "One-way length (m) of each string's cable to the inverter input; with `cable_cross_section_mm2`, "
+            "the cable's resistance replaces the flat `wiring` loss. Give it on every string or none"
+        ),
+        "cable_cross_section_mm2": "Conductor cross-section (mm²) of each string's cable",
+        "conductor": 'Cable conductor, `"copper"` or `"aluminium"`; `"copper"` by default',
+        "module_shading": (
+            "Each module's own shading, for string-level energy: `azimuth_deg`, `elevation_deg` and `modules`, "
+            "one entry per module in series order with a whole-module `beam_shaded_fraction` or one `substrings` "
+            "table per bypass diode of the module (its `bypass_diodes`, 3 by default); every string of an array "
+            "or none"
+        ),
+    },
+)
+
+ELECTRICAL_ENVIRONMENT_TABLE = TableSpec(
+    "electrical_environment",
+    keys=dict.fromkeys((f.name for f in fields(ElectricalEnvironment)), anything),
+    required=frozenset({"min_design_temp_c", "max_ambient_temp_c"}),
+    docs={
+        "min_design_temp_c": (
+            "Extreme annual minimum ambient (°C) on the basis the jurisdiction or manufacturer requires; cold Voc "
+            "is taken at it"
+        ),
+        "max_ambient_temp_c": "Hottest design ambient (°C)",
+        "hot_cell_temp_c": "Hottest cell temperature (°C), instead of `max_ambient_temp_c` plus the mounting rise",
+        "cold_operating_cell_temp_c": (
+            "Coldest cell temperature while producing (°C), instead of `min_design_temp_c` plus the mounting rise"
+        ),
+        "bifacial_rear_irradiance_w_m2": "Rear irradiance behind 1000 W/m² front for a bifacial design Isc; 135",
+        "inverter_ambient_temp_c": (
+            "The inverter's ambient (°C) for its `temperature_derating`, for an inverter indoors; unstated, the "
+            "weather's air temperature applies"
+        ),
+        "bypass_diode_voltage_v": (
+            "Forward voltage (V) of the modules' bypass diodes, for `module_shading`; "
+            f"{DEFAULT_BYPASS_DIODE_VOLTAGE_V:g} V is assumed, and reported as assumed, when unstated"
+        ),
+        "conductor_temp_c": (
+            "Operating temperature (°C) of the string cables' conductors; "
+            f"{DEFAULT_CONDUCTOR_TEMP_C:g} °C is assumed, and reported as assumed, when unstated"
+        ),
+        "mounting": (
+            "Module mounting, which sets the screening cell temperature rise: "
+            + ", ".join(f'`"{key}"` ({rise:g} °C)' for key, rise in MOUNTING_TEMPERATURE_RISE_C.items())
+            + '; `"tilted_rack"` by default'
+        ),
+    },
+)
+
+AC_CABLE_TABLE = TableSpec(
+    "ac_cable",
+    keys=dict.fromkeys((f.name for f in fields(AcCable)), anything),
+    required=frozenset({"length_m", "cross_section_mm2", "phases", "voltage_v"}),
+    docs={
+        "length_m": "One-way length (m) from the inverter to the meter",
+        "cross_section_mm2": "Cross-section (mm²) of each conductor",
+        "phases": "1 or 3",
+        "voltage_v": "Grid voltage (V): line to neutral for 1 phase, line to line for 3",
+        "conductor": '`"copper"` or `"aluminium"`; `"copper"` by default',
+        "power_factor": "The inverter's power factor; 1 by default",
+        "conductor_temp_c": (
+            "Operating temperature (°C) of the conductors; "
+            f"{DEFAULT_CONDUCTOR_TEMP_C:g} °C is assumed, and reported as assumed, when unstated"
+        ),
+    },
+)
+
+_ELECTRICAL_KEYS = ("inverters", "pv_strings", "electrical_environment")
 
 
-def _validate_gcr(gcr: Any, prefix: str = "") -> None:
-    """Validate a ground coverage ratio, whichever model consumes it.
+# Upper limits that may be unbounded. JSON has no infinity, so "inf" states it.
+_UNBOUNDED_FIELDS = frozenset(
+    {
+        "max_dc_voltage_v",
+        "max_dc_power_w",
+        "max_mppt_voltage_v",
+        "recommended_dc_power_w",
+        "max_input_current_a",
+        "max_short_circuit_current_a",
+        "max_string_input_current_a",
+        "max_string_short_circuit_current_a",
+        "max_usable_dc_power_w",
+    }
+)
 
-    ``gcr`` has two consumers and neither is a shading calculation: the
-    ``infinite_sheds`` rear-side view factors, and — on the tracking path —
-    the backtracking rotation schedule that pvlib's ``singleaxis`` derives
-    from it. The second is why this is checked even with no rear-side model
-    active. pvlib does not reject a nonsensical ratio; it quietly computes a
-    different rotation, so a mistyped ``3.5`` returns roughly half the annual
-    energy with no error anywhere. ``prefix`` already carries its trailing
-    dot, matching the other config-key messages.
-    """
-    if not is_valid_gcr(_finite_real(gcr, f"{prefix}gcr")):
-        raise ValueError(f"'{prefix}gcr' must be between 0 (exclusive) and 1 (inclusive)")
+
+def _built(cls: Callable[..., Any], table: dict[str, Any], where: str) -> Any:
+    """Construct a dataclass from a checked table, naming the table in a refusal."""
+    table = {
+        key: math.inf if key in _UNBOUNDED_FIELDS and isinstance(value, str) and value.lower() == "inf" else value
+        for key, value in table.items()
+    }
+    try:
+        return cls(**table)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"'{where}': {exc}") from exc
+
+
+def _electrical_inputs(
+    cfg: Mapping[str, Any],
+) -> tuple[tuple[InverterSpec, ...], tuple[PVString, ...], ElectricalEnvironment] | None:
+    """Validate the three string-topology keys and build their objects, or None when unset."""
+    present = [key for key in _ELECTRICAL_KEYS if cfg.get(key) is not None]
+    if not present:
+        return None
+    if len(present) < len(_ELECTRICAL_KEYS):
+        missing = ", ".join(f"'{key}'" for key in _ELECTRICAL_KEYS if key not in present)
+        raise ValueError(f"'inverters', 'pv_strings' and 'electrical_environment' go together; set {missing}")
+    for key in ("inverters", "pv_strings"):
+        if not isinstance(cfg[key], (list, tuple)):
+            raise TypeError(f"'{key}' must be a list of tables")
+    if not cfg["inverters"]:
+        raise ValueError("'inverters' needs at least one inverter")
+    inverters = []
+    for i, entry in enumerate(cfg["inverters"]):
+        table = INVERTER_TABLE.validate(entry, f"inverters[{i}]")
+        if table.get("mppts") is not None:
+            if not isinstance(table["mppts"], (list, tuple)):
+                raise TypeError(f"'inverters[{i}].mppts' must be a list of tables")
+            table["mppts"] = tuple(
+                _built(MpptSpec, MPPT_TABLE.validate(mppt, f"inverters[{i}].mppts[{j}]"), f"inverters[{i}].mppts[{j}]")
+                for j, mppt in enumerate(table["mppts"])
+            )
+        if table.get("ac_cable") is not None:
+            cable = AC_CABLE_TABLE.validate(table["ac_cable"], f"inverters[{i}].ac_cable")
+            _built(AcCable, cable, f"inverters[{i}].ac_cable")
+            table["ac_cable"] = cable
+        inverters.append(_built(InverterSpec, table, f"inverters[{i}]"))
+    strings = tuple(
+        _built(PVString, PV_STRING_TABLE.validate(entry, f"pv_strings[{i}]"), f"pv_strings[{i}]")
+        for i, entry in enumerate(cfg["pv_strings"])
+    )
+    environment = _built(
+        ElectricalEnvironment,
+        ELECTRICAL_ENVIRONMENT_TABLE.validate(cfg["electrical_environment"]),
+        "electrical_environment",
+    )
+    return tuple(inverters), strings, environment
+
+
+def _check_electrical_sizing(config: Mapping[str, Any]) -> None:
+    """Specified inverters size the AC side; refuse the keys that would size it twice."""
+    if config.get("inverters") is None:
+        return
+    for key in ("inverter_ac_rating_kw", "inverter_loading_ratio"):
+        if config.get(key) is not None:
+            raise ValueError(f"'inverters' sets the AC rating from their nameplates; remove '{key}'")
+    entries = config["inverters"] if isinstance(config["inverters"], (list, tuple)) else ()
+    if config.get("inverter_efficiency") is not None and any(
+        isinstance(entry, Mapping) and entry.get("inverter_efficiency") is not None for entry in entries
+    ):
+        raise ValueError("'inverters' set their own efficiency; remove 'inverter_efficiency'")
 
 
 def _validate_bifacial_settings(
     model: Any,
     module: Any,
-    gcr: Any,
     pvrow_height: Any,
     pvrow_pitch: Any,
     where: str = "",
@@ -1382,20 +1941,11 @@ def _validate_bifacial_settings(
 
     Shares its predicates with :mod:`breos.pv.model_options` but reports them
     against config keys. ``pvrow_*`` geometry is required only for an active
-    rear-side model; ``gcr`` is also checked independently after the existing
-    validators because tracking can consume it without bifacial modeling.
+    rear-side model. ``gcr`` is range-checked with the other PV settings,
+    because tracking reads it without bifacial modeling.
     """
     prefix = f"{where}." if where else ""
-    normalised = normalise_model_name(model)
-    if not is_known_model(model, BIFACIAL_MODELS):
-        valid = ", ".join(BIFACIAL_MODELS)
-        raise ValueError(f"'{prefix}bifacial_model' must be one of: {valid}")
-
-    for key, value in (("pvrow_height", pvrow_height), ("pvrow_pitch", pvrow_pitch)):
-        if value is not None and _finite_real(value, f"{prefix}{key}") <= 0:
-            raise ValueError(f"'{prefix}{key}' must be > 0 when configured")
-
-    if normalised == "none":
+    if normalise_model_name(model) == "none":
         return
 
     module_key = module or default_module_key()
@@ -1407,39 +1957,62 @@ def _validate_bifacial_settings(
         raise ValueError(f"'{prefix}pvrow_height' is required when bifacial_model='infinite_sheds'")
     if pvrow_pitch is None:
         raise ValueError(f"'{prefix}pvrow_pitch' is required when bifacial_model='infinite_sheds'")
-    # Deliberately last, so an active rear-side model still reports its
-    # missing metadata and geometry before quibbling about the ratio.
-    _validate_gcr(gcr, prefix)
 
 
-def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
+def _check_fields(cfg: Mapping[str, Any]) -> None:
+    """Check each top-level value its registry entry gives a ``check`` for; values are left as given."""
+    for key, field in APP_CONFIG_FIELDS.items():
+        if field.check is not None and key in cfg:
+            field.check(cfg[key], key)
+
+
+@dataclass(frozen=True)
+class ValidatedSpecs:
+    """What :func:`validate_config` builds while it checks, for the resolver to keep."""
+
+    tariff: TariffSpec | None
+    reference_tariff: ReferenceTariffSpec | None
+    smart_charging: SmartChargingSpec | None
+    currency: str
+
+
+def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
     """Validate user-facing App config before resolving derived values."""
     has_arrays = _validate_structure_and_location(cfg)
+    _refuse_dc_battery_inverter_keys(cfg)
+    _check_fields(cfg)
     _validate_pv_and_inverter(cfg, has_arrays)
     _validate_time_and_weather(cfg)
     _validate_economics(cfg)
-    tariff_spec = None
-    if cfg["tariff"] is not None:
+    tariff_spec = reference_spec = None
+    if cfg["tariff"] is not None or cfg["reference_tariff"] is not None:
         # Resolve location before PV module metadata or weather work. The
         # schedule's civil-time zone is part of the tariff definition, not a
         # conversion that may be deferred until the simulation is running.
         timezone = resolve_location(cfg)[2]
+    if cfg["tariff"] is not None:
         tariff_spec = resolve_tariff_spec(cfg, timezone)
     currency = run_currency(cfg["currency"], tariff_spec.prices.currency if tariff_spec is not None else None)
     if cfg["reference_tariff"] is not None:
-        resolve_reference_tariff_spec(cfg, resolve_location(cfg)[2], currency)
+        reference_spec = resolve_reference_tariff_spec(cfg, timezone, currency)
     check_cost_currency(
         currency,
         given=cfg.get("costs") or {},
         preset=cfg.get("cost_preset"),
         tariff=tariff_spec is not None,
+        # Not config_has_battery: the SOC limits it reads are checked only
+        # below, and a bad one must fail there, by its key.
         battery=cfg["battery_kwh"] * 1000 > 1,
+        coupling=cfg["battery_coupling"],
     )
     _validate_battery_and_degradation(cfg)
+    _validate_battery_coupling(cfg)
     _validate_period(cfg)
-    _validate_smart_charging(cfg, tariff_spec)
-    _validate_reachable_gcr(cfg, has_arrays)
-    return tariff_spec
+    smart_charging = resolve_smart_charging_spec(cfg, tariff_spec)
+    _electrical_inputs(cfg)
+    if cfg["electrical_fidelity"] == "string" and cfg.get("inverters") is None:
+        raise ValueError("electrical_fidelity = 'string' needs 'inverters', 'pv_strings' and 'electrical_environment'")
+    return ValidatedSpecs(tariff_spec, reference_spec, smart_charging, currency)
 
 
 def _tariff_study_date(value: Any, where: str) -> date:
@@ -1456,46 +2029,6 @@ def _tariff_study_date(value: Any, where: str) -> date:
     raise TypeError(f"'{where}' must be a date")
 
 
-def _strict_custom_table(
-    value: Any,
-    where: str,
-    *,
-    allowed: frozenset[str],
-    required: frozenset[str],
-) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"'{where}' must be a table/dict")
-    unknown = sorted(str(key) for key in value if key not in allowed)
-    if unknown:
-        raise ValueError(f"Unknown key(s) in '{where}': {', '.join(f'{where}.{key}' for key in unknown)}")
-    missing = sorted(key for key in required if key not in value)
-    if missing:
-        raise ValueError(f"'{where}' needs {', '.join(f'{where}.{key}' for key in missing)}")
-    return value
-
-
-_CUSTOM_SCHEDULE_KEYS = frozenset(
-    {
-        "identifier",
-        "version",
-        "timezone",
-        "cycle",
-        "periods",
-        "rules",
-        "source",
-        "source_url",
-        "note",
-        "effective_from",
-        "effective_to",
-        "holidays",
-        "seasons",
-    }
-)
-_CUSTOM_SCHEDULE_REQUIRED = frozenset({"identifier", "version", "timezone", "cycle", "periods", "rules"})
-_CUSTOM_RULE_KEYS = frozenset({"days", "season", "intervals"})
-_CUSTOM_HOLIDAY_KEYS = frozenset({"day_type", "dates", "source"})
-
-
 def _month(value: Any, where: str) -> int:
     month = integer(minimum=1)(value, where)
     if month > 12:
@@ -1503,94 +2036,77 @@ def _month(value: Any, where: str) -> int:
     return month
 
 
-def _custom_schedule(value: Any, where: str) -> ScheduleDefinition:
-    """Validate the App's strict nested shape, then use the shared parser."""
-    raw = _strict_custom_table(
-        value,
-        where,
-        allowed=_CUSTOM_SCHEDULE_KEYS,
-        required=_CUSTOM_SCHEDULE_REQUIRED,
-    )
-    identifier = text(raw["identifier"], f"{where}.identifier")
-    text(raw["version"], f"{where}.version")
-    timezone = text(raw["timezone"], f"{where}.timezone")
+def _tariff_timezone(value: Any, where: str) -> str:
+    timezone = text(value, where)
     try:
         ZoneInfo(timezone)
     except ZoneInfoNotFoundError as exc:
-        raise ValueError(f"Unknown IANA tariff timezone: {timezone!r} at '{where}.timezone'") from exc
-    normalized_raw = dict(raw)
-    normalized_raw["cycle"] = choice(tuple(sorted(SCHEDULE_CYCLES)))(raw["cycle"], f"{where}.cycle")
-    periods = raw["periods"]
-    if not isinstance(periods, (list, tuple)):
-        raise TypeError(f"'{where}.periods' must be a list of period names")
+        raise ValueError(f"Unknown IANA tariff timezone: {timezone!r} at '{where}'") from exc
+    return timezone
 
+
+def _holiday_dates(value: Any, where: str) -> Any:
+    """Holiday dates by year; the parser checks the dates, this the four-digit year keys TOML gives."""
+    if not isinstance(value, Mapping) or not value:
+        raise TypeError(f"'{where}' must map years to lists of ISO dates")
+    for year in value:
+        if not (isinstance(year, str) and re.fullmatch(r"\d{4}", year)) or year == "0000":
+            raise ValueError(f"'{where}' keys must be four-digit years from 0001 through 9999, not {year!r}")
+    return value
+
+
+# The keys a [tariff].custom_schedule allows. Their values are checked by
+# breos.tariffs.parse_schedule_definition; these tables refuse unknown keys,
+# which the parser ignores, and lowercase the selectors. A rule's season is
+# checked against the schedule's own seasons in _custom_schedule.
+_CUSTOM_RULE_TABLE = TableSpec(
+    "custom_schedule.rules[i]",
+    keys={"days": choice(("all", "saturday", "sunday", "weekday")), "season": anything, "intervals": anything},
+    required=frozenset({"days", "season", "intervals"}),
+)
+
+
+def _custom_rules(value: Any, where: str) -> list[dict[str, Any]]:
+    if not isinstance(value, (list, tuple)) or not value:
+        raise TypeError(f"'{where}' must be a non-empty list")
+    return [_CUSTOM_RULE_TABLE.validate(rule, f"{where}[{position}]") for position, rule in enumerate(value)]
+
+
+_CUSTOM_HOLIDAYS_TABLE = TableSpec(
+    "custom_schedule.holidays",
+    keys={"day_type": choice(("saturday", "sunday", "weekday")), "dates": _holiday_dates, "source": text},
+    required=frozenset({"day_type", "dates"}),
+)
+_CUSTOM_SCHEDULE_TABLE = TableSpec(
+    "custom_schedule",
+    keys={
+        "identifier": text,
+        "version": text,
+        "timezone": _tariff_timezone,
+        "cycle": choice(tuple(sorted(SCHEDULE_CYCLES))),
+        "periods": anything,
+        "rules": _custom_rules,
+        "source": text,
+        "source_url": text,
+        "note": text,
+        "effective_from": anything,
+        "effective_to": anything,
+        "holidays": optional(table(_CUSTOM_HOLIDAYS_TABLE)),
+        "seasons": optional(mapping_of(text, list_of(_month, min_length=1))),
+    },
+    required=frozenset({"identifier", "version", "timezone", "cycle", "periods", "rules"}),
+)
+
+
+def _custom_schedule(value: Any, where: str) -> ScheduleDefinition:
+    """Check the App's strict nested shape, then build the schedule with the shared parser."""
+    raw = _CUSTOM_SCHEDULE_TABLE.validate(value, where)
     seasons = raw.get("seasons")
-    season_selectors: tuple[str, ...] = ("all", "dst", "standard")
-    if seasons is not None:
-        if not isinstance(seasons, Mapping) or not seasons:
-            raise TypeError(f"'{where}.seasons' must be a table of season names to lists of months")
-        normalized_seasons: dict[str, list[int]] = {}
-        for name, months in seasons.items():
-            season = text(name, f"{where}.seasons key")
-            normalized_seasons[season] = list_of(_month, min_length=1)(months, f"{where}.seasons.{season}")
-        normalized_raw["seasons"] = normalized_seasons
-        season_selectors = ("all", *sorted(normalized_seasons))
-
-    rules = raw["rules"]
-    if not isinstance(rules, (list, tuple)) or not rules:
-        raise TypeError(f"'{where}.rules' must be a non-empty list")
-    normalized_rules = []
-    for position, rule in enumerate(rules):
-        rule_where = f"{where}.rules[{position}]"
-        rule_table = _strict_custom_table(
-            rule,
-            rule_where,
-            allowed=_CUSTOM_RULE_KEYS,
-            required=_CUSTOM_RULE_KEYS,
-        )
-        normalized_rule = dict(rule_table)
-        normalized_rule["days"] = choice(("all", "saturday", "sunday", "weekday"))(
-            rule_table["days"], f"{rule_where}.days"
-        )
-        normalized_rule["season"] = choice(season_selectors)(rule_table["season"], f"{rule_where}.season")
-        if not isinstance(rule_table["intervals"], Mapping):
-            raise TypeError(f"'{rule_where}.intervals' must be a table/dict")
-        normalized_rules.append(normalized_rule)
-    normalized_raw["rules"] = normalized_rules
-
-    holidays = raw.get("holidays")
-    if holidays is not None:
-        holiday_table = _strict_custom_table(
-            holidays,
-            f"{where}.holidays",
-            allowed=_CUSTOM_HOLIDAY_KEYS,
-            required=frozenset({"day_type", "dates"}),
-        )
-        normalized_holidays = dict(holiday_table)
-        normalized_holidays["day_type"] = choice(("saturday", "sunday", "weekday"))(
-            holiday_table["day_type"], f"{where}.holidays.day_type"
-        )
-        normalized_raw["holidays"] = normalized_holidays
-        holiday_dates = holiday_table["dates"]
-        if not isinstance(holiday_dates, Mapping) or not holiday_dates:
-            raise TypeError(f"'{where}.holidays.dates' must map years to lists of ISO dates")
-        for raw_year in holiday_dates:
-            if not (isinstance(raw_year, str) and re.fullmatch(r"\d{4}", raw_year)):
-                raise ValueError(f"'{where}.holidays.dates' keys must be four-digit years, not {raw_year!r}")
-            year = int(raw_year)
-            if not 1 <= year <= 9999:
-                raise ValueError(f"'{where}.holidays.dates' keys must be years from 0001 through 9999")
-        if "source" in holiday_table:
-            text(holiday_table["source"], f"{where}.holidays.source")
-
-    for name in ("source", "source_url", "note"):
-        if name in raw:
-            text(raw[name], f"{where}.{name}")
-
-    definition = parse_schedule_definition(
-        identifier, {key: item for key, item in normalized_raw.items() if key != "identifier"}, where=where
-    )
-    return definition
+    selectors = ("all", *sorted(seasons)) if seasons else ("all", "dst", "standard")
+    for position, rule in enumerate(raw["rules"]):
+        rule["season"] = choice(selectors)(rule["season"], f"{where}.rules[{position}].season")
+    identifier = raw.pop("identifier")
+    return parse_schedule_definition(identifier, raw, where=where)
 
 
 def _selected_schedule(table: Mapping[str, Any]) -> ScheduleDefinition:
@@ -1932,69 +2448,12 @@ def resolve_reference_tariff_spec(cfg: dict[str, Any], timezone: str, currency: 
     )
 
 
-# Keys each mode must set. grid_charge_efficiency has no default: the
-# inverter model has no AC-to-DC path to derive one from (ADR 0002 A6).
-# daily_persistence plans its target, so it sets none; discharge_only never
-# charges from the grid, so it sets its discharge periods alone.
-_COMMON_REQUIRED = ("charge_periods", "discharge_periods", "grid_charge_efficiency")
-_MODE_REQUIRED = {
-    "fixed_target": ("target_usable_fraction", *_COMMON_REQUIRED),
-    "daily_persistence": _COMMON_REQUIRED,
-    "discharge_only": ("discharge_periods",),
-}
-# Keys a mode refuses: the fixed target where the planner picks it, the
-# planner settings where there is no planner, and every grid-charging
-# setting where the grid never charges.
-_GRID_CHARGE_KEYS = ("target_usable_fraction", "charge_periods", "grid_charge_efficiency", "grid_import_limit_w")
-_MODE_REFUSED = {
-    "fixed_target": PLANNER_KEYS,
-    "daily_persistence": ("target_usable_fraction",),
-    "discharge_only": (*_GRID_CHARGE_KEYS, *PLANNER_KEYS),
-}
-
-
-def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
-    mode = table["mode"]
-    check_overlap_policy(mode, table.get("overlap_policy", "reject"))
-    if mode == "disabled":
-        extra = sorted(key for key in table if key != "mode")
-        if extra:
-            raise ValueError(
-                f"'{where}.mode' = 'disabled' takes no other keys; remove {', '.join(f'{where}.{k}' for k in extra)}"
-            )
-        return
-    refused = [key for key in _MODE_REFUSED[mode] if key in table]
-    if refused:
-        if mode in DISCHARGE_ONLY_MODES:
-            reason = "it never charges from the grid and takes only discharge_periods"
-        elif mode in PLANNER_MODES:
-            reason = "the planner chooses each day's target"
-        else:
-            reason = f"they set the planner of mode = {' or '.join(repr(m) for m in PLANNER_MODES)}"
-        raise ValueError(
-            f"'{where}.mode' = '{mode}' does not take {', '.join(f'{where}.{k}' for k in refused)}: {reason}"
-        )
-    missing = [key for key in _MODE_REQUIRED[mode] if key not in table]
-    if missing:
-        raise ValueError(f"'{where}' needs {', '.join(f'{where}.{k}' for k in missing)} for mode = '{mode}'")
-    if mode in PLANNER_MODES:
-        forecast = table.get(FORECAST_KEY, "persistence")
-        if forecast == "weather" and FORECAST_FILES_KEY not in table:
-            raise ValueError(
-                f"'{where}.{FORECAST_KEY}' = 'weather' needs {where}.{FORECAST_FILES_KEY}: the forecast weather "
-                "files, the first for lead day 1"
-            )
-        given = [key for key in (FORECAST_FILES_KEY, PUBLICATION_DELAY_KEY) if key in table]
-        if forecast != "weather" and given:
-            raise ValueError(
-                f"{', '.join(f'{where}.{k}' for k in given)} needs {where}.{FORECAST_KEY} = 'weather', not '{forecast}'"
-            )
-    overlap = sorted(set(table.get("charge_periods", ())) & set(table["discharge_periods"]))
-    if overlap and table.get("overlap_policy", "reject") == "reject":
-        raise ValueError(
-            f"'{where}.charge_periods' and '{where}.discharge_periods' share {', '.join(overlap)}; "
-            "every step either charges or discharges; "
-            "set overlap_policy = 'hold_target' with mode = 'fixed_target' or 'daily_persistence' to allow overlap"
+def _check_smart_charging_keys(table: dict[str, Any], where: str, coupling: str = "dc") -> None:
+    check_overlap_policy(table["mode"], table.get("overlap_policy", "reject"))
+    check_mode_settings(table["mode"], [key for key in table if key != "mode"], coupling, table.get(FORECAST_KEY))
+    if table["mode"] != "disabled":
+        check_period_overlap(
+            table.get("charge_periods", ()), table["discharge_periods"], table.get("overlap_policy", "reject")
         )
 
 
@@ -2086,7 +2545,8 @@ SMART_CHARGING_TABLE = TableSpec(
         ),
         "grid_charge_efficiency": (
             "AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. "
-            "No default. Not with `discharge_only`"
+            'No default. Not with `discharge_only`, nor with `battery_coupling = "ac"`, whose battery inverter '
+            "converts grid charge at `battery_inverter_efficiency`"
         ),
         "grid_import_limit_w": (
             "Site import limit in W for grid charging, which may import up to the limit minus the load's import. "
@@ -2094,6 +2554,14 @@ SMART_CHARGING_TABLE = TableSpec(
         ),
     },
 )
+# The same table for an AC-coupled battery, which refuses grid_charge_efficiency.
+AC_SMART_CHARGING_TABLE = replace(SMART_CHARGING_TABLE, check=partial(_check_smart_charging_keys, coupling="ac"))
+
+
+def smart_charging_table(coupling: str) -> TableSpec:
+    """The [smart_charging] table for a battery with ``coupling``."""
+    return AC_SMART_CHARGING_TABLE if coupling == "ac" else SMART_CHARGING_TABLE
+
 
 TERMINAL_VALUE_TABLE = TableSpec(
     "terminal_value",
@@ -2116,17 +2584,25 @@ NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
     "terminal_value": TERMINAL_VALUE_TABLE,
     "smart_charging": SMART_CHARGING_TABLE,
     "period": PERIOD_TABLE,
+    "electrical_environment": ELECTRICAL_ENVIRONMENT_TABLE,
+    "ac_cable": AC_CABLE_TABLE,
 }
 
 
 def _checked_smart_charging(
-    value: Any, schedule: TariffSchedule | None, battery_kwh: float, battery_key: str = "battery_kwh"
+    value: Any,
+    schedule: TariffSchedule | None,
+    battery_kwh: float,
+    battery_key: str = "battery_kwh",
+    coupling: str = "dc",
 ) -> dict[str, Any]:
     """Check a [smart_charging] table against the configured tariff schedule and battery.
 
     ``battery_key`` names the setting ``battery_kwh`` came from, for the error.
+    ``coupling`` selects the table: an AC-coupled battery refuses
+    ``grid_charge_efficiency`` where a DC-coupled one needs it (ADR 0004 C7).
     """
-    table = SMART_CHARGING_TABLE.validate(value)
+    table = smart_charging_table(coupling).validate(value)
     mode = table["mode"]
     if mode == "disabled":
         return table
@@ -2151,13 +2627,6 @@ def _checked_smart_charging(
     return table
 
 
-def _validate_smart_charging(cfg: dict[str, Any], tariff_spec: TariffSpec | None = None) -> None:
-    if cfg["smart_charging"] is None:
-        return
-    schedule = tariff_spec.definition.schedule if tariff_spec is not None else None
-    _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"])
-
-
 def resolve_smart_charging_spec(
     cfg: dict[str, Any], tariff_spec: TariffSpec | None, battery_key: str = "battery_kwh"
 ) -> SmartChargingSpec | None:
@@ -2171,7 +2640,8 @@ def resolve_smart_charging_spec(
     if cfg.get("smart_charging") is None:
         return None
     schedule = tariff_spec.definition.schedule if tariff_spec is not None else None
-    table = _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"], battery_key)
+    coupling = cfg.get("battery_coupling", "dc")
+    table = _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"], battery_key, coupling)
     if table["mode"] == "disabled":
         return SmartChargingSpec(mode="disabled")
     return SmartChargingSpec(
@@ -2186,31 +2656,8 @@ def resolve_smart_charging_spec(
         # Omitted planner settings take the planner's defaults, which the
         # spec then records.
         **{name: table[name] for name in PLANNER_KEYS if name in table},
+        battery_coupling=coupling,
     )
-
-
-def _validate_reachable_gcr(cfg: dict[str, Any], has_arrays: bool) -> None:
-    """Check every ``gcr`` that can reach the model, once everything else passes.
-
-    Runs last, and deliberately so: an out-of-range ``gcr`` used to be caught
-    only under an active bifacial model, so checking it earlier would change
-    which error an already-broken config reports. Running it here makes the
-    check purely additive — a config failing on some other key keeps failing
-    on that key, and ``gcr`` is only ever the *new* reason a config is
-    rejected.
-
-    Arrays that set no ``gcr`` inherit the top-level value, which is also the
-    function-level default handed to the multi-array entry point, so the
-    top-level value is checked even when every array overrides it. Bifacial
-    arrays have already had their effective ``gcr`` checked in the loop above;
-    re-checking an explicit override here is harmless and covers the
-    non-bifacial tracking path that nothing else reaches.
-    """
-    _validate_gcr(cfg["gcr"])
-    if has_arrays:
-        for index, array in enumerate(cfg["pv_arrays"]):
-            if "gcr" in array:
-                _validate_gcr(array["gcr"], f"pv_arrays[{index}].")
 
 
 def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
@@ -2235,12 +2682,8 @@ def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
         for field in ("latitude", "longitude", "timezone"):
             if field not in loc:
                 raise ValueError(f"Custom location must include '{field}'")
-        lat = _finite_real(loc["latitude"], "location.latitude")
-        lon = _finite_real(loc["longitude"], "location.longitude")
-        if not -90 <= lat <= 90:
-            raise ValueError("'location.latitude' must be between -90 and 90")
-        if not -180 <= lon <= 180:
-            raise ValueError("'location.longitude' must be between -180 and 180")
+        number(minimum=-90, maximum=90)(loc["latitude"], "location.latitude")
+        number(minimum=-180, maximum=180)(loc["longitude"], "location.longitude")
         if not isinstance(loc["timezone"], str):
             raise TypeError("'location.timezone' must be an IANA timezone string")
         try:
@@ -2268,108 +2711,91 @@ def _validate_load_profile(cfg: dict[str, Any]) -> None:
 
 def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
     """Validate PV sizing, array geometry, sky models, and inverter inputs."""
-    if not has_arrays and (not _is_int(cfg["n_modules"]) or cfg["n_modules"] < 1):
-        raise ValueError("'n_modules' must be >= 1")
-    _validate_tracker_settings(cfg)
+    if not has_arrays:
+        _count(cfg["n_modules"], "n_modules")
+    _check_albedo_or_surface(cfg, "")
     if has_arrays:
         if not isinstance(cfg["pv_arrays"], list):
             raise TypeError("'pv_arrays' must be a list")
         for i, arr in enumerate(cfg["pv_arrays"]):
-            # Only the key set is checked here; the values are checked below
-            # with the top-level rules they share.
             PV_ARRAY_TABLE.validate(arr, f"pv_arrays[{i}]")
-            _validate_tracker_settings(arr, where=f"pv_arrays[{i}]")
-            modules = arr.get("modules", 0)
-            if not _is_int(modules) or modules < 1:
+            if "modules" not in arr:
                 raise ValueError(f"'pv_arrays[{i}].modules' must be >= 1")
             module = arr.get("module", cfg.get("pv_module"))
-            if module is not None and module not in MODULES:
-                available = ", ".join(sorted(MODULES))
-                raise ValueError(f"Unknown PV module {module!r} in pv_arrays[{i}]. Available: {available}")
-            tilt = arr.get("tilt", cfg.get("tilt"))
-            azimuth = arr.get("azimuth", cfg.get("azimuth"))
-            if tilt is not None and not 0 <= _finite_real(tilt, f"pv_arrays[{i}].tilt") <= 90:
-                raise ValueError(f"'pv_arrays[{i}].tilt' must be between 0 and 90")
-            if azimuth is not None and not 0 <= _finite_real(azimuth, f"pv_arrays[{i}].azimuth") <= 360:
-                raise ValueError(f"'pv_arrays[{i}].azimuth' must be between 0 and 360")
-            _validate_sky_settings(
-                arr.get("transposition_model"),
-                arr.get("albedo"),
-                arr.get("surface_type"),
-                arr.get("model_perez"),
-                where=f"pv_arrays[{i}]",
-            )
+            mounting_keys = [key for key in _PV_ARRAY_MOUNTING_KEYS if key in arr]
+            if mounting_keys and cfg.get("electrical_environment") is None:
+                raise ValueError(
+                    f"'pv_arrays[{i}].{mounting_keys[0]}' applies to the string check; "
+                    "set 'inverters', 'pv_strings' and 'electrical_environment'"
+                )
             _validate_bifacial_settings(
                 arr.get("bifacial_model", cfg["bifacial_model"]),
                 module or default_module_key(),
-                arr.get("gcr", cfg["gcr"]),
                 arr.get("pvrow_height", cfg["pvrow_height"]),
                 arr.get("pvrow_pitch", cfg["pvrow_pitch"]),
                 where=f"pv_arrays[{i}]",
             )
-    if _finite_real(cfg["annual_consumption_kwh"], "annual_consumption_kwh") <= 0:
-        raise ValueError("'annual_consumption_kwh' must be > 0")
-    if _finite_real(cfg["battery_kwh"], "battery_kwh") < 0:
-        raise ValueError("'battery_kwh' must be >= 0")
-    if cfg.get("pv_module") is not None and cfg["pv_module"] not in MODULES:
-        available = ", ".join(sorted(MODULES))
-        raise ValueError(f"Unknown PV module {cfg['pv_module']!r}. Available: {available}")
-    tilt = cfg.get("tilt")
-    if tilt is not None and not 0 <= _finite_real(tilt, "tilt") <= 90:
-        raise ValueError("'tilt' must be between 0 and 90")
-    azimuth = cfg.get("azimuth")
-    if azimuth is not None and not 0 <= _finite_real(azimuth, "azimuth") <= 360:
-        raise ValueError("'azimuth' must be between 0 and 360")
+        by_modules = _module_shaded_arrays(cfg)
+        for i, arr in enumerate(cfg["pv_arrays"]):
+            if "shading" in arr and i in by_modules:
+                raise ValueError(
+                    f"'pv_arrays[{i}]' has a 'shading' table and strings with 'module_shading'; its modules' "
+                    "shading sets its irradiance, so give one or the other"
+                )
+        shaded = ["shading" in arr or i in by_modules for i, arr in enumerate(cfg["pv_arrays"])]
+        if any(shaded) and not all(shaded):
+            raise ValueError(
+                f"'pv_arrays[{shaded.index(False)}]' has no 'shading' table. Give every array a shading table "
+                "or strings with module_shading, or none; an unshaded array takes an all-zero table"
+            )
     if not has_arrays:
         _validate_bifacial_settings(
             cfg["bifacial_model"],
             cfg.get("pv_module") or default_module_key(),
-            cfg["gcr"],
             cfg["pvrow_height"],
             cfg["pvrow_pitch"],
         )
-    if not 0 < _finite_real(cfg["inverter_efficiency"], "inverter_efficiency") <= 1:
-        raise ValueError("'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
-    if cfg["inverter_ac_rating_kw"] is not None:
-        if _finite_real(cfg["inverter_ac_rating_kw"], "inverter_ac_rating_kw") <= 0:
-            raise ValueError("'inverter_ac_rating_kw' must be > 0")
-    elif _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
+    if (
+        cfg["inverter_ac_rating_kw"] is None
+        and cfg.get("inverters") is None
+        and _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0
+    ):
         raise ValueError("'inverter_loading_ratio' must be > 0")
+
+
+def _module_shaded_arrays(cfg: Mapping[str, Any]) -> set[int]:
+    """The arrays some string gives ``module_shading`` for, from the raw ``pv_strings``."""
+    strings = cfg.get("pv_strings") or []
+    return {
+        entry["array"]
+        for entry in strings
+        if isinstance(entry, Mapping) and entry.get("module_shading") is not None and _is_int(entry.get("array"))
+    }
+
+
+def _validate_shading_table(value: Any, where: str) -> None:
+    """Raise unless ``value`` is a valid near-shading table, naming ``where``."""
+    if not isinstance(value, Mapping):
+        raise ValueError(f"'{where}' must be a table of azimuth_deg, elevation_deg and beam_shaded_fraction")
+    try:
+        ShadingTable.from_mapping(value)
+    except ValueError as error:
+        raise ValueError(f"'{where}': {error}") from None
 
 
 def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
     """Validate simulation horizon, resolution, and solar-model selections."""
-    if not _is_int(cfg["projection_years"]) or cfg["projection_years"] < 1:
-        raise ValueError("'projection_years' must be >= 1")
-    if not 0 <= _finite_real(cfg["pv_degradation_rate"], "pv_degradation_rate") < 1:
-        raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
-    if cfg["resolution"] not in ("h", "15min"):
-        raise ValueError("'resolution' must be 'h' or '15min'")
     cfg["irradiance_resampling"] = validate_irradiance_resampling(cfg["irradiance_resampling"])
     _validate_weather_source(cfg)
     _validate_weather_file(cfg)
     cfg["horizon_profile"] = normalise_horizon_profile(cfg["horizon_profile"])
-    _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
-    if not is_known_model(cfg["solar_position"], SOLAR_POSITION_METHODS):
-        valid = ", ".join(SOLAR_POSITION_METHODS)
-        raise ValueError(f"'solar_position' must be one of: {valid}")
-    if not is_known_model(cfg["iam_model"], IAM_MODELS):
-        valid = ", ".join(IAM_MODELS)
-        raise ValueError(f"'iam_model' must be one of: {valid}")
-    if not is_known_model(cfg["diffuse_iam"], DIFFUSE_IAM_METHODS):
-        valid = ", ".join(DIFFUSE_IAM_METHODS)
-        raise ValueError(f"'diffuse_iam' must be one of: {valid}")
-    if not is_known_model(cfg["temperature_model"], TEMPERATURE_MODELS):
-        valid = ", ".join(TEMPERATURE_MODELS)
-        raise ValueError(f"'temperature_model' must be one of: {valid}")
     cfg["bifacial_model"] = normalise_model_name(cfg["bifacial_model"])
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
         if not isinstance(overrides, dict):
             raise TypeError("'pv_loss_overrides' must be a dict of loss component percentages")
         for name, value in overrides.items():
-            if not 0 <= _finite_real(value, f"pv_loss_overrides[{name!r}]") <= 100:
-                raise ValueError(f"'pv_loss_overrides[{name!r}]' must be a percentage between 0 and 100")
+            number(minimum=0, maximum=100)(value, f"pv_loss_overrides[{name!r}]")
         # Resolve the component names here so a typo cannot survive App
         # construction and fail after a TMY weather request.
         resolve_pvwatts_losses(overrides)
@@ -2418,16 +2844,6 @@ def _validate_weather_file(cfg: dict[str, Any]) -> None:
 
 def _validate_economics(cfg: dict[str, Any]) -> None:
     """Validate financial and optional export-emissions inputs."""
-    for key in ("inflation_rate", "discount_rate"):
-        if _finite_real(cfg[key], key) <= -1:
-            raise ValueError(f"'{key}' must be greater than -1")
-    if not -1 < _finite_real(cfg["sell_price_inflation"], "sell_price_inflation") < 1:
-        raise ValueError("'sell_price_inflation' must be between -1 and 1 (exclusive)")
-    for key in ("import_price_escalation", "om_escalation"):
-        if cfg[key] is not None and _finite_real(cfg[key], key) <= -1:
-            raise ValueError(f"'{key}' must be greater than -1 when configured")
-    if not 0 <= _finite_real(cfg["replacement_cost_learning"], "replacement_cost_learning") < 1:
-        raise ValueError("'replacement_cost_learning' must be at least 0 and below 1")
     if cfg["terminal_value"] is not None:
         cfg["terminal_value"] = TERMINAL_VALUE_TABLE.validate(cfg["terminal_value"])
         cfg["terminal_value"].setdefault("basis", "none")
@@ -2435,9 +2851,6 @@ def _validate_economics(cfg: dict[str, Any]) -> None:
         COSTS_TABLE.validate(cfg["costs"])
     if cfg["currency"] is not None:
         cfg["currency"] = check_currency(cfg["currency"], "currency")
-    if cfg["export_emissions_factor_gco2_kwh"] is not None:
-        if _finite_real(cfg["export_emissions_factor_gco2_kwh"], "export_emissions_factor_gco2_kwh") < 0:
-            raise ValueError("'export_emissions_factor_gco2_kwh' must be >= 0 when configured")
 
 
 def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
@@ -2446,16 +2859,7 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     max_soc = _finite_real(cfg["battery_max_soc"], "battery_max_soc")
     if not 0 <= min_soc < max_soc <= 1:
         raise ValueError("'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1")
-    if not 0 < _finite_real(cfg["battery_eol_percentage"], "battery_eol_percentage") < 1:
-        raise ValueError("'battery_eol_percentage' must be between 0 and 1 (exclusive)")
-    if cfg["battery_rte"] is not None and not 0 < _finite_real(cfg["battery_rte"], "battery_rte") <= 1:
-        raise ValueError("'battery_rte' must be between 0 (exclusive) and 1 (inclusive)")
-    for key in ("battery_max_charge_power_w", "battery_max_discharge_power_w"):
-        if cfg[key] is not None and _finite_real(cfg[key], key) < 0:
-            raise ValueError(f"'{key}' must be >= 0 when configured")
     if cfg["battery_power_limit_c_rate"] is not None:
-        if _finite_real(cfg["battery_power_limit_c_rate"], "battery_power_limit_c_rate") <= 0:
-            raise ValueError("'battery_power_limit_c_rate' must be greater than 0 when configured")
         if cfg["battery_max_charge_power_w"] is not None or cfg["battery_max_discharge_power_w"] is not None:
             raise ValueError(
                 "'battery_power_limit_c_rate' limits both directions from capacity; do not also "
@@ -2489,22 +2893,7 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
             f"'{start.year}-01-01'. To simulate part of the year, set [period]."
         )
 
-    if not isinstance(cfg["enable_resistance_fade"], bool):
-        raise TypeError("'enable_resistance_fade' must be a boolean")
-    if not isinstance(cfg["battery_enable_replacement"], bool):
-        raise TypeError("'battery_enable_replacement' must be a boolean")
-    if not isinstance(cfg["battery_allow_terminal_replacement"], bool):
-        raise TypeError("'battery_allow_terminal_replacement' must be a boolean")
-    min_remaining = _finite_real(
-        cfg["battery_replacement_min_remaining_years"], "battery_replacement_min_remaining_years"
-    )
-    if min_remaining < 0:
-        raise ValueError("'battery_replacement_min_remaining_years' must be >= 0")
-    cfg["battery_replacement_min_remaining_years"] = min_remaining
-    if cfg["battery_skipped_replacement_action"] not in SKIPPED_REPLACEMENT_ACTIONS:
-        raise ValueError(
-            f"'battery_skipped_replacement_action' must be one of: {', '.join(SKIPPED_REPLACEMENT_ACTIONS)}"
-        )
+    cfg["battery_replacement_min_remaining_years"] = float(cfg["battery_replacement_min_remaining_years"])
 
     # Validated through breos.execution so App and Monte Carlo cannot disagree
     # about which names exist. The default stays "python": the compiled path is
@@ -2512,8 +2901,8 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     cfg["execution_backend"] = validate_execution_backend(cfg["execution_backend"])
 
     degradation_engine = str(cfg["degradation_engine"]).strip().lower()
-    if degradation_engine not in ("native", "blast"):
-        raise ValueError("'degradation_engine' must be one of: native, blast")
+    if degradation_engine not in DEGRADATION_ENGINES:
+        raise ValueError(f"'degradation_engine' must be one of: {', '.join(DEGRADATION_ENGINES)}")
     cfg["degradation_engine"] = degradation_engine
 
     if degradation_engine == "blast":
@@ -2530,19 +2919,79 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
         raise ValueError("'blast_model' requires 'degradation_engine=blast'; native degradation remains the default")
 
 
+# An AC-coupled battery's own inverter (ADR 0004 C2): "dc" refuses them all.
+BATTERY_INVERTER_KEYS: tuple[str, ...] = (
+    "battery_inverter_ac_rating_kw",
+    "battery_inverter_kw_per_kwh",
+    "battery_inverter_efficiency",
+)
+
+
+def _refuse_dc_battery_inverter_keys(cfg: Mapping[str, Any]) -> None:
+    """A DC-coupled battery has no inverter of its own, so its keys are refused before their values are checked."""
+    if cfg["battery_coupling"] != "dc":
+        return
+    given = [key for key in BATTERY_INVERTER_KEYS if cfg[key] is not None]
+    costs = cfg.get("costs")
+    if isinstance(costs, Mapping) and "battery_inverter_cost_per_kw" in costs:
+        given.append("costs.battery_inverter_cost_per_kw")
+    if given:
+        raise ValueError(
+            f"{', '.join(repr(key) for key in given)} describe an AC-coupled battery's own inverter; "
+            "set battery_coupling = 'ac' or remove them"
+        )
+
+
+def _validate_battery_coupling(cfg: dict[str, Any]) -> None:
+    """Validate the battery topology and an AC-coupled battery's inverter (ADR 0004 C2, C9).
+
+    ``"dc"`` refuses the battery inverter keys and its price, so no setting
+    is silently ignored; :func:`_refuse_dc_battery_inverter_keys` does that
+    first, in :func:`validate_config`. ``"ac"`` with a battery needs one rating key and
+    the efficiency; without a battery it takes them and needs neither, so a
+    capacity sweep from 0 keeps one config. Its price is checked when the
+    costs resolve, since a preset could carry it.
+    """
+    coupling = cfg["battery_coupling"]
+    if cfg["battery_inverter_ac_rating_kw"] is not None and cfg["battery_inverter_kw_per_kwh"] is not None:
+        raise ValueError(
+            "'battery_inverter_ac_rating_kw' and 'battery_inverter_kw_per_kwh' both size the battery inverter; "
+            "set one of them"
+        )
+    efficiency = cfg["battery_inverter_efficiency"]
+    if coupling == "ac" and config_has_battery(cfg):
+        if cfg["battery_inverter_ac_rating_kw"] is None and cfg["battery_inverter_kw_per_kwh"] is None:
+            raise ValueError(
+                "An AC-coupled battery needs its inverter's rating: set 'battery_inverter_ac_rating_kw' or "
+                "'battery_inverter_kw_per_kwh'"
+            )
+        if efficiency is None:
+            raise ValueError(
+                "An AC-coupled battery needs 'battery_inverter_efficiency', from a source for the product; "
+                "it has no default"
+            )
+
+
+def battery_inverter_ac_capacity_w(cfg: Mapping[str, Any]) -> float | None:
+    """An AC-coupled battery's inverter rating in W, or None without one.
+
+    ``battery_inverter_kw_per_kwh`` resolves against the nominal capacity, so
+    the rating is fixed for the project (ADR 0004 C2).
+    """
+    if cfg["battery_coupling"] != "ac" or not config_has_battery(cfg):
+        return None
+    if cfg["battery_inverter_ac_rating_kw"] is not None:
+        return float(cfg["battery_inverter_ac_rating_kw"]) * 1000
+    return float(cfg["battery_inverter_kw_per_kwh"]) * float(cfg["battery_kwh"]) * 1000
+
+
 def _is_int(value: Any) -> bool:
     """Return whether *value* is an integer, excluding booleans."""
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _finite_real(value: Any, key: str) -> float:
-    """Return a finite float or raise an actionable public config error."""
-    if isinstance(value, bool) or not isinstance(value, Real):
-        raise TypeError(f"'{key}' must be a finite number")
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError(f"'{key}' must be a finite number")
-    return result
+# A finite number, returned as float.
+_finite_real = number()
 
 
 def resolve_location(cfg: dict[str, Any]) -> tuple[float, float, str, str | None]:
@@ -2590,9 +3039,7 @@ def normalise_pv_arrays(
     default_module = cfg["pv_module"] or default_module_key()
 
     # Tracker settings are inherited from the top level like module, tilt and
-    # azimuth. The PV model has its own fallbacks for an array without them,
-    # and those used to win: a top-level single-axis tracker ran fixed-tilt
-    # once pv_arrays was set.
+    # azimuth, before the PV model's own fallbacks for an array without them.
     tracker_defaults = {key: cfg[key] for key in ("tracking", *_TRACKER_GEOMETRY_KEYS)}
     tracker_defaults["axis_azimuth"] = axis_azimuth
 
@@ -2609,11 +3056,26 @@ def normalise_pv_arrays(
             for key in _TRACKER_GEOMETRY_KEYS:
                 value = arr.get(key)
                 entry[key] = tracker_defaults[key] if value is None else value
-        for key in _PV_ARRAY_OPTION_KEYS:
+        for key in (*PER_ARRAY_MODEL_OPTION_KEYS, *_PV_ARRAY_MOUNTING_KEYS):
             if key in arr:
                 entry[key] = arr[key]
+        if "shading" in arr:
+            entry["shading"] = _plain_shading(arr["shading"])
         normalized.append(entry)
     return normalized
+
+
+def _plain_shading(value: Mapping[str, Any]) -> dict[str, Any]:
+    """A validated shading table as plain lists of floats, as the result echoes it."""
+    table = ShadingTable.from_mapping(value)
+    plain: dict[str, Any] = {
+        "azimuth_deg": list(table.azimuth_deg),
+        "elevation_deg": list(table.elevation_deg),
+        "beam_shaded_fraction": [list(row) for row in table.beam_shaded_fraction],
+    }
+    if table.sky_view_factor_stated:
+        plain["sky_view_factor"] = table.sky_view_factor
+    return plain
 
 
 def resolve_pv_system(
@@ -2658,34 +3120,19 @@ def validate_temperature_module_metadata(
 ) -> None:
     """Validate any module metadata required by the selected thermal model.
 
-    Array configurations may name different modules, so SAM NOCT needs each
-    one checked during App config resolution rather than failing after weather
-    loading. The thermal kernel repeats this validation for direct solar calls.
+    Array configurations may name different modules and thermal models, so SAM
+    NOCT needs each array checked during App config resolution rather than
+    failing after weather loading. The thermal kernel repeats this validation
+    for direct solar calls.
     """
-    model = normalise_model_name(temperature_model)
-    modules = [get_module(arr["module"]) for arr in pv_arrays] if pv_arrays else [pv_params]
-    for module in modules:
+    if not pv_arrays:
+        validate_temperature_inputs(
+            normalise_model_name(temperature_model), pv_params.Module_Efficiency, pv_params.NOCT
+        )
+    for arr in pv_arrays:
+        module = get_module(arr["module"])
+        model = normalise_model_name(arr.get("temperature_model", temperature_model))
         validate_temperature_inputs(model, module.Module_Efficiency, module.NOCT)
-
-
-def resolve_tracking(cfg: dict[str, Any]) -> str:
-    """Return the top-level tracker mode.
-
-    The validator skips an unset (None) mode, so ``tracking = None`` is
-    rejected here.
-    """
-    tracking = cfg["tracking"]
-    if tracking not in _TRACKING_MODES:
-        raise ValueError(f"tracking must be 'fixed', 'single_axis', or 'dual_axis', got {tracking!r}")
-    return tracking
-
-
-def _cost_preset_currency(key: str) -> str:
-    """The currency of a packaged cost preset; an unknown key raises with the available ones."""
-    costs_db = load_config_json("costs.json")
-    if key not in costs_db:
-        raise ValueError(f"Unknown cost preset '{key}'. Available: {', '.join(sorted(costs_db))}")
-    return str(costs_db[key]["currency"])
 
 
 def check_cost_currency(
@@ -2695,6 +3142,7 @@ def check_cost_currency(
     preset: str | None = None,
     tariff: bool,
     battery: bool | None,
+    coupling: str = "dc",
     where: str = "[costs]",
 ) -> None:
     """Refuse cost inputs that are not in the run's ``currency``.
@@ -2704,25 +3152,32 @@ def check_cost_currency(
     cost the run prices with whose :class:`~breos.economics.CostParams`
     default is a EUR amount must be given, in ``given`` (the cost keys set
     explicitly) or by a preset in that currency. Defaults of zero are zero in
-    any currency and stay. ``tariff`` and ``battery`` select the keys the run
-    prices with (:func:`~breos.economics.default_amount_cost_keys`).
+    any currency and stay. ``tariff``, ``battery`` and ``coupling`` select the
+    keys the run prices with (:func:`~breos.economics.default_amount_cost_keys`).
 
     Raises:
         ValueError: If the preset's currency differs, or a EUR default would be read.
     """
     supplied = set(given)
     if preset:
-        preset_currency = _cost_preset_currency(preset)
+        costs_db = load_config_json("costs.json")
+        if preset not in costs_db:
+            raise ValueError(f"Unknown cost preset '{preset}'. Available: {', '.join(sorted(costs_db))}")
+        preset_currency = str(costs_db[preset]["currency"])
         if preset_currency != currency:
             raise ValueError(
                 f"cost_preset '{preset}' is priced in {preset_currency}, but the run is in {currency}. BREOS does "
                 f"not convert currencies: remove cost_preset and give the costs in {currency} under {where}, or "
                 f"choose a cost preset in {currency}."
             )
-        supplied.update(load_config_json("costs.json")[preset])
+        supplied.update(costs_db[preset])
     if currency == DEFAULT_CURRENCY:
         return
-    missing = [key for key in default_amount_cost_keys(tariff=tariff, battery=battery) if key not in supplied]
+    missing = [
+        key
+        for key in default_amount_cost_keys(tariff=tariff, battery=battery, coupling=coupling)
+        if key not in supplied
+    ]
     if missing:
         raise ValueError(
             f"The run is in {currency}, but {', '.join(missing)} would come from the built-in "
@@ -2786,7 +3241,8 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
     """Build the cost-analysis input dictionary for the resolved system.
 
     A replacement is priced at the storage cost per kWh of the configured
-    capacity (ADR 0003 E4), the price the optimizer uses too.
+    capacity (ADR 0003 E4), the price the optimizer uses too, unless
+    ``battery_replacement_cost`` states the price of one (ADR 0004 C9).
     """
     return calculate_costs(
         n_modules=cfg["n_modules"],
@@ -2795,7 +3251,11 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
         cost_params=resolved.cost_params,
         # The rating that clips production is the one CAPEX prices (#181).
         inverter_ac_capacity_w=resolved.inverter_ac_capacity_w,
-        replacement_cost_each=replacement_event_cost(cfg["battery_kwh"], resolved.cost_params.battery_cost_per_kwh),
+        replacement_cost_each=replacement_event_cost(
+            cfg["battery_kwh"], resolved.cost_params.battery_cost_per_kwh, cfg.get("battery_replacement_cost")
+        ),
+        battery_coupling=cfg.get("battery_coupling", "dc"),
+        battery_inverter_ac_capacity_w=resolved.battery_inverter_ac_capacity_w,
     )
 
 
@@ -2818,13 +3278,8 @@ def _normalise_config_values(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 # Keys that set the same thing, so one config layer may set only one of them.
-# A later layer (a CLI flag over a file, a sweep value over the base) that
-# sets one drops the other from the layers below: see override_config.
 EXCLUSIVE_ALTERNATIVES: Mapping[str, str] = {
-    "inverter_ac_rating_kw": "inverter_loading_ratio",
-    "inverter_loading_ratio": "inverter_ac_rating_kw",
-    "weather_file": "weather_source",
-    "weather_source": "weather_file",
+    key: field.exclusive_with for key, field in APP_CONFIG_FIELDS.items() if field.exclusive_with is not None
 }
 
 
@@ -2847,14 +3302,22 @@ def _check_one_inverter_sizing(config: Mapping[str, Any]) -> None:
 
 def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     """Merge, validate, and resolve App configuration."""
+    module_catalogue = catalogue_snapshot()
     normalized = normalize_config_keys(config)
     _check_one_inverter_sizing(normalized)
+    _check_electrical_sizing(normalized)
     cfg = merge_defaults(normalized)
-    if cfg["inverter_ac_rating_kw"] is not None:
-        # The absolute rating replaces the ratio, so the ratio is reported unset.
+    if cfg["inverter_ac_rating_kw"] is not None or cfg["inverters"] is not None:
+        # An absolute rating replaces the ratio, so the ratio is reported unset.
         cfg["inverter_loading_ratio"] = None
     _normalise_config_values(cfg)
-    tariff = validate_config(cfg)
+    specs = validate_config(cfg)
+    tariff = specs.tariff
+    if cfg.get("pv_arrays"):
+        # The result echoes the tables as plain floats, whatever numbers they came as.
+        cfg["pv_arrays"] = [
+            {**arr, "shading": _plain_shading(arr["shading"])} if "shading" in arr else arr for arr in cfg["pv_arrays"]
+        ]
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
     tilt, azimuth, axis_azimuth = resolve_orientation(cfg, lat)
@@ -2862,12 +3325,48 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         cfg, tilt=tilt, azimuth=azimuth, axis_azimuth=axis_azimuth
     )
     validate_temperature_module_metadata(cfg["temperature_model"], pv_arrays, pv_params)
-    tracking = resolve_tracking(cfg)
+    tracking = cfg["tracking"]
 
     # Materialise the resolved module count (derived from pv_arrays when set)
     # into a fresh dict rather than mutating the merged config in place.
     cfg = {**cfg, "n_modules": n_modules}
     cost_params = resolve_costs(cfg)
+    battery_inverter_w = battery_inverter_ac_capacity_w(cfg)
+    if battery_inverter_w is not None and cost_params.battery_inverter_cost_per_kw is None:
+        raise ValueError(
+            "An AC-coupled battery needs '[costs] battery_inverter_cost_per_kw', the price of its own inverter per "
+            "kW; BREOS has no default for it. Set 0 if another price already includes the inverter"
+        )
+    electrical = _resolve_electrical(cfg, pv_arrays, pv_params, n_modules)
+    if electrical is not None and any(string.module_shading is not None for string in electrical.strings):
+        # The result echoes each module's tables as plain floats.
+        cfg["pv_strings"] = [
+            {**entry, "module_shading": string.module_shading.as_config()}
+            if string.module_shading is not None
+            else entry
+            for entry, string in zip(cfg["pv_strings"], electrical.strings, strict=True)
+        ]
+    if electrical is not None and electrical.dc_wiring is not None:
+        overrides = cfg["pv_loss_overrides"] or {}
+        if "wiring" not in overrides:
+            # The cables model the DC wiring. A stated wiring loss stays, as the
+            # AC side's until AC cables are modelled.
+            cfg["pv_loss_overrides"] = {**overrides, "wiring": 0.0}
+    if any("shading" in arr for arr in pv_arrays) or _module_shaded_arrays(cfg):
+        overrides = cfg["pv_loss_overrides"] or {}
+        if "shading" not in overrides:
+            # The tables model the near shading. A stated flat loss stays, on
+            # top of them, for whatever they leave out.
+            cfg["pv_loss_overrides"] = {**overrides, "shading": 0.0}
+    if electrical is not None:
+        cfg["inverter_ac_rating_kw"] = sum(inverter.nominal_power_w for inverter in electrical.inverters) / 1000
+        rated = [(i.nominal_power_w, i.inverter_efficiency) for i in electrical.inverters]
+        known = [(power, efficiency) for power, efficiency in rated if efficiency is not None]
+        if len(known) == len(rated):
+            # The nameplate-weighted mean, as the aggregate model has one inverter.
+            cfg["inverter_efficiency"] = sum(p * e for p, e in known) / sum(p for p, _ in known)
+        elif known:
+            raise ValueError("Give every entry of 'inverters' an inverter_efficiency, or none")
     ac_capacity_w: float | None
     if cfg["inverter_ac_rating_kw"] is not None:
         ac_capacity_w = float(cfg["inverter_ac_rating_kw"]) * 1000
@@ -2876,7 +3375,22 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     else:
         ac_capacity_w = inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"])
 
-    currency = run_currency(cfg["currency"], tariff.prices.currency if tariff is not None else None)
+    ac_cable = (
+        None if cfg["ac_cable"] is None else _built(AcCable, AC_CABLE_TABLE.validate(cfg["ac_cable"]), "ac_cable")
+    )
+    if electrical is not None and any(inverter.ac_cable is not None for inverter in electrical.inverters):
+        if len(electrical.inverters) == 1:
+            # One inverter has one cable to the meter, given in either place.
+            if ac_cable is not None:
+                raise ValueError("Give the inverter's AC cable as '[ac_cable]' or 'inverters[0].ac_cable', not both")
+            own = electrical.inverters[0].ac_cable
+            assert own is not None
+            ac_cable = _built(AcCable, dict(own), "inverters[0].ac_cable")
+        elif electrical.fidelity != "string":
+            raise ValueError(
+                "An inverter's own 'ac_cable' with several inverters needs electrical_fidelity = 'string', which "
+                "converts each inverter on its own"
+            )
     return ResolvedAppConfig(
         cfg=cfg,
         lat=lat,
@@ -2894,10 +3408,154 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         axis_azimuth=axis_azimuth,
         inverter_ac_capacity_w=ac_capacity_w,
         tariff=tariff,
-        smart_charging=resolve_smart_charging_spec(cfg, tariff),
+        smart_charging=specs.smart_charging,
         cost_params=cost_params,
         emissions_params=resolve_emissions(cfg),
         period=resolve_period(cfg, timezone),
-        reference_tariff=resolve_reference_tariff_spec(cfg, timezone, currency),
-        currency=currency,
+        reference_tariff=specs.reference_tariff,
+        currency=specs.currency,
+        electrical=electrical,
+        ac_cable=ac_cable,
+        inverter_conversion=_inverter_conversion(electrical, ac_cable, pv_arrays, pv_params),
+        module_catalogue=module_catalogue,
+        battery_inverter_ac_capacity_w=battery_inverter_w,
     )
+
+
+def _inverter_conversion(
+    electrical: ElectricalSetup | None,
+    ac_cable: AcCable | None,
+    pv_arrays: list[dict[str, Any]],
+    pv_params: PVModuleParams,
+) -> InverterConversion | None:
+    """The efficiency curve, AC cable and night consumption the dispatch runs, or None for none of them.
+
+    Aggregate energy reads the curve at its middle row, the nominal voltage of
+    a three-row curve. String-level energy reads it at the strings' STC
+    maximum power voltage, weighted by their STC power; that row stands for
+    the steps without PV, and each step with PV reads its own operating
+    voltage (:func:`breos.app_inputs.build_inverter_curve_row`). The night
+    consumption is every inverter's that states one.
+
+    String-level energy with several inverters converts each on its own
+    (:func:`breos.app_inputs.build_inverter_units`), so there is no single
+    conversion: None.
+    """
+    inverters = electrical.inverters if electrical is not None else ()
+    if len(inverters) > 1 and electrical is not None and electrical.fidelity == "string":
+        return None
+    if len(inverters) > 1 and any(i.efficiency_curve or i.temperature_derating for i in inverters):
+        raise ValueError(
+            "An inverter efficiency_curve or temperature_derating with several inverters needs "
+            f"electrical_fidelity = 'string'; {len(inverters)} are configured"
+        )
+    curve = inverters[0].efficiency_curve if inverters else None
+    stated = [i.night_consumption_w for i in inverters if i.night_consumption_w is not None]
+    night = sum(stated) if stated else None
+    if curve is None and ac_cable is None and night is None:
+        return None
+    voltage = None
+    if curve is not None and electrical is not None and electrical.fidelity == "string":
+        modules = [get_module(arr["module"]) for arr in pv_arrays] or [pv_params]
+        weighted = [
+            (s.modules * s.parallel * modules[s.array].Mpp, s.modules * modules[s.array].Vmp)
+            for s in electrical.strings
+            if s.array < len(modules)
+        ]
+        power = sum(p for p, _ in weighted)
+        voltage = sum(p * v for p, v in weighted) / power if power > 0 else None
+    return InverterConversion.build(curve, voltage_v=voltage, ac_cable=ac_cable, night_consumption_w=night)
+
+
+def _check_module_shading(
+    cfg: Mapping[str, Any], strings: Sequence[PVString], arrays: Sequence[tuple[PVModuleParams, int]]
+) -> tuple[PVString, ...]:
+    """The strings with their module shading bound to their array's module; refuse shading string energy cannot run.
+
+    Each string's tables take its module's bypass diodes
+    (:meth:`~breos.pv.shading.ModuleShading.for_module`).
+    """
+    shaded = [string.module_shading is not None for string in strings]
+    if not any(shaded):
+        return tuple(strings)
+    n_arrays = len(cfg["pv_arrays"] or [])
+    bound = []
+    for i, string in enumerate(strings):
+        if string.module_shading is not None and string.array < len(arrays):
+            module = arrays[string.array][0]
+            try:
+                shading = string.module_shading.for_module(module.bypass_diodes, module.cell_strings_in_parallel)
+            except ValueError as error:
+                raise ValueError(f"'pv_strings[{i}].module_shading': {error}") from None
+            problem = shading.inconsistency(module.N_Cells)
+            if problem:
+                raise ValueError(f"'pv_strings[{i}].module_shading': {problem}")
+            string = replace(string, module_shading=shading)
+        bound.append(string)
+    first = shaded.index(True)
+    if cfg["electrical_fidelity"] != "string":
+        raise ValueError(f"'pv_strings[{first}].module_shading' needs electrical_fidelity = 'string'")
+    if not n_arrays:
+        raise ValueError(f"'pv_strings[{first}].module_shading' needs 'pv_arrays'")
+    for array in sorted({string.array for string in strings}):
+        members = [i for i, string in enumerate(strings) if string.array == array]
+        flags = [shaded[i] for i in members]
+        if any(flags) and not all(flags):
+            raise ValueError(
+                f"'pv_strings[{members[flags.index(False)]}]' has no module_shading, but another string of "
+                f"array {array} does. Give every string of an array module_shading, or none"
+            )
+    return tuple(bound)
+
+
+# The DC/AC ratio range outside which the electrical check warns, per inverter.
+DC_AC_RATIO_RANGE = (0.8, 1.6)
+
+
+def _resolve_electrical(
+    cfg: Mapping[str, Any], pv_arrays: list[dict[str, Any]], pv_params: PVModuleParams, n_modules: int
+) -> ElectricalSetup | None:
+    """Check the configured string topology against the resolved arrays, or None without one."""
+    inputs = _electrical_inputs(cfg)
+    if inputs is None:
+        return None
+    inverters, strings, environment = inputs
+    arrays = [(get_module(arr["module"]), arr["modules"]) for arr in pv_arrays] or [(pv_params, n_modules)]
+    mountings = [
+        _built(ArrayMounting, {key: arr[key] for key in _PV_ARRAY_MOUNTING_KEYS if key in arr}, f"pv_arrays[{i}]")
+        for i, arr in enumerate(pv_arrays)
+    ] or None
+    cabled = [string.has_cable for string in strings]
+    if any(cabled) and not all(cabled):
+        raise ValueError(
+            "Give every 'pv_strings' entry cable_length_m and cable_cross_section_mm2, or none: the cables "
+            "replace the flat 'wiring' loss for the whole system"
+        )
+    strings = _check_module_shading(cfg, strings, arrays)
+    setup = ElectricalSetup(
+        inverters,
+        strings,
+        environment,
+        check_topology(
+            arrays, inverters, strings, environment, dc_ac_ratio_range=DC_AC_RATIO_RANGE, mountings=mountings
+        ),
+        fidelity=cfg["electrical_fidelity"],
+        dc_wiring=cable_summary(arrays, strings, environment),
+    )
+    if setup.fidelity == "string":
+        problems = string_model_problems(setup)
+        if len(inverters) > 1 and config_has_battery(cfg) and cfg["battery_coupling"] != "ac":
+            problems.append(
+                f"a battery beside {len(inverters)} inverters must be AC-coupled (battery_coupling = 'ac'); a "
+                "DC-coupled battery sits behind one hybrid inverter"
+            )
+        smart_charging = cfg.get("smart_charging") or {}
+        if len(inverters) > 1 and config_has_battery(cfg) and smart_charging.get("mode") in PLANNER_MODES:
+            # The planner converts one forecast through one PV inverter (ADR 0004 M7).
+            problems.append(
+                f"smart_charging.mode = '{smart_charging['mode']}' plans with one PV inverter, not "
+                f"{len(inverters)}; use mode = 'fixed_target' or 'discharge_only'"
+            )
+        if problems:
+            raise ValueError("electrical_fidelity = 'string' cannot run: " + "; ".join(problems))
+    return setup

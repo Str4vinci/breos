@@ -25,9 +25,10 @@ scores. System kWp, inverter rating, and CAPEX use the selected module's
 key is absent. It optimizes two values: projected lifetime grid independence
 and projected NPV. A design is selected for how it performs across the project
 lifetime, which is the question a sizing study asks.
-`optimization.objective_basis = "projected"` names this basis and is the only
-accepted value. The annual `"steady_state"` basis was removed in 0.7.0, and a
-config that still sets it raises an error.
+This is the only basis, so the config does not name it.
+`optimization.objective_basis` is deprecated in 0.8.0: `"projected"` still
+passes with a warning, and 0.9.0 refuses the key. The annual `"steady_state"`
+basis was removed in 0.7.0, and a config that still sets it raises an error.
 
 Projected mode repeats the configured TMY. Each year applies the configured PV
 degradation factor and carries battery stored energy, PV-origin stored energy,
@@ -76,12 +77,12 @@ call takes them as DataFrames.
 | --- | --- |
 | `location` | `latitude`, `longitude` (required); `timezone` (`"UTC"`); `altitude` (looked up from the coordinates); `name` (`""`) |
 | `pv` | `module` (the App's default module); `params` (an inline module: `Mpp`, `Vmp`, `Imp`, `Voc`, `Isc` required; temperature coefficients `T_Pmax_pct`, `T_Voc_pct` and `T_Isc_pct`, `N_Cells` and `celltype` optional); `dimensions` or `module_width_m` and `module_length_m` (1.134 × 2.278 m); `degradation_rate` (0.005, or `financials.pv_degradation_rate`) |
-| `battery` | the `BatteryConfig` keys `min_soc`, `max_soc`, `charge_efficiency`, `discharge_efficiency`, `standby_loss_wh`, `eol_percentage`, `max_charge_power_w`, `max_discharge_power_w`, `power_limit_c_rate`, `calendar_model`, `enable_resistance_fade` (the App's defaults); `temperature` (`"weather"`); `indoor_model` (the App's `battery_indoor_model` table); `degradation_engine` (`"native"`); `blast_model`; `replacement_cost` (storage cost per kWh times capacity); `enable_replacement` (`true`); `allow_terminal_replacement` (`true`); `replacement_min_remaining_years` (0); `skipped_replacement_action` (`"keep"`); `initial_soh` (100) |
+| `battery` | the `BatteryConfig` keys `min_soc`, `max_soc`, `charge_efficiency`, `discharge_efficiency`, `standby_loss_wh`, `eol_percentage`, `max_charge_power_w`, `max_discharge_power_w`, `power_limit_c_rate`, `calendar_model`, `enable_resistance_fade` (the App's defaults); `temperature` (`"weather"`); `indoor_model` (the App's `battery_indoor_model` table); `degradation_engine` (`"native"`); `blast_model`; `replacement_cost` (storage cost per kWh times capacity); `enable_replacement` (`true`); `allow_terminal_replacement` (`true`); `replacement_min_remaining_years` (0); `skipped_replacement_action` (`"keep"`); `initial_soh` (100); `coupling` (`"dc"`), and for `"ac"` the battery inverter's `inverter_ac_rating_kw` or `inverter_kw_per_kwh` and `inverter_efficiency` (no defaults), with `[costs] battery_inverter_cost_per_kw`; see [AC-coupled batteries](../getting-started/configuration.md#ac-coupled-batteries) |
 | `costs` | the App's `costs` keys, plus `dc_ac_ratio` (1.25), the DC peak over the inverter AC rating |
 | `financials` | `inflation_rate` (0.02), `sell_price_inflation` (0), `import_price_escalation`, `om_escalation`, `replacement_cost_learning`, `discount_rate` (0.03), `project_lifespan`, `pv_degradation_rate`, and the flat-price fallbacks `electricity_cost` and `electricity_sold_cost` |
 | `constraints` | see below |
 | `mode` | `fixed_azimuth` (none: azimuth is searched, 90–270° in the northern hemisphere, −90–90° in the southern); `layouts` (`["single"]`; add `"east_west"` to search East–West roofs too); `east_west_tilt_deg` (10), the fixed tilt of an East–West design |
-| `optimization` | `objective_basis` (`"projected"`); `early_stop` (off; `true` or a table turns it on, and a table takes `enabled` (`true`), `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
+| `optimization` | `objective_basis` (`"projected"`, deprecated in 0.8.0); `early_stop` (off; `true` or a table turns it on, and a table takes `enabled` (`true`), `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
 | `simulation` | `resolution` (`"h"`, or `"15min"`); `irradiance_resampling` (`"auto"`); `years_projection` (20, or `financials.project_lifespan`) |
 | `inverter` | `efficiency`, used when the top-level `inverter_efficiency` (0.96) is not set |
 | `emissions` | the `EmissionsParams` fields; the search then reports `Projected_CO2_*` for every Pareto row |
@@ -137,6 +138,25 @@ row has the configured `Tilt` and a NaN `Azimuth`.
 `details["provenance"]["mode"]` records the layouts and tilt used.
 `evaluate_projected_design` takes `layout="east_west"` with a `tilt` and no
 `azimuth`, and its metrics carry `Layout` too.
+
+`details["evaluated"]` holds every design the search scored, one row per
+distinct design vector in the order first scored. Its columns are the Pareto
+table's, then `Constraint_Budget` (CAPEX minus `budget`), `Constraint_Area`
+(module frame area minus `max_area_m2`) and, with `enforce_zeb`,
+`Constraint_ZEB` (1 minus the projected ZEB ratio); a value of zero or less
+meets the limit. `Feasible` is true when every constraint is met, and
+`Evaluations` is the number of times NSGA-II asked for the design. Like the
+Pareto table, it records the run's currency in `attrs["currency"]`.
+`details["evaluation_counts"]` holds `evaluations` (pymoo's evaluation count),
+`simulations` (the projections run) and `distinct_designs`.
+
+Each design vector is simulated once per search. pymoo removes duplicates
+only within a population and its offspring, so a design that left the
+population and comes back would otherwise be simulated again. A repeat takes
+the scores of its first simulation instead. A projection depends on the
+design alone, so the search, its front and every value are the same as
+without the cache. The record of scored designs stays in the parent process,
+and worker processes simulate only designs not yet scored.
 
 Results expose `Projected_*` diagnostics. The ordinary `Grid_Independence_%`
 and `NPV` columns equal `Projected_Grid_Independence_%` and

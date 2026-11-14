@@ -22,10 +22,10 @@ the columns of the [ledger schema](energy-balance.md#ledger-schema).
 
 `App.revalue(changes)` returns the result a finished run would give at other
 prices, without changing the App or its `result()`. `changes` may set only
-the economics keys: `costs`, `cost_preset`, `tariff`, `reference_tariff`,
-`terminal_value`, `discount_rate`, `inflation_rate` and the escalators
-(`import_price_escalation`, `om_escalation`, `sell_price_inflation`,
-`replacement_cost_learning`). Any other key, such as `battery_kwh` or
+the economics keys: `costs`, `cost_preset`, `currency`, `tariff`, `reference_tariff`,
+`terminal_value`, `discount_rate`, `inflation_rate`,
+`battery_replacement_cost` and the escalators (`import_price_escalation`,
+`om_escalation`, `sell_price_inflation`, `replacement_cost_learning`). Any other key, such as `battery_kwh` or
 `projection_years`, raises `ValueError`; build a new `App` for it.
 
 A nested table changes only the keys it sets, and a key set to `None` in it

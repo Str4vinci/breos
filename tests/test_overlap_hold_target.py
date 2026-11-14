@@ -12,6 +12,7 @@ from breos._dispatch import _dispatch_dc_step, lfp_capacity_factor
 from breos.app import App
 from breos.battery import BatteryConfig, _simulate_detailed_run, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
+from breos.inverter import NO_CONVERSION
 from breos.smart_charging import FixedTargetDayController, SmartChargingSpec, period_layout, resolve_instructions
 from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 from tests.test_controller_seam import SPEC, _project, _Recording, _scenario, _steps_per_day
@@ -105,6 +106,7 @@ def _step(
         floor,
         0.95,
         1e9,
+        *NO_CONVERSION.kernel_arguments(1.0),
     )
 
 
@@ -297,7 +299,12 @@ def test_default_reject_preserves_the_existing_ledger_bits(name, freq, digest):
         execution_backend="python",
         **kwargs,
     )[0]
-    assert hashlib.sha256(frame.drop(columns="Datetime").to_numpy(dtype=np.float64).tobytes()).hexdigest() == digest
+    # No inverter night consumption is configured and the battery is DC-coupled:
+    # the columns added since are 0 and the rest keep their bits.
+    added = ["Inverter_Night_Consumption", "PV_AC_To_Battery", "PV_Charge_Conversion_Loss"]
+    assert (frame[added] == 0.0).all().all()
+    ledger = frame.drop(columns=["Datetime", *added])
+    assert hashlib.sha256(ledger.to_numpy(dtype=np.float64).tobytes()).hexdigest() == digest
 
 
 @pytest.mark.usefixtures("_patch_weather")

@@ -20,39 +20,7 @@ from breos.app_inputs import PreparedSimulationInputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.runners import app as app_runner
 from breos.solar import PVProductionBreakdown
-
-# Energy-ledger closure identities (Wh; hourly => W and Wh are numerically equal).
-# Both hold on every timestep row, including battery-replacement rows.
-
-
-def _assert_energy_ledger_closes(results: pd.DataFrame, atol: float = 1e-6) -> None:
-    delta = (
-        results["Battery_Charge_Stored"]
-        - results["Battery_Discharge_DC"]
-        - results["Standby_Loss"]
-        - results["Capacity_Window_Loss"]
-        - results["Battery_Replacement_Energy_Removed"]
-        + results["Battery_Replacement_Energy_Added"]
-    )
-    np.testing.assert_allclose(results["Battery_Energy_Delta"], delta, atol=atol)
-
-    lhs = results["PV_DC"] + results["Battery_Replacement_Energy_Added"]
-    rhs = (
-        results["PV_AC_To_Load"]
-        + results["PV_AC_Export"]
-        + results["Battery_AC_To_Load"]
-        + results["PV_DC_Curtailed"]
-        + results["Battery_Charge_Loss"]
-        + results["Battery_Discharge_Loss"]
-        + results["PV_Direct_Inverter_Loss"]
-        + results["Battery_Inverter_Loss"]
-        + results["Standby_Loss"]
-        + results["Capacity_Window_Loss"]
-        + results["Battery_Replacement_Energy_Removed"]
-        + results["Battery_Energy_Delta"]
-    )
-    np.testing.assert_allclose(lhs, rhs, atol=atol)
-
+from tests.energy_conservation import assert_energy_conservation
 
 # ---------------------------------------------------------------------------
 # Test 2: BLAST at 15-minute resolution
@@ -110,7 +78,7 @@ def test_blast_15min_resolution_two_days():
         for values in snapshot[group_name].values():
             assert np.isfinite(values[-1])
 
-    _assert_energy_ledger_closes(results_df)
+    assert_energy_conservation(results_df, config)
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +130,7 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
         "total_initial_cost": 12000.0,
         "replacement_cost_each": 5.0 * 500.0,
     }
-    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
     monkeypatch.setattr(projection_module, "build_costs_dict", lambda cfg, resolved: costs)
 
     # Wrap (do not mock) the real degradation call to retain each year's frames.
@@ -240,6 +208,7 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     np.testing.assert_allclose(cost_projection["Cost_Replacement"].to_numpy(), expected_replacement_cost, atol=1e-9)
 
     replacement_reset_energy = battery_kwh * 1000.0 * max_soc
+    battery = projection_module.build_battery_config(cfg, resolved, initial_soh=100.0)
     replacement_years_seen = 0
     for year_idx, year_result in enumerate(captured_years):
         results_df = year_result[0]
@@ -247,7 +216,7 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
         year_replacements = year_result[3]
 
         # Ledger closes on every row of every year, including replacement rows.
-        _assert_energy_ledger_closes(results_df)
+        assert_energy_conservation(results_df, battery)
 
         if not year_replacements:
             continue
@@ -359,6 +328,18 @@ def test_blast_split_matches_continuous_at_mid_swing_boundary(blast_model):
     assert 0.15 < boundary_soc < 0.85, boundary_soc
     assert abs(soc[boundary] - soc[boundary - 1]) > 0.05
     assert abs(soc[boundary + 1] - soc[boundary]) > 0.05
+    # The carried day-start anchor is the true mid-swing SoC, away from both rails.
+    anchor = year_one_state["day_start_soc_absolute"]
+    assert anchor == pytest.approx(soc[boundary - 1], abs=1e-12)
+    assert abs(anchor - config.max_soc) > 0.05
+    assert abs(anchor - config.min_soc) > 0.05
+
+    # The first span's EFC does not depend on how long the run continues afterwards.
+    year_one_efc = year_one_state["blast_engine"]["stressors"]["efc"][-1]
+    assert year_one_efc > 0.0
+    assert year_one_efc == pytest.approx(
+        continuous_degradation["Cumulative_FEC"].iloc[len(year_one_degradation) - 1], abs=1e-12
+    )
 
     # Final SOH matches to a tight tolerance.
     assert year_two_degradation["SOH"].iloc[-1] == pytest.approx(continuous_degradation["SOH"].iloc[-1], abs=1e-9)

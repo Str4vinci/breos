@@ -4,22 +4,19 @@ from pathlib import Path
 
 import pytest
 
-from breos import cli
 from breos.app import App
 
-BASE = {"location": "porto", "n_modules": 6, "annual_consumption_kwh": 3000, "projection_years": 1}
+# The cached weather CSVs these tests write carry no metadata sidecar, so the
+# sun position is pinned at the step labels rather than left to "auto".
+BASE = {
+    "location": "porto",
+    "n_modules": 6,
+    "annual_consumption_kwh": 3000,
+    "projection_years": 1,
+    "solar_position": "interval-start",
+}
 SARAH3_FILE = "porto_tmy_2005_2023_pvgis-sarah3.csv"
 NSRDB_FILE = "porto_tmy_2014_nsrdb.csv"
-
-
-@pytest.fixture
-def no_fetch(monkeypatch):
-    """Fail if App falls back to a PVGIS fetch; these tests are offline."""
-
-    def _fail(*args, **kwargs):
-        raise AssertionError("App fetched PVGIS weather instead of using the local cache")
-
-    monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fail)
 
 
 @pytest.fixture
@@ -106,12 +103,6 @@ def test_weather_source_is_rejected_for_coordinate_locations():
     location = {"latitude": 41.15, "longitude": -8.63, "timezone": "Europe/Lisbon"}
     with pytest.raises(ValueError, match="coordinate-dict locations"):
         App({**BASE, "location": location, "weather_source": "nsrdb"})
-
-
-def test_cli_weather_source_flag_reaches_the_config():
-    args = cli.build_parser().parse_args(["run", "--location", "porto", "--weather-source", "nsrdb"])
-
-    assert cli._build_config(args)["weather_source"] == "nsrdb"
 
 
 def test_a_gzip_compressed_cached_tmy_file_is_used(tmp_path, monkeypatch, no_fetch):

@@ -36,15 +36,24 @@ from breos.app import App
 from breos.app_config import ResolvedAppConfig, resolve_app_config
 from breos.app_inputs import (
     INPUT_INDEPENDENT_KEYS,
-    build_dc_system_base,
+    InverterSteps,
+    build_inverter_ac_derate,
+    build_inverter_curve_row,
+    build_pv_production_breakdown,
     config_cache_key,
     load_consumption_profile,
     resample_hourly_weather,
     weather_input_frequency,
 )
-from breos.battery import LEDGER_SCHEMA_VERSION, AlignedSimulationInputs, align_simulation_inputs
+from breos.battery import (
+    LEDGER_SCHEMA_VERSION,
+    AlignedSimulationInputs,
+    align_simulation_inputs,
+    simulate_energy_balance_summary,
+)
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import find_payback_year, find_payback_year_interpolated, projection_rates_record
+from breos.exceedance import yield_exceedance
 from breos.execution import (
     aggregate_jit_cache_states,
     backend_provenance,
@@ -58,22 +67,29 @@ from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import (
     ProjectionYear,
     build_pv_only_battery_config,
-    effective_reference_escalation,
     first_end_of_life_metrics,
     run_projection,
+    tariff_records,
     value_projection,
 )
-from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
+from breos.pv._solver import SolverDiagnostics
+from breos.pv.model_options import (
+    DEFAULT_SOLAR_POSITION,
+    resolve_solar_position_method,
+    solar_position_record,
+    solar_position_warning_scope,
+    warn_solar_position_fallback,
+)
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
-from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
+from breos.tariffs import ResolvedTariff
 from breos.utils import package_version
 from breos.weather import (
     _weather_file_sha256,
     _weather_metadata_sidecar_path,
+    _weather_years,
     build_battery_temperature_series,
     fill_leap_day,
-    preload_weather_by_year,
     resample_to_15min,
     weather_metadata,
 )
@@ -119,11 +135,76 @@ class MonteCarloSettings:
     # the App config's top-level ``execution_backend``, which itself defaults
     # to "python"; see :func:`run_montecarlo`.
     execution_backend: str | None = None
+    # One-sigma uncertainty of the PV model's annual yield, in percent: the
+    # irradiance data, transposition, PV model and loss assumptions together.
+    # Stated by the caller; None leaves it out. Each trajectory then draws one
+    # persistent yield factor, and the yield exceedance values include it.
+    model_uncertainty_pct: float | None = None
+
+    def __post_init__(self) -> None:
+        # Checked when the settings are made, so build_year_cache refuses
+        # what run_montecarlo refuses.
+        if self.n_runs < 1:
+            raise ValueError("n_runs must be at least 1")
+        if self.years_per_run is not None and self.years_per_run < 1:
+            raise ValueError("years_per_run must be at least 1")
+        if not (math.isfinite(self.load_uncertainty) and self.load_uncertainty >= 0.0):
+            raise ValueError("load_uncertainty must be a finite, non-negative number")
+        if self.model_uncertainty_pct is not None and not (
+            math.isfinite(self.model_uncertainty_pct) and self.model_uncertainty_pct >= 0.0
+        ):
+            raise ValueError("model_uncertainty_pct must be a finite, non-negative number or None")
+        # The load scale multiplies demand, so a negative bound would make demand negative.
+        if not (math.isfinite(self.min_load_scale) and self.min_load_scale >= 0.0):
+            raise ValueError(f"min_load_scale must be a finite, non-negative number, got {self.min_load_scale}")
+        # None is the way to leave demand unbounded above. An infinite bound would
+        # say the same thing, but it cannot be written to strict JSON provenance.
+        if self.max_load_scale is not None and not math.isfinite(self.max_load_scale):
+            raise ValueError(
+                "max_load_scale must be a finite number, or None to leave the load scale unbounded, "
+                f"got {self.max_load_scale}"
+            )
+        if self.max_load_scale is not None and not self.max_load_scale >= self.min_load_scale:
+            raise ValueError(
+                f"max_load_scale must be at least min_load_scale ({self.min_load_scale}), got {self.max_load_scale}"
+            )
+        if self.load_distribution not in {"normal", "uniform"}:
+            raise ValueError("load_distribution must be 'normal' or 'uniform'")
+        if self.n_procs < 1:
+            raise ValueError("n_procs must be at least 1")
+        if self.execution_backend is not None:
+            validate_execution_backend(self.execution_backend)
+        if (
+            self.weather_start_year is not None
+            and self.weather_end_year is not None
+            and self.weather_start_year > self.weather_end_year
+        ):
+            raise ValueError("weather_start_year must not be later than weather_end_year")
+
+
+def _solver_summary(by_weather_year: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Recovery counts for prepared source years, counted once per weather year."""
+    years = deepcopy(by_weather_year or {})
+    stages: dict[str, int] = {}
+    for record in years.values():
+        for stage, count in record["by_stage"].items():
+            stages[stage] = stages.get(stage, 0) + count
+    return {
+        "by_weather_year": years,
+        "total": {
+            "recovered_steps": sum(record["recovered_steps"] for record in years.values()),
+            "by_stage": dict(sorted(stages.items())),
+        },
+    }
 
 
 @dataclass
 class MonteCarloResult:
-    """Outcome of a Monte Carlo study."""
+    """Outcome of a Monte Carlo study.
+
+    ``solver`` reports recoveries by source weather year and their total,
+    counted once per prepared year rather than per trajectory draw.
+    """
 
     runs: pd.DataFrame  # one row per run
     summary: dict[str, dict[str, float]]  # metric -> descriptive statistics and quantiles
@@ -131,6 +212,25 @@ class MonteCarloResult:
     available_years: list[int] = field(default_factory=list)
     yearly: pd.DataFrame | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
+    # P50/P75/P90/P99 annual yield over the weather years, for one year and
+    # the study horizon (breos.exceedance); None with fewer than two years.
+    yield_exceedance: dict[str, Any] | None = None
+    # Recoveries in the parent's prepared inputs, by source weather year and
+    # summed over those years; not multiplied by trajectory sampling.
+    solver: dict[str, Any] = field(default_factory=_solver_summary)
+
+
+def _sample_pv_model_factor(settings: MonteCarloSettings, run_idx: int) -> float:
+    """One trajectory's PV yield factor from the model uncertainty; 1 without one.
+
+    Drawn from the run's own child stream, ``SeedSequence(seed).spawn(n_runs)[run_idx].spawn(1)[0]``,
+    so stating an uncertainty leaves every weather year and load scale draw as it was.
+    """
+    sigma = settings.model_uncertainty_pct
+    if not sigma:
+        return 1.0
+    rng = np.random.default_rng(np.random.SeedSequence(settings.seed, spawn_key=(run_idx, 0)))
+    return max(0.0, 1.0 + float(rng.normal(0.0, sigma / 100.0)))
 
 
 def _sample_load_scale(
@@ -154,22 +254,15 @@ def _sample_load_scale(
 
 
 def _index_weather(df: pd.DataFrame) -> pd.DataFrame:
-    """Turn a ``preload_weather_by_year`` frame (with a ``date`` column) into a
-    UTC-indexed weather DataFrame matching the deterministic pipeline.
+    """A weather year, indexed on the file's clock, in UTC as the deterministic pipeline has it.
 
     The years are read without 29 February, so a leap target year gets a copy
     of 28 February, as an App run of that year does. The day is filled on the
     file's own clock, where it was dropped: in UTC, a file written at +01:00
     would still have an hour dated 29 February, and the fill would be skipped.
     """
-    w = df.copy()
-    w["date"] = pd.to_datetime(w["date"])
-    w = fill_leap_day(w.set_index("date"))
-    if w.index.tz is None:
-        w.index = w.index.tz_localize("UTC")
-    else:
-        w.index = w.index.tz_convert("UTC")
-    return w
+    w = fill_leap_day(df)
+    return w.tz_localize("UTC") if w.index.tz is None else w.tz_convert("UTC")
 
 
 def _load_weather_years(
@@ -181,7 +274,7 @@ def _load_weather_years(
 ) -> dict[int, pd.DataFrame]:
     """Read the weather file into per-year frames at the study resolution."""
     freq = cfg["resolution"]
-    weather_by_year = preload_weather_by_year(settings.weather_file, target_year=settings.target_year)
+    weather_by_year = _weather_years(settings.weather_file, target_year=settings.target_year)
     if settings.weather_start_year is not None:
         weather_by_year = {
             year: frame for year, frame in weather_by_year.items() if year >= settings.weather_start_year
@@ -208,16 +301,17 @@ def _load_weather_years(
         )
         if runtime_weather is not None and not runtime_weather:
             # The same resolution the PV model applies, so a spelling such as
-            # "Mid-Interval" is recorded with the offset it actually gets.
-            method = resolve_solar_position_method(cfg.get("solar_position", DEFAULT_SOLAR_POSITION))
-            offset = solar_position_time_offset(method, weather, freq)
+            # "Mid-Interval" is recorded with the offset it actually gets, and
+            # "auto" with the method it resolves to on this weather.
+            solar_position = solar_position_record(cfg.get("solar_position", DEFAULT_SOLAR_POSITION), weather, freq)
             runtime_weather.update(
                 {
                     "representative_source_year": int(year),
                     "input_resolution": input_frequency,
                     "output_resolution": str(freq),
-                    "solar_position_method": method,
-                    "solar_position_offset_minutes": offset.total_seconds() / 60.0,
+                    "solar_position_requested": solar_position["requested"],
+                    "solar_position_method": solar_position["resolved"],
+                    "solar_position_offset_minutes": solar_position["offset_minutes"],
                     "metadata": weather_metadata(weather),
                 }
             )
@@ -225,27 +319,46 @@ def _load_weather_years(
     return indexed_by_year
 
 
+_PvYears = tuple[dict[int, pd.Series], dict[int, pd.Series], dict[int, InverterSteps]]
+
+
+# Every weather year computes the sun position, and an "auto" fallback warns
+# once for the study, not once per year.
+@solar_position_warning_scope()
 def _build_pv_years(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     weather_by_year: dict[int, pd.DataFrame],
-) -> tuple[dict[int, pd.Series], dict[int, pd.Series]]:
-    """Build each year's undegraded DC production and battery temperature series.
+    *,
+    solver_by_year: dict[int, dict[str, Any]] | None = None,
+) -> _PvYears:
+    """Build each year's undegraded DC production, battery temperature and inverter series.
 
-    Both read the weather frames without writing to them, which is what lets
+    All read the weather frames without writing to them, which is what lets
     a :class:`MonteCarloYearCache` build them again from the frames it holds.
+    The inverter series are its temperature derating and its efficiency
+    curve's row at each step's operating voltage, each None when not modelled.
+    ``solver_by_year`` retains the recovery record from each prepared year.
     """
     dc_by_year: dict[int, pd.Series] = {}
     temp_by_year: dict[int, pd.Series] = {}
+    inverter_by_year: dict[int, InverterSteps] = {}
     for year, weather in weather_by_year.items():
-        dc_by_year[year] = build_dc_system_base(cfg, resolved, weather)
+        breakdown = build_pv_production_breakdown(cfg, resolved, weather)
+        if solver_by_year is not None:
+            solver_by_year[year] = deepcopy(breakdown.solver_diagnostics or SolverDiagnostics().result())
+        dc_by_year[year] = breakdown.dc_after_losses
         temp_by_year[year] = build_battery_temperature_series(
             cfg["battery_temperature"],
             index=dc_by_year[year].index,
             weather_df=weather,
             indoor_model=cfg["battery_indoor_model"],
         )
-    return dc_by_year, temp_by_year
+        inverter_by_year[year] = InverterSteps(
+            build_inverter_ac_derate(resolved, weather, dc_by_year[year].index),
+            build_inverter_curve_row(resolved, breakdown),
+        )
+    return dc_by_year, temp_by_year, inverter_by_year
 
 
 def _precompute_year_caches(
@@ -254,10 +367,11 @@ def _precompute_year_caches(
     settings: MonteCarloSettings,
     *,
     runtime_weather: dict[str, Any] | None = None,
-) -> tuple[dict[int, pd.Series], dict[int, pd.Series]]:
-    """Build per-year undegraded DC production and battery temperature series."""
+    solver_by_year: dict[int, dict[str, Any]] | None = None,
+) -> _PvYears:
+    """Build per-year undegraded DC production, battery temperature and inverter series."""
     weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
-    return _build_pv_years(cfg, resolved, weather_by_year)
+    return _build_pv_years(cfg, resolved, weather_by_year, solver_by_year=solver_by_year)
 
 
 # Config keys the PV layer of the year cache never reads, directly or through
@@ -361,6 +475,8 @@ class MonteCarloYearCache:
         pv_key: str | None,
         dc_by_year: dict[int, pd.Series],
         temp_by_year: dict[int, pd.Series],
+        inverter_by_year: dict[int, InverterSteps],
+        solver_by_year: dict[int, dict[str, Any]] | None = None,
     ) -> None:
         self._weather_key = weather_key
         self._weather_by_year = weather_by_year
@@ -368,6 +484,12 @@ class MonteCarloYearCache:
         self._pv_key = pv_key
         self._dc_by_year = dc_by_year
         self._temp_by_year = temp_by_year
+        self._inverter_by_year = inverter_by_year
+        self._solver_by_year = (
+            deepcopy(solver_by_year)
+            if solver_by_year is not None
+            else {year: SolverDiagnostics().result() for year in dc_by_year}
+        )
 
     @property
     def weather_key(self) -> dict[str, Any]:
@@ -388,9 +510,14 @@ class MonteCarloYearCache:
         return f"MonteCarloYearCache(weather_file={self._weather_key['weather_file']!r}, years={self.available_years})"
 
     def _years_for(
-        self, cfg: dict[str, Any], resolved: ResolvedAppConfig, settings: MonteCarloSettings
-    ) -> tuple[dict[int, pd.Series], dict[int, pd.Series], dict[str, Any]]:
-        """The DC and temperature series and weather record for one study."""
+        self,
+        cfg: dict[str, Any],
+        resolved: ResolvedAppConfig,
+        settings: MonteCarloSettings,
+        *,
+        solver_by_year: dict[int, dict[str, Any]] | None = None,
+    ) -> tuple[dict[int, pd.Series], dict[int, pd.Series], dict[int, InverterSteps], dict[str, Any]]:
+        """The DC, temperature and inverter series and weather record for one study."""
         weather_key = _weather_cache_key(cfg, resolved, settings)
         if weather_key != self._weather_key:
             differing = ", ".join(name for name in weather_key if weather_key[name] != self._weather_key.get(name))
@@ -400,11 +527,22 @@ class MonteCarloYearCache:
             )
         pv_key = _pv_cache_key(cfg)
         if pv_key is None or pv_key != self._pv_key:
-            self._dc_by_year, self._temp_by_year = _build_pv_years(cfg, resolved, self._weather_by_year)
+            rebuilt_solver: dict[int, dict[str, Any]] = {}
+            self._dc_by_year, self._temp_by_year, self._inverter_by_year = _build_pv_years(
+                cfg, resolved, self._weather_by_year, solver_by_year=rebuilt_solver
+            )
+            self._solver_by_year = rebuilt_solver
             self._pv_key = pv_key
+        if solver_by_year is not None:
+            solver_by_year.update(deepcopy(self._solver_by_year))
         # New dicts over the shared series: a study reads them and never
         # writes to them, and its provenance keeps its own weather record.
-        return dict(self._dc_by_year), dict(self._temp_by_year), deepcopy(self._runtime_weather)
+        return (
+            dict(self._dc_by_year),
+            dict(self._temp_by_year),
+            dict(self._inverter_by_year),
+            deepcopy(self._runtime_weather),
+        )
 
 
 def _reject_period(cfg: dict[str, Any]) -> None:
@@ -423,6 +561,21 @@ def _reject_weather_file(cfg: dict[str, Any]) -> None:
             "'weather_file' names the App's one-year weather and is not used by Monte Carlo, which samples the "
             "years of MonteCarloSettings.weather_file ([montecarlo].weather_file in a config file). "
             "Remove 'weather_file' from the config."
+        )
+
+
+def _reject_several_string_inverters(resolved: ResolvedAppConfig) -> None:
+    """Refuse string-level energy with several inverters, before any weather is loaded or any trajectory runs.
+
+    Each trajectory carries one DC series, converted by one inverter; several
+    inverters each convert their own share (ADR 0007 D10), in breos.App only.
+    """
+    electrical = resolved.electrical
+    if electrical is not None and electrical.fidelity == "string" and len(electrical.inverters) > 1:
+        raise ValueError(
+            f"electrical_fidelity = 'string' with {len(electrical.inverters)} inverters runs in breos.App only; "
+            "Monte Carlo converts each trajectory's DC through one inverter. Run the design with breos.App, or "
+            "use electrical_fidelity = 'aggregate'."
         )
 
 
@@ -461,12 +614,23 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
     _reject_period(cfg)
     _reject_weather_file(cfg)
     _reject_planned_smart_charging(resolved)
+    _reject_several_string_inverters(resolved)
     weather_key = _weather_cache_key(cfg, resolved, settings)
     runtime_weather: dict[str, Any] = {}
     weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
-    dc_by_year, temp_by_year = _build_pv_years(cfg, resolved, weather_by_year)
+    solver_by_year: dict[int, dict[str, Any]] = {}
+    dc_by_year, temp_by_year, inverter_by_year = _build_pv_years(
+        cfg, resolved, weather_by_year, solver_by_year=solver_by_year
+    )
     return MonteCarloYearCache(
-        weather_key, weather_by_year, runtime_weather, _pv_cache_key(cfg), dc_by_year, temp_by_year
+        weather_key,
+        weather_by_year,
+        runtime_weather,
+        _pv_cache_key(cfg),
+        dc_by_year,
+        temp_by_year,
+        inverter_by_year,
+        solver_by_year,
     )
 
 
@@ -475,6 +639,7 @@ def _align_years(
     base_load: pd.DataFrame,
     dc_by_year: dict[int, pd.Series],
     temp_by_year: dict[int, pd.Series],
+    inverter_by_year: dict[int, InverterSteps],
     *,
     has_battery: bool,
 ) -> dict[int, AlignedSimulationInputs]:
@@ -499,6 +664,8 @@ def _align_years(
             base_load,
             temp_by_year[year] if has_battery else None,
             freq=freq,
+            inverter_ac_derate=inverter_by_year[year].ac_derate,
+            inverter_curve_row=inverter_by_year[year].curve_row,
         )
         for year, dc_power in dc_by_year.items()
     }
@@ -559,7 +726,9 @@ def _prepare_pv_chains(
     Returns ``None`` when the study is not shaped to benefit, in which case
     every run computes its own conversion exactly as before.
     """
-    if config_has_battery(cfg):
+    if config_has_battery(cfg) or settings.model_uncertainty_pct:
+        # A trajectory's model factor scales its PV, which a memoized
+        # conversion cannot follow.
         return None
     any_year = next(iter(aligned_by_year.values()), None)
     if any_year is None:
@@ -585,24 +754,36 @@ def _prepare_pv_chains(
     }
 
 
+@dataclass(frozen=True)
+class _Study:
+    """What every trajectory of a study reads: built once, and installed once per worker process."""
+
+    cfg: dict[str, Any]
+    resolved: ResolvedAppConfig
+    available_years: np.ndarray
+    years_per_run: int
+    settings: MonteCarloSettings
+    aligned_by_year: dict[int, AlignedSimulationInputs]
+    # Each (weather year, project year)'s PV chain, already scaled; None
+    # when memoizing them does not pay (_pv_chain_cache_is_worthwhile).
+    pv_chains: dict[tuple[int, int], AlignedSimulationInputs] | None = None
+    tariff: ResolvedTariff | None = None
+    instructions: DispatchInstructions | None = None
+    # Prices each trajectory's no-system household on its own sampled load,
+    # so the with- and without-system costs stay paired.
+    reference_tariff: ResolvedTariff | None = None
+
+
 def _simulate_trajectory(
-    cfg: dict[str, Any],
-    resolved: ResolvedAppConfig,
-    available_years: np.ndarray,
-    years_per_run: int,
-    settings: MonteCarloSettings,
-    rng: np.random.Generator,
-    aligned_by_year: dict[int, AlignedSimulationInputs],
-    pv_chains: dict[tuple[int, int], AlignedSimulationInputs] | None,
-    tariff: ResolvedTariff | None = None,
-    instructions: DispatchInstructions | None = None,
-    reference_tariff: ResolvedTariff | None = None,
+    study: _Study, rng: np.random.Generator, pv_model_factor: float = 1.0
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     """Run one Monte Carlo trajectory and return its summary metrics.
 
-    A ``reference_tariff`` prices the trajectory's no-system household on its
-    own sampled load, so the with- and without-system costs stay paired.
+    ``pv_model_factor`` scales the trajectory's PV in every year: a model
+    bias persists, unlike the weather.
     """
+    cfg, resolved, settings = study.cfg, study.resolved, study.settings
+    available_years, aligned_by_year, pv_chains = study.available_years, study.aligned_by_year, study.pv_chains
     degradation_rate = cfg["pv_degradation_rate"]
     has_battery = config_has_battery(cfg)
 
@@ -621,7 +802,9 @@ def _simulate_trajectory(
         # With a PV chain memoized for this pair the PV side is already
         # scaled, and scaling the load does not invalidate the chain.
         if pv_chains is None:
-            aligned = aligned_by_year[year].scaled(pv_factor=pv_degradation_factor, load_factor=load_scale)
+            aligned = aligned_by_year[year].scaled(
+                pv_factor=pv_degradation_factor * pv_model_factor, load_factor=load_scale
+            )
         else:
             aligned = pv_chains[(year, year_idx)].scaled(load_factor=load_scale)
         return ProjectionYear(
@@ -633,13 +816,13 @@ def _simulate_trajectory(
     projection = run_projection(
         cfg,
         resolved,
-        years_per_run,
+        study.years_per_run,
         year_inputs,
         has_battery=has_battery,
         execution_backend=cast(str, settings.execution_backend),
-        tariff=tariff,
-        instructions=instructions,
-        reference_tariff=reference_tariff,
+        tariff=study.tariff,
+        instructions=study.instructions,
+        reference_tariff=study.reference_tariff,
     )
     current_soh = projection.carry.soh_pct
     total_replacements = projection.total_replacements
@@ -667,6 +850,7 @@ def _simulate_trajectory(
         "lifetime_grid_independence_pct": lifetime_gi,
         "total_replacements": int(total_replacements),
         "total_replacement_cost_t0_prices": float(total_replacement_cost),
+        "pv_model_factor": float(pv_model_factor),
         # The trajectory's first end-of-life crossing (ADR 0003 E11); NaN
         # and None without one.
         **first_end_of_life_metrics(projection.end_of_life_events),
@@ -691,6 +875,11 @@ def _simulate_trajectory(
 
 def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
     """Describe each metric across runs.
+
+    The ``p*`` keys are quantiles: ``p10`` is the value 10 % of runs fall
+    below. A bankable P90 of a quantity that should be high, such as
+    ``npv_savings``, is its ``p10``; of one that should be low, such as
+    ``lcoe_per_kwh``, its ``p90``.
 
     Each entry gives ``count``, the number of runs its statistics cover, out
     of ``n_runs``. Runs without a value are left out of the statistics. For
@@ -718,7 +907,11 @@ def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
                 "std": 0.0 if len(series) == 1 else float(series.std()),
                 "p5": float(series.quantile(0.05)),
                 "p2_5": float(series.quantile(0.025)),
+                "p10": float(series.quantile(0.10)),
+                "p25": float(series.quantile(0.25)),
                 "p50": float(series.quantile(0.50)),
+                "p75": float(series.quantile(0.75)),
+                "p90": float(series.quantile(0.90)),
                 "p95": float(series.quantile(0.95)),
                 "p97_5": float(series.quantile(0.975)),
                 "min": float(series.min()),
@@ -732,7 +925,31 @@ def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
     return summary
 
 
-_WORKER_CONTEXT: tuple[Any, ...] | None = None
+_WORKER_STUDY: _Study | None = None
+
+
+def _yield_exceedance(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    aligned_by_year: dict[int, AlignedSimulationInputs],
+    settings: MonteCarloSettings,
+    years_per_run: int,
+) -> dict[str, Any] | None:
+    """P50/P75/P90/P99 annual AC yield over the weather years, for one year and ``years_per_run``.
+
+    Each weather year's yield is the system's first-year, undegraded AC output
+    without a battery, so it measures the weather and the PV system alone.
+    None with fewer than two weather years.
+    """
+    if len(aligned_by_year) < 2:
+        return None
+    battery_config = build_pv_only_battery_config(cfg, resolved)
+    yields = {
+        year: simulate_energy_balance_summary(aligned=aligned, battery_config=battery_config).total_pv_wh / 1000.0
+        for year, aligned in aligned_by_year.items()
+    }
+    result = yield_exceedance(yields, model_uncertainty_pct=settings.model_uncertainty_pct)
+    return result.as_dict(horizons=(1, years_per_run))
 
 
 def _resolve_study_tariff(
@@ -765,34 +982,24 @@ def _study_calendar(aligned_by_year: dict[int, AlignedSimulationInputs]) -> pd.D
     return pd.DatetimeIndex(calendar)
 
 
-def _initialize_worker(*context: Any) -> None:
+def _initialize_worker(study: _Study) -> None:
     """Install read-only trajectory inputs once per worker process."""
-    global _WORKER_CONTEXT
-    _WORKER_CONTEXT = context
+    global _WORKER_STUDY
+    _WORKER_STUDY = study
 
 
-def _initialize_pool_worker(*context: Any) -> None:
+def _initialize_pool_worker(study: _Study) -> None:
     """Initialise a pool worker: one native thread, then the trajectory inputs."""
     limit_worker_threads()
-    _initialize_worker(*context)
+    _initialize_worker(study)
 
 
 def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame | None, str | None]:
     """Evaluate one deterministic per-run random stream in a worker."""
-    if _WORKER_CONTEXT is None:
+    study = _WORKER_STUDY
+    if study is None:
         raise RuntimeError("Monte Carlo worker context was not initialized")
-    (
-        cfg,
-        resolved,
-        available_years,
-        years_per_run,
-        settings,
-        aligned_by_year,
-        pv_chains,
-        tariff,
-        instructions,
-        reference_tariff,
-    ) = _WORKER_CONTEXT
+    settings = study.settings
     # One observation window per trajectory: that is the unit of work whose
     # compile cost is being attributed. A no-op on the Python backend.
     reset_jit_cache_observation(settings.execution_backend)
@@ -801,19 +1008,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
     # different base seeds share no trajectory. Without a seed, every run
     # draws fresh entropy.
     rng = np.random.default_rng(np.random.SeedSequence(settings.seed, spawn_key=(run_idx,)))
-    metrics, trajectory = _simulate_trajectory(
-        cfg,
-        resolved,
-        available_years,
-        years_per_run,
-        settings,
-        rng,
-        aligned_by_year,
-        pv_chains,
-        tariff,
-        instructions,
-        reference_tariff,
-    )
+    metrics, trajectory = _simulate_trajectory(study, rng, pv_model_factor=_sample_pv_model_factor(settings, run_idx))
     # None from a numba run means no compiled dispatch call was observed -- a
     # trajectory can legitimately never enter the kernel. Record that as
     # "unknown" rather than aborting: the trajectory's results are valid either
@@ -862,39 +1057,9 @@ def run_montecarlo(
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
     _reject_planned_smart_charging(resolved)
+    _reject_several_string_inverters(resolved)
     if settings.execution_backend is None:
         settings = replace(settings, execution_backend=cfg["execution_backend"])
-    if settings.n_runs < 1:
-        raise ValueError("n_runs must be at least 1")
-    if settings.years_per_run is not None and settings.years_per_run < 1:
-        raise ValueError("years_per_run must be at least 1")
-    if not (math.isfinite(settings.load_uncertainty) and settings.load_uncertainty >= 0.0):
-        raise ValueError("load_uncertainty must be a finite, non-negative number")
-    # The load scale multiplies demand, so a negative bound would make demand negative.
-    if not (math.isfinite(settings.min_load_scale) and settings.min_load_scale >= 0.0):
-        raise ValueError(f"min_load_scale must be a finite, non-negative number, got {settings.min_load_scale}")
-    # None is the way to leave demand unbounded above. An infinite bound would
-    # say the same thing, but it cannot be written to strict JSON provenance.
-    if settings.max_load_scale is not None and not math.isfinite(settings.max_load_scale):
-        raise ValueError(
-            "max_load_scale must be a finite number, or None to leave the load scale unbounded, "
-            f"got {settings.max_load_scale}"
-        )
-    if settings.max_load_scale is not None and not settings.max_load_scale >= settings.min_load_scale:
-        raise ValueError(
-            f"max_load_scale must be at least min_load_scale ({settings.min_load_scale}), got {settings.max_load_scale}"
-        )
-    if settings.load_distribution not in {"normal", "uniform"}:
-        raise ValueError("load_distribution must be 'normal' or 'uniform'")
-    if settings.n_procs < 1:
-        raise ValueError("n_procs must be at least 1")
-    validate_execution_backend(settings.execution_backend)
-    if (
-        settings.weather_start_year is not None
-        and settings.weather_end_year is not None
-        and settings.weather_start_year > settings.weather_end_year
-    ):
-        raise ValueError("weather_start_year must not be later than weather_end_year")
     if cfg["degradation_engine"] == "blast":
         raise ValueError("degradation_engine='blast' is not supported with Monte Carlo yet")
     _reject_period(cfg)
@@ -912,16 +1077,27 @@ def run_montecarlo(
     has_battery = config_has_battery(cfg)
     execution = backend_provenance(settings.execution_backend, pv_only=not has_battery)
 
-    if year_cache is None:
-        runtime_weather: dict[str, Any] = {}
-        dc_by_year, temp_by_year = _precompute_year_caches(
-            cfg,
-            resolved,
-            settings,
-            runtime_weather=runtime_weather,
+    # One "auto" fallback warning per study. A year cache that reuses its PV
+    # layer builds nothing that warns, so the study warns from its weather
+    # record; a study that built its PV layer and warned does not warn again.
+    solver_by_year: dict[int, dict[str, Any]] = {}
+    with solar_position_warning_scope():
+        if year_cache is None:
+            runtime_weather: dict[str, Any] = {}
+            dc_by_year, temp_by_year, inverter_by_year = _precompute_year_caches(
+                cfg,
+                resolved,
+                settings,
+                runtime_weather=runtime_weather,
+                solver_by_year=solver_by_year,
+            )
+        else:
+            dc_by_year, temp_by_year, inverter_by_year, runtime_weather = year_cache._years_for(
+                cfg, resolved, settings, solver_by_year=solver_by_year
+            )
+        warn_solar_position_fallback(
+            runtime_weather.get("solar_position_requested", ""), runtime_weather.get("solar_position_method", "")
         )
-    else:
-        dc_by_year, temp_by_year, runtime_weather = year_cache._years_for(cfg, resolved, settings)
     available_years = np.array(sorted(dc_by_year.keys()))
 
     deps = App._runtime_dependencies()
@@ -936,6 +1112,7 @@ def run_montecarlo(
         base_load,
         dc_by_year,
         temp_by_year,
+        inverter_by_year,
         has_battery=has_battery,
     )
     pv_chains = _prepare_pv_chains(cfg, resolved, aligned_by_year, settings, years_per_run)
@@ -949,7 +1126,7 @@ def run_montecarlo(
     # The weather frames and the raw load profile are not passed to the
     # workers: alignment consumed them here, and a worker only ever reads the
     # aligned arrays.
-    context = (
+    study = _Study(
         cfg,
         resolved,
         available_years,
@@ -962,10 +1139,10 @@ def run_montecarlo(
         reference_tariff,
     )
     if settings.n_procs == 1:
-        _initialize_worker(*context)
+        _initialize_worker(study)
         outputs = [_run_trajectory_index(run_idx) for run_idx in range(settings.n_runs)]
     else:
-        with Pool(settings.n_procs, initializer=_initialize_pool_worker, initargs=context) as pool:
+        with Pool(settings.n_procs, initializer=_initialize_pool_worker, initargs=(study,)) as pool:
             outputs = pool.map(_run_trajectory_index, range(settings.n_runs))
 
     rows: list[dict[str, Any]] = []
@@ -991,12 +1168,16 @@ def run_montecarlo(
     # Plot labels read the currency from the frame.
     runs_df.attrs["currency"] = currency
     yearly_df = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else None
+    exceedance = _yield_exceedance(cfg, resolved, aligned_by_year, settings, years_per_run)
+    solver = _solver_summary(solver_by_year)
     return MonteCarloResult(
         runs=runs_df,
         summary=_summarize(runs_df),
         settings=settings,
         available_years=[int(y) for y in available_years],
         yearly=yearly_df,
+        yield_exceedance=exceedance,
+        solver=solver,
         provenance={
             "breos_version": package_version(),
             "result_schema_version": RESULT_SCHEMA_VERSION,
@@ -1005,6 +1186,7 @@ def run_montecarlo(
             "resolved_config": cfg,
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
+            "solver": deepcopy(solver),
             "runtime_weather": runtime_weather,
             # The load is built for target_year; resolved_config keeps the
             # start_date the user gave, which Monte Carlo does not use.
@@ -1023,18 +1205,7 @@ def run_montecarlo(
                 else {}
             ),
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
-            **({"tariff": tariff_provenance(tariff, calendar_year=settings.target_year)} if tariff is not None else {}),
-            **(
-                {
-                    "reference_tariff": reference_tariff_provenance(
-                        reference_tariff,
-                        calendar_year=settings.target_year,
-                        import_price_escalation=effective_reference_escalation(resolved),
-                    )
-                }
-                if reference_tariff is not None
-                else {}
-            ),
+            **tariff_records(resolved, tariff, reference_tariff, calendar_year=settings.target_year),
             **(
                 {"smart_charging": smart_charging_provenance(spec, instructions, tariff)}
                 if spec is not None and instructions is not None and tariff is not None

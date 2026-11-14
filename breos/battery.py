@@ -10,70 +10,42 @@ This module handles battery energy storage simulation including:
 
 import dataclasses
 import math
+import warnings
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
-import rainflow
 
 from breos._controller import ControllerBatteryState, ControllerCarry, DailyDispatchController, _ControllerSession
 from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its names stay importable here
-    _LEDGER_COLUMNS,
     _N_ROWS,
     _ROW,
     _ROW_COLUMNS,
     LEDGER_SCHEMA_VERSION,
     _dispatch_day_python,
     compute_cell_temperature,
-    lfp_capacity_factor,
 )
 from breos.constants import (
-    A_Q,
-    A_R,
-    B_Q,
-    B_R,
-    C_DOC_Q,
-    C_DOC_R,
-    D_DOC_Q,
-    D_DOC_R,
+    BATTERY_COUPLINGS,
     DEFAULT_CHARGE_EFFICIENCY,
     DEFAULT_DISCHARGE_EFFICIENCY,
     DEFAULT_EOL_PERCENTAGE,
-    DEFAULT_INDOOR_CEILING_C,
-    DEFAULT_INDOOR_COUPLING_ALPHA,
-    DEFAULT_INDOOR_FLOOR_C,
-    DEFAULT_INDOOR_SETPOINT_C,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
     DEFAULT_STANDBY_LOSS_WH,
     DEFAULT_THERMAL_RESISTANCE_K_PER_W,
-    LAM_EA_J_MOL,
-    LAM_EXPONENT_B,
-    LAM_K0_FRAC,
-    LAM_SOC_EXPONENT_N,
-    NAUMANN_EA_J_MOL,
-    NAUMANN_EA_R_J_MOL,
-    NAUMANN_EXPONENT_B,
-    NAUMANN_EXPONENT_B_R,
-    NAUMANN_K0_PERCENT,
-    NAUMANN_K0_R_PERCENT,
-    NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL,
-    NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B,
-    NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC,
-    NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N,
-    NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL,
-    NAUMANN_LAM_FIELD_CALIBRATED_V2_EXPONENT_B,
-    NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC,
-    NAUMANN_LAM_FIELD_CALIBRATED_V2_SOC_EXPONENT_N,
-    NAUMANN_SOC_EXPONENT_N,
-    NAUMANN_SOC_EXPONENT_N_R,
-    R_GAS,
     SKIPPED_REPLACEMENT_ACTIONS,
-    T_REF_K,
-    Z_Q,
-    Z_R,
+)
+from breos.degradation.native import (  # noqa: F401  -- the documented primitives stay importable here
+    _get_degradation_params,
+    _update_battery_soh_from_cycles,
+    resistance_to_efficiency,
+    update_battery_resistance_calendar,
+    update_battery_resistance_cyclewise,
+    update_battery_soh_calendar,
+    update_battery_soh_cyclewise,
 )
 from breos.degradation.protocol import (
     BlastDegradationAdapter,
@@ -83,11 +55,30 @@ from breos.degradation.protocol import (
 )
 from breos.dispatch_instructions import DispatchInstructions
 from breos.execution import is_pv_only_dispatch, single_thread_blas, validate_execution_backend
-from breos.inverter import _calculate_dc_ac_power_arrays
+from breos.inverter import (
+    InverterConversion,
+    InverterUnits,
+    _calculate_dc_ac_power_arrays,
+    as_inverter_conversion,
+    convert_units,
+)
 from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
 
 if TYPE_CHECKING:
     from breos.tariffs import ResolvedTariff
+
+
+def _finite(name: str, value: Any) -> float:
+    """``value`` as a float, refusing a bool, a non-number and a non-finite number by ``name``."""
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a finite number, not a bool")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be a finite number")
+    return result
 
 
 @dataclass
@@ -95,11 +86,19 @@ class BatteryConfig:
     """
     Configuration parameters for battery simulation.
 
-    Only DC-coupled systems (hybrid inverters) are modelled:
-    - PV → Battery: No inverter loss (stays in DC)
-    - Battery → Load: Inverter loss applies (DC to AC)
-
-    AC-coupled dispatch is not implemented.
+    ``coupling`` selects the topology (ADR 0004). ``"dc"``, the default, is a
+    hybrid inverter: PV and the battery share one DC bus and one inverter, so
+    PV charges the battery as DC and battery discharge crosses the shared
+    inverter. ``"ac"`` gives the battery its own bidirectional inverter on the
+    AC bus beside the PV inverter, described by
+    ``battery_inverter_ac_capacity_w`` and ``battery_inverter_efficiency``;
+    the inverter fields above then describe the PV inverter only. ``"dc"``
+    refuses the battery inverter fields, and ``"ac"`` requires the
+    efficiency. With ``"ac"`` PV converts as in a PV-only run, its surplus
+    AC charges the battery through the battery inverter, and grid charge
+    takes instructions without a ``grid_charge_efficiency``. Instruction
+    planners and daily controllers run with it; with several PV inverters the
+    App refuses the daily-target planner, which plans through one.
 
     Power limits are nameplate powers and therefore scale with the timestep:
     ``max_charge_power_w`` limits DC input to the battery path, while
@@ -114,7 +113,9 @@ class BatteryConfig:
     ``ac_output_scale`` derates AC delivery for shortfall the chain does not
     model and is bounded to ``(0, 1]``. It applies inside dispatch, not to a
     finished result, so battery discharge decisions and the reachable AC
-    ceiling respond to it. It is one constant approximating the combined
+    ceiling respond to it. With ``"ac"`` it scales the PV inverter's
+    conversion alone; the battery inverter's output and ceiling are
+    unchanged. It is one constant approximating the combined
     annual effect of things like availability, curtailment and downstream
     wiring, not a model of any of them individually. While it is active,
     the reported inverter loss is the whole DC-to-AC shortfall rather than
@@ -223,19 +224,20 @@ class BatteryConfig:
     # an under-predicting model on the DC side instead. The default 1.0 is a
     # no-op and reproduces prior behaviour bit-for-bit.
     ac_output_scale: float = 1.0
+    # The inverter's measured efficiency curve and AC cable; None keeps the
+    # PVWatts part-load curve and no cable. A mapping of its fields is accepted.
+    inverter_conversion: Optional[InverterConversion] = None
+    # Battery topology (ADR 0004): "dc" for a hybrid inverter, "ac" for a
+    # battery inverter of its own on the AC bus.
+    coupling: str = "dc"
+    # The AC-coupled battery inverter: its AC rating (W), the AC output when
+    # discharging and the AC input when charging, None for flat unclipped
+    # conversion; and its nominal efficiency, which has no default. Both are
+    # refused with "dc".
+    battery_inverter_ac_capacity_w: Optional[float] = None
+    battery_inverter_efficiency: Optional[float] = None
 
     def __post_init__(self):
-        def finite(name: str, value: float) -> float:
-            if isinstance(value, (bool, np.bool_)):
-                raise ValueError(f"{name} must be a finite number, not a bool")
-            try:
-                result = float(value)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"{name} must be a finite number") from exc
-            if not math.isfinite(result):
-                raise ValueError(f"{name} must be a finite number")
-            return result
-
         # Checked rather than coerced: a string such as "false" is truthy.
         if not isinstance(self.allow_terminal_replacement, (bool, np.bool_)):
             raise ValueError("allow_terminal_replacement must be a bool")
@@ -247,7 +249,7 @@ class BatteryConfig:
         if self.replacement_years_after_span < 0:
             raise ValueError("replacement_years_after_span must be a non-negative integer")
         self.replacement_years_after_span = int(self.replacement_years_after_span)
-        self.replacement_min_remaining_years = finite(
+        self.replacement_min_remaining_years = _finite(
             "replacement_min_remaining_years", self.replacement_min_remaining_years
         )
         if self.replacement_min_remaining_years < 0.0:
@@ -255,17 +257,17 @@ class BatteryConfig:
         if self.skipped_replacement_action not in SKIPPED_REPLACEMENT_ACTIONS:
             raise ValueError(f"skipped_replacement_action must be one of: {', '.join(SKIPPED_REPLACEMENT_ACTIONS)}")
 
-        self.nominal_energy_wh = finite("nominal_energy_wh", self.nominal_energy_wh)
-        self.initial_soh = finite("initial_soh", self.initial_soh)
-        self.eol_percentage = finite("eol_percentage", self.eol_percentage)
-        self.min_soc = finite("min_soc", self.min_soc)
-        self.max_soc = finite("max_soc", self.max_soc)
-        self.charge_efficiency = finite("charge_efficiency", self.charge_efficiency)
-        self.discharge_efficiency = finite("discharge_efficiency", self.discharge_efficiency)
-        self.inverter_efficiency = finite("inverter_efficiency", self.inverter_efficiency)
-        self.standby_loss_wh = finite("standby_loss_wh", self.standby_loss_wh)
-        self.initial_resistance_growth = finite("initial_resistance_growth", self.initial_resistance_growth)
-        self.thermal_resistance_k_per_w = finite("thermal_resistance_k_per_w", self.thermal_resistance_k_per_w)
+        self.nominal_energy_wh = _finite("nominal_energy_wh", self.nominal_energy_wh)
+        self.initial_soh = _finite("initial_soh", self.initial_soh)
+        self.eol_percentage = _finite("eol_percentage", self.eol_percentage)
+        self.min_soc = _finite("min_soc", self.min_soc)
+        self.max_soc = _finite("max_soc", self.max_soc)
+        self.charge_efficiency = _finite("charge_efficiency", self.charge_efficiency)
+        self.discharge_efficiency = _finite("discharge_efficiency", self.discharge_efficiency)
+        self.inverter_efficiency = _finite("inverter_efficiency", self.inverter_efficiency)
+        self.standby_loss_wh = _finite("standby_loss_wh", self.standby_loss_wh)
+        self.initial_resistance_growth = _finite("initial_resistance_growth", self.initial_resistance_growth)
+        self.thermal_resistance_k_per_w = _finite("thermal_resistance_k_per_w", self.thermal_resistance_k_per_w)
 
         if self.nominal_energy_wh < 0.0:
             raise ValueError("nominal_energy_wh must be non-negative")
@@ -283,7 +285,25 @@ class BatteryConfig:
             if getattr(self, name) < 0.0:
                 raise ValueError(f"{name} must be non-negative")
 
-        for name in ("inverter_ac_capacity_w", "max_charge_power_w", "max_discharge_power_w"):
+        if self.coupling not in BATTERY_COUPLINGS:
+            raise ValueError(f"coupling must be one of: {', '.join(BATTERY_COUPLINGS)}; got {self.coupling!r}")
+        if self.coupling == "dc":
+            for name in ("battery_inverter_ac_capacity_w", "battery_inverter_efficiency"):
+                if getattr(self, name) is not None:
+                    raise ValueError(f"{name} describes an AC-coupled battery's own inverter; it needs coupling = 'ac'")
+        else:
+            if self.battery_inverter_efficiency is None:
+                raise ValueError("an AC-coupled battery needs battery_inverter_efficiency; it has no default")
+            self.battery_inverter_efficiency = _finite("battery_inverter_efficiency", self.battery_inverter_efficiency)
+            if not 0.0 < self.battery_inverter_efficiency <= 1.0:
+                raise ValueError("battery_inverter_efficiency must be greater than 0 and at most 1")
+
+        for name in (
+            "inverter_ac_capacity_w",
+            "max_charge_power_w",
+            "max_discharge_power_w",
+            "battery_inverter_ac_capacity_w",
+        ):
             value = getattr(self, name)
             if value is not None:
                 if isinstance(value, (bool, np.bool_)):
@@ -301,11 +321,13 @@ class BatteryConfig:
                     "power_limit_c_rate limits both directions from capacity; do not also set "
                     "max_charge_power_w or max_discharge_power_w"
                 )
-            rate = finite("power_limit_c_rate", self.power_limit_c_rate)
+            rate = _finite("power_limit_c_rate", self.power_limit_c_rate)
             if rate <= 0.0:
                 raise ValueError("power_limit_c_rate must be greater than 0")
             self.power_limit_c_rate = rate
-        self.ac_output_scale = finite("ac_output_scale", self.ac_output_scale)
+        if self.inverter_conversion is not None:
+            self.inverter_conversion = as_inverter_conversion(self.inverter_conversion)
+        self.ac_output_scale = _finite("ac_output_scale", self.ac_output_scale)
         if not 0.0 < self.ac_output_scale <= 1.0:
             raise ValueError(
                 "ac_output_scale must be greater than 0 and at most 1; it is applied after the "
@@ -313,6 +335,11 @@ class BatteryConfig:
                 "nameplate and more AC than the DC entering the inverter. Scale the DC series "
                 "instead to correct an under-predicting model"
             )
+
+    @property
+    def conversion(self) -> InverterConversion:
+        """The inverter conversion the kernels run, the default when none is configured."""
+        return as_inverter_conversion(self.inverter_conversion)
 
     @property
     def stored_power_limit_w(self) -> Optional[float]:
@@ -362,6 +389,30 @@ def _repeat_annual_load_across_year_edges(load_utc: pd.Series, rng_utc: pd.Datet
         return load_utc
     combined = pd.concat(parts)
     return combined[~combined.index.duplicated(keep="first")].sort_index()
+
+
+def _align_ac_derate(inverter_ac_derate: Optional[pd.Series], rng: pd.DatetimeIndex) -> Optional[np.ndarray]:
+    """Reindex the inverter's per-step AC rating fraction onto ``rng``; None when there is none."""
+    if inverter_ac_derate is None:
+        return None
+    values = inverter_ac_derate.reindex(rng)
+    _require_complete_series(values, "inverter_ac_derate")
+    array = values.values.astype(np.float64)
+    if (array < 0.0).any() or (array > 1.0).any():
+        raise ValueError("inverter_ac_derate must be a fraction in [0, 1] at every step")
+    return array
+
+
+def _align_curve_rows(inverter_curve_row: Optional[pd.Series], rng: pd.DatetimeIndex) -> Optional[np.ndarray]:
+    """Reindex the efficiency curve's per-step row position onto ``rng``; None when there is none."""
+    if inverter_curve_row is None:
+        return None
+    values = inverter_curve_row.reindex(rng)
+    _require_complete_series(values, "inverter_curve_row")
+    array = np.ascontiguousarray(values.values, dtype=np.float64)
+    if not np.isfinite(array).all() or (array < 0.0).any():
+        raise ValueError("inverter_curve_row must be a finite row position of at least 0 at every step")
+    return array
 
 
 def _align_input_arrays(
@@ -464,6 +515,10 @@ class AlignedSimulationInputs:
         temperature_c: Battery cell temperature (C) per step, 25 C if none was given.
         freq: The calendar's step, which converts power to energy. A run on
             these inputs takes it from here.
+        inverter_ac_derate: The inverter's AC rating per step as a fraction
+            of its nameplate, from temperature derating; None for none.
+        inverter_curve_row: The efficiency curve's row position per step,
+            from the operating DC voltage; None reads the conversion's own row.
     """
 
     index: pd.DatetimeIndex
@@ -472,7 +527,9 @@ class AlignedSimulationInputs:
     temperature_c: np.ndarray
     freq: str
     pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
-    pv_chain_key: Optional[Tuple[int, int, int, float, float, float, float]] = None
+    pv_chain_key: Optional[Tuple[Any, ...]] = None
+    inverter_ac_derate: Optional[np.ndarray] = None
+    inverter_curve_row: Optional[np.ndarray] = None
 
     def resolve_freq(self, freq: Optional[str]) -> str:
         """Return the inputs' own step, refusing a ``freq`` that disagrees with it."""
@@ -496,6 +553,8 @@ class AlignedSimulationInputs:
             freq=self.freq,
             pv_chain=self.pv_chain if pv_factor == 1.0 else None,
             pv_chain_key=self.pv_chain_key if pv_factor == 1.0 else None,
+            inverter_ac_derate=self.inverter_ac_derate,
+            inverter_curve_row=self.inverter_curve_row,
         )
 
     def _pv_chain_cache_key(
@@ -504,7 +563,7 @@ class AlignedSimulationInputs:
         hours_per_step: float,
         *,
         pv_dc_w: Optional[np.ndarray] = None,
-    ) -> Tuple[int, int, int, float, float, float, float]:
+    ) -> Tuple[Any, ...]:
         """Identify the aligned PV values and inverter settings used by the memo."""
         cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
         pv_values = self.pv_dc_w if pv_dc_w is None else pv_dc_w
@@ -516,6 +575,9 @@ class AlignedSimulationInputs:
             float(cap_wh),
             float(battery_config.inverter_efficiency),
             float(battery_config.ac_output_scale),
+            battery_config.conversion.cache_key(),
+            None if self.inverter_ac_derate is None else id(self.inverter_ac_derate),
+            None if self.inverter_curve_row is None else id(self.inverter_curve_row),
         )
 
     def with_pv_only_chain(
@@ -550,6 +612,10 @@ class AlignedSimulationInputs:
             cap_wh,
             battery_config.inverter_efficiency,
             battery_config.ac_output_scale,
+            conversion=battery_config.conversion,
+            ac_derate=self.inverter_ac_derate,
+            curve_rows=self.inverter_curve_row,
+            hours_per_step=hours_per_step,
         )
         for values in chain:
             values.setflags(write=False)
@@ -562,6 +628,8 @@ class AlignedSimulationInputs:
             freq=self.freq,
             pv_chain=chain,
             pv_chain_key=pv_chain_key,
+            inverter_ac_derate=self.inverter_ac_derate,
+            inverter_curve_row=self.inverter_curve_row,
         )
 
 
@@ -573,6 +641,8 @@ def align_simulation_inputs(
     freq: str = "h",
     start_time: Optional[pd.Timestamp] = None,
     end_time: Optional[pd.Timestamp] = None,
+    inverter_ac_derate: Optional[pd.Series] = None,
+    inverter_curve_row: Optional[pd.Series] = None,
 ) -> AlignedSimulationInputs:
     """Align simulation inputs once so many runs can share the result.
 
@@ -594,6 +664,8 @@ def align_simulation_inputs(
         load_w=load_values,
         temperature_c=temperature_values,
         freq=freq,
+        inverter_ac_derate=_align_ac_derate(inverter_ac_derate, rng),
+        inverter_curve_row=_align_curve_rows(inverter_curve_row, rng),
     )
 
 
@@ -636,14 +708,7 @@ def _carried_origin(value: Optional[float], name: str, limit_wh: float, limit_na
     """
     if value is None:
         return 0.0
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"{name} must be a finite number, not a bool")
-    try:
-        origin_wh = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a finite number") from exc
-    if not math.isfinite(origin_wh):
-        raise ValueError(f"{name} must be a finite number")
+    origin_wh = _finite(name, value)
     slack = 4.0 * math.ulp(max(abs(limit_wh), abs(origin_wh)))
     if not 0.0 <= origin_wh <= limit_wh + slack:
         raise ValueError(f"{name} must be between 0 and {limit_name}")
@@ -667,14 +732,7 @@ def _resolve_carried_energy(
     if initial_energy_wh is None:
         energy_wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
     else:
-        if isinstance(initial_energy_wh, (bool, np.bool_)):
-            raise ValueError("initial_energy_wh must be a finite number, not a bool")
-        try:
-            energy_wh = float(initial_energy_wh)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("initial_energy_wh must be a finite number") from exc
-        if not math.isfinite(energy_wh):
-            raise ValueError("initial_energy_wh must be a finite number")
+        energy_wh = _finite("initial_energy_wh", initial_energy_wh)
         if not 0.0 <= energy_wh <= battery_config.nominal_energy_wh:
             raise ValueError(
                 f"initial_energy_wh must be between 0 and nominal_energy_wh ({battery_config.nominal_energy_wh:g} Wh)"
@@ -690,6 +748,58 @@ def _resolve_carried_energy(
         "initial_energy_wh minus initial_pv_origin_energy_wh",
     )
     return energy_wh, pv_origin_wh, grid_origin_wh
+
+
+@dataclass(frozen=True)
+class _StartState:
+    """The aging state a span starts from."""
+
+    fec: float
+    calendar_seconds: float
+    cumulative_cycle_deg: float
+    cumulative_cal_deg: float
+    soh_fraction: float
+    resistance_growth: float
+
+
+def _resolve_start_state(
+    engine_key: str,
+    battery_config: BatteryConfig,
+    initial_degradation_state: Optional[Dict[str, Any]],
+    *,
+    initial_fec: float,
+    initial_calendar_seconds: float,
+    initial_cumulative_cycle_deg: float,
+    initial_cumulative_cal_deg: float,
+    initial_resistance_growth: Optional[float],
+) -> _StartState:
+    """The span's starting aging state: a native snapshot's values, else the arguments and the battery's own.
+
+    The arguments are the multi-year continuation seam (the App's year loop);
+    a native snapshot takes precedence over them. ``initial_resistance_growth``
+    None is the battery's configured starting resistance. BLAST restores its
+    own state from the snapshot (:func:`_build_degradation_lifecycle`).
+    """
+    native = engine_key == "native" and initial_degradation_state is not None
+    payload: Mapping[str, Any] = initial_degradation_state if native and initial_degradation_state else {}
+
+    def carried(key: str, default: Any) -> Any:
+        return float(payload.get(key, default)) if native else default
+
+    if "resistance_growth" in payload:
+        resistance_growth = float(payload["resistance_growth"])
+    elif initial_resistance_growth is None:
+        resistance_growth = battery_config.initial_resistance_growth
+    else:
+        resistance_growth = initial_resistance_growth
+    return _StartState(
+        fec=carried("fec_cum", initial_fec),
+        calendar_seconds=carried("cumulative_calendar_seconds", initial_calendar_seconds),
+        cumulative_cycle_deg=carried("cumulative_cycle_degradation", initial_cumulative_cycle_deg),
+        cumulative_cal_deg=carried("cumulative_calendar_degradation", initial_cumulative_cal_deg),
+        soh_fraction=carried("soh_fraction", battery_config.initial_soh / 100.0),
+        resistance_growth=resistance_growth,
+    )
 
 
 def _build_degradation_lifecycle(
@@ -716,8 +826,8 @@ def _build_degradation_lifecycle(
         lifecycle: DegradationLifecycle = NativeDegradationAdapter(
             model_key=battery_config.calendar_model,
             initial_soh_fraction=battery_soh_decimal,
-            initial_fec=float(state_payload.get("fec_cum", initial_fec)),
-            initial_calendar_seconds=float(state_payload.get("cumulative_calendar_seconds", initial_calendar_seconds)),
+            initial_fec=float(initial_fec),
+            initial_calendar_seconds=float(initial_calendar_seconds),
             **_native_degradation_kwargs(battery_config.calendar_model),
             cycle_step=_update_battery_soh_from_cycles,
             calendar_step=update_battery_soh_calendar,
@@ -876,6 +986,7 @@ _PV_ONLY_ROWS: Tuple[str, ...] = (
     "PV_AC_To_Load",
     "PV_AC_Export",
     "PV_Direct_Inverter_Loss",
+    "Inverter_Night_Consumption",
 )
 # Rows a PV-only run fills with values it already wrote under another name.
 _PV_ONLY_ALIASES: Dict[str, str] = {
@@ -1194,6 +1305,59 @@ def _apply_battery_retirement(
     return 0.0, 0.0, 0.0, 0.0
 
 
+def _pv_inverter_conversion(
+    pv_dc_wh: np.ndarray,
+    *,
+    battery_config: BatteryConfig,
+    hours_per_step: float,
+    cap_wh: float,
+    pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
+    ac_derate: Optional[np.ndarray] = None,
+    curve_rows: Optional[np.ndarray] = None,
+    units: Optional[InverterUnits] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """The PV inverters' conversion of ``pv_dc_wh`` on its own: ``(ac, conversion_loss, clipping, night)``.
+
+    Wh per step, as a PV-only run converts it. ``night`` is the inverters'
+    draw on the steps they convert nothing, None when there is none. A
+    PV-only run and an AC-coupled battery's PV inverter (ADR 0004 C3) both
+    take their conversion from here, so they agree bit for bit. ``ac_derate``
+    and ``curve_rows`` are aligned to ``pv_dc_wh``; ``units`` and a memoized
+    ``pv_chain`` cover a whole span.
+    """
+    if units is not None:
+        assert pv_chain is None
+        converted = convert_units(
+            pv_dc_wh,
+            units,
+            inverter_efficiency=battery_config.inverter_efficiency,
+            ac_output_scale=battery_config.ac_output_scale,
+            hours_per_step=hours_per_step,
+        )
+        # With several inverters, each one draws on the steps it receives no DC.
+        night = converted.night if converted.night.any() else None
+        return converted.ac, converted.conversion_loss, converted.clipping, night
+    if pv_chain is None:
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
+            pv_dc_wh,
+            cap_wh,
+            battery_config.inverter_efficiency,
+            battery_config.ac_output_scale,
+            conversion=battery_config.conversion,
+            ac_derate=ac_derate,
+            curve_rows=curve_rows,
+            hours_per_step=hours_per_step,
+        )
+    else:
+        # Memoized by the caller for these exact inputs. Same values, same
+        # expressions downstream; see AlignedSimulationInputs.with_pv_only_chain.
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = pv_chain
+    # The inverter's draw while it converts nothing, from the grid.
+    night_wh = battery_config.conversion.night_consumption_w * hours_per_step
+    night = np.where(pv_dc_wh <= 0.0, night_wh, 0.0) if night_wh > 0.0 else None
+    return ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night
+
+
 def _dispatch_no_battery_vectorized(
     out: Union["_ResultBuffers", "_PvOnlySummaryBuffers"],
     pv_dc_values: np.ndarray,
@@ -1205,13 +1369,22 @@ def _dispatch_no_battery_vectorized(
     cap_wh: float,
     pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
     steps: slice = slice(None),
+    ac_derate: Optional[np.ndarray] = None,
+    curve_rows: Optional[np.ndarray] = None,
+    units: Optional[InverterUnits] = None,
+    span_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None,
 ) -> None:
     """Fill a PV-only result buffer without entering the timestep loop.
 
     ``steps`` fills only those steps of a full buffer, which is how a retired
     battery's steps are dispatched: element by element the same expressions,
     so each step equals the PV-only system's. A memoized ``pv_chain`` covers
-    the whole span only.
+    the whole span only. ``units``, aligned to the span, converts each
+    inverter's share of the DC on its own instead of ``battery_config``'s
+    single conversion (:func:`~breos.inverter.convert_units`).
+    ``span_chain`` is an AC-coupled battery's PV inverter conversion over the
+    whole span, ``(ac, conversion_loss, clipping, night)`` in Wh, which its
+    retired steps read instead of converting again (ADR 0004 C12).
     """
     if steps == slice(None):
         out.zero_fill()
@@ -1219,22 +1392,35 @@ def _dispatch_no_battery_vectorized(
         assert isinstance(out, _ResultBuffers) and pv_chain is None
         out.matrix[:, steps] = 0.0
 
+    assert units is None or steps == slice(None)
     pv_dc_wh = np.maximum(0.0, pv_dc_values[steps] * hours_per_step)
     load_wh = load_values[steps] * hours_per_step
-    if pv_chain is None:
-        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
-            pv_dc_wh,
-            cap_wh,
-            battery_config.inverter_efficiency,
-            battery_config.ac_output_scale,
-        )
+    night_consumption_wh: Optional[np.ndarray]
+    if span_chain is not None:
+        assert pv_chain is None and units is None
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night_consumption_wh = (part[steps] for part in span_chain)
+        if not night_consumption_wh.any():
+            night_consumption_wh = None
     else:
-        # Memoized by the caller for these exact inputs. Same values, same
-        # expressions downstream; see AlignedSimulationInputs.with_pv_only_chain.
-        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = pv_chain
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night_consumption_wh = _pv_inverter_conversion(
+            pv_dc_wh,
+            battery_config=battery_config,
+            hours_per_step=hours_per_step,
+            cap_wh=cap_wh,
+            pv_chain=pv_chain,
+            ac_derate=None if ac_derate is None else ac_derate[steps],
+            curve_rows=None if curve_rows is None else curve_rows[steps],
+            units=units,
+        )
     pv_ac_to_load_wh = np.minimum(ac_wh, load_wh)
     grid_export_wh = ac_wh - pv_ac_to_load_wh
     grid_import_wh = np.maximum(0.0, load_wh - pv_ac_to_load_wh)
+    if night_consumption_wh is not None:
+        # Idle units share the bus: their draw precedes export. The battery
+        # never supplies it (ADR 0004 M9).
+        pv_to_night_wh = np.minimum(grid_export_wh, night_consumption_wh)
+        grid_export_wh = grid_export_wh - pv_to_night_wh
+        grid_import_wh = grid_import_wh + (night_consumption_wh - pv_to_night_wh)
     # Keep the scalar reference's subtraction order. Returning ``ac_wh``
     # here is algebraically equivalent but differs by one ULP at low load.
     pv_production_wh = pv_dc_wh - clipping_loss_dc_wh - conversion_loss_wh
@@ -1260,6 +1446,9 @@ def _dispatch_no_battery_vectorized(
     out.columns["PV_AC_To_Load"][steps] = pv_ac_to_load_wh / hours_per_step
     out.columns["PV_AC_Export"][steps] = grid_export_w
     out.columns["PV_Direct_Inverter_Loss"][steps] = conversion_w
+    out.columns["Inverter_Night_Consumption"][steps] = (
+        0.0 if night_consumption_wh is None else night_consumption_wh / hours_per_step
+    )
     out.columns["Inverter_Loss"][steps] = conversion_w
 
 
@@ -1561,9 +1750,8 @@ class SimulationSummary:
     """Annual totals and carry state, without a per-timestep frame.
 
     ``column_sums`` holds the plain sum of every column the detailed results
-    frame exposes, under the same names and in the same units, so a caller
-    that used to write ``results_df[col].sum()`` reads ``column_sums[col]``
-    and gets the identical value. Unit scaling stays with the caller, because
+    frame exposes, under the same names and in the same units:
+    ``column_sums[col]`` is the value ``results_df[col].sum()`` gives. Unit scaling stays with the caller, because
     the order of a scaling expression is itself observable in floating point.
 
     The remaining fields are the state a multi-year caller has to carry, plus
@@ -1753,19 +1941,29 @@ def _simulate_core(
     replay_seam: bool = False,
     instruction_planner: Optional[Callable[[ControllerBatteryState], DispatchInstructions]] = None,
     battery_retired: bool = False,
+    inverter_ac_derate: Optional[pd.Series] = None,
+    inverter_curve_row: Optional[pd.Series] = None,
+    inverter_units: Optional[InverterUnits] = None,
 ) -> "_CoreRun":
     """
     Simulate energy balance with battery storage and degradation.
 
     This function processes PV DC production and load profiles to calculate
-    grid interaction, battery state, and degradation for DC-coupled hybrid
-    inverter systems. AC-coupled battery dispatch is not implemented.
+    grid interaction, battery state, and degradation, for a DC-coupled
+    battery behind a hybrid inverter or an AC-coupled one behind its own
+    inverter (``battery_config.coupling``, ADR 0004).
 
     Energy flow for DC-coupled (hybrid inverter) systems:
     - PV -> Load: DC -> Inverter -> AC (one inverter loss)
     - PV -> Battery: DC -> Battery (charge efficiency only)
     - Battery -> Load: DC -> Inverter -> AC (discharge efficiency + inverter loss)
     - Grid -> Load: AC (no conversion)
+
+    For AC-coupled systems PV converts in the PV inverter as in a PV-only
+    run, and the battery inverter converts both ways:
+    - PV -> Battery: DC -> PV inverter -> AC -> battery inverter -> DC
+    - Battery -> Load: DC -> battery inverter -> AC
+    - Grid -> Battery: AC -> battery inverter -> DC
 
     Args:
         pv_dc: Series with PV DC power production (W) - before inverter.
@@ -1779,6 +1977,18 @@ def _simulate_core(
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
         temperature_series: Ambient (battery-location) temperature (C),
             defaults to 25C. The dispatch derives ``T_cell`` from it.
+        inverter_ac_derate: Optional inverter AC rating per step as a fraction
+            of ``battery_config.inverter_ac_capacity_w``, from temperature
+            derating. It must cover every step. None is the full rating.
+        inverter_curve_row: Optional position among the inverter efficiency
+            curve's voltage rows per step, from the operating DC voltage. It
+            must cover every step. None reads the conversion's own row.
+        inverter_units: Several inverters, each converting its own share of
+            the DC (:class:`~breos.inverter.InverterUnits`), for a run without
+            a battery or with an AC-coupled one; a DC-coupled battery is
+            refused. They replace ``battery_config``'s single conversion and
+            night draw, and must cover every step. None converts through
+            ``battery_config`` alone.
         degradation_engine: Degradation backend. ``"native"`` preserves the
             Naumann/Lam model; ``"blast"`` uses the BLAST daily endpoint adapter.
         blast_model: BLAST model key when ``degradation_engine="blast"``.
@@ -1856,12 +2066,24 @@ def _simulate_core(
         # Create time range
         rng = pd.date_range(start=start_time, end=end_time, freq=freq)
         _pv_dc_vals, _load_vals, _temp_vals = _align_input_arrays(pv_dc, houseload, temperature_series, rng)
+        _derate_vals = _align_ac_derate(inverter_ac_derate, rng)
+        _curve_rows = _align_curve_rows(inverter_curve_row, rng)
+        _units = None if inverter_units is None else inverter_units.aligned(rng)
     else:
         # The caller has already built the calendar and reindexed onto it.
+        if inverter_ac_derate is not None or inverter_curve_row is not None:
+            raise ValueError(
+                "pass inverter_ac_derate and inverter_curve_row to align_simulation_inputs with aligned inputs"
+            )
+        if inverter_units is not None:
+            raise ValueError("inverter_units need the per-step series, not aligned inputs")
+        _units = None
         rng = aligned.index
         _pv_dc_vals = aligned.pv_dc_w
         _load_vals = aligned.load_w
         _temp_vals = aligned.temperature_c
+        _derate_vals = aligned.inverter_ac_derate
+        _curve_rows = aligned.inverter_curve_row
 
     degradation_engine_key = _resolve_degradation_engine(
         degradation_engine,
@@ -1871,20 +2093,18 @@ def _simulate_core(
     )
 
     state_payload = initial_degradation_state or {}
-    if degradation_engine_key == "native" and initial_degradation_state is not None:
-        initial_fec = float(state_payload.get("fec_cum", initial_fec))
-        initial_calendar_seconds = float(state_payload.get("cumulative_calendar_seconds", initial_calendar_seconds))
-        initial_cumulative_cycle_deg = float(
-            state_payload.get("cumulative_cycle_degradation", initial_cumulative_cycle_deg)
-        )
-        initial_cumulative_cal_deg = float(
-            state_payload.get("cumulative_calendar_degradation", initial_cumulative_cal_deg)
-        )
-
-    # Initialize state
-    battery_soh_decimal = battery_config.initial_soh / 100.0
-    if degradation_engine_key == "native" and initial_degradation_state is not None:
-        battery_soh_decimal = float(state_payload.get("soh_fraction", battery_soh_decimal))
+    start = _resolve_start_state(
+        degradation_engine_key,
+        battery_config,
+        initial_degradation_state,
+        initial_fec=initial_fec,
+        initial_calendar_seconds=initial_calendar_seconds,
+        initial_cumulative_cycle_deg=initial_cumulative_cycle_deg,
+        initial_cumulative_cal_deg=initial_cumulative_cal_deg,
+        initial_resistance_growth=initial_resistance_growth,
+    )
+    battery_soh_decimal = start.soh_fraction
+    resistance_growth = start.resistance_growth
     Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _resolve_carried_energy(
         initial_energy_wh,
         initial_pv_origin_energy_wh,
@@ -1896,15 +2116,6 @@ def _simulate_core(
     # Degradation windows are positional (fixed steps_per_day), not
     # calendar-based: DST days shift the windows by design, and a trailing
     # partial window is processed at the end. Dispatch shares this convention.
-    # The function argument is the multi-year continuation seam (used by the
-    # App's year loop). A native state snapshot takes precedence; otherwise
-    # None means to use the battery's configured starting resistance.
-    if degradation_engine_key == "native" and "resistance_growth" in state_payload:
-        resistance_growth = float(state_payload["resistance_growth"])
-    else:
-        resistance_growth = (
-            battery_config.initial_resistance_growth if initial_resistance_growth is None else initial_resistance_growth
-        )
     # Charge/discharge efficiencies, derated by resistance growth when the
     # fade model is enabled; updated after each daily degradation step.
     eff_charge = battery_config.charge_efficiency
@@ -1926,6 +2137,11 @@ def _simulate_core(
         battery_config.max_soc,
         battery_config.min_soc,
     )
+    if has_battery and _units is not None and battery_config.coupling != "ac":
+        raise ValueError(
+            "a battery beside several inverters must be AC-coupled (coupling = 'ac'); a DC-coupled battery "
+            "sits behind one hybrid inverter"
+        )
     if not has_battery and aligned is not None and aligned.pv_chain is not None:
         expected_chain_key = aligned._pv_chain_cache_key(battery_config, hours_per_step)
         if aligned.pv_chain_key != expected_chain_key:
@@ -1954,8 +2170,8 @@ def _simulate_core(
         has_battery=has_battery,
         blast_model=blast_model,
         initial_degradation_state=initial_degradation_state,
-        initial_fec=initial_fec,
-        initial_calendar_seconds=initial_calendar_seconds,
+        initial_fec=start.fec,
+        initial_calendar_seconds=start.calendar_seconds,
         default_day_start_soc=degradation_day_start_soc,
         default_day_start_t_cell=degradation_day_start_t_cell,
     )
@@ -1999,16 +2215,16 @@ def _simulate_core(
     aging = _AgingState(
         soh_fraction=battery_soh_decimal,
         soh_percent=Battery_SOH,
-        fec_cum=initial_fec,
+        fec_cum=start.fec,
         # Lifetime FEC starts this span at zero whatever the installed pack
         # already carries, so the end-of-span value is the FEC the span itself
         # accumulated across every pack it used.
         fec_lifetime=0.0,
-        cumulative_cal_seconds=initial_calendar_seconds,
+        cumulative_cal_seconds=start.calendar_seconds,
         # Coerced so a NumPy scalar argument, such as float32, is summed in
         # float64 like the carried state always was.
-        cumulative_cycle_deg=float(initial_cumulative_cycle_deg),
-        cumulative_cal_deg=float(initial_cumulative_cal_deg),
+        cumulative_cycle_deg=float(start.cumulative_cycle_deg),
+        cumulative_cal_deg=float(start.cumulative_cal_deg),
         resistance_growth=resistance_growth,
         eff_charge=eff_charge,
         eff_discharge=eff_discharge,
@@ -2033,6 +2249,21 @@ def _simulate_core(
     cap_stored_wh = _step_energy_cap(battery_config.stored_power_limit_w, hours_per_step)
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
+    ac_coupled = has_battery and battery_config.coupling == "ac"
+
+    def battery_state() -> ControllerBatteryState:
+        # The state the next step dispatches from, as a planner or a daily
+        # controller decides on it.
+        return ControllerBatteryState(
+            energy_wh=Battery_Energy_Wh,
+            pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
+            grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
+            soh_fraction=battery_soh_decimal,
+            resistance_growth=aging.resistance_growth,
+            charge_efficiency=eff_charge,
+            discharge_efficiency=eff_discharge,
+        )
+
     if instruction_planner is not None:
         if dispatch_instructions is not None or day_controller is not None:
             raise ValueError("pass one of dispatch_instructions, an instruction planner or a daily controller")
@@ -2040,22 +2271,32 @@ def _simulate_core(
             raise ValueError("an instruction planner needs a battery; a PV-only run has nothing to dispatch")
         # Planned from the state the first step dispatches from, the one a
         # daily controller's first decision would see.
-        dispatch_instructions = instruction_planner(
-            ControllerBatteryState(
-                energy_wh=Battery_Energy_Wh,
-                pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
-                grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
-                soh_fraction=battery_soh_decimal,
-                resistance_growth=aging.resistance_growth,
-                charge_efficiency=eff_charge,
-                discharge_efficiency=eff_discharge,
-            )
-        )
+        dispatch_instructions = instruction_planner(battery_state())
         if not isinstance(dispatch_instructions, DispatchInstructions):
             raise TypeError("an instruction planner must return DispatchInstructions")
     if dispatch_instructions is not None and len(dispatch_instructions) != n_steps:
         raise ValueError(
             f"dispatch_instructions cover {len(dispatch_instructions)} steps; the simulation has {n_steps}"
+        )
+    if (
+        battery_config.coupling == "dc"
+        and dispatch_instructions is not None
+        and dispatch_instructions.grid_charge_efficiency is None
+    ):
+        # Checked here, before a PV-only or retired run skips the day loop.
+        raise ValueError(
+            "a DC-coupled battery needs a grid_charge_efficiency in its dispatch instructions; "
+            "only an AC-coupled battery converts grid charge in its own inverter"
+        )
+    if (
+        ac_coupled
+        and dispatch_instructions is not None
+        and dispatch_instructions.grid_charge_efficiency is not None
+        and not np.isnan(dispatch_instructions.grid_target_fraction).all()
+    ):
+        raise ValueError(
+            "an AC-coupled battery grid-charges through its own inverter; its dispatch instructions "
+            "take grid_charge_efficiency = None"
         )
     # No instructions is greedy dispatch; one no-op set serves every day.
     instructions = dispatch_instructions if dispatch_instructions is not None else DispatchInstructions.noop(n_steps)
@@ -2080,6 +2321,8 @@ def _simulate_core(
     # The dispatch reads instructions at global positions; a controller's
     # buffer is filled day by day ahead of each segment.
     dispatch_arrays: Any = instructions if session is None else session.instructions
+    # The kernels read a per-step rating fraction; one array of ones serves every day.
+    _full_rating = np.ones(n_steps) if _derate_vals is None else _derate_vals
 
     # PV-only balance is already vectorized with NumPy and does not need the
     # general per-step dispatcher. This common path is faster than either the
@@ -2094,6 +2337,9 @@ def _simulate_core(
             hours_per_step=hours_per_step,
             cap_wh=cap_wh,
             pv_chain=None if aligned is None else aligned.pv_chain,
+            ac_derate=_derate_vals,
+            curve_rows=_curve_rows,
+            units=_units,
         )
         return _CoreRun(
             buffers=out,
@@ -2103,6 +2349,22 @@ def _simulate_core(
             degradation_tracking=degradation_tracking,
             hours_per_step=hours_per_step,
         )
+
+    # An AC-coupled battery's PV inverter converts as in a PV-only run,
+    # whatever the battery does, so its conversion is computed once for the
+    # span (ADR 0004 C3, M2).
+    ac_pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None
+    if ac_coupled:
+        chain_ac, chain_loss, chain_clip, chain_night = _pv_inverter_conversion(
+            np.maximum(0.0, _pv_dc_vals * hours_per_step),
+            battery_config=battery_config,
+            hours_per_step=hours_per_step,
+            cap_wh=cap_wh,
+            ac_derate=_derate_vals,
+            curve_rows=_curve_rows,
+            units=_units,
+        )
+        ac_pv_chain = (chain_ac, chain_loss, chain_clip, np.zeros(n_steps) if chain_night is None else chain_night)
 
     # Dispatch advances one degradation day at a time. Health state is fixed
     # for the whole window and advanced here, between windows, so every
@@ -2131,18 +2393,7 @@ def _simulate_core(
                 if session.decides_at(segment_start):
                     # A day starting where the previous window closed sees the
                     # state after that close's aging and any replacement.
-                    session.decide(
-                        segment_start,
-                        ControllerBatteryState(
-                            energy_wh=Battery_Energy_Wh,
-                            pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
-                            grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
-                            soh_fraction=battery_soh_decimal,
-                            resistance_growth=aging.resistance_growth,
-                            charge_efficiency=eff_charge,
-                            discharge_efficiency=eff_discharge,
-                        ),
-                    )
+                    session.decide(segment_start, battery_state())
                 segment_end = session.prepare_segment(segment_start, window_end)
             if aging.retired:
                 # A retired pack neither charges nor discharges, whatever the
@@ -2156,6 +2407,9 @@ def _simulate_core(
                     hours_per_step=hours_per_step,
                     cap_wh=cap_wh,
                     steps=slice(segment_start, segment_end),
+                    ac_derate=_derate_vals,
+                    curve_rows=_curve_rows,
+                    span_chain=ac_pv_chain,
                 )
                 out.columns["Battery_SOH"][segment_start:segment_end] = aging.soh_percent
             else:
@@ -2180,6 +2434,9 @@ def _simulate_core(
                     cap_discharge_wh=cap_discharge_wh,
                     cap_stored_wh=cap_stored_wh,
                     instructions=dispatch_arrays,
+                    ac_derate=_full_rating if _derate_vals is None else _derate_vals,
+                    curve_rows=_curve_rows,
+                    pv_chain=ac_pv_chain,
                 )
             if session is not None:
                 session.complete_segment(_pv_dc_vals, _load_vals, _temp_vals)
@@ -2266,6 +2523,9 @@ def simulate_energy_balance(
     execution_backend: str = "python",
     finalize_degradation: Optional[bool] = None,
     battery_retired: bool = False,
+    inverter_ac_derate: Optional[pd.Series] = None,
+    inverter_curve_row: Optional[pd.Series] = None,
+    inverter_units: Optional[InverterUnits] = None,
 ) -> (
     Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame]
     | Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, Dict[str, Any]]
@@ -2316,6 +2576,9 @@ def simulate_energy_balance(
         dispatch_instructions=dispatch_instructions,
         execution_backend=execution_backend,
         battery_retired=battery_retired,
+        inverter_ac_derate=inverter_ac_derate,
+        inverter_curve_row=inverter_curve_row,
+        inverter_units=inverter_units,
     )
     result = _detailed_frames(core)
     if not return_degradation_state:
@@ -2420,6 +2683,9 @@ def simulate_energy_balance_summary(
     finalize_degradation: Optional[bool] = None,
     weights: Optional[Mapping[str, Tuple[str, np.ndarray]]] = None,
     battery_retired: bool = False,
+    inverter_ac_derate: Optional[pd.Series] = None,
+    inverter_curve_row: Optional[pd.Series] = None,
+    inverter_units: Optional[InverterUnits] = None,
 ) -> SimulationSummary:
     """Simulate an energy balance and return annual totals and carry state.
 
@@ -2476,414 +2742,34 @@ def simulate_energy_balance_summary(
         summary_only=True,
         aligned=aligned,
         battery_retired=battery_retired,
+        inverter_ac_derate=inverter_ac_derate,
+        inverter_curve_row=inverter_curve_row,
+        inverter_units=inverter_units,
     )
     return _build_simulation_summary(core, return_degradation_state=return_degradation_state, weights=weights)
 
 
-def apply_indoor_temperature_model(
-    outdoor_temperature: pd.Series,
-    setpoint_c: float = DEFAULT_INDOOR_SETPOINT_C,
-    coupling_alpha: float = DEFAULT_INDOOR_COUPLING_ALPHA,
-    floor_c: float = DEFAULT_INDOOR_FLOOR_C,
-    ceiling_c: float = DEFAULT_INDOOR_CEILING_C,
-) -> pd.Series:
-    """
-    Transform outdoor temperature to indoor temperature for battery simulation.
+def __getattr__(name: str) -> Any:
+    # breos.battery.lfp_capacity_factor is deprecated in 0.8.0 and goes in 0.9.0;
+    # the function itself stays in breos._dispatch, where the dispatch step uses it.
+    if name == "lfp_capacity_factor":
+        from breos._dispatch import lfp_capacity_factor
 
-    Residential batteries are installed indoors where building thermal mass
-    buffers outdoor extremes. This stateless preprocessing applies a weighted
-    blend with clamp before temperatures enter the simulation loop.
-
-    T_indoor = clamp(alpha * T_outdoor + (1 - alpha) * T_setpoint, floor, ceiling)
-
-    Args:
-        outdoor_temperature: Outdoor ambient temperature series (°C)
-        setpoint_c: Indoor comfort midpoint (°C)
-        coupling_alpha: How much outdoor temp influences indoor (0=insulated, 1=outdoor)
-        floor_c: Minimum indoor temperature (°C)
-        ceiling_c: Maximum indoor temperature (°C)
-
-    Returns:
-        Indoor temperature series (°C), same index as input
-    """
-    t_indoor = coupling_alpha * outdoor_temperature + (1.0 - coupling_alpha) * setpoint_c
-    return t_indoor.clip(lower=floor_c, upper=ceiling_c)
-
-
-def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
-    """Get degradation model parameters based on model name.
-
-    All LFP models use Naumann (2020) cycle aging + the specified calendar aging parameters.
-    The 'naumann' model uses Naumann's own calendar params; 'naumann_lam*' variants use
-    Lam et al. (2025) calendar params with different calibrations.
-
-    Models:
-        'naumann'                          — Naumann 2020 calendar + cycle (NMC/LFP lab)
-        'naumann_lam'                      — Naumann cycle + Lam 2025 lab-derived calendar
-        'naumann_lam_field_calibrated'     — v1 field-calibrated fit (default alias)
-        'naumann_lam_field_calibrated_v1'  — v1 field-calibrated fit (explicit)
-        'naumann_lam_field_calibrated_v2'  — v2 field-calibrated fit with
-                                             Lam Ea/n fixed and k0/b fitted
-    """
-    model_lower = model.lower().replace("-", "_")
-
-    # ── Naumann (pure) ────────────────────────────────────────────────────
-    if model_lower == "naumann":
-        k0_frac = NAUMANN_K0_PERCENT / 100.0
-        return k0_frac, NAUMANN_EA_J_MOL, NAUMANN_EXPONENT_B, NAUMANN_SOC_EXPONENT_N
-
-    # ── Naumann-Lam: lab-derived ──────────────────────────────────────────
-    elif model_lower == "naumann_lam":
-        return LAM_K0_FRAC, LAM_EA_J_MOL, LAM_EXPONENT_B, LAM_SOC_EXPONENT_N
-
-    # ── Naumann-Lam: field-calibrated v1 (default) ───────────────────────
-    elif model_lower in ("naumann_lam_field_calibrated", "naumann_lam_field_calibrated_v1"):
-        return (
-            NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC,
-            NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL,
-            NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B,
-            NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N,
+        warnings.warn(
+            "breos.battery.lfp_capacity_factor is deprecated and will be removed in BREOS 0.9.0",
+            DeprecationWarning,
+            stacklevel=2,
         )
+        return lfp_capacity_factor
+    # Moved to breos.weather in 0.8.0, its only caller; the old name goes in 0.9.0.
+    if name == "apply_indoor_temperature_model":
+        from breos.weather import apply_indoor_temperature_model
 
-    elif model_lower == "naumann_lam_field_calibrated_v2":
-        return (
-            NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC,
-            NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL,
-            NAUMANN_LAM_FIELD_CALIBRATED_V2_EXPONENT_B,
-            NAUMANN_LAM_FIELD_CALIBRATED_V2_SOC_EXPONENT_N,
+        warnings.warn(
+            "breos.battery.apply_indoor_temperature_model is deprecated and will be removed in BREOS 0.9.0; "
+            "import it from breos.weather",
+            DeprecationWarning,
+            stacklevel=2,
         )
-
-    else:
-        raise ValueError(
-            f"Unknown calendar model: {model}. Use 'naumann_lam_field_calibrated', "
-            f"'naumann_lam_field_calibrated_v1', "
-            f"'naumann_lam_field_calibrated_v2', "
-            f"'naumann_lam', or 'naumann'."
-        )
-
-
-def _detect_cycles_rainflow_arrays(
-    soc_values: np.ndarray,
-    time_ticks: np.ndarray,
-    ticks_per_second: float,
-    min_doc_fraction: float = 0.01,
-) -> List[Dict]:
-    """Detect rainflow cycles from arrays used by the simulation hot path."""
-    if len(soc_values) < 2:
-        return []
-
-    # rainflow.extract_cycles expects a sequence; multiply by 100 for percent
-    soc_pct = soc_values * 100.0
-
-    cycles = []
-    for rng, mean, count, i_start, i_end in rainflow.extract_cycles(soc_pct):
-        doc = rng / 100.0  # convert back to fraction
-        if doc < min_doc_fraction:
-            continue
-
-        mean_soc = mean / 100.0
-
-        # Estimate C-rate from cycle duration
-        if i_start < len(time_ticks) and i_end < len(time_ticks):
-            duration_seconds = (time_ticks[i_end] - time_ticks[i_start]) / ticks_per_second
-            duration_h = duration_seconds / 3600.0
-        else:
-            duration_h = 0.0
-        mean_c_rate = doc / duration_h if duration_h > 0 else 0.0
-
-        cycles.append(
-            {
-                "doc": doc,
-                "mean_soc": mean_soc,
-                "count": count,  # 1.0 for full, 0.5 for half
-                "mean_c_rate": mean_c_rate,
-                "start_idx": i_start,
-                "end_idx": i_end,
-            }
-        )
-
-    return cycles
-
-
-# =========================================================================
-# Resistance fade functions (Naumann 2020)
-# =========================================================================
-
-
-def update_battery_resistance_cyclewise(
-    resistance_growth: float, cycles: List[Dict], fec_cum: float, min_DoD_fraction: float = 0.01
-) -> Tuple[float, float]:
-    """
-    Calculate cycle-induced resistance growth using Naumann's model.
-
-    Uses the same differential form as capacity fade but with resistance
-    parameters (A_R, B_R, C_DOC_R, D_DOC_R, Z_R).
-
-    Args:
-        resistance_growth: Current cumulative resistance growth (fraction, e.g. 0.05 = 5%)
-        cycles: Rainflow cycle dicts, each with ``doc`` (depth, fraction),
-            ``count`` (1.0 for a full cycle, 0.5 for a half) and
-            ``mean_c_rate``
-        fec_cum: Cumulative FEC at start of this period
-        min_DoD_fraction: Minimum DOC to count
-
-    Returns:
-        Tuple of (new_resistance_growth, delta_resistance_growth)
-    """
-    delta_R = 0.0
-    running_fec = fec_cum
-
-    for cyc in cycles:
-        DOC = max(0.0, min(1.0, cyc["doc"]))
-        if DOC < min_DoD_fraction:
-            continue
-
-        dFEC = DOC * cyc["count"]
-        mean_c_rate = cyc["mean_c_rate"]
-
-        kC = max(0.0, A_R * mean_c_rate + B_R)
-        kDOC = max(0.0, C_DOC_R * ((DOC - 0.6) ** 3) + D_DOC_R)
-
-        fec_new = running_fec + dFEC
-
-        # Differential form: dR% = kC * kDOC * (FEC_new^Z_R - FEC_old^Z_R)
-        dR_percent = kC * kDOC * (fec_new**Z_R - running_fec**Z_R)
-        dR_fraction = dR_percent / 100.0
-
-        delta_R += dR_fraction
-        running_fec = fec_new
-
-    new_growth = resistance_growth + delta_R
-    return new_growth, delta_R
-
-
-def update_battery_resistance_calendar(
-    resistance_growth: float,
-    T_cell_C: float,
-    cumulative_cal_seconds: float,
-    dt_days: float = 1.0,
-    mean_soc_absolute: float = 0.5,
-) -> Tuple[float, float]:
-    """
-    Calculate calendar-induced resistance growth using Naumann's model.
-
-    Same Arrhenius + power-law structure as calendar capacity fade,
-    but with resistance-specific parameters from Naumann Table 6.
-
-    Args:
-        resistance_growth: Current cumulative resistance growth (fraction)
-        T_cell_C: Cell temperature (C)
-        cumulative_cal_seconds: Total elapsed calendar seconds
-        dt_days: Time step in days
-        mean_soc_absolute: Mean absolute SOC during period
-
-    Returns:
-        Tuple of (new_resistance_growth, delta_resistance_growth)
-    """
-    dt_seconds = dt_days * 86400.0
-    if dt_seconds <= 0:
-        return resistance_growth, 0.0
-
-    k0_frac = NAUMANN_K0_R_PERCENT / 100.0
-
-    T_K = T_cell_C + 273.15
-    arr_factor = math.exp(-NAUMANN_EA_R_J_MOL / R_GAS * (1.0 / T_K - 1.0 / T_REF_K))
-
-    t_old = cumulative_cal_seconds
-    t_new = t_old + dt_seconds
-    b = NAUMANN_EXPONENT_B_R
-
-    term_old = math.pow(t_old, b) if t_old > 0 else 0.0
-    term_new = math.pow(t_new, b)
-    delta_time = term_new - term_old
-
-    soc_stress = max(0.0, mean_soc_absolute) ** NAUMANN_SOC_EXPONENT_N_R
-
-    dR_fraction = k0_frac * arr_factor * delta_time * soc_stress
-
-    return resistance_growth + dR_fraction, dR_fraction
-
-
-def resistance_to_efficiency(
-    resistance_growth: float,
-    base_charge_eff: float,
-    base_discharge_eff: float,
-) -> Tuple[float, float]:
-    """
-    Convert resistance growth to effective charge/discharge efficiencies.
-
-    Internal resistance growth increases ohmic losses proportionally. Both
-    baseline efficiencies receive the same ``sqrt(1 + growth)`` derating,
-    preserving their original ratio.
-
-    RTE_new = RTE_base / (1 + resistance_growth)
-
-    Args:
-        resistance_growth: Relative resistance growth (fraction, 0=new cell)
-        base_charge_eff: Baseline charge efficiency
-        base_discharge_eff: Baseline discharge efficiency
-
-    Returns:
-        Tuple of (effective_charge_eff, effective_discharge_eff)
-    """
-    if resistance_growth <= 0:
-        return base_charge_eff, base_discharge_eff
-
-    derate = math.sqrt(1.0 + resistance_growth)
-    return base_charge_eff / derate, base_discharge_eff / derate
-
-
-def _update_battery_soh_from_cycles(
-    soh_start_fraction: float,
-    cycles: List[Dict],
-    *,
-    fec_cum: float = 0.0,
-    min_DoD_fraction: float = 0.01,
-) -> Tuple[float, float, float]:
-    qloss_cycle_fraction = 0.0
-
-    for cyc in cycles:
-        DOC = max(0.0, min(1.0, cyc["doc"]))
-        if DOC < min_DoD_fraction:
-            continue
-
-        mean_c_rate = cyc["mean_c_rate"]
-        # Energy throughput for this cycle in FEC; a rainflow count is 1.0
-        # for a full cycle and 0.5 for a half
-        dFEC = DOC * cyc["count"]
-
-        # Naumann-style k-factors with the LFP cycle aging coefficients
-        kC = max(0.0, A_Q * mean_c_rate + B_Q)
-        kDOC = max(0.0, C_DOC_Q * ((DOC - 0.6) ** 3) + D_DOC_Q)
-
-        fec_new = fec_cum + dFEC
-
-        # Differential form using cumulative FEC (Naumann Eq. 5-6)
-        dq_percent = kC * kDOC * (fec_new**Z_Q - fec_cum**Z_Q)
-        dq_fraction = dq_percent / 100.0
-
-        qloss_cycle_fraction += dq_fraction
-        fec_cum = fec_new
-
-    soh_after = max(0.0, soh_start_fraction - qloss_cycle_fraction)
-    return soh_after, qloss_cycle_fraction, fec_cum
-
-
-def _update_battery_soh_cyclewise_arrays(
-    soh_start_fraction: float,
-    soc_values: np.ndarray,
-    time_ticks: np.ndarray,
-    ticks_per_second: float,
-    *,
-    fec_cum: float = 0.0,
-    min_DoD_fraction: float = 0.01,
-) -> Tuple[float, float, float]:
-    """Run native rainflow degradation without constructing pandas objects."""
-    if len(soc_values) < 2:
-        return soh_start_fraction, 0.0, fec_cum
-    cycles = _detect_cycles_rainflow_arrays(
-        soc_values,
-        time_ticks,
-        ticks_per_second,
-        min_doc_fraction=min_DoD_fraction,
-    )
-    return _update_battery_soh_from_cycles(
-        soh_start_fraction,
-        cycles,
-        fec_cum=fec_cum,
-        min_DoD_fraction=min_DoD_fraction,
-    )
-
-
-def update_battery_soh_cyclewise(
-    soh_start_fraction: float,
-    soc_series_absolute: pd.Series,
-    *,
-    fec_cum: float = 0.0,
-    min_DoD_fraction: float = 0.01,
-) -> Tuple[float, float, float]:
-    """
-    Calculate cycle-induced degradation using Naumann's semi-empirical model.
-
-    Implements Equation 5-6 from Naumann 2020 paper with the LFP cycle aging
-    coefficients. Cycles are counted with rainflow (ASTM E1049) over the
-    whole series, and the series' own ends close them.
-
-    Args:
-        soh_start_fraction: Starting SOH as fraction (0-1)
-        soc_series_absolute: SOC time series
-        fec_cum: Cumulative full equivalent cycles
-        min_DoD_fraction: Minimum DoD to count as cycle
-
-    Returns:
-        Tuple of (soh_after, qloss_cycle_fraction, fec_cum)
-    """
-    if len(soc_series_absolute) < 2:
-        return soh_start_fraction, 0.0, fec_cum
-
-    time_ticks, ticks_per_second = _datetime_index_ticks(soc_series_absolute.index)
-    return _update_battery_soh_cyclewise_arrays(
-        soh_start_fraction,
-        soc_series_absolute.to_numpy(),
-        time_ticks,
-        ticks_per_second,
-        fec_cum=fec_cum,
-        min_DoD_fraction=min_DoD_fraction,
-    )
-
-
-def update_battery_soh_calendar(
-    soh_start_fraction: float,
-    k0_frac: float,
-    Ea: float,
-    n: float,
-    cal_b: float,
-    T_cell_C: float = 25.0,
-    cumulative_cal_seconds: float = 0.0,
-    dt_days: float = 1.0,
-    mean_soc_absolute: float = 0.5,
-) -> Tuple[float, float, float]:
-    """
-    Generalized calendar aging using power law physics (Naumann / Lam 2025).
-
-    dSOH = k0_frac * Arr * ((t+dt)^b - t^b) * SOC_stress
-
-    Args:
-        soh_start_fraction: Starting SOH as fraction
-        k0_frac: Rate constant (fraction per second^b)
-        Ea: Activation energy (J/mol)
-        n: SOC exponent
-        cal_b: Time exponent (0.5 for sqrt-time, 0.75 for Lam)
-        T_cell_C: Cell temperature (°C)
-        cumulative_cal_seconds: Total elapsed seconds
-        dt_days: Time step in days
-        mean_soc_absolute: Mean SOC during period
-
-    Returns:
-        Tuple of (soh_after, dsoh_fraction, new_cumulative_seconds)
-    """
-    dt_seconds = dt_days * 86400.0
-    if dt_seconds <= 0:
-        return soh_start_fraction, 0.0, cumulative_cal_seconds
-
-    # Temperature factor (Arrhenius) relative to 25°C
-    T_K = T_cell_C + 273.15
-    arr_factor = math.exp(-Ea / R_GAS * (1.0 / T_K - 1.0 / T_REF_K))
-
-    # Power law time calculation
-    t_old = cumulative_cal_seconds
-    t_new = cumulative_cal_seconds + dt_seconds
-
-    term_old = math.pow(t_old, cal_b) if t_old > 0 else 0.0
-    term_new = math.pow(t_new, cal_b)
-    delta_time_factor = term_new - term_old
-
-    # SOC stress factor
-    soc_stress = max(0.0, mean_soc_absolute) ** n
-
-    # Calculate degradation fraction
-    d_soh_fraction = k0_frac * arr_factor * delta_time_factor * soc_stress
-
-    soh_after = max(0.0, soh_start_fraction - d_soh_fraction)
-
-    return soh_after, d_soh_fraction, t_new
+        return apply_indoor_temperature_model
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

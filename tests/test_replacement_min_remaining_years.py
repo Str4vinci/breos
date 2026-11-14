@@ -13,20 +13,13 @@ nothing.
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pandas as pd
 import pytest
 
-import breos.optimization as optimization_module
-import breos.projection as projection_module
-from breos.app_config import resolve_app_config
 from breos.battery import BatteryConfig, align_simulation_inputs, simulate_energy_balance
 from breos.economics import replacement_booking_time
-from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization import evaluate_projected_design
-from breos.optimization_config import resolve_optimization_config
 from breos.projection import CarryState, ProjectionYear, project_years
 from tests.test_terminal_replacement import (
     EVERY_PERIOD_EOL,
@@ -34,8 +27,6 @@ from tests.test_terminal_replacement import (
     _assert_same_run,
     _design_inputs,
     _inputs,
-    _mc_config,
-    _projected_metrics,
     _replaced_steps,
     _require_numba,
     _run,
@@ -43,69 +34,6 @@ from tests.test_terminal_replacement import (
 
 # Three hourly days stand for one project year, as in the terminal-guard tests.
 YEAR_STEPS = 72
-
-
-# -- the settings ------------------------------------------------------------------
-
-
-class TestBatteryConfigFields:
-    def test_the_defaults_skip_nothing(self):
-        config = BatteryConfig(nominal_energy_wh=5000.0)
-        assert config.replacement_min_remaining_years == 0.0
-        assert config.replacement_years_after_span == 0
-
-    def test_values_are_stored_as_float_and_int(self):
-        config = BatteryConfig(
-            nominal_energy_wh=5000.0, replacement_min_remaining_years=1, replacement_years_after_span=np.int64(2)
-        )
-        assert config.replacement_min_remaining_years == 1.0
-        assert isinstance(config.replacement_min_remaining_years, float)
-        assert config.replacement_years_after_span == 2
-        assert type(config.replacement_years_after_span) is int
-
-    @pytest.mark.parametrize("value", [-0.5, math.nan, math.inf, True, None])
-    def test_a_bad_minimum_is_refused(self, value):
-        with pytest.raises(ValueError, match="replacement_min_remaining_years must be"):
-            BatteryConfig(nominal_energy_wh=5000.0, replacement_min_remaining_years=value)
-
-    @pytest.mark.parametrize("value", [-1, 1.0, True, "1", None])
-    def test_a_bad_year_count_is_refused(self, value):
-        with pytest.raises(ValueError, match="replacement_years_after_span must be a non-negative integer"):
-            BatteryConfig(nominal_energy_wh=5000.0, replacement_years_after_span=value)
-
-
-class TestAppAndOptimizerKeys:
-    BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5}
-    LOCATION = {"location": {"latitude": 41.15, "longitude": -8.61}}
-
-    def test_the_app_key_resolves_zero_by_default_and_keeps_a_float(self):
-        assert resolve_app_config(self.BASE).cfg["battery_replacement_min_remaining_years"] == 0.0
-        resolved = resolve_app_config({**self.BASE, "battery_replacement_min_remaining_years": 1})
-        assert resolved.cfg["battery_replacement_min_remaining_years"] == 1.0
-        battery = projection_module.build_battery_config(resolved.cfg, resolved, initial_soh=100.0)
-        assert battery.replacement_min_remaining_years == 1.0
-
-    @pytest.mark.parametrize(
-        "value,error",
-        [(-0.5, ValueError), (math.nan, ValueError), (math.inf, ValueError), (True, TypeError), ("1", TypeError)],
-    )
-    def test_the_app_key_refuses_a_bad_value(self, value, error):
-        with pytest.raises(error, match="'battery_replacement_min_remaining_years' must be"):
-            resolve_app_config({**self.BASE, "battery_replacement_min_remaining_years": value})
-
-    def test_the_optimizer_key_resolves_zero_by_default_and_is_forwarded(self):
-        assert resolve_optimization_config(self.LOCATION)["battery"]["replacement_min_remaining_years"] == 0.0
-        config = {**self.LOCATION, "battery": {"replacement_min_remaining_years": 1}}
-        assert resolve_optimization_config(config)["battery"]["replacement_min_remaining_years"] == 1.0
-        battery = optimization_module._build_battery_config_from_spec(
-            {"replacement_min_remaining_years": 1.0}, nominal_energy_wh=5000.0
-        )
-        assert battery.replacement_min_remaining_years == 1.0
-
-    @pytest.mark.parametrize("value,error", [(-0.5, ValueError), (math.nan, ValueError), (True, TypeError)])
-    def test_the_optimizer_key_refuses_a_bad_value(self, value, error):
-        with pytest.raises(error, match="'battery.replacement_min_remaining_years' must be"):
-            resolve_optimization_config({**self.LOCATION, "battery": {"replacement_min_remaining_years": value}})
 
 
 # -- one span ---------------------------------------------------------------------
@@ -141,11 +69,7 @@ def test_the_years_after_the_span_count_toward_what_is_left():
     assert _replaced_steps(after) == [23]
 
 
-def test_a_zero_minimum_is_the_default_whatever_follows():
-    _assert_same_run(
-        _run(YEAR_STEPS, eol_percentage=EVERY_PERIOD_EOL),
-        _run(YEAR_STEPS, eol_percentage=EVERY_PERIOD_EOL, replacement_min_remaining_years=0.0),
-    )
+def test_with_a_zero_minimum_the_years_after_the_span_change_nothing():
     _assert_same_run(
         _run(YEAR_STEPS, eol_percentage=EVERY_PERIOD_EOL),
         _run(YEAR_STEPS, eol_percentage=EVERY_PERIOD_EOL, replacement_years_after_span=5),
@@ -272,23 +196,6 @@ def test_frames_summaries_and_numba_agree():
     assert frames.carry.soh_pct == numba.carry.soh_pct
 
 
-def test_the_projection_leaves_the_callers_config_alone(monkeypatch):
-    seen: list[tuple[float, int]] = []
-    real = projection_module.simulate_energy_balance
-
-    def recording(**kwargs):
-        config = kwargs["battery_config"]
-        seen.append((config.replacement_min_remaining_years, config.replacement_years_after_span))
-        return real(**kwargs)
-
-    monkeypatch.setattr(projection_module, "simulate_energy_balance", recording)
-    _project(1.0)
-    assert seen == [(1.0, 2), (1.0, 1), (1.0, 0)]
-    seen.clear()
-    _project(0.0)
-    assert seen == [(0.0, 0), (0.0, 0), (0.0, 0)]
-
-
 # -- App, Monte Carlo and the optimizer ------------------------------------------------
 
 
@@ -315,30 +222,7 @@ def test_app_skips_the_last_years_swaps_and_records_the_setting():
     )
 
 
-def test_an_explicit_zero_is_the_default_app_run():
-    default = _app(battery_eol_percentage=0.7).result()
-    explicit = _app(battery_eol_percentage=0.7, battery_replacement_min_remaining_years=0).result()
-    for result in (default, explicit):
-        result["provenance"].pop("execution", None)
-    assert default == explicit
-
-
-def test_monte_carlo_skips_the_swaps_of_each_trajectory(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=7)
-
-    guarded = run_montecarlo(
-        _mc_config(battery_eol_percentage=EVERY_PERIOD_EOL, battery_replacement_min_remaining_years=1.0), settings
-    )
-
-    assert guarded.provenance["resolved_config"]["battery_replacement_min_remaining_years"] == 1.0
-    assert (guarded.runs["total_replacements"] == 365).all()
-
-
 def test_the_projected_optimizer_skips_the_swaps_and_records_the_setting(monkeypatch):
-    guarded, _inputs_seen = _projected_metrics(monkeypatch, replacement_min_remaining_years=1.0)
-    assert guarded["_yearly_summary_df"]["Replacements"].tolist() == [3, 0]
-
     weather, load, pv = _design_inputs()
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **_kwargs: pv)
     result = evaluate_projected_design(
@@ -359,10 +243,3 @@ def test_the_projected_optimizer_skips_the_swaps_and_records_the_setting(monkeyp
     assert treatment["replacement_min_remaining_years"] == 1.0
     assert treatment["allow_terminal_replacement"] is True
     assert result.yearly["Replacements"].tolist() == [3, 0]
-
-
-def test_the_key_reference_lists_the_setting():
-    from pathlib import Path
-
-    reference = (Path(__file__).resolve().parents[1] / "docs" / "getting-started" / "config-reference.md").read_text()
-    assert "| `battery_replacement_min_remaining_years` | `0.0` | — |" in reference

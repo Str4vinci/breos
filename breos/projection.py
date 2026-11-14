@@ -43,11 +43,13 @@ from breos.economics import (
     cost_analysis_projection,
     price_year_rows,
     projection_rates_record,
+    replacement_event_cost,
     replacement_fraction_from_steps,
     terminal_health_credit,
 )
 from breos.execution import config_has_battery, observed_jit_cache_state, reset_jit_cache_observation
-from breos.tariffs import ResolvedTariff
+from breos.inverter import InverterUnits
+from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
 from breos.utils import get_hours_per_step
 
 
@@ -87,8 +89,21 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
         max_discharge_power_w=cfg["battery_max_discharge_power_w"],
         power_limit_c_rate=cfg["battery_power_limit_c_rate"],
         enable_resistance_fade=cfg.get("enable_resistance_fade", False),
+        inverter_conversion=resolved.inverter_conversion,
         **efficiency,
+        **_battery_inverter(cfg, resolved),
     )
+
+
+def _battery_inverter(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[str, Any]:
+    """An AC-coupled battery's BatteryConfig fields (ADR 0004 C2), none for a DC-coupled one."""
+    if cfg.get("battery_coupling", "dc") != "ac":
+        return {}
+    return {
+        "coupling": "ac",
+        "battery_inverter_ac_capacity_w": resolved.battery_inverter_ac_capacity_w,
+        "battery_inverter_efficiency": cfg["battery_inverter_efficiency"],
+    }
 
 
 def build_pv_only_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> BatteryConfig:
@@ -103,6 +118,7 @@ def build_pv_only_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfi
         nominal_energy_wh=0,
         inverter_efficiency=cfg["inverter_efficiency"],
         inverter_ac_capacity_w=resolved.inverter_ac_capacity_w,
+        inverter_conversion=resolved.inverter_conversion,
     )
 
 
@@ -216,6 +232,8 @@ _DIAGNOSTIC_COLUMNS = {
     "Battery_Charge_Input_kWh": "Battery_Charge_Input",
     "Grid_AC_To_Battery_kWh": "Grid_AC_To_Battery",
     "Grid_Charge_Conversion_Loss_kWh": "Grid_Charge_Conversion_Loss",
+    "PV_AC_To_Battery_kWh": "PV_AC_To_Battery",
+    "PV_Charge_Conversion_Loss_kWh": "PV_Charge_Conversion_Loss",
     "Battery_Discharge_DC_kWh": "Battery_Discharge_DC",
     "Battery_AC_To_Load_kWh": "Battery_AC_To_Load",
     "Battery_Charge_Loss_kWh": "Battery_Charge_Loss",
@@ -275,7 +293,7 @@ def build_year_row(
     """
 
     def kwh(column: str) -> float:
-        return float(sums_w[column] * hours_per_step / 1000)
+        return _step_total(sums_w[column], hours_per_step)
 
     direct_pv_ac_kwh = kwh("PV_AC_To_Load")
     pv_origin_battery_ac_kwh = kwh("PV_Origin_Battery_AC_To_Load")
@@ -358,16 +376,32 @@ def build_year_row(
     return row
 
 
+# The flows a tariff prices, by the money column each fills and the frame
+# column it is summed from, with the step price that applies to it.
+_PRICED_FLOWS: dict[str, tuple[str, str]] = {
+    "Import_Cost": ("Import_From_Grid", "import"),
+    "Export_Revenue": ("PV_AC_Export", "export"),
+    "Baseline_Import_Cost": ("Houseload", "import"),
+    "Grid_Charge_Cost": ("Grid_AC_To_Battery", "import"),
+}
+# The frame columns those flows are summed from, once each.
+_PRICED_FLOW_COLUMNS = tuple(dict.fromkeys(column for column, _kind in _PRICED_FLOWS.values()))
+
+
+def _step_total(sum_w: float, hours_per_step: float) -> float:
+    """A year's total from a sum over its steps: kWh from powers (W), money from price-weighted powers."""
+    return float(sum_w * hours_per_step / 1000)
+
+
 def _tariff_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]:
-    import_prices = np.asarray(tariff.import_price_per_kwh, dtype=float)
-    weights = {
-        "Import_Cost": ("Import_From_Grid", import_prices),
-        "Export_Revenue": ("PV_AC_Export", np.asarray(tariff.export_price_per_kwh, dtype=float)),
-        # The no-system household buys its whole load at the same prices.
-        "Baseline_Import_Cost": ("Houseload", import_prices),
-        # The part of Import_Cost bought to charge the battery.
-        "Grid_Charge_Cost": ("Grid_AC_To_Battery", import_prices),
+    # The no-system household buys its whole load at the system's import
+    # prices, and Grid_Charge_Cost is the part of Import_Cost bought to
+    # charge the battery.
+    prices = {
+        "import": np.asarray(tariff.import_price_per_kwh, dtype=float),
+        "export": np.asarray(tariff.export_price_per_kwh, dtype=float),
     }
+    weights = {name: (column, prices[kind]) for name, (column, kind) in _PRICED_FLOWS.items()}
     if tariff.network_price_per_kwh is not None:
         network_prices = np.asarray(tariff.network_price_per_kwh, dtype=float)
         # The network part of each household's import, which caps its annual
@@ -415,18 +449,6 @@ def _network_credit_money(
     return {columns[0]: charge, columns[1]: min(credit.amount_per_year * fraction, charge)}
 
 
-# The flows a tariff prices, by the money column each fills and the frame
-# column it is summed from, with the step price that applies to it.
-_PRICED_FLOWS: dict[str, tuple[str, str]] = {
-    "Import_Cost": ("Import_From_Grid", "import"),
-    "Export_Revenue": ("PV_AC_Export", "export"),
-    "Baseline_Import_Cost": ("Houseload", "import"),
-    "Grid_Charge_Cost": ("Grid_AC_To_Battery", "import"),
-}
-# The frame columns those flows are summed from, once each.
-_PRICED_FLOW_COLUMNS = tuple(dict.fromkeys(column for column, _kind in _PRICED_FLOWS.values()))
-
-
 def _period_energy_name(money_column: str, bucket: str) -> str:
     return f"{_PRICED_FLOWS[money_column][0]}_kWh@{bucket}"
 
@@ -461,18 +483,17 @@ def _period_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]
     return weights
 
 
-def _fixed_charge(tariff: ResolvedTariff, simulated_hours: float) -> float:
-    # Billed on the simulated duration, as the flat path is (ADR 0003 E5).
+def _fixed_charge(tariff: ResolvedTariff, billed_days: float | None, simulated_hours: float) -> float:
+    # A [period] window bills its civil days (Billed_Days), whatever DST does
+    # to its hours; any other span bills its simulated duration, as the flat
+    # path does (ADR 0003 E5).
+    if billed_days is not None:
+        return tariff.prices.fixed_charge_per_day * billed_days
     return tariff.prices.fixed_charge_per_day * (simulated_hours / 24)
 
 
 def _billed_fixed_charge(tariff: ResolvedTariff, row: pd.Series) -> float:
-    # A [period] row bills its civil days (Billed_Days), whatever DST does to
-    # its hours; any other row bills its simulated duration.
-    billed_days = row.get("Billed_Days")
-    if billed_days is not None and not pd.isna(billed_days):
-        return tariff.prices.fixed_charge_per_day * float(billed_days)
-    return _fixed_charge(tariff, row["Simulated_Hours"])
+    return _fixed_charge(tariff, _billed_days(row), row["Simulated_Hours"])
 
 
 def _tariff_money(
@@ -487,19 +508,15 @@ def _tariff_money(
     The fixed charge is billed on ``billed_days`` when given (a [period]
     window's civil days), otherwise on the simulated duration.
     """
-    money = {name: float(weighted_w[name] * hours_per_step / 1000) for name in _PRICED_FLOWS}
-    money["Fixed_Charge"] = (
-        tariff.prices.fixed_charge_per_day * billed_days
-        if billed_days is not None
-        else _fixed_charge(tariff, n_steps * hours_per_step)
-    )
+    money = {name: _step_total(weighted_w[name], hours_per_step) for name in _PRICED_FLOWS}
+    money["Fixed_Charge"] = _fixed_charge(tariff, billed_days, n_steps * hours_per_step)
     if tariff.prices.annual_network_credit is not None:
         for name, columns in (
             (_NETWORK_IMPORT, SYSTEM_NETWORK_CREDIT_COLUMNS),
             (_BASELINE_NETWORK_IMPORT, BASELINE_NETWORK_CREDIT_COLUMNS),
         ):
             money.update(
-                _network_credit_money(tariff, float(weighted_w[name] * hours_per_step / 1000), billed_days, columns)
+                _network_credit_money(tariff, _step_total(weighted_w[name], hours_per_step), billed_days, columns)
             )
     return money
 
@@ -525,18 +542,14 @@ def _reference_money(
     the system tariff gave the no-system household.
     """
     money = {
-        "Baseline_Import_Cost": float(weighted_w["Baseline_Import_Cost"] * hours_per_step / 1000),
-        "Baseline_Fixed_Charge": (
-            reference.prices.fixed_charge_per_day * billed_days
-            if billed_days is not None
-            else _fixed_charge(reference, n_steps * hours_per_step)
-        ),
+        "Baseline_Import_Cost": _step_total(weighted_w["Baseline_Import_Cost"], hours_per_step),
+        "Baseline_Fixed_Charge": _fixed_charge(reference, billed_days, n_steps * hours_per_step),
     }
     if reference.prices.annual_network_credit is not None:
         money.update(
             _network_credit_money(
                 reference,
-                float(weighted_w[_BASELINE_NETWORK_IMPORT] * hours_per_step / 1000),
+                _step_total(weighted_w[_BASELINE_NETWORK_IMPORT], hours_per_step),
                 billed_days,
                 BASELINE_NETWORK_CREDIT_COLUMNS,
             )
@@ -561,10 +574,10 @@ def price_reference_year_rows(
     weights = _reference_weights(reference)
     weighted = weighted_column_sums({"Houseload": np.asarray(houseload_w)}, weights)
     repriced = yearly_df.drop(columns=[column for column in BASELINE_NETWORK_CREDIT_COLUMNS if column in yearly_df])
-    repriced["Baseline_Import_Cost"] = float(weighted["Baseline_Import_Cost"] * hours_per_step / 1000)
+    repriced["Baseline_Import_Cost"] = _step_total(weighted["Baseline_Import_Cost"], hours_per_step)
     repriced["Baseline_Fixed_Charge"] = [_billed_fixed_charge(reference, row) for _, row in repriced.iterrows()]
     if reference.prices.annual_network_credit is not None:
-        network = float(weighted[_BASELINE_NETWORK_IMPORT] * hours_per_step / 1000)
+        network = _step_total(weighted[_BASELINE_NETWORK_IMPORT], hours_per_step)
         credits = [
             _network_credit_money(reference, network, _billed_days(row), BASELINE_NETWORK_CREDIT_COLUMNS)
             for _, row in repriced.iterrows()
@@ -575,8 +588,17 @@ def price_reference_year_rows(
 
 
 def _billed_days(row: pd.Series) -> float | None:
+    # A [period] window's civil days; NaN, in a row of another span, bills
+    # the simulated duration.
     billed_days = row.get("Billed_Days")
     return None if billed_days is None or pd.isna(billed_days) else float(billed_days)
+
+
+def _window_days(extra: Mapping[str, Any]) -> Any:
+    # A projection year's Billed_Days as the caller gave it, so its scalar
+    # type prices as before; None and NaN bill the simulated duration.
+    billed_days = extra.get("Billed_Days")
+    return None if billed_days is None or pd.isna(billed_days) else billed_days
 
 
 def _period_prices(tariff: ResolvedTariff, kind: str) -> dict[str, float]:
@@ -694,15 +716,8 @@ def price_tariff_year_rows_by_step(
         n_steps = len(flows["Import_From_Grid"])
         if n_steps != len(tariff.index):
             raise ValueError("the step flows and the tariff are on different calendars")
-        billed_days = row.get("Billed_Days")
         money_rows.append(
-            _tariff_money(
-                tariff,
-                weighted_column_sums(flows, weights),
-                hours_per_step,
-                n_steps,
-                None if billed_days is None or pd.isna(billed_days) else float(billed_days),
-            )
+            _tariff_money(tariff, weighted_column_sums(flows, weights), hours_per_step, n_steps, _billed_days(row))
         )
     money_columns = (
         *_PRICED_FLOWS,
@@ -740,6 +755,16 @@ class ProjectionYear:
     temperature_series: pd.Series | None = None
     aligned: AlignedSimulationInputs | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
+    # The inverter's AC rating per step as a fraction of its nameplate, from
+    # temperature derating, with the per-step series; None for none.
+    inverter_ac_derate: pd.Series | None = None
+    # The efficiency curve's row position per step, from the operating DC
+    # voltage, with the per-step series; None reads the conversion's own row.
+    inverter_curve_row: pd.Series | None = None
+    # Several inverters, each converting its own share of ``pv_dc``, for a
+    # run without a battery or with an AC-coupled one; None converts through
+    # the battery config.
+    inverter_units: InverterUnits | None = None
 
 
 @dataclass(frozen=True)
@@ -847,6 +872,155 @@ def first_end_of_life_metrics(events: Sequence[Mapping[str, Any]]) -> dict[str, 
         "first_end_of_life_reason": first.get("reason"),
         "first_end_of_life_soh_pct": float(first.get("soh_pct", math.nan)),
     }
+
+
+@dataclass(frozen=True)
+class _YearOutcome:
+    """One simulated project year: the sums its row is built from and the state it leaves."""
+
+    carry: CarryState
+    # Each results column's sum over the year's steps (W), and the tariff's
+    # price-weighted sums.
+    sums_w: Mapping[str, float]
+    weighted_w: Mapping[str, float]
+    n_replacements: int
+    replaced_wh: float
+    replacement_steps: Sequence[int]
+    n_steps: int
+    # The year's own FEC over every pack it ran.
+    annual_fec: float
+    span_events: Sequence[EndOfLifeEvent]
+    # T_cell summed through the step that retires the pack; None if none does.
+    retiring_t_cell_sum: float | None
+    # Per-step years only: the year's frame, the sets a year planner returned
+    # and the instructions a daily controller executed.
+    results_df: pd.DataFrame | None = None
+    planned: tuple[DispatchInstructions, ...] = ()
+    executed: DispatchInstructions | None = None
+
+
+def _run_summary_year(
+    aligned: AlignedSimulationInputs,
+    common: Mapping[str, Any],
+    carry: CarryState,
+    *,
+    has_battery: bool,
+    weights: Mapping[str, tuple[str, np.ndarray]] | None,
+) -> _YearOutcome:
+    """Run one year from aligned inputs, as a summary without per-step frames."""
+    summary = simulate_energy_balance_summary(aligned=aligned, weights=weights, **common)
+    batt_cfg: BatteryConfig = common["battery_config"]
+    return _YearOutcome(
+        carry=carry.after_summary(summary, has_battery=has_battery, resistance_fade=batt_cfg.enable_resistance_fade),
+        sums_w=summary.column_sums,
+        weighted_w=summary.weighted_sums,
+        n_replacements=summary.n_replacements,
+        replaced_wh=summary.replaced_capacity_wh,
+        replacement_steps=summary.replacement_steps,
+        n_steps=summary.n_steps,
+        annual_fec=summary.fec_all_packs if has_battery and summary.has_degradation_rows else 0.0,
+        span_events=summary.end_of_life_events,
+        retiring_t_cell_sum=summary.in_service_t_cell_sum,
+    )
+
+
+def _run_frame_year(
+    year: ProjectionYear,
+    year_idx: int,
+    common: Mapping[str, Any],
+    carry: CarryState,
+    *,
+    has_battery: bool,
+    weights: Mapping[str, tuple[str, np.ndarray]] | None,
+    planner: YearPlanner | None,
+    day_controller: DailyDispatchController | None,
+    tariff: ResolvedTariff | None,
+    replay_seam: bool,
+) -> _YearOutcome:
+    """Run one year with per-step frames: greedy or on static instructions, from a year planner, or day by day."""
+    assert year.pv_dc is not None and year.houseload is not None
+    step_inputs: dict[str, Any] = {
+        "pv_dc": year.pv_dc,
+        "houseload": year.houseload,
+        "temperature_series": year.temperature_series if has_battery else None,
+        "inverter_ac_derate": year.inverter_ac_derate,
+        "inverter_curve_row": year.inverter_curve_row,
+        "inverter_units": year.inverter_units,
+    }
+    planned: list[DispatchInstructions] = []
+    executed = None
+    if planner is None and day_controller is None:
+        results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
+            "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
+            simulate_energy_balance(**step_inputs, **common),
+        )
+        carry = carry.after_frames(results_df, degradation_df, state, has_battery=has_battery)
+    else:
+        core_kwargs = {key: value for key, value in common.items() if key != "return_degradation_state"}
+        if planner is not None:
+            batt_cfg: BatteryConfig = common["battery_config"]
+
+            def plan_year(state: ControllerBatteryState) -> DispatchInstructions:
+                chosen = planner(YearStart(year_idx, year, batt_cfg, state))
+                planned.append(chosen)
+                return chosen
+
+            run_kwargs: dict[str, Any] = {"instruction_planner": plan_year}
+        else:
+            run_kwargs = {
+                "day_controller": day_controller,
+                "controller_tariff": tariff,
+                "controller_carry": carry.controller_carry,
+                "projection_year": year_idx,
+                "replay_seam": replay_seam,
+            }
+        detailed = _simulate_detailed_run(**step_inputs, **run_kwargs, **core_kwargs)
+        results_df, n_rep, degradation_df = detailed.results_df, detailed.n_replacements, detailed.degradation_df
+        carry = carry.after_frames(results_df, degradation_df, detailed.degradation_state, has_battery=has_battery)
+        if day_controller is not None:
+            carry = replace(carry, controller_carry=detailed.controller_carry)
+            executed = detailed.controller_instructions
+    span_events = [
+        EndOfLifeEvent.from_record(record) for record in degradation_df.attrs.get(END_OF_LIFE_EVENTS_ATTR, ())
+    ]
+    # Reduced as the summary reduces it, so both paths report one float.
+    last_served = retiring_step(span_events)
+    return _YearOutcome(
+        carry=carry,
+        sums_w={column: float(results_df[column].sum()) for column in _ROW_SUM_COLUMNS},
+        weighted_w=weighted_column_sums(
+            {column: results_df[column].to_numpy() for column, _ in (weights or {}).values()}, weights
+        ),
+        n_replacements=n_rep,
+        replaced_wh=frame_replaced_capacity_wh(results_df),
+        replacement_steps=np.flatnonzero(results_df["Battery_Replaced"].to_numpy()).tolist(),
+        n_steps=len(results_df),
+        # Each project year is its own simulation span, so the span's
+        # all-pack total is exactly this year's FEC.
+        annual_fec=(
+            float(degradation_df["Cumulative_FEC_All_Packs"].iloc[-1])
+            if has_battery and not degradation_df.empty
+            else 0.0
+        ),
+        span_events=span_events,
+        retiring_t_cell_sum=(
+            float(np.sum(results_df["T_cell"].to_numpy()[: last_served + 1])) if last_served is not None else None
+        ),
+        results_df=results_df,
+        planned=tuple(planned),
+        executed=executed,
+    )
+
+
+def _step_flows(results_df: pd.DataFrame, previous: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """A year's per-step priced flows; a flow equal to the year before's is that array, kept once."""
+    flows: dict[str, np.ndarray] = {}
+    for column in _PRICED_FLOW_COLUMNS:
+        # A copy, so the year's frame is not kept alive by a view.
+        values = results_df[column].to_numpy(dtype=float, copy=True)
+        same = previous.get(column)
+        flows[column] = same if same is not None and np.array_equal(same, values) else values
+    return flows
 
 
 def project_years(
@@ -990,18 +1164,7 @@ def project_years(
             for priced in (tariff, reference_tariff):
                 if priced is not None:
                     _check_tariff_calendar(priced, year.aligned.index)
-            summary = simulate_energy_balance_summary(aligned=year.aligned, weights=weights, **common)
-            weighted_w: Mapping[str, float] = summary.weighted_sums
-            carry = carry.after_summary(
-                summary, has_battery=has_battery, resistance_fade=batt_cfg.enable_resistance_fade
-            )
-            sums_w: Mapping[str, float] = summary.column_sums
-            n_rep, replaced_wh = summary.n_replacements, summary.replaced_capacity_wh
-            replacement_steps: Sequence[int] = summary.replacement_steps
-            n_steps = summary.n_steps
-            annual_fec = summary.fec_all_packs if has_battery and summary.has_degradation_rows else 0.0
-            span_events: Sequence[EndOfLifeEvent] = summary.end_of_life_events
-            retiring_t_cell_sum = summary.in_service_t_cell_sum
+            outcome = _run_summary_year(year.aligned, common, carry, has_battery=has_battery, weights=weights)
         else:
             if year.pv_dc is None or year.houseload is None:
                 raise ValueError("a projection year needs aligned inputs, or pv_dc and houseload")
@@ -1011,112 +1174,27 @@ def project_years(
             for priced in (tariff, reference_tariff):
                 if priced is not None:
                     _check_tariff_calendar(priced, pd.date_range(year.pv_dc.index[0], year.pv_dc.index[-1], freq=freq))
-            if planner is not None:
-                core_kwargs = {
-                    key: value
-                    for key, value in common.items()
-                    if key not in ("return_degradation_state", "dispatch_instructions")
-                }
-                planned: list[DispatchInstructions] = []
-
-                def plan_year(
-                    state: ControllerBatteryState,
-                    planner: YearPlanner = planner,
-                    year_idx: int = year_idx,
-                    year: ProjectionYear = year,
-                    batt_cfg: BatteryConfig = batt_cfg,
-                    planned: list[DispatchInstructions] = planned,
-                ) -> DispatchInstructions:
-                    chosen = planner(YearStart(year_idx, year, batt_cfg, state))
-                    planned.append(chosen)
-                    return chosen
-
-                detailed = _simulate_detailed_run(
-                    pv_dc=year.pv_dc,
-                    houseload=year.houseload,
-                    temperature_series=year.temperature_series if has_battery else None,
-                    instruction_planner=plan_year,
-                    **core_kwargs,
-                )
-                results_df, n_rep, degradation_df = (
-                    detailed.results_df,
-                    detailed.n_replacements,
-                    detailed.degradation_df,
-                )
-                carry = carry.after_frames(
-                    results_df, degradation_df, detailed.degradation_state, has_battery=has_battery
-                )
-                dispatched.extend(planned)
-            elif day_controller is None:
-                results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
-                    "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
-                    simulate_energy_balance(
-                        pv_dc=year.pv_dc,
-                        houseload=year.houseload,
-                        temperature_series=year.temperature_series if has_battery else None,
-                        **common,
-                    ),
-                )
-                carry = carry.after_frames(results_df, degradation_df, state, has_battery=has_battery)
-            else:
-                assert tariff is not None
-                core_kwargs = {key: value for key, value in common.items() if key != "return_degradation_state"}
-                detailed = _simulate_detailed_run(
-                    pv_dc=year.pv_dc,
-                    houseload=year.houseload,
-                    temperature_series=year.temperature_series,
-                    day_controller=day_controller,
-                    controller_tariff=tariff,
-                    controller_carry=carry.controller_carry,
-                    projection_year=year_idx,
-                    replay_seam=replay_seam,
-                    **core_kwargs,
-                )
-                results_df, n_rep, degradation_df = (
-                    detailed.results_df,
-                    detailed.n_replacements,
-                    detailed.degradation_df,
-                )
-                carry = replace(
-                    carry.after_frames(results_df, degradation_df, detailed.degradation_state, has_battery=has_battery),
-                    controller_carry=detailed.controller_carry,
-                )
-                if detailed.controller_instructions is not None:
-                    executed.append(detailed.controller_instructions)
-            sums_w = {column: float(results_df[column].sum()) for column in _ROW_SUM_COLUMNS}
-            replaced_wh = frame_replaced_capacity_wh(results_df)
-            replacement_steps = np.flatnonzero(results_df["Battery_Replaced"].to_numpy()).tolist()
-            n_steps = len(results_df)
-            span_events = [
-                EndOfLifeEvent.from_record(record) for record in degradation_df.attrs.get(END_OF_LIFE_EVENTS_ATTR, ())
-            ]
-            # Reduced as the summary reduces it, so both paths report one float.
-            last_served = retiring_step(span_events)
-            retiring_t_cell_sum = (
-                float(np.sum(results_df["T_cell"].to_numpy()[: last_served + 1])) if last_served is not None else None
-            )
-            # Each project year is its own simulation span, so the span's
-            # all-pack total is exactly this year's FEC.
-            annual_fec = (
-                float(degradation_df["Cumulative_FEC_All_Packs"].iloc[-1])
-                if has_battery and not degradation_df.empty
-                else 0.0
+            outcome = _run_frame_year(
+                year,
+                year_idx,
+                common,
+                carry,
+                has_battery=has_battery,
+                weights=weights,
+                planner=planner,
+                day_controller=day_controller,
+                tariff=tariff,
+                replay_seam=replay_seam,
             )
             if first_year_results_df is None:
-                first_year_results_df = results_df
-            weighted_w = weighted_column_sums(
-                {column: results_df[column].to_numpy() for column, _ in (weights or {}).values()}, weights
-            )
+                first_year_results_df = outcome.results_df
             if record_priced_flows:
-                previous = priced_flows[-1] if priced_flows else {}
-                flows: dict[str, np.ndarray] = {}
-                for column in _PRICED_FLOW_COLUMNS:
-                    # A copy, so the year's frame is not kept alive by a view.
-                    values = results_df[column].to_numpy(dtype=float, copy=True)
-                    same = previous.get(column)
-                    flows[column] = same if same is not None and np.array_equal(same, values) else values
-                priced_flows.append(flows)
-
+                assert outcome.results_df is not None
+                priced_flows.append(_step_flows(outcome.results_df, priced_flows[-1] if priced_flows else {}))
+        carry = outcome.carry
+        dispatched.extend(outcome.planned)
+        if outcome.executed is not None:
+            executed.append(outcome.executed)
         if static is not None:
             dispatched.append(static)
 
@@ -1125,42 +1203,48 @@ def project_years(
             if state_name is not None:
                 jit_cache_states.append(state_name)
 
-        total_replacements += n_rep
-        end_of_life_events.extend(end_of_life_record(event, year_idx, n_steps) for event in span_events)
+        total_replacements += outcome.n_replacements
+        span_events = outcome.span_events
+        end_of_life_events.extend(end_of_life_record(event, year_idx, outcome.n_steps) for event in span_events)
         # The battery serves through the step that retires it, and not at all
         # in a year that starts retired.
         retiring = retiring_step(span_events)
         if started_retired:
             in_service_steps, in_service_t_cell_sum = 0, None
         elif retiring is None:
-            in_service_steps, in_service_t_cell_sum = n_steps, sums_w["T_cell"]
+            in_service_steps, in_service_t_cell_sum = outcome.n_steps, outcome.sums_w["T_cell"]
         else:
-            in_service_steps, in_service_t_cell_sum = retiring + 1, retiring_t_cell_sum
+            in_service_steps, in_service_t_cell_sum = retiring + 1, outcome.retiring_t_cell_sum
         if retiring is not None:
             carry = replace(carry, battery_retired=True)
         rows.append(
             build_year_row(
                 year_idx,
-                sums_w,
+                outcome.sums_w,
                 hours_per_step,
                 carry,
                 has_battery=has_battery,
-                n_replacements=n_rep,
-                replaced_capacity_wh=replaced_wh,
-                replacement_steps=replacement_steps,
-                n_steps=n_steps,
+                n_replacements=outcome.n_replacements,
+                replaced_capacity_wh=outcome.replaced_wh,
+                replacement_steps=outcome.replacement_steps,
+                n_steps=outcome.n_steps,
                 pv_degradation_factor=year.pv_degradation_factor,
-                annual_fec=annual_fec,
+                annual_fec=outcome.annual_fec,
                 in_service_steps=in_service_steps,
                 in_service_t_cell_sum=in_service_t_cell_sum,
                 extra=year.extra,
                 money=_year_money(
-                    tariff, reference_tariff, weighted_w, hours_per_step, n_steps, year.extra.get("Billed_Days")
+                    tariff,
+                    reference_tariff,
+                    outcome.weighted_w,
+                    hours_per_step,
+                    outcome.n_steps,
+                    _window_days(year.extra),
                 ),
             )
         )
         if record_period_energy:
-            period_rows.append({name: float(weighted_w[name] * hours_per_step / 1000) for name in period_weights})
+            period_rows.append({name: _step_total(outcome.weighted_w[name], hours_per_step) for name in period_weights})
 
     if not rows:
         raise RuntimeError("projection_years must be at least 1")
@@ -1248,6 +1332,29 @@ def effective_reference_escalation(resolved: ResolvedAppConfig) -> float:
     return projection_rates_record(resolved.cfg)["import_price_escalation"]
 
 
+def tariff_records(
+    resolved: ResolvedAppConfig,
+    tariff: ResolvedTariff | None,
+    reference_tariff: ResolvedTariff | None,
+    *,
+    calendar_year: int,
+) -> dict[str, dict[str, Any]]:
+    """The provenance records of a run's tariff and no-system reference tariff, keyed as App and Monte Carlo report them.
+
+    Each is left out when the run has none.
+    """
+    records = {}
+    if tariff is not None:
+        records["tariff"] = tariff_provenance(tariff, calendar_year=calendar_year)
+    if reference_tariff is not None:
+        records["reference_tariff"] = reference_tariff_provenance(
+            reference_tariff,
+            calendar_year=calendar_year,
+            import_price_escalation=effective_reference_escalation(resolved),
+        )
+    return records
+
+
 def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: ProjectionRun) -> ProjectionValue:
     """Price a projection from its year rows; App and Monte Carlo value their runs the same way.
 
@@ -1278,7 +1385,9 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         terminal = terminal_health_credit(
             final_soh_fraction=run.carry.soh_pct / 100 if config_has_battery(cfg) else None,
             threshold=cfg["battery_eol_percentage"],
-            replacement_cost_each=costs["replacement_cost_each"],
+            # The pack alone, whatever battery_replacement_cost prices a
+            # replacement at (ADR 0004 C9 amends ADR 0003 E10).
+            replacement_cost_each=replacement_event_cost(cfg["battery_kwh"], resolved.cost_params.battery_cost_per_kwh),
             inflation_rate=cfg["inflation_rate"],
             replacement_cost_learning=cfg.get("replacement_cost_learning", 0.0),
             discount_rate=cfg["discount_rate"],

@@ -1,9 +1,13 @@
 # 0004 — AC-coupled batteries: a battery inverter on the AC bus
 
 - **Status:** Accepted, with the eight open questions decided (see
-  [Decisions on the open questions](#decisions-on-the-open-questions)). No
-  code yet; implementation is planned for 0.8.0 (#379).
-- **Date:** 2026-10-03; accepted 2026-10-04
+  [Decisions on the open questions](#decisions-on-the-open-questions)) and
+  amended for the electrical work (see
+  [Amendments of 2026-10-13](#amendments-of-2026-10-13)). Specified in
+  #379; implemented for 0.8.0 in #419 (see
+  [Implementation notes](#implementation-notes)).
+- **Date:** 2026-10-03; accepted 2026-10-04; amended 2026-10-13;
+  implemented 2026-10-14
 
 ## Context
 
@@ -921,6 +925,78 @@ Risks across the work:
 - **Cost data.** BREOS has no sourced battery inverter price, so every
   AC-coupled study supplies its own (C9).
 
+## Amendments of 2026-10-13
+
+The record was written against `2e06c99`. Since then the electrical work
+(ADR 0007, 0008, 0009) gave the inverter an efficiency curve, a row position
+per step, temperature derating, an AC cable and night consumption, and
+string-level energy with several inverters. The maintainer decided these
+amendments on 2026-10-13, before the implementation started. Where they
+differ from the sections above, they apply. Line references above stay at
+`2e06c99`.
+
+- **M1. Ledger version.** The ledger was already at `"3.1"` for the
+  electrical additions, unreleased. `PV_AC_To_Battery` and
+  `PV_Charge_Conversion_Loss` join 3.1 instead of making a new version (C8).
+  They are written, as zeros, from the first step of the implementation.
+- **M2. The PV chain is the whole PV-only conversion.** C3's arrays are what
+  a PV-only run computes now: the efficiency curve at each step's row, the
+  temperature derating, the AC cable and `ac_output_scale`, and with several
+  inverters each inverter's conversion of its own share (ADR 0007 D9). The
+  chain also carries that run's night draw (M3). P1, P3 and P4 compare
+  against this PV-only run, bit for bit apart from the sign of a zero: the
+  step's scalar `min` and `max` and NumPy's vectorised ones break a tie
+  between `0.0` and `-0.0` differently, so a `-0.0` PV or load value can
+  give `0.0` on one side and `-0.0` on the other.
+- **M3. The PV inverter's night draw is grid import.** With `"ac"` the PV
+  inverter draws its `night_consumption_w` on every step on which it
+  receives no PV DC, whatever the battery does, and the grid supplies it, as
+  in a PV-only run. The battery does not serve it, and
+  `Inverter_Night_Consumption` stays part of `Import_From_Grid`. This is a
+  simplification: a battery inverter that follows the meter would also cover
+  that draw. A hybrid inverter keeps today's rule: it draws only on a step
+  with no PV and no battery flow. Battery inverter standby stays out of
+  scope (C9).
+- **M4. The battery inverter converts on the PVWatts curve only**, as
+  decision 1 says. It takes no efficiency curve, AC cable or temperature
+  derating: the kernels receive an empty curve, a zero cable and the full
+  rating for it. Those can be added to it later.
+- **M5. One set of keys in both fidelities.** String-level energy describes
+  the battery inverter with the keys of C2, as aggregate energy does.
+  `inverters` lists PV inverters only.
+- **M6. Several PV inverters with an AC-coupled battery.** String-level
+  energy with several inverters accepts a battery with `"ac"`: every PV
+  inverter feeds the AC bus and the battery inverter draws from it, so M2's
+  chain is all the battery step needs. This lifts ADR 0007's refusal for
+  `"ac"` only. A DC-coupled battery with several inverters stays refused: a
+  hybrid inverter beside PV-only inverters is a mixed topology that this
+  record does not specify. Monte Carlo still refuses several inverters.
+- **M7. The daily-target planner.** ADR 0007 D9 left its single curve row
+  to revisit here. With `"ac"` the PV inverter does not depend on the
+  battery, so the planner converts its forecast PV on the scalar row, at the
+  full rating and with no night draw, as D9 states for a hybrid inverter.
+  Its choice of target is the only thing that can differ; dispatch runs
+  every step on the per-step row and derating.
+- **M8. Order of the work.** The PR plan below stands, with M6 as a step of
+  its own after PR 4. #419 asked to build after #417 and #418; the
+  maintainer kept AC coupling first. AC1–AC7 take PV DC directly, so the PV
+  defaults do not change them; App-level results computed for the invariants
+  are regenerated with those changes.
+
+## Amendment of 2026-10-22
+
+- **M9. Net idle PV inverter draw on the AC bus.** After the house load,
+  PV AC surplus serves idle inverters' draw before AC battery charging or
+  export. Only the uncovered draw is imported; the battery never serves it
+  (M3). A hybrid's no-PV/no-battery-flow rule and all single-inverter results
+  stay unchanged. `Inverter_Night_Consumption` records the whole draw. No
+  ledger column is needed: its PV share is
+  `min(Inverter_Night_Consumption, max(0, PV_DC_To_Inverter - PV_Direct_Inverter_Loss - PV_AC_To_Load))`;
+  the rest is the imported share. Include the PV share in the PV inverter
+  output and whole-system balances, and subtract only the imported share
+  from grid import in the house-load balance. This amends M3 for several
+  inverters and ADR 0007 D9/D10.
+
 ## Decisions on the open questions
 
 Decided by the maintainer on 2026-10-04. The proposal's eight open questions
@@ -984,3 +1060,37 @@ C7 states the rule and AC7 checks it.
   topologies, as the optimizer can; the terminal credit stays pack-only.
 - Inverter replacement and inverter standby consumption stay unmodelled for
   every inverter, and the docs say so.
+
+## Implementation notes
+
+Implemented for 0.8.0 in #419, in the order of the PR plan with M8's
+additions. Where the implementation settled a point the text left open:
+
+- **Several PV inverters (M8).** A battery beside several inverters must be
+  AC-coupled; the PV chain is converted per inverter, and a retired pack's
+  steps read that chain, so they equal the PV-only run. The daily-target
+  planner plans through one PV inverter (M7), so it is refused with several
+  inverters; `fixed_target` and `discharge_only` run. A per-inverter forecast
+  split is left for later.
+- **Smart-charging validation.** `[smart_charging]` is validated against the
+  battery's coupling: a DC-coupled battery keeps the table check that
+  requires `grid_charge_efficiency`, so its errors and their order are
+  unchanged, and an AC-coupled one uses a variant that refuses it. The
+  optimizer validates the table with the coupling its `[battery]` table
+  gives.
+- **Reports.** The loss waterfall's `battery_inverter` block reports the
+  rating, nominal efficiency, and charging, discharging and total
+  conversion loss; with `"ac"` the `inverter` block's conversion loss is
+  the PV inverter's alone. The PV inverter's AC cable diagnostic counts PV
+  AC to the battery, not battery discharge.
+- **Currencies and revaluation.** A non-EUR AC-coupled run needs
+  `inverter_cost_per_kw_simple`, never the hybrid price.
+  `battery_replacement_cost` is an economics key that `App.revalue` may
+  change, and a currency change must restate it.
+- **Optimizer provenance (C14).** An AC study's
+  `battery_replacement_treatment` records the sizing key and its basis, the
+  efficiency and the price; `Battery_Inverter_AC_Rating_kW` is each
+  candidate's resolved rating. A candidate at or below 1 Wh, which dispatch
+  and CAPEX treat as PV-only, has no battery inverter.
+- **Oracles.** The LP bound refuses an AC-coupled battery; the daily-target
+  oracle mirrors the planner's PV chain.

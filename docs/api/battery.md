@@ -10,8 +10,9 @@ with Lam `Ea`/`n` fixed and `k0`/`b` fitted to field data.
 
 ## Configuration
 
-BREOS supports stationary DC-coupled/hybrid batteries only; there is no
-AC-coupled option (see [Energy balance](energy-balance.md#physical-boundary-and-coupling)).
+BREOS models stationary batteries, DC-coupled behind a hybrid inverter or
+AC-coupled with their own inverter (see
+[Energy balance](energy-balance.md#physical-boundary-and-coupling)).
 Optional charge and discharge nameplate limits default to unlimited;
 configure them for realistic sizing studies. Charge power is measured at the
 DC charge-path input. Discharge power is measured as AC delivered to load.
@@ -49,7 +50,7 @@ and daily mean absolute SOC.
 .. autosummary::
    :toctree: generated/
 
-   breos.battery.apply_indoor_temperature_model
+   breos.weather.apply_indoor_temperature_model
    breos.battery.compute_cell_temperature
 ```
 
@@ -64,8 +65,9 @@ calls the two resistance functions once per window. It does not call
 an incremental rainflow counter. `update_battery_soh_cyclewise` is a
 standalone equivalent of that cycle step for one whole SOC series. It closes
 the rainflow residue at the end of the series, so calling it once per day
-does not reproduce a simulation. Use these functions directly only when
-reproducing or critiquing the degradation model.
+does not reproduce a simulation. It is deprecated in 0.8.0 and will be
+removed in 0.9.0. Use these functions directly only when reproducing or
+critiquing the degradation model.
 
 ```{eval-rst}
 .. autosummary::

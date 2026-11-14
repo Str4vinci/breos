@@ -1,5 +1,7 @@
 """Hourly irradiance policy, dawn/dusk support and public runner wiring."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -9,7 +11,7 @@ from breos import App
 from breos.app_config import resolve_app_config
 from breos.app_inputs import resample_hourly_weather
 from breos.cli import build_parser
-from breos.weather import WEATHER_METADATA_KEY, resample_to_15min
+from breos.weather import IRRADIANCE_RESAMPLING_POLICIES, WEATHER_METADATA_KEY, resample_to_15min
 
 COORDINATES = {"latitude": 41.1579, "longitude": -8.6291, "altitude": 0.0}
 
@@ -34,15 +36,27 @@ def test_overcast_diffuse_is_not_capped(policy):
 
 
 @pytest.mark.parametrize(
-    "names", [("ghi", "dni", "dhi"), ("shortwave_radiation", "direct_normal_irradiance", "diffuse_radiation")]
+    ("names", "kwargs"),
+    [
+        pytest.param(("ghi", "dni", "dhi"), {}, id="pvlib-names"),
+        pytest.param(
+            ("shortwave_radiation", "direct_normal_irradiance", "diffuse_radiation"), {}, id="openmeteo-names"
+        ),
+        # The explicit policy conserves energy whatever the interpolation method.
+        pytest.param(
+            ("ghi", "dni", "dhi"),
+            {"method": "linear", "irradiance_resampling": "clear_sky_energy_conserving"},
+            id="explicit-linear",
+        ),
+    ],
 )
-def test_independent_component_hourly_conservation(names):
+def test_independent_component_hourly_conservation(names, kwargs):
     source = _weather().rename(columns=dict(zip(("ghi", "dni", "dhi"), names, strict=True)))
-    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 700]])
-    result = resample_to_15min(source, **COORDINATES)
+    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 425]])
+    result = resample_to_15min(source, **kwargs, **COORDINATES)
     np.testing.assert_allclose(result.to_numpy().reshape(-1, 4, 3).mean(axis=1), source, rtol=1e-9, atol=1e-6)
     metadata = result.attrs[WEATHER_METADATA_KEY]
-    assert metadata["irradiance_resampling"] == "auto"
+    assert metadata["irradiance_resampling"] == kwargs.get("irradiance_resampling", "auto")
     assert metadata["irradiance_resampling_resolved"] == "clear_sky_energy_conserving"
     assert "preserve_irradiance_energy" not in metadata
     assert metadata["irradiance_closure"]["after"]["absolute_residual_energy_fraction"] > 0
@@ -116,13 +130,16 @@ def test_negative_direct_interpolation_is_clipped():
 
 @pytest.mark.parametrize("value", ["bogus", True, None])
 def test_app_validates_policy(value):
-    with pytest.raises(ValueError, match="irradiance_resampling.*auto, clear_sky, clear_sky_energy_conserving"):
+    with pytest.raises(
+        ValueError, match="irradiance_resampling.*auto, clear_sky, clear_sky_energy_conserving, quadrature"
+    ):
         resolve_app_config(
             {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "irradiance_resampling": value}
         )
 
 
-def test_app_passes_and_records_explicit_policy(monkeypatch):
+@pytest.mark.parametrize("policy", ["clear_sky_energy_conserving", "quadrature"])
+def test_app_passes_and_records_explicit_policy(monkeypatch, policy):
     from tools.generate_app_golden import synthetic_weather
 
     source = synthetic_weather()
@@ -143,12 +160,12 @@ def test_app_passes_and_records_explicit_policy(monkeypatch):
             "start_date": "2025-01-01",
             "resolution": "15min",
             "projection_years": 1,
-            "irradiance_resampling": "clear_sky_energy_conserving",
+            "irradiance_resampling": policy,
         }
     )
     app.simulate()
     provenance = app.result()["provenance"]
-    assert received == ["clear_sky_energy_conserving"]
+    assert received == [policy]
     assert provenance["weather"]["irradiance_resampling"] == received[0]
     assert provenance["weather"]["irradiance_resampling_resolved"] == received[0]
     assert "preserve_irradiance_energy" not in provenance["weather"]
@@ -156,9 +173,10 @@ def test_app_passes_and_records_explicit_policy(monkeypatch):
 
 
 @pytest.mark.parametrize("command", ["run", "montecarlo"])
-def test_cli_exposes_shared_app_policy(command):
-    args = build_parser().parse_args([command, "--config", "config.toml", "--irradiance-resampling", "clear_sky"])
-    assert args.irradiance_resampling == "clear_sky"
+@pytest.mark.parametrize("policy", ["clear_sky", "quadrature"])
+def test_cli_exposes_shared_app_policy(command, policy):
+    args = build_parser().parse_args([command, "--config", "config.toml", "--irradiance-resampling", policy])
+    assert args.irradiance_resampling == policy
 
 
 def test_helper_keeps_native_quarter_hour_weather():
@@ -175,16 +193,17 @@ def test_helper_keeps_native_quarter_hour_weather():
     )
 
 
+@pytest.mark.parametrize("policy", ["clear_sky_energy_conserving", "quadrature"])
 @pytest.mark.parametrize("runner", ["fixed", "search", "weather_sequence"])
-def test_optimizer_prepares_hourly_weather_before_pv(monkeypatch, runner):
+def test_optimizer_prepares_hourly_weather_before_pv(monkeypatch, runner, policy):
     import breos.optimization as optimization
     from tests.test_optimization_parity import _problem_config
 
     source = _weather()
     config = _problem_config()
-    config["simulation"].update(resolution="15min", irradiance_resampling="clear_sky_energy_conserving")
+    config["simulation"].update(resolution="15min", irradiance_resampling=policy)
     load = pd.DataFrame({"Load": 100.0}, index=source.index)
-    expected = resample_to_15min(source, latitude=41.15, longitude=-8.61)
+    expected = resample_to_15min(source, latitude=41.15, longitude=-8.61, irradiance_resampling=policy)
     calls = []
 
     class StopAtPV(RuntimeError):
@@ -212,12 +231,12 @@ def test_optimizer_prepares_hourly_weather_before_pv(monkeypatch, runner):
                 weather_by_year=[source] if runner == "weather_sequence" else None,
             )
     pd.testing.assert_frame_equal(calls[0], expected)
-    assert calls[0].attrs[WEATHER_METADATA_KEY]["irradiance_resampling"] == "clear_sky_energy_conserving"
+    assert calls[0].attrs[WEATHER_METADATA_KEY]["irradiance_resampling"] == policy
 
 
 def test_closure_diagnostics_are_observational():
     source = _weather()
-    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 700]])
+    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 425]])
     unconserved = resample_to_15min(source, irradiance_resampling="clear_sky", **COORDINATES)
     conserved = resample_to_15min(source, **COORDINATES)
     diagnostics = conserved.attrs[WEATHER_METADATA_KEY]["irradiance_closure"]
@@ -235,13 +254,16 @@ def test_closure_diagnostics_are_observational():
     assert conserved.dhi.iloc[-4:].mean() > conserved.ghi.iloc[-4:].mean()
 
 
-def test_montecarlo_records_the_app_policy(tmp_path):
+@pytest.mark.parametrize("policy", ["clear_sky_energy_conserving", "quadrature"])
+def test_montecarlo_records_the_app_policy(tmp_path, policy):
     from breos.montecarlo import MonteCarloSettings, run_montecarlo
     from breos.weather import save_weather_csv
     from tools.generate_app_golden import synthetic_weather
 
+    # A right-labelled source: each hour is stamped at its end.
     source = synthetic_weather()
-    source.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
+    source.index = source.index + pd.Timedelta(hours=1)
+    source.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"}
     source.index.name = "date"
     path = tmp_path / "weather.csv"
     save_weather_csv(source, path)
@@ -251,15 +273,21 @@ def test_montecarlo_records_the_app_policy(tmp_path):
             "n_modules": 10,
             "annual_consumption_kwh": 4000,
             "resolution": "15min",
-            "irradiance_resampling": "clear_sky_energy_conserving",
+            "irradiance_resampling": policy,
+            "solar_position": "weather",
         },
         MonteCarloSettings(weather_file=str(path), n_runs=1, years_per_run=1, target_year=2025, seed=0),
     )
     provenance = result.provenance
     metadata = provenance["runtime_weather"]["metadata"]
-    assert provenance["resolved_config"]["irradiance_resampling"] == "clear_sky_energy_conserving"
-    assert metadata["irradiance_resampling"] == "clear_sky_energy_conserving"
-    assert metadata["irradiance_resampling_resolved"] == "clear_sky_energy_conserving"
+    # The runtime weather is relabelled to the left edge, and the sun is
+    # placed mid-interval on the 15-minute steps it was resampled to.
+    assert metadata["timestamp_label_basis"] == "left"
+    assert metadata["source_timestamp_label_basis"] == "right"
+    assert provenance["runtime_weather"]["solar_position_offset_minutes"] == 7.5
+    assert provenance["resolved_config"]["irradiance_resampling"] == policy
+    assert metadata["irradiance_resampling"] == policy
+    assert metadata["irradiance_resampling_resolved"] == policy
     assert "preserve_irradiance_energy" not in metadata
     assert "preserve_irradiance_energy" not in provenance["settings"]
     assert not hasattr(result.settings, "preserve_irradiance_energy")
@@ -293,3 +321,239 @@ def test_optimizer_records_policy_and_resamples_at_the_configured_altitude(monke
         assert record["irradiance_resampling"] == "auto"
         assert record["irradiance_resampling_resolved"] == "clear_sky"
         assert record["output_resolution"] == "15min"
+
+
+def _minute_geometry(result, centre_offset):
+    """Apparent-zenith cosine and clear sky at the 15 one-minute samples of each step."""
+    times = (result.index + centre_offset).repeat(15) + pd.to_timedelta(np.tile(np.arange(15) - 7, len(result)), "min")
+    site = Location(**COORDINATES)
+    position = site.get_solarposition(times)
+    sky = site.get_clearsky(times, solar_position=position)
+    cos_zenith = np.maximum(np.cos(np.deg2rad(position.apparent_zenith.to_numpy())), 0.0)
+    return cos_zenith, sky
+
+
+def test_quadrature_conserves_interval_mean_dni_and_dhi_and_closes_per_sample():
+    source = _weather()
+    source.iloc[:] = np.array([[500, 400, 300], [700, 600, 350], [600, 500, 450], [300, 200, 250], [400, 100, 425]])
+    result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+    means = result.to_numpy().reshape(-1, 4, 3).mean(axis=1)
+    np.testing.assert_allclose(means[:, 1:], source[["dni", "dhi"]], rtol=1e-12)
+
+    # Each hour follows its clear-sky shape. GHI closes in every one-minute
+    # sample, so a step's GHI is its DHI plus the mean of DNI·cos(zenith) over
+    # its samples, not its mean DNI times one cosine.
+    cos_zenith, sky = _minute_geometry(result, pd.Timedelta(minutes=7.5))
+    minutes = {}
+    for component in ("dni", "dhi"):
+        weights = sky[component].to_numpy().reshape(len(source), 60)
+        minutes[component] = (source[component].to_numpy()[:, None] * weights / weights.mean(axis=1)[:, None]).ravel()
+    np.testing.assert_allclose(result.dni, minutes["dni"].reshape(-1, 15).mean(axis=1), rtol=1e-12)
+    expected_ghi = (minutes["dni"] * cos_zenith + minutes["dhi"]).reshape(-1, 15).mean(axis=1)
+    np.testing.assert_allclose(result.ghi, expected_ghi, rtol=1e-12)
+    np.testing.assert_allclose(
+        result.ghi - result.dhi, (minutes["dni"] * cos_zenith).reshape(-1, 15).mean(axis=1), rtol=1e-12
+    )
+
+    metadata = result.attrs[WEATHER_METADATA_KEY]
+    assert metadata["irradiance_resampling"] == metadata["irradiance_resampling_resolved"] == "quadrature"
+    assert metadata["irradiance_resampling_reconstruction"] == "one_minute_quadrature"
+    quadrature = metadata["irradiance_quadrature"]
+    assert quadrature["conserved_components"] == ["dni", "dhi"]
+    assert quadrature["derived_components"] == ["ghi"]
+    derived = means[:, 0]
+    assert quadrature["ghi_reconciliation"]["energy_change_fraction"] == pytest.approx(
+        derived.sum() / source.ghi.sum() - 1
+    )
+    assert quadrature["ghi_reconciliation"]["absolute_residual_energy_fraction"] == pytest.approx(
+        np.abs(derived - source.ghi).sum() / source.ghi.sum()
+    )
+    assert metadata["irradiance_closure"]["before"] == metadata["irradiance_closure"]["after"]
+
+
+def test_quadrature_open_meteo_names_and_right_labels():
+    names = ("shortwave_radiation", "direct_normal_irradiance", "diffuse_radiation")
+    source = _weather().rename(columns=dict(zip(("ghi", "dni", "dhi"), names, strict=True)))
+    source.index = source.index + pd.Timedelta(hours=1)
+    source.attrs[WEATHER_METADATA_KEY]["timestamp_label_basis"] = "right"
+    result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+    assert result.index[0] == source.index[0] - pd.Timedelta(hours=1)
+    np.testing.assert_allclose(
+        result[list(names[1:])].to_numpy().reshape(-1, 4, 2).mean(axis=1), source[list(names[1:])]
+    )
+    assert (result[names[0]] >= result[names[2]]).all()
+
+
+def test_quadrature_interpolates_instant_samples_without_conservation():
+    # Samples on a constant clear-sky ratio come back on that ratio at every minute.
+    source = _weather("instant")
+    source.attrs[WEATHER_METADATA_KEY]["irradiance_time_offset_hours"] = 0.25
+    sky = Location(**COORDINATES).get_clearsky(source.index + pd.Timedelta(minutes=15))
+    source["dni"] = 0.5 * (sky.dni.to_numpy() + 5.0)
+    source["dhi"] = 1.5 * (sky.dhi.to_numpy() + 5.0)
+    result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+    cos_zenith, minute_sky = _minute_geometry(result, pd.Timedelta(minutes=15))
+    dni = 0.5 * (minute_sky.dni.to_numpy() + 5.0)
+    dhi = 1.5 * (minute_sky.dhi.to_numpy() + 5.0)
+    np.testing.assert_allclose(result.dni, dni.reshape(-1, 15).mean(axis=1), rtol=1e-9)
+    np.testing.assert_allclose(result.ghi, (dni * cos_zenith + dhi).reshape(-1, 15).mean(axis=1), rtol=1e-9)
+    quadrature = result.attrs[WEATHER_METADATA_KEY]["irradiance_quadrature"]
+    assert quadrature["conserved_components"] == []
+    # The quarter-hour centred on each sample is compared with it.
+    assert quadrature["ghi_reconciliation"]["energy_change_fraction"] == pytest.approx(
+        result.ghi.iloc[::4].sum() / source.ghi.sum() - 1
+    )
+
+
+def test_quadrature_night_is_zero_and_unsupported_hours_are_counted():
+    source = _weather()
+    source = source.iloc[:3].copy()
+    source.index = pd.date_range("2025-06-21 00:00", periods=3, freq="h", tz="UTC")
+    result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+    np.testing.assert_allclose(result[["dni", "dhi"]].to_numpy().reshape(-1, 4, 2).mean(axis=1), source[["dni", "dhi"]])
+    np.testing.assert_allclose(result.ghi, result.dhi)
+    assert result.attrs[WEATHER_METADATA_KEY]["irradiance_resampling_zero_support_counts"] == {
+        "ghi": 0,
+        "dni": 3,
+        "dhi": 3,
+    }
+
+    source.iloc[:] = 0.0
+    dark = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+    assert dark.eq(0).all().all()
+
+
+def test_quadrature_skips_only_dark_steps(monkeypatch):
+    import breos.weather as weather_module
+
+    index = pd.date_range("2025-03-20 04:00", periods=18, freq="h", tz="UTC")
+    rng = np.random.default_rng(0)
+    source = pd.DataFrame(rng.uniform(0, 600, (len(index), 3)), index=index, columns=["ghi", "dni", "dhi"])
+    # Keep the random components within the accepted weather contract.
+    source["ghi"] = np.maximum(source.ghi, source.dhi)
+    for basis in ("interval_mean", "instant"):
+        source.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": basis, "timestamp_label_basis": "left"}
+        fast = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+        monkeypatch.setattr(weather_module, "_QUADRATURE_DARK_ZENITH", 180.0)
+        full = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+        monkeypatch.undo()
+        pd.testing.assert_frame_equal(fast, full)
+        assert fast.attrs == full.attrs
+
+
+def test_quadrature_requires_coordinates_components_and_hourly_index():
+    with pytest.raises(ValueError, match="quadrature.*latitude and longitude"):
+        resample_to_15min(_weather(), irradiance_resampling="quadrature")
+    with pytest.raises(ValueError, match="quadrature.*missing: ghi"):
+        resample_to_15min(_weather().drop(columns="ghi"), irradiance_resampling="quadrature", **COORDINATES)
+    irregular = _weather().drop(index=_weather().index[2])
+    with pytest.raises(ValueError, match="quadrature requires a regular hourly index"):
+        resample_to_15min(irregular, irradiance_resampling="quadrature", **COORDINATES)
+
+
+def test_quadrature_leaves_other_columns_to_interpolation():
+    source = _weather()
+    source["temp_air"] = [10.0, 12.0, 14.0, 13.0, 11.0]
+    quadrature = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+    conserving = resample_to_15min(source, **COORDINATES)
+    assert list(quadrature.columns) == list(source.columns)
+    pd.testing.assert_series_equal(quadrature.temp_air, conserving.temp_air)
+
+
+@pytest.mark.parametrize("basis", ["interval_mean", "instant"])
+@pytest.mark.parametrize("component", ["ghi", "dni", "dhi"])
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_quadrature_refuses_non_finite_irradiance(basis, component, bad):
+    source = _weather(basis)
+    source.loc[source.index[2], component] = bad
+    with pytest.raises(ValueError, match=f"weather column '{component}' has 1 values that are not finite numbers"):
+        resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+
+
+def test_quadrature_reconciliation_is_undefined_without_input_ghi():
+    source = _weather()
+    source[["ghi", "dni", "dhi"]] = [0.0, 400.0, 20.0]
+    result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+    assert result.ghi.sum() > 0
+    reconciliation = result.attrs[WEATHER_METADATA_KEY]["irradiance_quadrature"]["ghi_reconciliation"]
+    assert reconciliation == {"energy_change_fraction": None, "absolute_residual_energy_fraction": None}
+
+
+def test_quadrature_step_means_do_not_close_with_one_cosine():
+    # Porto, 20 March, a dawn quarter-hour: the step's GHI is its DHI plus the
+    # mean of DNI·cos(zenith) over the samples, which differs from its mean
+    # DNI times the sample-mean cosine.
+    index = pd.date_range("2025-03-20 06:00", periods=4, freq="h", tz="UTC")
+    source = pd.DataFrame({"ghi": 300.0, "dni": 400.0, "dhi": 100.0}, index=index)
+    source.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
+    result = resample_to_15min(source, irradiance_resampling="quadrature", **COORDINATES)
+    cos_zenith, _ = _minute_geometry(result, pd.Timedelta(minutes=7.5))
+    step_cos = cos_zenith.reshape(-1, 15).mean(axis=1)
+    residual = np.abs(result.ghi - result.dni * step_cos - result.dhi)
+    assert residual.iloc[3] > 5.0
+
+
+@pytest.mark.parametrize("policy", IRRADIANCE_RESAMPLING_POLICIES)
+@pytest.mark.parametrize("invalid", ["inconsistent", "nonfinite", "nonnumeric"])
+def test_resampling_rejects_inconsistent_source_before_reconciliation(policy, invalid):
+    source = _weather()
+    source.attrs[WEATHER_METADATA_KEY]["timestamp_label_basis"] = "right"
+    stamp = source.index[2]
+    if invalid == "inconsistent":
+        source.loc[stamp, ["ghi", "dhi"]] = [0, 867.347]
+        message = "inconsistent irradiance"
+    else:
+        source["ghi"] = source.ghi.astype(object)
+        source.loc[stamp, "ghi"] = np.nan if invalid == "nonfinite" else "missing"
+        message = "not finite numbers"
+    original = source.copy(deep=True)
+    with pytest.raises(ValueError, match=message) as exc:
+        resample_to_15min(source, irradiance_resampling=policy, **COORDINATES)
+    assert str(stamp) in str(exc.value)
+    pd.testing.assert_frame_equal(source, original)
+
+
+@pytest.mark.parametrize("columns", [["ghi"], ["dni"], ["dhi"], ["temp_air"]])
+def test_partial_column_resampling_still_works(columns):
+    source = _weather().assign(temp_air=20.0)[columns]
+    result = resample_to_15min(source, **COORDINATES)
+    assert list(result.columns) == columns
+    assert np.isfinite(result.to_numpy()).all()
+
+
+# The committed hourly TMY files, with each site's coordinates and civil timezone.
+COMMITTED_TMY_DIR = Path(__file__).resolve().parents[1] / "validation" / "data" / "weather"
+COMMITTED_TMY_SITES = {
+    "berlin_tmy_2005_2023_pvgis-sarah3.csv.gz": (52.52, 13.40, "Europe/Berlin"),
+    "golden_colorado_tmy_2005_2023_pvgis-era5.csv.gz": (39.74, -105.18, "America/Denver"),
+    "melbourne_tmy_2005_2023_pvgis-era5.csv.gz": (-37.81, 144.96, "Australia/Melbourne"),
+    "nairobi_tmy_2005_2023_pvgis-sarah3.csv.gz": (-1.29, 36.82, "Africa/Nairobi"),
+    "new_delhi_tmy_2005_2023_pvgis-era5.csv.gz": (28.61, 77.21, "Asia/Kolkata"),
+    "porto_tmy_2005_2023_pvgis-sarah3.csv.gz": (41.15, -8.61, "Europe/Lisbon"),
+    "sao_paulo_tmy_2005_2023_pvgis-sarah3.csv.gz": (-23.55, -46.63, "America/Sao_Paulo"),
+}
+
+
+def test_every_committed_tmy_file_is_listed():
+    assert sorted(path.name for path in COMMITTED_TMY_DIR.glob("*.csv.gz")) == sorted(COMMITTED_TMY_SITES)
+
+
+# Resampled weather can break the GHI/DHI rule on a few steps although its
+# hourly source passes (Berlin, one step); PV extraction must still run.
+@pytest.mark.parametrize("name", list(COMMITTED_TMY_SITES))
+def test_committed_tmy_runs_at_15_minutes(name, no_fetch):
+    latitude, longitude, timezone = COMMITTED_TMY_SITES[name]
+    app = App(
+        {
+            "location": {"latitude": latitude, "longitude": longitude, "timezone": timezone},
+            "weather_file": str(COMMITTED_TMY_DIR / name),
+            "n_modules": 10,
+            "annual_consumption_kwh": 3000,
+            "start_date": "2025-01-01",
+            "resolution": "15min",
+            "projection_years": 1,
+            "solar_position": "interval-start",
+        }
+    )
+    app.simulate()
+    assert app.result()["pv_dc_generation_kwh"] > 0

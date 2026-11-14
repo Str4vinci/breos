@@ -299,6 +299,18 @@ def test_fixed_target_app_run_charges_from_the_grid_and_reports_it(monkeypatch):
     assert len(record["instruction_hash"]) == 64
     assert "smart_charging" not in plain and "smart_charging" not in plain["provenance"]
 
+    for key in (
+        "grid_import_cost_year1_prices",
+        "grid_export_revenue_year1_prices",
+        "fixed_charge_year1_prices",
+        "no_system_import_cost_year1_prices",
+    ):
+        assert key in charged
+    grid_charge = charged["grid_charge_cost_year1_prices"]
+    assert grid_charge == year1["grid_charge_cost_year1_prices"]
+    # The grid charge is part of the grid import cost, not added to it.
+    assert 0.0 < grid_charge <= charged["grid_import_cost_year1_prices"]
+
     # Grid energy shifted through the battery is imported, so it earns no
     # avoided emissions, and its round-trip loss counts against the system
     # (A10): self-consumed CO2 falls by the grid charge net of its delivery.
@@ -309,25 +321,6 @@ def test_fixed_target_app_run_charges_from_the_grid_and_reports_it(monkeypatch):
     assert charged["co2_avoided_self_consumption_year1_kg"] == pytest.approx(
         (charged["self_consumption_kwh"] + shift) * ci / 1000, abs=0.05
     )
-
-
-@pytest.mark.usefixtures("_patch_weather")
-def test_fixed_target_reports_its_grid_charge_cost_at_the_top_level():
-    app = _app(FIXED)
-    app.simulate()
-    result = app.result()
-
-    for key in (
-        "grid_import_cost_year1_prices",
-        "grid_export_revenue_year1_prices",
-        "fixed_charge_year1_prices",
-        "no_system_import_cost_year1_prices",
-    ):
-        assert key in result
-    grid_charge = result["grid_charge_cost_year1_prices"]
-    assert grid_charge == result["smart_charging"]["yearly"][0]["grid_charge_cost_year1_prices"]
-    # The grid charge is part of the grid import cost, not added to it.
-    assert 0.0 < grid_charge <= result["grid_import_cost_year1_prices"]
 
 
 @pytest.mark.usefixtures("_patch_weather")
@@ -369,9 +362,8 @@ def test_fixed_target_follows_the_resolved_tri_hourly_periods():
     assert instructions.grid_charge_efficiency == 0.9
     assert instructions.grid_import_limit_w == math.inf
 
-
-def test_fixed_target_stays_aligned_across_a_dst_day():
-    # 29 March 2026 has 23 local hours; a UTC index keeps every instant.
+    # Across a DST day (29 March 2026 has 23 local hours) a UTC index keeps
+    # every instant, and the instructions stay aligned with the labels.
     index = pd.date_range("2026-03-28", "2026-03-31", freq="15min", tz="UTC", inclusive="left")
     tariff = _tri_tariff(index)
     spec = SmartChargingSpec(
@@ -415,7 +407,7 @@ def test_the_controller_checks_its_tariff():
     ("fields", "message"),
     [
         ({"mode": "greedy"}, r"'smart_charging\.mode' must be one of"),
-        ({"mode": "disabled", "target_usable_fraction": 0.5}, "takes no other settings"),
+        ({"mode": "disabled", "target_usable_fraction": 0.5}, "takes no other keys"),
         ({"mode": "fixed_target", "charge_periods": ("off_peak",)}, r"needs smart_charging\.target_usable_fraction"),
         (
             {

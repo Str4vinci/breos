@@ -117,8 +117,13 @@ def synthetic_weather(year: int = 2025) -> pd.DataFrame:
 
 def _fake_fetch(*_args, **kwargs):
     weather = synthetic_weather(int(kwargs.get("sample_year") or 2025))
+    # Instant samples at their labels: solar_position = "auto" then puts the
+    # sun at the labels, as "interval-start" does, without a fallback warning.
     weather.attrs["breos_weather_metadata"] = {
         "source": "synthetic_golden",
+        "radiation_time_basis": "instant",
+        "timestamp_label_basis": "instant",
+        "irradiance_time_offset_hours": 0.0,
         "horizon": {"status": "not_applied", "provider": "pvgis", "profile": None},
     }
     return weather, {"inputs": {"location": {"latitude": 41.1579, "longitude": -8.6291, "elevation": 0}}}
@@ -135,6 +140,8 @@ def run_scenario(name: str) -> dict[str, Any]:
         app = App({**SCENARIOS[name], "execution_backend": "python"})
         app.simulate()
         result = app.result()
+    # The whole result, before any field is dropped, must be plain JSON.
+    json.dumps(result)
     return {
         key: value
         for key, value in flatten(result).items()

@@ -19,7 +19,15 @@ from breos.app import App
 from breos.montecarlo import _index_weather
 from breos.runners.app import run_app_simulation
 
-_BASE = {"n_modules": 6, "annual_consumption_kwh": 3000, "projection_years": 1, "start_date": "2025-01-01"}
+# Some cases read cached weather CSVs without a metadata sidecar, so the sun
+# position is pinned at the step labels rather than left to "auto".
+_BASE = {
+    "n_modules": 6,
+    "annual_consumption_kwh": 3000,
+    "projection_years": 1,
+    "start_date": "2025-01-01",
+    "solar_position": "interval-start",
+}
 
 
 def _result_index(config):
@@ -105,7 +113,7 @@ def test_montecarlo_historical_weather_is_indexed_in_utc(synthetic_weather, tz):
     weather = synthetic_weather.copy()
     weather.index = weather.index.tz_localize(None) if tz is None else weather.index.tz_convert(tz)
 
-    indexed = _index_weather(weather.reset_index(names="date"))
+    indexed = _index_weather(weather)
 
     assert str(indexed.index.tz) == "UTC"
     assert indexed.index[0] == pd.Timestamp("2023-01-01 00:00", tz="UTC")

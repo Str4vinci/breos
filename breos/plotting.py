@@ -34,10 +34,10 @@ import pandas as pd
 from scipy.stats import t as student_t
 
 from breos.constants import DEFAULT_EOL_PERCENTAGE
-from breos.economics import _initial_investment, _recorded_currency, find_payback_year_interpolated
+from breos.economics import _from_year_zero, _initial_investment, _recorded_currency, find_payback_year_interpolated
 from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import find_irradiance_column, local_datetime_index
-from breos.weather import extract_ambient_temperature, preload_weather_by_year
+from breos.weather import _weather_years, extract_ambient_temperature
 
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -70,6 +70,21 @@ def _finish(
     fig.savefig(os.path.join(results_directory, filename), dpi=dpi, bbox_inches=bbox_inches)
     plt.close(fig)
     return fig
+
+
+# The four energy-flow columns of the yearly and monthly plots, in their
+# drawing order, with their legend labels.
+_ENERGY_LABELS = {
+    "PV_Production": "PV Production",
+    "Houseload": "Load",
+    "Import_From_Grid": "Grid Import",
+    "PV_AC_Export": "Grid Export",
+}
+
+
+def _scenario_suffix(scenario_name: str) -> str:
+    """The file-name suffix of a scenario: ``_<name>``, or nothing without one."""
+    return f"_{scenario_name}" if scenario_name else ""
 
 
 def _currency(frame: pd.DataFrame) -> str:
@@ -466,8 +481,7 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: Optional[str] = N
     """
     df = _local_time_indexed(results_df)
 
-    columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
-    columns = [c for c in columns if c in df.columns]
+    columns = [c for c in _ENERGY_LABELS if c in df.columns]
 
     yearly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("YE").sum()
 
@@ -477,13 +491,7 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: Optional[str] = N
 
     ax.set_xticklabels([d.strftime("%Y") for d in yearly.index], rotation=0)
     ax.set_ylabel("Energy (kWh)")
-    labels = {
-        "PV_Production": "PV Production",
-        "Houseload": "Load",
-        "Import_From_Grid": "Grid Import",
-        "PV_AC_Export": "Grid Export",
-    }
-    ax.legend([labels[column] for column in columns])
+    ax.legend([_ENERGY_LABELS[column] for column in columns])
     ax.grid(True, alpha=0.3, axis="y")
 
     fig.tight_layout()
@@ -517,7 +525,7 @@ def weekly_graphs(
     week_data = df[df["Week"] == week_number]
 
     if week_data.empty:
-        print(f"No data found for week {week_number}")
+        warnings.warn(f"No data found for week {week_number}", UserWarning, stacklevel=2)
         return None
 
     fig, ax = plt.subplots(figsize=(14, 6))
@@ -557,6 +565,16 @@ def weekly_graphs(
     return _finish(fig, results_directory, f"week_{week_number}_profile.png")
 
 
+def _line_figure(x: Any, y: Any, style: str, ylabel: str, results_directory: Optional[str], filename: str) -> Figure:
+    """One line over time on a 10 x 6 figure, as the degradation plots draw each series."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(x, y, style, linewidth=2)
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    return _finish(fig, results_directory, filename)
+
+
 def _degradation_x(degradation_df: pd.DataFrame) -> pd.Index:
     """The x values of a daily degradation frame: its ``Datetime`` on the local clock, else its index."""
     if "Datetime" in degradation_df.columns:
@@ -584,18 +602,14 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: Optional[
     """
     figures: "dict[str, Figure]" = {}
     if degradation_df.empty:
-        print("No degradation data to plot")
         return figures
 
     x = _degradation_x(degradation_df)
 
     # 1. SOH over time
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-    ax1.plot(x, degradation_df["SOH"], "b-", linewidth=2)
-    ax1.set_ylabel("SOH (%)")
-    ax1.grid(True, alpha=0.3)
-    fig.tight_layout()
-    figures["battery_degradation_soh"] = _finish(fig, results_directory, "battery_degradation_soh.png")
+    figures["battery_degradation_soh"] = _line_figure(
+        x, degradation_df["SOH"], "b-", "SOH (%)", results_directory, "battery_degradation_soh.png"
+    )
 
     # 2. Degradation components for the active battery inventory.
     def _plot_degradation_components(cycle_data, calendar_data, filename, ylabel):
@@ -627,12 +641,14 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: Optional[
 
     # 3. FEC
     if "Cumulative_FEC" in degradation_df.columns:
-        fig, ax3 = plt.subplots(figsize=(10, 6))
-        ax3.plot(x, degradation_df["Cumulative_FEC"], "g-", linewidth=2)
-        ax3.set_ylabel("Full Equivalent Cycles")
-        ax3.grid(True, alpha=0.3)
-        fig.tight_layout()
-        figures["battery_degradation_fec"] = _finish(fig, results_directory, "battery_degradation_fec.png")
+        figures["battery_degradation_fec"] = _line_figure(
+            x,
+            degradation_df["Cumulative_FEC"],
+            "g-",
+            "Full Equivalent Cycles",
+            results_directory,
+            "battery_degradation_fec.png",
+        )
 
     # 4. Resistance growth and RTE (if available)
     if "Resistance_Growth" in degradation_df.columns:
@@ -663,21 +679,25 @@ def plot_resistance_and_efficiency(
     x = _degradation_x(degradation_df)
 
     # Resistance growth plot
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(x, degradation_df["Resistance_Growth"] * 100, "r-", linewidth=2)
-    ax.set_ylabel("Resistance Growth (%)")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    figures["battery_resistance_growth"] = _finish(fig, results_directory, "battery_resistance_growth.png")
+    figures["battery_resistance_growth"] = _line_figure(
+        x,
+        degradation_df["Resistance_Growth"] * 100,
+        "r-",
+        "Resistance Growth (%)",
+        results_directory,
+        "battery_resistance_growth.png",
+    )
 
     # Effective RTE plot
     if "Effective_RTE" in degradation_df.columns:
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(x, degradation_df["Effective_RTE"] * 100, "m-", linewidth=2)
-        ax.set_ylabel("Round-Trip Efficiency (%)")
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-        figures["battery_effective_rte"] = _finish(fig, results_directory, "battery_effective_rte.png")
+        figures["battery_effective_rte"] = _line_figure(
+            x,
+            degradation_df["Effective_RTE"] * 100,
+            "m-",
+            "Round-Trip Efficiency (%)",
+            results_directory,
+            "battery_effective_rte.png",
+        )
     return figures
 
 
@@ -794,7 +814,7 @@ def plot_breakeven(
     Returns:
         The figures, keyed ``breakeven_cumulative`` and ``breakeven_annual``.
     """
-    suffix = f"_{scenario_name}" if scenario_name else ""
+    suffix = _scenario_suffix(scenario_name)
 
     years = cost_projection["Year"]
 
@@ -802,18 +822,14 @@ def plot_breakeven(
     if "Cost_No_Sys_Cumulative_NPV" in cost_projection.columns:
         no_sys = cost_projection["Cost_No_Sys_Cumulative_NPV"]
         with_sys = cost_projection["Cost_System_Cumulative_NPV"]
-        annual_column = "Cost_System_Annual_NPV"
         label_suffix = " (NPV)"
     else:
         no_sys = cost_projection["Cost_No_Sys_Cumulative"]
         with_sys = cost_projection["Cost_System_Cumulative"]
-        annual_column = "Cost_System_Annual"
         label_suffix = ""
 
     # The year-0 investment anchors the break-even curve, as in the library.
-    initial_investment = cost_projection.attrs.get("total_investment")
-    if initial_investment is None and annual_column in cost_projection.columns:
-        initial_investment = float(with_sys.iloc[0] - cost_projection[annual_column].iloc[0])
+    initial_investment = _initial_investment(cost_projection)
 
     # Break-even with month precision, by the same interpolation Monte Carlo
     # and the optimizer report.
@@ -838,9 +854,8 @@ def plot_breakeven(
         # Interpolate the cost at break-even, from the year-0 investment when
         # the break-even falls inside the first year.
         curve_years, curve_cost = years.to_numpy(dtype=float), with_sys.to_numpy(dtype=float)
-        if initial_investment is not None and curve_years[0] > 0.0:
-            curve_years = np.concatenate(([0.0], curve_years))
-            curve_cost = np.concatenate(([float(initial_investment)], curve_cost))
+        if initial_investment is not None:
+            curve_years, curve_cost = _from_year_zero(curve_years, curve_cost, initial_investment)
         be_cost = np.interp(be_year_interpolated, curve_years, curve_cost)
         ax1.axvline(x=be_year_interpolated, color="blue", linestyle="--", alpha=0.7, linewidth=1.5)
         ax1.scatter([be_year_interpolated], [be_cost], s=120, c="blue", zorder=5, edgecolors="white", linewidth=2)
@@ -879,9 +894,6 @@ def plot_breakeven(
 
     fig2.tight_layout()
     _finish(fig2, results_directory, f"breakeven_annual{suffix}.png")
-
-    # Print BEP to console
-    print(f"   Break-even point: {be_text}")
     return {"breakeven_cumulative": fig1, "breakeven_annual": fig2}
 
 
@@ -930,7 +942,7 @@ def plot_battery_soh_timeseries(
     if not 0.0 < eol_percentage < 1.0:
         raise ValueError(f"eol_percentage is a fraction between 0 and 1, not {eol_percentage!r}")
     eol_pct = 100.0 * eol_percentage
-    suffix = f"_{scenario_name}" if scenario_name else ""
+    suffix = _scenario_suffix(scenario_name)
 
     df = _local_time_indexed(results_df)
 
@@ -942,7 +954,7 @@ def plot_battery_soh_timeseries(
         df = df[df.index <= _on_index_clock(end_date, df.index)]
 
     if "Battery_SOH" not in df.columns:
-        print("Warning: Battery_SOH column not found in results")
+        warnings.warn("Battery_SOH column not found in results", UserWarning, stacklevel=2)
         return None
 
     fig, ax = plt.subplots(figsize=(14, 6))
@@ -984,13 +996,12 @@ def plot_monthly_comparison(
     Returns:
         The matplotlib ``Figure``.
     """
-    suffix = f"_{scenario_name}" if scenario_name else ""
+    suffix = _scenario_suffix(scenario_name)
 
     df = _local_time_indexed(results_df)
 
     # Monthly aggregation
-    columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
-    columns = [c for c in columns if c in df.columns]
+    columns = [c for c in _ENERGY_LABELS if c in df.columns]
 
     monthly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("ME").sum()
     monthly["Month"] = monthly.index.strftime("%b")
@@ -1006,19 +1017,12 @@ def plot_monthly_comparison(
         "Import_From_Grid": "#FF6347",
         "PV_AC_Export": "#32CD32",
     }
-    labels = {
-        "PV_Production": "PV Generation",
-        "Houseload": "Load Demand",
-        "Import_From_Grid": "Grid Import",
-        "PV_AC_Export": "Grid Export",
-    }
-
     for i, col in enumerate(columns):
         ax.bar(
             x + i * width,
             monthly[col],
             width,
-            label=labels.get(col, col),
+            label=_ENERGY_LABELS[col],
             color=colors.get(col, "gray"),
             alpha=0.85,
             edgecolor="black",
@@ -1065,7 +1069,7 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: Optional[s
     """
     df = _local_time_indexed(results_df)
 
-    energy_columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
+    energy_columns = list(_ENERGY_LABELS)
     missing = [column for column in energy_columns if column not in df.columns]
     if missing:
         raise ValueError(f"Missing energy-balance column(s): {', '.join(missing)}")
@@ -1088,12 +1092,26 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: Optional[s
     width = 0.35
 
     # Positives
-    ax.bar(months - width / 2, monthly_avg["PV_Production"], width, label="PV Production", color="gold", alpha=0.9)
-    ax.bar(months + width / 2, monthly_avg["PV_AC_Export"], width, label="Grid Export", color="green", alpha=0.9)
+    labels = _ENERGY_LABELS
+    ax.bar(
+        months - width / 2, monthly_avg["PV_Production"], width, label=labels["PV_Production"], color="gold", alpha=0.9
+    )
+    ax.bar(
+        months + width / 2, monthly_avg["PV_AC_Export"], width, label=labels["PV_AC_Export"], color="green", alpha=0.9
+    )
 
     # Negatives (Load and Import)
-    ax.bar(months - width / 2, -monthly_avg["Houseload"], width, label="Load", color="steelblue", alpha=0.9)
-    ax.bar(months + width / 2, -monthly_avg["Import_From_Grid"], width, label="Grid Import", color="red", alpha=0.9)
+    ax.bar(
+        months - width / 2, -monthly_avg["Houseload"], width, label=labels["Houseload"], color="steelblue", alpha=0.9
+    )
+    ax.bar(
+        months + width / 2,
+        -monthly_avg["Import_From_Grid"],
+        width,
+        label=labels["Import_From_Grid"],
+        color="red",
+        alpha=0.9,
+    )
 
     ax.axhline(0, color="black", linewidth=0.8)
 
@@ -1245,7 +1263,7 @@ def plot_montecarlo_simulation(
             "(an npv_savings column and a run or payback_year column)"
         )
 
-    suffix = f"_{scenario_name}" if scenario_name else ""
+    suffix = _scenario_suffix(scenario_name)
     plots_folder = None if results_directory is None else os.path.join(results_directory, "plots")
     if plots_folder is not None:
         os.makedirs(plots_folder, exist_ok=True)
@@ -1299,7 +1317,6 @@ def plot_breakeven_distribution(
     """
     paid_back = _finite_payback_years(breakeven_steps)
     if not paid_back.size:
-        print("No break-even points to plot histogram.")
         return None
 
     fig, ax = plt.subplots(figsize=(12, 8))
@@ -1626,7 +1643,7 @@ def _historical_weather_years(
     if isinstance(historical, Mapping):
         years = dict(historical)
     else:
-        years = preload_weather_by_year(os.fspath(historical))
+        years = _weather_years(os.fspath(historical), target_year=2025)
     if not years:
         raise ValueError("The historical weather has no complete year")
     return years
@@ -1928,10 +1945,9 @@ def plot_breakeven_comparison(
         no_sys = df["Cost_No_Sys_Cumulative_NPV"].to_numpy(dtype=float)
         with_sys = df["Cost_System_Cumulative_NPV"].to_numpy(dtype=float)
         investment = _initial_investment(df)
-        if investment is not None and len(years) and years[0] > 0.0:
-            years = np.concatenate(([0.0], years))
-            no_sys = np.concatenate(([0.0], no_sys))
-            with_sys = np.concatenate(([investment], with_sys))
+        if investment is not None:
+            _, no_sys = _from_year_zero(years, no_sys, 0.0)
+            years, with_sys = _from_year_zero(years, with_sys, investment)
         curves.append((years, no_sys, with_sys))
 
     # One no-system baseline per group of scenarios that share it.
@@ -2620,7 +2636,7 @@ def plot_co2_savings(
     if "CO2_Avoided_Total_kg" not in cost_projection.columns:
         return {}
 
-    suffix = f"_{scenario_name}" if scenario_name else ""
+    suffix = _scenario_suffix(scenario_name)
 
     years = cost_projection["Year"]
     co2_total = cost_projection["CO2_Avoided_Total_kg"]

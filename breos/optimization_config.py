@@ -16,11 +16,13 @@ module) are checked and defaulted the way the App does.
 from __future__ import annotations
 
 import math
+import warnings
 from copy import deepcopy
 from dataclasses import fields
 from typing import Any, Mapping
 
 from breos.app_config import (
+    APP_CONFIG_FIELDS,
     COSTS_TABLE,
     DEFAULTS,
     INDOOR_MODEL_TABLE,
@@ -31,19 +33,21 @@ from breos.app_config import (
     check_calendar_model,
     check_cost_currency,
     default_module_key,
+    smart_charging_table,
 )
 from breos.config_schema import (
     TableSpec,
     anything,
     boolean,
     choice,
+    integer,
     list_of,
     number,
     table,
     text,
 )
-from breos.constants import SKIPPED_REPLACEMENT_ACTIONS
-from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
+from breos.constants import BATTERY_COUPLINGS, DEGRADATION_ENGINES, RESOLUTIONS, SKIPPED_REPLACEMENT_ACTIONS
+from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE, PANEL_WP_REMOVED
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import PV_MODEL_CONFIG_KEYS
 from breos.smart_charging import PLANNER_MODES
@@ -80,25 +84,20 @@ _REMOVED_KEYS = {
     ("constraints", "budget_eur"): (
         "constraints.budget_eur was renamed to constraints.budget in 0.7.0; the budget is in the run's currency."
     ),
-    ("costs", "panel_wp"): (
-        "costs.panel_wp was removed in 0.7.0: CAPEX is priced at the selected module's own "
-        "rating. Remove the key, or select a module with the wattage you meant."
-    ),
+    ("costs", "panel_wp"): PANEL_WP_REMOVED,
 }
 
 
 def _integer(minimum: int) -> Any:
     """A whole number, returned as ``int``; ``20.0`` is accepted, ``20.5`` is not."""
+    return integer(minimum=minimum, whole_floats=True)
 
-    def check(value: Any, where: str) -> int:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError(f"'{where}' must be a whole number")
-        if isinstance(value, float) and not (math.isfinite(value) and value.is_integer()):
-            raise ValueError(f"'{where}' must be a whole number")
-        if value < minimum:
-            raise ValueError(f"'{where}' must be >= {minimum}")
-        return int(value)
 
+def _app_check(key: str) -> Any:
+    """The App's own check of the top-level key ``key``."""
+    check = APP_CONFIG_FIELDS[key].check
+    if check is None:
+        raise KeyError(f"App config key {key!r} has no check")
     return check
 
 
@@ -124,7 +123,11 @@ def _scale(value: Any) -> float:
 
 
 def _dc_output_scale(value: Any, where: str) -> float:
-    """A DC-side yield correction, applied before dispatch; not bounded above."""
+    """A DC-side yield correction, applied before dispatch; not bounded above.
+
+    Clipping, charging and the part-load ratio all respond to it, which makes
+    it the knob for a model that under-predicts measured yield.
+    """
     scale = _scale(value)
     if not math.isfinite(scale) or scale <= 0.0:
         raise ValueError("dc_output_scale must be finite and greater than 0")
@@ -132,7 +135,11 @@ def _dc_output_scale(value: Any, where: str) -> float:
 
 
 def _ac_output_scale(value: Any, where: str) -> float:
-    """An AC-side derate, applied after the inverter nameplate limit, so at most 1."""
+    """An AC-side derate, applied after the inverter nameplate limit, so at most 1.
+
+    Above 1 the inverter would deliver more than its nameplate and more AC
+    than the DC entering it, and the reported inverter loss would pin at 0.
+    """
     scale = _scale(value)
     if not math.isfinite(scale) or not 0.0 < scale <= 1.0:
         raise ValueError(
@@ -159,6 +166,12 @@ def _objective_basis(value: Any, where: str) -> str:
         )
     if not (isinstance(value, str) and value.strip().lower() == DEFAULT_OBJECTIVE_BASIS):
         raise ValueError("optimization.objective_basis must be 'projected'")
+    warnings.warn(
+        "optimization.objective_basis is deprecated and will be refused in BREOS 0.9.0: "
+        "'projected' is the only basis, so remove the key",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return DEFAULT_OBJECTIVE_BASIS
 
 
@@ -232,7 +245,7 @@ BATTERY_TABLE = TableSpec(
         # Read by the battery temperature builder, which checks it.
         "temperature": anything,
         "indoor_model": _optional(table(INDOOR_MODEL_TABLE)),
-        "degradation_engine": choice(("native", "blast")),
+        "degradation_engine": choice(DEGRADATION_ENGINES),
         "blast_model": anything,
         "replacement_cost": anything,
         "enable_replacement": boolean,
@@ -244,17 +257,26 @@ BATTERY_TABLE = TableSpec(
         # What a swap the two rules above skip does with the old pack.
         "skipped_replacement_action": choice(SKIPPED_REPLACEMENT_ACTIONS),
         "initial_soh": number(minimum=0, maximum=100, min_exclusive=True),
+        # The battery's topology, fixed for a study (ADR 0004 C2, C13), and
+        # an AC-coupled battery's own inverter.
+        "coupling": choice(BATTERY_COUPLINGS),
+        "inverter_ac_rating_kw": _optional(number(minimum=0, min_exclusive=True)),
+        "inverter_kw_per_kwh": _optional(number(minimum=0, min_exclusive=True)),
+        "inverter_efficiency": _optional(number(minimum=0, maximum=1, min_exclusive=True)),
     },
 )
+# The [battery] keys that describe an AC-coupled battery's own inverter.
+BATTERY_INVERTER_KEYS = ("inverter_ac_rating_kw", "inverter_kw_per_kwh", "inverter_efficiency")
 FINANCIALS_TABLE = TableSpec(
     "financials",
     keys={
-        "inflation_rate": number(),
-        "sell_price_inflation": number(),
-        "import_price_escalation": _optional(number()),
-        "om_escalation": _optional(number()),
-        "replacement_cost_learning": _optional(number()),
-        "discount_rate": number(),
+        # The App's checks, so the two refuse the same rates.
+        **{
+            key: _app_check(key)
+            for key in ("inflation_rate", "sell_price_inflation", "import_price_escalation", "om_escalation")
+        },
+        "replacement_cost_learning": _optional(_app_check("replacement_cost_learning")),
+        "discount_rate": _app_check("discount_rate"),
         "project_lifespan": _integer(1),
         "pv_degradation_rate": number(minimum=0, maximum=1, max_exclusive=True),
         # Flat prices, used when [costs] does not set them.
@@ -300,6 +322,15 @@ MODE_TABLE = TableSpec(
         "east_west_tilt_deg": number(minimum=0, maximum=90),
     },
 )
+# The early stop's settings when [optimization.early_stop] leaves them out;
+# min_gen defaults to the smaller of 20 and the generation cap.
+EARLY_STOP_DEFAULTS: Mapping[str, Any] = {
+    "enabled": True,
+    "ftol": 0.0025,
+    "period": 10,
+    "n_skip": 0,
+    "only_feasible": True,
+}
 EARLY_STOP_TABLE = TableSpec(
     "optimization.early_stop",
     keys={
@@ -325,7 +356,7 @@ OPTIMIZATION_TABLE = TableSpec(
 SIMULATION_TABLE = TableSpec(
     "simulation",
     keys={
-        "resolution": choice(("h", "15min")),
+        "resolution": choice(RESOLUTIONS),
         "years_projection": _integer(1),
         "irradiance_resampling": choice(IRRADIANCE_RESAMPLING_POLICIES),
     },
@@ -365,12 +396,22 @@ OPTIMIZATION_SCALARS: Mapping[str, Any] = {
 }
 
 
-def _first_set(where: tuple[tuple[str, Any], ...], default: Any) -> Any:
-    """The first spelling of a setting that is set, in the documented order, else ``default``."""
-    for _name, value in where:
-        if value is not None:
-            return value
-    return default
+def _first_set(*values: Any, default: Any) -> Any:
+    """The first of a setting's spellings that is set, in the documented order, else ``default``."""
+    return next((value for value in values if value is not None), default)
+
+
+def _check_blast_model(battery: Mapping[str, Any]) -> None:
+    """The App's BLAST rules: a known model with the blast engine, and none without it."""
+    blast_model = battery["blast_model"]
+    if battery["degradation_engine"] == "blast":
+        from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
+
+        if blast_model not in ENABLED_BLAST_MODEL_KEYS:
+            available = ", ".join(ENABLED_BLAST_MODEL_KEYS)
+            raise ValueError(f"Unknown battery.blast_model {blast_model!r}. Available: {available}")
+    elif blast_model is not None:
+        raise ValueError("battery.blast_model requires battery.degradation_engine = 'blast'")
 
 
 def _currency(resolved: Mapping[str, Any]) -> str:
@@ -391,6 +432,7 @@ def _currency(resolved: Mapping[str, Any]) -> str:
         given=[*resolved["costs"], *flat_prices],
         tariff=tariff is not None,
         battery=False if max_battery == 0 else None,
+        coupling=resolved["battery"]["coupling"],
     )
     return currency
 
@@ -398,6 +440,45 @@ def _currency(resolved: Mapping[str, Any]) -> str:
 def adjusted_max_tilt_deg(latitude: float, margin_deg: float) -> float:
     """The ``max_tilt_deg = "adjust"`` bound: 5° × round((|latitude| + margin) / 5), within 60–90°."""
     return float(min(max(5.0 * round((abs(float(latitude)) + float(margin_deg)) / 5.0), 60.0), 90.0))
+
+
+def _check_battery_coupling(battery: Mapping[str, Any], costs: Mapping[str, Any], max_battery_kwh: float) -> None:
+    """Check the battery's topology and an AC-coupled battery's inverter (ADR 0004 C2, C9).
+
+    ``"dc"`` refuses the battery inverter keys and its price, so no setting is
+    silently ignored. ``"ac"`` in a search that may install a battery needs
+    one rating key, the efficiency and the price, before any candidate runs.
+    """
+    if battery["coupling"] == "dc":
+        given = [f"battery.{name}" for name in BATTERY_INVERTER_KEYS if battery[name] is not None]
+        if "battery_inverter_cost_per_kw" in costs:
+            given.append("costs.battery_inverter_cost_per_kw")
+        if given:
+            raise ValueError(
+                f"{', '.join(given)} describe an AC-coupled battery's own inverter; "
+                "set battery.coupling = 'ac' or remove them"
+            )
+        return
+    if battery["inverter_ac_rating_kw"] is not None and battery["inverter_kw_per_kwh"] is not None:
+        raise ValueError(
+            "battery.inverter_ac_rating_kw and battery.inverter_kw_per_kwh both size the battery inverter; set one"
+        )
+    if max_battery_kwh == 0:
+        return
+    if battery["inverter_ac_rating_kw"] is None and battery["inverter_kw_per_kwh"] is None:
+        raise ValueError(
+            "An AC-coupled battery needs its inverter's rating: set battery.inverter_ac_rating_kw or "
+            "battery.inverter_kw_per_kwh"
+        )
+    if battery["inverter_efficiency"] is None:
+        raise ValueError(
+            "An AC-coupled battery needs battery.inverter_efficiency, from a source for the product; it has no default"
+        )
+    if "battery_inverter_cost_per_kw" not in costs:
+        raise ValueError(
+            "An AC-coupled battery needs costs.battery_inverter_cost_per_kw, the price of its own inverter per kW; "
+            "BREOS has no default for it. Set 0 if another price already includes the inverter"
+        )
 
 
 def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -455,7 +536,16 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
         # Validation normalises values; the tariff, reference-tariff and
         # smart-charging tables are kept as given and resolved by the shared
         # App resolvers.
-        checked = OPTIMIZATION_TABLES[key].validate(value, key)
+        if key == "smart_charging":
+            # The battery's coupling decides whether grid_charge_efficiency is
+            # needed or refused (ADR 0004 C7); [battery] checks the value.
+            raw_battery = config.get("battery")
+            raw = raw_battery.get("coupling", "dc") if isinstance(raw_battery, Mapping) else "dc"
+            # Spelled as [battery] accepts it; a bad value fails there.
+            coupling = raw.strip().lower() if isinstance(raw, str) else "dc"
+            checked = smart_charging_table(coupling).validate(value, key)
+        else:
+            checked = OPTIMIZATION_TABLES[key].validate(value, key)
         if key == "smart_charging" and checked["mode"] in PLANNER_MODES:
             raise ValueError(
                 f"'smart_charging.mode' = '{checked['mode']}' is experimental and runs in breos.App only; the "
@@ -482,28 +572,20 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
     simulation.setdefault("resolution", DEFAULT_RESOLUTION)
     simulation.setdefault("irradiance_resampling", DEFAULTS["irradiance_resampling"])
+    # simulation.years_projection, else financials.project_lifespan.
     simulation["years_projection"] = _first_set(
-        (
-            ("simulation.years_projection", simulation.get("years_projection")),
-            ("financials.project_lifespan", financials.get("project_lifespan")),
-        ),
-        DEFAULTS["projection_years"],
+        simulation.get("years_projection"), financials.get("project_lifespan"), default=DEFAULTS["projection_years"]
     )
+    # pv.degradation_rate, else financials.pv_degradation_rate.
     pv["degradation_rate"] = _first_set(
-        (
-            ("pv.degradation_rate", pv.get("degradation_rate")),
-            ("financials.pv_degradation_rate", financials.get("pv_degradation_rate")),
-        ),
-        DEFAULTS["pv_degradation_rate"],
+        pv.get("degradation_rate"), financials.get("pv_degradation_rate"), default=DEFAULTS["pv_degradation_rate"]
     )
+    # inverter_efficiency, else inverter.efficiency.
     resolved["inverter_efficiency"] = _first_set(
-        (
-            ("inverter_efficiency", resolved.get("inverter_efficiency")),
-            ("inverter.efficiency", inverter.get("efficiency")),
-        ),
-        DEFAULTS["inverter_efficiency"],
+        resolved.get("inverter_efficiency"), inverter.get("efficiency"), default=DEFAULTS["inverter_efficiency"]
     )
-    module = _first_set((("pv.module", pv.get("module")), ("pv_module", resolved.pop("pv_module", None))), None)
+    # pv.module, else pv_module.
+    module = _first_set(pv.get("module"), resolved.pop("pv_module", None), default=None)
     if "params" not in pv:
         pv["module"] = module or default_module_key()
     elif module is not None:
@@ -517,12 +599,16 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     battery.setdefault("indoor_model", None)
     battery.setdefault("degradation_engine", "native")
     battery.setdefault("blast_model", None)
+    _check_blast_model(battery)
     battery.setdefault("replacement_cost", None)
     battery.setdefault("enable_replacement", True)
     battery.setdefault("allow_terminal_replacement", True)
     battery.setdefault("replacement_min_remaining_years", 0.0)
     battery.setdefault("skipped_replacement_action", "keep")
     battery.setdefault("initial_soh", 100.0)
+    battery.setdefault("coupling", "dc")
+    for name in BATTERY_INVERTER_KEYS:
+        battery.setdefault(name, None)
     resolved["costs"] = resolved.get("costs") or {}
 
     constraints = resolved.setdefault("constraints", {}) or {}
@@ -542,6 +628,7 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     constraints.setdefault("max_tilt_deg", DEFAULT_MAX_TILT_DEG)
     constraints.setdefault("tilt_margin_deg", DEFAULT_TILT_MARGIN_DEG)
     constraints.setdefault("enforce_zeb", False)
+    _check_battery_coupling(battery, resolved["costs"], constraints["max_battery_kwh"])
     max_tilt = constraints["max_tilt_deg"]
     if max_tilt == "adjust":
         max_tilt = adjusted_max_tilt_deg(location["latitude"], constraints["tilt_margin_deg"])
@@ -564,7 +651,9 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
     optimization = resolved.setdefault("optimization", {}) or {}
     resolved["optimization"] = optimization
-    optimization.setdefault("objective_basis", DEFAULT_OBJECTIVE_BASIS)
+    # The key is deprecated: drop it once validated, so that resolving the
+    # resolved config again (as worker processes do) does not warn again.
+    optimization.pop("objective_basis", None)
     optimization.setdefault("early_stop", None)
     for key in ("emissions", "tariff", "reference_tariff", "smart_charging"):
         resolved.setdefault(key, None)

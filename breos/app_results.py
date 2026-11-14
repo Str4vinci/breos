@@ -13,10 +13,11 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig
 from breos.battery import LEDGER_SCHEMA_VERSION, resistance_to_efficiency
 from breos.economics import projection_rates_record
+from breos.electrical import electrical_result
 from breos.execution import config_has_battery
 from breos.projection import build_battery_config
 from breos.result_schema import RESULT_SCHEMA_VERSION
-from breos.runners.app import CO2_COLUMNS, SimulationArtifacts
+from breos.runners.app import SimulationArtifacts, first_year_co2
 from breos.smart_charging import PLANNER_MODES
 from breos.utils import get_hours_per_step, local_datetime_index, package_version
 
@@ -259,6 +260,17 @@ def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = Non
     return rows
 
 
+def _infinity_as_text(value: Any) -> Any:
+    """Replace infinite floats by "inf" or "-inf", recursively."""
+    if isinstance(value, float) and math.isinf(value):
+        return "inf" if value > 0 else "-inf"
+    if isinstance(value, Mapping):
+        return {key: _infinity_as_text(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_infinity_as_text(item) for item in value]
+    return value
+
+
 def _provenance(
     resolved: ResolvedAppConfig,
     artifacts: SimulationArtifacts,
@@ -279,7 +291,8 @@ def _provenance(
         "pv_module": cfg["pv_module"] or resolved.pv_module_key,
     }
     # Round-trip through JSON to guarantee only public, serializable scalar types.
-    normalized_cfg = json.loads(json.dumps(normalized_cfg, default=str))
+    # An unbounded equipment limit is written "inf", as JSON has no infinity.
+    normalized_cfg = json.loads(json.dumps(_infinity_as_text(normalized_cfg), default=str))
     weather = json.loads(json.dumps(artifacts.weather_metadata, default=str))
     weather.setdefault("latitude", resolved.lat)
     weather.setdefault("longitude", resolved.lon)
@@ -294,7 +307,10 @@ def _provenance(
         "resolution": cfg["resolution"],
         "timezone": resolved.timezone,
         "start_date": cfg["start_date"],
-        "pv_model": {"bifacial": deepcopy(artifacts.pv_loss_waterfall["bifacial"])},
+        "pv_model": {
+            "bifacial": deepcopy(artifacts.pv_loss_waterfall["bifacial"]),
+            **({"solar_position": deepcopy(artifacts.solar_position)} if artifacts.solar_position else {}),
+        },
         "degradation": artifacts.degradation_summary,
         # Which dispatch implementation produced these numbers, and the
         # toolchain it ran on. A bit-identity claim cannot be checked after the
@@ -437,6 +453,7 @@ def build_result(
         # Copied, so editing a result cannot reach the stored run that
         # App.revalue prices again.
         "pv_loss_waterfall": deepcopy(artifacts.pv_loss_waterfall),
+        "electrical": electrical_result(resolved.electrical, artifacts.solver_diagnostics),
         "provenance": _provenance(resolved, artifacts, input_repairs),
         "degradation": deepcopy(artifacts.degradation_summary),
     }
@@ -495,7 +512,8 @@ def build_result(
         # every runner (#183); a [period] window keeps its one row's.
         projection = artifacts.cost_projection
         if projection is not None:
-            co2 = {column: float(projection[column].iloc[0]) for column in CO2_COLUMNS}
+            co2 = first_year_co2(projection)
+            assert co2 is not None
             lifetime: dict[str, float | None] = {
                 "self": round(float(projection.attrs["lifetime_co2_avoided_self_consumed_kg"]), 2),
                 "export": round(float(projection.attrs["lifetime_co2_avoided_export_kg"]), 2),

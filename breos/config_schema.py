@@ -113,14 +113,18 @@ def number(
     return check
 
 
-def integer(*, minimum: int | None = None) -> Checker:
+def integer(*, minimum: int | None = None, whole_floats: bool = False) -> Checker:
     """An integer, optionally at least ``minimum``; returned as ``int``.
 
-    A bool is refused, and so is a float even when it is integral (``2.0``).
+    A bool is refused, and so is a float, even an integral one (``2.0``),
+    unless ``whole_floats``.
     """
 
     def check(value: Any, where: str) -> int:
-        if isinstance(value, bool) or not isinstance(value, Integral):
+        if whole_floats and isinstance(value, float):
+            if not (math.isfinite(value) and value.is_integer()):
+                raise ValueError(f"'{where}' must be a whole number")
+        elif isinstance(value, bool) or not isinstance(value, Integral):
             raise TypeError(f"'{where}' must be an integer")
         result = int(value)
         if minimum is not None and result < minimum:
@@ -151,16 +155,35 @@ def boolean(value: Any, where: str) -> bool:
     return value
 
 
-def choice(options: Iterable[str], *, case_insensitive: bool = True) -> Checker:
-    """One of ``options``; returned lowercased when ``case_insensitive``."""
-    allowed = tuple(options)
-    lookup = {option.lower(): option for option in allowed} if case_insensitive else {o: o for o in allowed}
+@dataclass(frozen=True)
+class Choice:
+    """The checker :func:`choice` returns; ``options`` lists the allowed values, as the CLI offers them."""
 
-    def check(value: Any, where: str) -> str:
-        key = value.strip().lower() if case_insensitive and isinstance(value, str) else value
-        if not isinstance(value, str) or key not in lookup:
-            raise ValueError(f"'{where}' must be one of: {', '.join(allowed)}; got {value!r}")
-        return lookup[key]
+    options: tuple[str, ...]
+    case_insensitive: bool = True
+
+    def __call__(self, value: Any, where: str) -> str:
+        if isinstance(value, str):
+            key = value.strip().lower() if self.case_insensitive else value
+            for option in self.options:
+                if key == (option.lower() if self.case_insensitive else option):
+                    return option
+        raise ValueError(f"'{where}' must be one of: {', '.join(self.options)}; got {value!r}")
+
+
+def choice(options: Iterable[str], *, case_insensitive: bool = True) -> Choice:
+    """One of ``options``, matched after stripping and lowercasing when ``case_insensitive``.
+
+    Returns the option as listed.
+    """
+    return Choice(tuple(options), case_insensitive)
+
+
+def optional(checker: Checker) -> Checker:
+    """``checker``, or None for a value that is None."""
+
+    def check(value: Any, where: str) -> Any:
+        return None if value is None else checker(value, where)
 
     return check
 

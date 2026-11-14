@@ -10,12 +10,13 @@ Every scenario runs at both resolutions in ``RESOLUTIONS``, hourly and
 
 Usage::
 
-    python tools/parity/harness.py OUT.npz [python|numba] [--instructions]
+    python tools/parity/harness.py OUT.npz [python|numba] [--instructions] [--ac]
 
 The backend defaults to ``python``. ``--instructions`` adds
 ``INSTRUCTION_SCENARIOS``, which need a tree with ``dispatch_instructions``;
-leave it off when dumping an older tree. ``-h`` or ``--help`` prints this
-text.
+leave it off when dumping an older tree. ``--ac`` adds ``AC_SCENARIOS``,
+AC-coupled batteries (ADR 0004), which need a tree with
+``BatteryConfig.coupling``. ``-h`` or ``--help`` prints this text.
 
 Run it against two trees and compare the ``.npz`` files with
 ``compare.py``; any differing bit in any exported column shows up as a
@@ -248,7 +249,9 @@ INSTRUCTION_SCENARIOS = (
 )
 
 
-def _tou_instructions(index: pd.DatetimeIndex, *, target: float, reserve: float, efficiency: float, limit_w: float):
+def _tou_instructions(
+    index: pd.DatetimeIndex, *, target: float, reserve: float, efficiency: float | None, limit_w: float
+):
     """Charge from the grid overnight, discharge in the evening, hold in between."""
     from breos.dispatch_instructions import DispatchInstructions
 
@@ -306,10 +309,65 @@ def build_instructed(name: str, freq: str = FREQ):
     return pv, load, temp, cfg, {**sim, "dispatch_instructions": instructions}
 
 
+# AC-coupled batteries (ADR 0004): the battery has its own inverter on the AC
+# bus. Kept apart like INSTRUCTION_SCENARIOS, since they need a tree with
+# ``BatteryConfig.coupling``.
+AC_SCENARIOS = (
+    "ac_baseline",
+    "ac_flat_inverter",
+    "ac_saturating",
+    "ac_fixed_target",
+    "ac_night_limited",
+    "ac_replacement",
+)
+
+
+def build_ac(name: str, freq: str = FREQ):
+    """Return ``build``'s tuple for an AC-coupled scenario."""
+    import math
+
+    ac = {"coupling": "ac", "battery_inverter_efficiency": 0.95}
+    if name == "ac_flat_inverter":
+        # No battery inverter rating: the flat, unclipped conversion.
+        pv, load, temp, cfg, sim = build("baseline", freq)
+        return pv, load, temp, {**cfg, **ac}, sim
+    if name == "ac_saturating":
+        # The PV inverter clips at midday while a 1.5 kW battery inverter
+        # binds in both directions.
+        pv, load, temp, cfg, sim = build("saturating", freq)
+        return pv, load, temp, {**cfg, **ac, "battery_inverter_ac_capacity_w": 1500.0}, sim
+    if name == "ac_replacement":
+        pv, load, temp, cfg, sim = build("replacement", freq)
+        return pv, load, temp, {**cfg, **ac, "battery_inverter_ac_capacity_w": 3000.0}, sim
+    if name in ("ac_fixed_target", "ac_night_limited"):
+        pv, load, temp, cfg, sim = build("baseline", freq)
+        cfg = {**cfg, **ac, "battery_inverter_ac_capacity_w": 3000.0}
+        limit_w = math.inf
+        if name == "ac_night_limited":
+            # The PV inverter's night draw counts against a site limit that
+            # overnight grid charge reaches.
+            cfg["inverter_conversion"] = {"night_consumption_w": 15.0}
+            limit_w = 1800.0
+        instructions = _tou_instructions(pv.index, target=0.8, reserve=0.0, efficiency=None, limit_w=limit_w)
+        return pv, load, temp, cfg, {**sim, "dispatch_instructions": instructions}
+    # "ac_baseline"
+    pv, load, temp, cfg, sim = build("baseline", freq)
+    return pv, load, temp, {**cfg, **ac, "battery_inverter_ac_capacity_w": 3000.0}, sim
+
+
+def build_any(name: str, freq: str = FREQ):
+    """``build``, ``build_instructed`` or ``build_ac``, by the scenario's name."""
+    if name in INSTRUCTION_SCENARIOS:
+        return build_instructed(name, freq)
+    if name in AC_SCENARIOS:
+        return build_ac(name, freq)
+    return build(name, freq)
+
+
 def run(name: str, backend: str = "python", freq: str = FREQ):
     from breos.battery import BatteryConfig, simulate_energy_balance
 
-    pv, load, temp, cfg, sim_kwargs = (build_instructed if name in INSTRUCTION_SCENARIOS else build)(name, freq)
+    pv, load, temp, cfg, sim_kwargs = build_any(name, freq)
     battery_config = BatteryConfig(**cfg)
     kwargs = dict(sim_kwargs)
     if backend != "python":
@@ -336,13 +394,14 @@ def _column(values: pd.Series) -> np.ndarray:
     return values.astype(str).to_numpy(dtype=np.str_)
 
 
-def dump(path: str, backend: str = "python", *, instructions: bool = False) -> None:
+def dump(path: str, backend: str = "python", *, instructions: bool = False, ac: bool = False) -> None:
     """Write every scenario's columns to ``path``.
 
     ``instructions`` adds INSTRUCTION_SCENARIOS, which need a tree with
     ``dispatch_instructions``; leave it off when dumping an older tree.
+    ``ac`` adds AC_SCENARIOS likewise.
     """
-    names = SCENARIOS + (INSTRUCTION_SCENARIOS if instructions else ())
+    names = SCENARIOS + (INSTRUCTION_SCENARIOS if instructions else ()) + (AC_SCENARIOS if ac else ())
     payload: dict[str, np.ndarray] = {}
     for freq in RESOLUTIONS:
         for name in names:
@@ -369,8 +428,13 @@ if __name__ == "__main__":
     if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
         print(__doc__)
         sys.exit(0)
-    args = [arg for arg in sys.argv[1:] if arg != "--instructions"]
+    args = [arg for arg in sys.argv[1:] if arg not in ("--instructions", "--ac")]
     if not args:
         print(__doc__, file=sys.stderr)
         sys.exit(2)
-    dump(args[0], args[1] if len(args) > 1 else "python", instructions="--instructions" in sys.argv[1:])
+    dump(
+        args[0],
+        args[1] if len(args) > 1 else "python",
+        instructions="--instructions" in sys.argv[1:],
+        ac="--ac" in sys.argv[1:],
+    )

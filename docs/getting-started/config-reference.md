@@ -16,6 +16,7 @@ is a `breos run` option that overrides the config file.
 
 | Key | Default | CLI flag | Description |
 |---|---|---|---|
+| `ac_cable` | `None` | — | The AC cable from the inverter to the meter, whose I²R loss the dispatch takes from the inverter's output; see [`[ac_cable]`](#ac_cable) and [AC cable](configuration.md#ac-cable) |
 | `albedo` | `None` | `--albedo` | Ground reflectance (0-1) for the ground-diffuse component; `None` uses pvlib's 0.25 default. Mutually exclusive with `surface_type` |
 | `annual_consumption_kwh` | *required* | `--annual-consumption-kwh` | Annual electricity demand (kWh) |
 | `axis_azimuth` | `None` | — | Tracker axis azimuth (degrees). `None` sets it from the latitude |
@@ -23,18 +24,23 @@ is a `breos run` option that overrides the config file.
 | `azimuth` | `None` | `--azimuth` | Surface azimuth (degrees). `None` faces the equator: 180 in the northern hemisphere |
 | `backtrack` | `True` | — | Whether single-axis trackers backtrack to avoid row shading |
 | `battery_allow_terminal_replacement` | `True` | — | Whether a battery that reaches end of life in the horizon's final degradation period is replaced. That period ends on the last simulated step: the last whole day, a trailing partial day, or a span shorter than a day. `false` skips only that replacement and its cost; the period is still aged. See [Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon) |
+| `battery_coupling` | `"dc"` | `--battery-coupling` | `"dc"` for a hybrid inverter that PV and the battery share, `"ac"` for a battery with its own bidirectional inverter on the AC bus beside the PV inverter. With `"ac"` the `inverter_*` keys describe the PV inverter only. One of `"dc"`, `"ac"` |
 | `battery_enable_replacement` | `True` | — | Whether a battery that reaches end of life is replaced. `false` skips every replacement: the battery keeps ageing below its threshold, or is retired, as `battery_skipped_replacement_action` says. See [Running without replacement](configuration.md#running-without-replacement) |
 | `battery_eol_percentage` | `0.7` | — | SOH fraction at which the battery reaches end of life: it is replaced, or, when the replacement is skipped, kept or retired |
 | `battery_indoor_model` | `None` | — | Indoor-temperature model settings. `None` applies the default indoor buffering; `{enabled = false}` uses `battery_temperature` without remapping. See [`[battery_indoor_model]`](#battery_indoor_model) |
+| `battery_inverter_ac_rating_kw` | `None` | `--battery-inverter-ac-rating-kw` | The AC-coupled battery inverter's AC rating in kW: its AC output discharging and AC input charging. With `battery_coupling = "ac"` and a battery, set this or `battery_inverter_kw_per_kwh` |
+| `battery_inverter_efficiency` | `None` | `--battery-inverter-efficiency` | The AC-coupled battery inverter's nominal efficiency, from a source for the product. It has no default and is required with `battery_coupling = "ac"` and a battery. Both directions use the PVWatts part-load curve; the charging direction is an assumption |
+| `battery_inverter_kw_per_kwh` | `None` | `--battery-inverter-kw-per-kwh` | The AC-coupled battery inverter's AC rating per kWh of nominal capacity, so a capacity sweep keeps one ratio. Instead of `battery_inverter_ac_rating_kw` |
 | `battery_kwh` | `0.0` | `--battery-kwh` | Nominal battery capacity in kWh (`0` = no battery). The SOC window sets the usable share; see [Battery capacity and the SOC window](configuration.md#battery-capacity-and-the-soc-window) |
 | `battery_max_charge_power_w` | `None` | `--battery-max-charge-power-w` | Maximum DC power entering the battery charge path; `None` is unlimited |
 | `battery_max_discharge_power_w` | `None` | `--battery-max-discharge-power-w` | Maximum battery AC power delivered to load; `None` is unlimited |
 | `battery_max_soc` | `0.9` | — | Battery SOC ceiling, on the same basis as `battery_min_soc` |
 | `battery_min_soc` | `0.1` | — | Battery SOC floor, as a fraction of nominal SOH-derated capacity |
 | `battery_power_limit_c_rate` | `None` | `--battery-power-limit-c-rate` | Charge and discharge limit on the stored energy, as a multiple of capacity (1.0 = 1 C). It scales with `battery_kwh` and cannot be combined with `battery_max_charge_power_w` or `battery_max_discharge_power_w` |
+| `battery_replacement_cost` | `None` | `--battery-replacement-cost` | The price of one battery replacement at t = 0, such as a unit sold as pack and inverter. `None` prices the pack at `storage_cost_per_kwh`. The terminal credit stays the pack's |
 | `battery_replacement_min_remaining_years` | `0.0` | — | Fewest project years a replacement battery must have left to serve. A battery that reaches end of life with less than this left before the end of the horizon is not replaced; it keeps ageing below its end-of-life threshold. `0` replaces at every end of life. See [Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon) |
 | `battery_rte` | `None` | — | Battery round-trip efficiency, split evenly across charge and discharge; `None` is 0.95 |
-| `battery_skipped_replacement_action` | `"keep"` | — | What happens to a battery whose end-of-life replacement is skipped. `"keep"` leaves it in service below its threshold until its state of health reaches 0, when it is retired; `"retire"` switches it off, and the project finishes PV-only. Applies only when `battery_enable_replacement`, `battery_replacement_min_remaining_years` or `battery_allow_terminal_replacement` skips a swap. See [Retiring the battery instead of keeping it](configuration.md#retiring-the-battery-instead-of-keeping-it) |
+| `battery_skipped_replacement_action` | `"keep"` | — | What happens to a battery whose end-of-life replacement is skipped. `"keep"` leaves it in service below its threshold until its state of health reaches 0, when it is retired; `"retire"` switches it off, and the project finishes PV-only. Applies only when `battery_enable_replacement`, `battery_replacement_min_remaining_years` or `battery_allow_terminal_replacement` skips a swap. See [Retiring the battery instead of keeping it](configuration.md#retiring-the-battery-instead-of-keeping-it). One of `"keep"`, `"retire"` |
 | `battery_temperature` | `"weather"` | — | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path. The indoor model then remaps it unless `battery_indoor_model` disables it |
 | `bifacial_model` | `"none"` | `--bifacial-model` | Rear-irradiance model. `"none"` is front-only production; `"infinite_sheds"` needs sourced module bifaciality plus `gcr`, `pvrow_height` and `pvrow_pitch`. One of `"none"`, `"infinite_sheds"` |
 | `blast_model` | `None` | `--blast-model` | Stable BLAST model key; required with `degradation_engine = "blast"` and invalid with the native engine |
@@ -47,6 +53,8 @@ is a `breos run` option that overrides the config file.
 | `diffuse_iam` | `"none"` | `--diffuse-iam` | Whether the incidence-angle modifier also applies to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated selected IAM model (Marion 2017); the default applies IAM to beam only, a known ~0.5-1% overestimate. One of `"none"`, `"marion"` |
 | `discount_rate` | `0.03` | `--discount-rate` | Nominal discount rate for NPV |
 | `dual_axis_max_tilt` | `90.0` | — | Maximum panel tilt for dual-axis tracking (degrees) |
+| `electrical_environment` | `None` | — | Design temperatures and mounting for the string check; see [`[electrical_environment]`](#electrical_environment). Set with `inverters` and `pv_strings` |
+| `electrical_fidelity` | `"aggregate"` | — | How energy depends on the string topology: `"aggregate"` ignores it; `"string"` applies each MPPT input's voltage, current and power limits, the inverter's power limit and its start-up voltage. `"string"` needs `inverters`, `pv_strings` and `electrical_environment`, a wiring without structural errors, and one inverter, or several with no battery or an AC-coupled one (`battery_coupling = "ac"`). One of `"aggregate"`, `"string"` |
 | `emissions_country` | `None` | `--emissions-country` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...); see [Packaged options](options.md#emissions-factors) |
 | `enable_resistance_fade` | `False` | — | Grow the battery's internal resistance as it ages (Naumann), which lowers its charge and discharge efficiencies. Native engine only: it cannot be combined with `degradation_engine = "blast"` |
 | `execution_backend` | `"python"` | `--execution-backend` | Within-day dispatch implementation. `"python"` is the numerical reference; `"numba"` is an optional compiled path that reproduces it bit for bit and needs `pip install "breos[fast]"`. One of `"python"`, `"numba"` |
@@ -59,7 +67,8 @@ is a `breos run` option that overrides the config file.
 | `inverter_ac_rating_kw` | `None` | `--inverter-ac-rating-kw` | Absolute inverter AC rating in kW, instead of `inverter_loading_ratio`: it clips production and CAPEX prices it. Not with `inverter_loading_ratio` |
 | `inverter_efficiency` | `0.96` | `--inverter-efficiency` | Nominal inverter efficiency used by the PVWatts part-load curve |
 | `inverter_loading_ratio` | `1.25` | `--inverter-loading-ratio` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production and that CAPEX prices. Not with `inverter_ac_rating_kw` |
-| `irradiance_resampling` | `"auto"` | `--irradiance-resampling` | Hourly-to-15-minute irradiance policy: `"auto"` conserves declared interval means and uses `"clear_sky"` otherwise. `"clear_sky_energy_conserving"` requires interval-mean weather metadata. Each component is conserved independently; no GHI/DNI/DHI closure is enforced. One of `"auto"`, `"clear_sky"`, `"clear_sky_energy_conserving"` |
+| `inverters` | `None` | — | Specified inverters, checked with `pv_strings` against `electrical_environment`; see [`[[inverters]]`](#inverters). Their summed `nominal_power_w` replaces `inverter_loading_ratio` and `inverter_ac_rating_kw`. Set with `pv_strings` and `electrical_environment` |
+| `irradiance_resampling` | `"auto"` | `--irradiance-resampling` | Hourly-to-15-minute irradiance policy: `"auto"` conserves declared interval means and uses `"clear_sky"` otherwise. `"clear_sky_energy_conserving"` requires interval-mean weather metadata. Each component is conserved independently; no GHI/DNI/DHI closure is enforced. `"quadrature"` derives GHI from DNI and DHI in every one-minute sample and averages the samples into quarter-hours, conserving interval-mean DNI and DHI. One of `"auto"`, `"clear_sky"`, `"clear_sky_energy_conserving"`, `"quadrature"` |
 | `load_profile` | `"demandlib_h0"` | `--load-profile` | Load profile key; see [Load profiles](configuration.md#load-profiles) and [Packaged options](options.md#load-profiles) |
 | `load_profile_column` | `None` | `--load-profile-column` | For `load_profile = "custom"` only: the CSV column holding the load, if the file has several. Refused for any other profile |
 | `load_profile_file` | `None` | `--load-profile-file` | Load-profile CSV to read instead of the key's filename pattern; required for `load_profile = "custom"`. A relative path is taken inside `rlp_directory` when that is set |
@@ -76,6 +85,7 @@ is a `breos run` option that overrides the config file.
 | `pv_degradation_rate` | `0.005` | `--pv-degradation-rate` | Annual PV degradation rate, compounded and counted from the start of each year, so year 1 has none; see [Module aging](../api/pv.md#module-aging) |
 | `pv_loss_overrides` | `None` | — | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
 | `pv_module` | `None` | `--pv-module` | Module key from the built-in catalogue. `None` uses the catalogue's first entry, `Suntech_STP550S_STC` |
+| `pv_strings` | `None` | — | String topology: which modules of which array connect to which inverter input; see [`[[pv_strings]]`](#pv_strings). Set with `inverters` and `electrical_environment` |
 | `pvrow_height` | `None` | `--pvrow-height` | Height of the PV row center above ground; required by `"infinite_sheds"`, in the same unit as `pvrow_pitch` |
 | `pvrow_pitch` | `None` | `--pvrow-pitch` | Distance between adjacent PV rows; required by `"infinite_sheds"`, in the same unit as `pvrow_height` |
 | `reference_tariff` | *unset* | — | What the household would pay without the system: an import price, by period or flat, and a fixed charge, independent of the system's `[tariff]`. Unset, the no-system baseline is priced at the system's own prices; see [`[reference_tariff]`](#reference_tariff) and [No-system reference tariff](configuration.md#no-system-reference-tariff) |
@@ -84,15 +94,15 @@ is a `breos run` option that overrides the config file.
 | `rlp_directory` | `None` | `--rlp-directory` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
 | `sell_price_inflation` | `0.0` | `--sell-price-inflation` | Annual escalation of the grid export (sell) price |
 | `smart_charging` | *unset* | — | Battery dispatch by tariff period: grid charging toward a fixed target or, experimentally, a daily planned target in the listed charge periods, or discharge only in the listed periods; see [`[smart_charging]`](#smart_charging) and [Smart charging](configuration.md#smart-charging) |
-| `solar_position` | `"interval-start"` | `--solar-position` | Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. `"weather"` reads the representative-time offset from content-bound weather metadata, including provider offsets for instantaneous irradiance and left- or right-labelled interval means. One of `"interval-start"`, `"mid-interval"`, `"weather"` |
+| `solar_position` | `"auto"` | `--solar-position` | Where within each timestep the sun position is evaluated. `"weather"` reads the representative-time offset from content-bound weather metadata, including provider offsets for instantaneous irradiance and left- or right-labelled interval means, and raises when the metadata has no `radiation_time_basis`. `"auto"` is `"weather"` when the metadata states a `radiation_time_basis` and `"interval-start"`, with a warning, when it does not. `"interval-start"` takes the sun at the step label (the default before 0.8.0) and `"mid-interval"` half a timestep later. One of `"auto"`, `"interval-start"`, `"mid-interval"`, `"weather"` |
 | `start_date` | `"2023-01-01"` | `--start-date` | 1 January of the study year, `YYYY-01-01`. The App simulates that year, or the `period` window in it. Monte Carlo does not use it for the load or weather; its `target_year` sets the study year |
 | `surface_type` | `None` | `--surface-type` | Named ground cover mapped to an albedo; an alternative to `albedo`. One of `"aluminum"`, `"asphalt"`, `"concrete"`, `"copper"`, `"dirty steel"`, `"fresh grass"`, `"fresh snow"`, `"fresh steel"`, `"grass"`, `"sand"`, `"sea"`, `"snow"`, `"soil"`, `"urban"` |
 | `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Run a parameter sweep](../how-to/parameter-sweep.md) |
 | `tariff` | *unset* | — | Time-of-use import and export prices on a bundled or custom schedule, replacing the flat `costs.electricity_cost`, `costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use tariffs](configuration.md#time-of-use-tariffs) |
-| `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. The default is Faiman, open rack. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
+| `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. The default is Faiman, open rack. A `pv_arrays` entry may set its own. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
 | `terminal_value` | *unset (basis = none)* | — | Optional estimate of the final battery pack's residual value from its capacity health; see [`[terminal_value]`](#terminal_value) and [Estimated battery residual value](configuration.md#estimated-battery-residual-value) |
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
-| `tracking` | `"fixed"` | — | Tracking mode: `"fixed"`, `"single_axis"`, `"dual_axis"` |
+| `tracking` | `"fixed"` | — | Tracking mode. One of `"fixed"`, `"single_axis"`, `"dual_axis"` |
 | `transposition_model` | `"isotropic"` | `--transposition-model`, `--sky-model` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model). One of `"isotropic"`, `"klucher"`, `"haydavies"`, `"reindl"`, `"king"`, `"perez"`, `"perez-driesse"` |
 | `weather_file` | `None` | `--weather-file` | One-year weather CSV (or gzip-compressed `.csv.gz`) to simulate, in the layout of the cached `weather/` files, instead of the `weather/` cache or a PVGIS fetch. Any filename and any location work. A relative path is taken from the working directory. The file's path and SHA-256 digest are recorded under `provenance.weather`; see [Run offline with cached weather](../how-to/offline-weather.md#name-the-weather-file) |
 | `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Run offline with cached weather](../how-to/offline-weather.md) |
@@ -103,13 +113,14 @@ Cost overrides, as `[costs]` in TOML. A key you omit comes from `cost_preset`, a
 
 | Key | Default | Description |
 |---|---|---|
+| `battery_inverter_cost_per_kw` | `None` | An AC-coupled battery inverter's price per kW of its AC rating, required with `battery_coupling = "ac"` and a battery. It has no default; 0 states that another price, such as `storage_cost_per_kwh`, already includes it |
 | `daily_power_cost` | `0.3` | Fixed grid-connection charge per day, at year-1 prices |
 | `electricity_cost` | `0.27` | Flat import price, per kWh at year-1 prices |
 | `electricity_sold_cost` | `0.06` | Flat export price, per kWh at year-1 prices |
 | `installation_cost_battery` | `350.0` | Fixed battery installation cost, for a system with a battery |
 | `installation_cost_per_module` | `350.0` | Installation cost per PV module |
-| `inverter_cost_per_kw_hybrid` | `102.58` | Hybrid inverter price per kW of AC rating, for a system with a battery |
-| `inverter_cost_per_kw_simple` | `48.37` | Inverter price per kW of AC rating, for a PV-only system |
+| `inverter_cost_per_kw_hybrid` | `102.58` | Hybrid inverter price per kW of AC rating, for a DC-coupled system with a battery (`battery_coupling = "dc"`) |
+| `inverter_cost_per_kw_simple` | `48.37` | PV inverter price per kW of AC rating, for a PV-only system and, with `battery_coupling = "ac"`, for the PV inverter whether or not there is a battery |
 | `land_cost` | `0.0` | Land cost, part of the initial investment |
 | `maintenance_cost` | `0.0` | Fixed O&M cost per year, at year-1 prices |
 | `maintenance_cost_per_panel` | `10.0` | O&M cost per PV module per year, at year-1 prices |
@@ -117,7 +128,7 @@ Cost overrides, as `[costs]` in TOML. A key you omit comes from `cost_preset`, a
 | `operation_cost` | `0.0` | Further operation cost per year, at year-1 prices |
 | `other_cost_per_module` | `50.0` | Other cost per PV module, such as cabling |
 | `other_costs` | `0.0` | Fixed other initial cost |
-| `storage_cost_per_kwh` | `500.0` | Battery price per kWh of nominal capacity; also the t = 0 price of each replacement |
+| `storage_cost_per_kwh` | `500.0` | Battery price per kWh of nominal capacity; also the t = 0 price of each replacement, unless `battery_replacement_cost` sets one |
 
 ## battery_indoor_model
 
@@ -144,18 +155,107 @@ One entry per array, as `[[pv_arrays]]` in TOML. `modules` is required; an array
 | `azimuth` |  | `azimuth` for this array; inherits the top-level value |
 | `backtrack` |  | `backtrack` for this array; inherits the top-level value |
 | `bifacial_model` |  | `bifacial_model` for this array; inherits the top-level value |
+| `cold_operating_cell_temp_c` |  | Coldest cell temperature while producing (°C) for this array's strings, instead of any mounting rise |
 | `cross_axis_tilt` |  | `cross_axis_tilt` for this array; inherits the top-level value |
 | `dual_axis_max_tilt` |  | `dual_axis_max_tilt` for this array; inherits the top-level value |
 | `gcr` |  | `gcr` for this array; inherits the top-level value |
+| `hot_cell_temp_c` |  | Hottest cell temperature (°C) for this array's strings, instead of any mounting rise |
 | `max_angle` |  | `max_angle` for this array; inherits the top-level value |
 | `model_perez` |  | `model_perez` for this array; inherits the top-level value |
 | `module` |  | Module catalogue key for this array; inherits `pv_module` |
+| `mounting` |  | String-check mounting for this array; inherits `electrical_environment.mounting` |
 | `pvrow_height` |  | `pvrow_height` for this array; inherits the top-level value |
 | `pvrow_pitch` |  | `pvrow_pitch` for this array; inherits the top-level value |
+| `shading` |  | Near-shading table: `azimuth_deg`, `elevation_deg`, `beam_shaded_fraction` (one row per elevation) and optional `sky_view_factor`; every array or none |
 | `surface_type` |  | `surface_type` for this array; inherits the top-level value |
+| `temperature_model` |  | `temperature_model` for this array; inherits the top-level value |
 | `tilt` |  | `tilt` for this array; inherits the top-level value |
 | `tracking` |  | `tracking` for this array; inherits the top-level value |
 | `transposition_model` |  | `transposition_model` for this array; inherits the top-level value |
+
+## inverters
+
+One entry per specified inverter, as `[[inverters]]` in TOML. `None` or an omitted key means a datasheet value is unknown; the string check then reports it instead of assuming one. Set with `pv_strings` and `electrical_environment`. See [String topology checks](configuration.md#string-topology-checks).
+
+| Key | Required | Description |
+|---|---|---|
+| `nominal_power_w` | yes | AC nameplate (W) |
+| `ac_cable` |  | The inverter's own AC cable, with the keys of [`[ac_cable]`](#ac_cable); with several inverters it needs string-level energy, and `[ac_cable]` is then the run they share. See [Several inverters](configuration.md#several-inverters) |
+| `efficiency_curve` |  | Measured efficiency against AC output, replacing the single efficiency: `output_fraction` (AC output over the nameplate, increasing), `efficiency` (one row per DC voltage) and `voltages_v` (one per row, increasing; optional with one row). See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve) |
+| `inverter_efficiency` |  | Efficiency fraction. When every inverter sets it, their nameplate-weighted mean replaces `inverter_efficiency` |
+| `is_hybrid` |  | Whether the inverter also connects a battery; metadata |
+| `isc_comparison_factor` |  | Multiplier the manufacturer applies to the array's STC Isc before comparing it with an input's short-circuit rating, at least 1; 1 where Isc is compared as it is. Unset is reported as missing |
+| `max_dc_power_w` |  | Maximum PV generator power the manufacturer permits (W), or `inf` for none |
+| `max_dc_voltage_v` |  | Maximum DC input voltage (V), or `inf` for none |
+| `max_mppt_voltage_v` |  | Upper end of the MPPT voltage range (V), or `inf` for none |
+| `max_short_circuit_current_a` |  | Maximum array short-circuit current over all inputs (A), or `inf` for none; checked when set |
+| `max_usable_dc_power_w` |  | DC power the inverter converts over all inputs (W), or `inf` for none; string-level energy applies it |
+| `min_mppt_voltage_v` |  | Lower end of the MPPT voltage range (V), or 0 for none |
+| `mppts` |  | One table per MPPT input, in datasheet order; see [`mppts`](#mppts) |
+| `night_consumption_w` |  | What the inverter draws from the AC bus while it converts nothing (W), as its datasheet states; PV surplus after the house load serves it before charging or export, and only the remainder is imported. Unset, it is not modelled. See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve) |
+| `recommended_dc_power_w` |  | Recommended PV generator power (W), or `inf` for none |
+| `startup_voltage_v` |  | Start-up voltage (V), or 0 for none |
+| `temperature_derating` |  | Allowed AC output against ambient: `ambient_temp_c` (°C, increasing) and `max_output_fraction` (of the nameplate). See [Inverter efficiency curve](configuration.md#inverter-efficiency-curve) |
+
+## mppts
+
+One entry per MPPT input of an inverter, in datasheet order, as `[[inverters.mppts]]` in TOML. Inputs with different limits each list their own.
+
+| Key | Required | Description |
+|---|---|---|
+| `max_dc_power_w` |  | Maximum PV generator power on the input (W), or `inf` for none; checked when set |
+| `max_input_current_a` |  | Maximum operating input current (A), or `inf` for none |
+| `max_short_circuit_current_a` |  | Maximum array short-circuit current (A), or `inf` for none |
+| `max_string_input_current_a` |  | Maximum operating current of each string connection (A), or `inf` for none; checked when set |
+| `max_string_short_circuit_current_a` |  | Maximum short-circuit current of each string connection (A), or `inf` for none; checked when set |
+| `max_strings` |  | Strings the input takes in parallel |
+| `max_usable_dc_power_w` |  | DC power the input converts (W), or `inf` for none; string-level energy applies it |
+
+## pv_strings
+
+One entry per group of identical strings on one input, as `[[pv_strings]]` in TOML. Every module of every array must be in exactly one string. Entries on the same input are counted together.
+
+| Key | Required | Description |
+|---|---|---|
+| `array` | yes | 0-based position of the array in `pv_arrays`; 0 without `pv_arrays` |
+| `inverter` | yes | 0-based position of the inverter in `inverters` |
+| `modules` | yes | Modules in series in each string |
+| `mppt` | yes | 0-based position of the input in that inverter's `mppts` |
+| `cable_cross_section_mm2` |  | Conductor cross-section (mm²) of each string's cable |
+| `cable_length_m` |  | One-way length (m) of each string's cable to the inverter input; with `cable_cross_section_mm2`, the cable's resistance replaces the flat `wiring` loss. Give it on every string or none |
+| `conductor` |  | Cable conductor, `"copper"` or `"aluminium"`; `"copper"` by default |
+| `module_shading` |  | Each module's own shading, for string-level energy: `azimuth_deg`, `elevation_deg` and `modules`, one entry per module in series order with a whole-module `beam_shaded_fraction` or one `substrings` table per bypass diode of the module (its `bypass_diodes`, 3 by default); every string of an array or none |
+| `parallel` |  | Identical strings in parallel on the input; 1 by default |
+
+## electrical_environment
+
+Design temperatures for the string check, as `[electrical_environment]` in TOML.
+
+| Key | Required | Description |
+|---|---|---|
+| `max_ambient_temp_c` | yes | Hottest design ambient (°C) |
+| `min_design_temp_c` | yes | Extreme annual minimum ambient (°C) on the basis the jurisdiction or manufacturer requires; cold Voc is taken at it |
+| `bifacial_rear_irradiance_w_m2` |  | Rear irradiance behind 1000 W/m² front for a bifacial design Isc; 135 |
+| `bypass_diode_voltage_v` |  | Forward voltage (V) of the modules' bypass diodes, for `module_shading`; 0.5 V is assumed, and reported as assumed, when unstated |
+| `cold_operating_cell_temp_c` |  | Coldest cell temperature while producing (°C), instead of `min_design_temp_c` plus the mounting rise |
+| `conductor_temp_c` |  | Operating temperature (°C) of the string cables' conductors; 50 °C is assumed, and reported as assumed, when unstated |
+| `hot_cell_temp_c` |  | Hottest cell temperature (°C), instead of `max_ambient_temp_c` plus the mounting rise |
+| `inverter_ambient_temp_c` |  | The inverter's ambient (°C) for its `temperature_derating`, for an inverter indoors; unstated, the weather's air temperature applies |
+| `mounting` |  | Module mounting, which sets the screening cell temperature rise: `"flush"` (30 °C), `"tilted_rack"` (25 °C), `"ground_mount"` (20 °C); `"tilted_rack"` by default |
+
+## ac_cable
+
+The cable from the inverter to the meter, as `[ac_cable]` in TOML; see [AC cable](configuration.md#ac-cable).
+
+| Key | Required | Description |
+|---|---|---|
+| `cross_section_mm2` | yes | Cross-section (mm²) of each conductor |
+| `length_m` | yes | One-way length (m) from the inverter to the meter |
+| `phases` | yes | 1 or 3 |
+| `voltage_v` | yes | Grid voltage (V): line to neutral for 1 phase, line to line for 3 |
+| `conductor` |  | `"copper"` or `"aluminium"`; `"copper"` by default |
+| `conductor_temp_c` |  | Operating temperature (°C) of the conductors; 50 °C is assumed, and reported as assumed, when unstated |
+| `power_factor` |  | The inverter's power factor; 1 by default |
 
 ## tariff
 
@@ -209,13 +309,13 @@ Optional estimated residual value of the final battery pack, as `[terminal_value
 
 ## smart_charging
 
-Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels`, `soc_states`, `wear_cost_per_kwh` and `decision_boundary`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; `"hold_target"` permits overlapping periods for `fixed_target` and `daily_persistence`, retaining the target as the discharge floor.
+Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and, with a DC-coupled battery, `grid_charge_efficiency`, which `battery_coupling = "ac"` refuses; it refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels`, `soc_states`, `wear_cost_per_kwh` and `decision_boundary`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; `"hold_target"` permits overlapping periods for `fixed_target` and `daily_persistence`, retaining the target as the discharge floor.
 
 | Key | Required | Description |
 |---|---|---|
 | `charge_periods` | `fixed_target`, `daily_persistence` | Tariff periods in which the grid may charge the battery. Not with `discharge_only` |
 | `discharge_periods` | unless `disabled` | Tariff periods in which the battery may discharge to the load; overlap needs `hold_target`. Under `discharge_only` the battery holds its charge in every other period |
-| `grid_charge_efficiency` | `fixed_target`, `daily_persistence` | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default. Not with `discharge_only` |
+| `grid_charge_efficiency` | `fixed_target`, `daily_persistence`, with `battery_coupling = "dc"` | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default. Not with `discharge_only`, nor with `battery_coupling = "ac"`, whose battery inverter converts grid charge at `battery_inverter_efficiency` |
 | `mode` | yes | `fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App only) plans each day's target; `discharge_only` discharges only in `discharge_periods` and never charges from the grid; `disabled` is greedy self-consumption |
 | `target_usable_fraction` | `fixed_target` | Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is `battery_max_soc`. `fixed_target` only |
 | `decision_boundary` |  | `daily_persistence` only: when the planner decides a target. `civil_day` (default) decides one per civil day at local midnight; `charge_window_start` decides one per charge window at its start, held until the next window starts. A window is a run of consecutive steps in `charge_periods`; it may cross midnight or span a weekend. Needs a tariff period outside `charge_periods` |

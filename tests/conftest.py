@@ -1,18 +1,22 @@
 """Shared fixtures for BREOS test suite."""
 
+import hashlib
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 from pvlib.location import Location
 
 from breos import tariffs
-from breos.battery import BatteryConfig, apply_indoor_temperature_model
+from breos.battery import BatteryConfig
 from breos.economics import CostParams
 from breos.emissions import EmissionsParams
 from breos.load_profiles import load_profile
 from breos.pv_modules import get_module
 from breos.solar import calculate_pv_production_dc
-from breos.weather import extract_ambient_temperature
+from breos.weather import WEATHER_METADATA_KEY, apply_indoor_temperature_model, extract_ambient_temperature
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +28,34 @@ def _fresh_tariff_classifications():
 # ---------------------------------------------------------------------------
 # Synthetic weather (1 year, hourly, no API call)
 # ---------------------------------------------------------------------------
+
+# The time basis the synthetic weather declares: instant samples at their
+# labels. With it, solar_position = "auto" (the default) resolves to
+# "weather" with a zero offset, so the sun is where "interval-start" puts it,
+# bit for bit, and auto does not warn; the 15-minute resampler reads it as
+# it reads weather that declares nothing.
+INSTANT_AT_LABELS = {
+    "radiation_time_basis": "instant",
+    "timestamp_label_basis": "instant",
+    "irradiance_time_offset_hours": 0.0,
+}
+
+
+def declare_instant_at_labels(weather: pd.DataFrame) -> pd.DataFrame:
+    """Add :data:`INSTANT_AT_LABELS` to ``weather``'s metadata, in place, and return it."""
+    metadata = dict(weather.attrs.get(WEATHER_METADATA_KEY) or {})
+    weather.attrs[WEATHER_METADATA_KEY] = {**metadata, **INSTANT_AT_LABELS}
+    return weather
+
+
+def write_instant_at_labels_sidecar(path) -> None:
+    """Write a valid metadata sidecar declaring :data:`INSTANT_AT_LABELS` for the weather CSV at ``path``."""
+    payload = {
+        "schema_version": 1,
+        "weather_sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+        WEATHER_METADATA_KEY: dict(INSTANT_AT_LABELS),
+    }
+    Path(f"{path}.metadata.json").write_text(json.dumps(payload))
 
 
 def _build_synthetic_weather(year: int = 2023, freq: str = "h") -> pd.DataFrame:
@@ -53,9 +85,11 @@ def _build_synthetic_weather(year: int = 2023, freq: str = "h") -> pd.DataFrame:
     temp_air = 15 + 8 * np.sin((day_of_year - 80) / 365 * 2 * np.pi) + 4 * np.sin((hour_of_day - 14) / 24 * 2 * np.pi)
     wind_speed = np.full(n_steps, 3.0)
 
-    return pd.DataFrame(
-        {"ghi": ghi, "dni": dni, "dhi": dhi, "temp_air": temp_air, "wind_speed": wind_speed},
-        index=index,
+    return declare_instant_at_labels(
+        pd.DataFrame(
+            {"ghi": ghi, "dni": dni, "dhi": dhi, "temp_air": temp_air, "wind_speed": wind_speed},
+            index=index,
+        )
     )
 
 
@@ -85,15 +119,17 @@ def _build_open_meteo_weather(index: pd.DatetimeIndex) -> pd.DataFrame:
     # Simple daytime bell centered at noon.
     daylight = np.clip(np.sin((hour - 6) / 12 * np.pi), 0, None)
     ghi = 700.0 * daylight
-    return pd.DataFrame(
-        {
-            "temperature_2m": 15.0 + 8.0 * daylight,
-            "wind_speed_10m": 2.0,
-            "shortwave_radiation": ghi,
-            "direct_normal_irradiance": 0.8 * ghi,
-            "diffuse_radiation": 0.2 * ghi,
-        },
-        index=index,
+    return declare_instant_at_labels(
+        pd.DataFrame(
+            {
+                "temperature_2m": 15.0 + 8.0 * daylight,
+                "wind_speed_10m": 2.0,
+                "shortwave_radiation": ghi,
+                "direct_normal_irradiance": 0.8 * ghi,
+                "diffuse_radiation": 0.2 * ghi,
+            },
+            index=index,
+        )
     )
 
 
@@ -107,6 +143,7 @@ def _write_multiyear_weather(path, years=(2021, 2022)):
         weather.insert(0, "date", idx)
         frames.append(weather)
     pd.concat(frames, ignore_index=True).to_csv(path, index=False)
+    write_instant_at_labels_sidecar(path)
     return path
 
 
@@ -288,6 +325,7 @@ def _patch_weather(monkeypatch, synthetic_weather):
         use_horizon = kwargs.get("use_horizon", True)
         weather.attrs["breos_weather_metadata"] = {
             "source": "PVGIS_TMY",
+            **INSTANT_AT_LABELS,
             "horizon": {
                 "status": "applied" if use_horizon else "not_applied",
                 "provider": "pvgis",
@@ -298,3 +336,93 @@ def _patch_weather(monkeypatch, synthetic_weather):
 
     monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fake_fetch)
     monkeypatch.setattr("breos.app.load_weather", lambda **kw: None)  # force fetch path
+
+
+# ---------------------------------------------------------------------------
+# Guard: App must not fetch weather
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def no_fetch(monkeypatch):
+    """Fail if App falls back to a PVGIS fetch, for tests that serve weather from local files."""
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("App fetched PVGIS weather instead of reading a local weather file")
+
+    monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fail)
+
+
+# ---------------------------------------------------------------------------
+# Shared optimizer and Monte Carlo cases
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def tou_optimizer_case(monkeypatch):
+    """Two Lisbon winter days for the projected optimizer: stubbed PV, 1 kW load, daily bi-hourly prices."""
+    from breos import optimization
+
+    index = pd.date_range("2026-01-05", periods=48, freq="h", tz="Europe/Lisbon")
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": 20.0}, index=index))
+    load = pd.DataFrame({"Load": 1000.0}, index=index)
+    pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
+    monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "Europe/Lisbon", "altitude": 100},
+        "simulation": {"resolution": "h", "years_projection": 2},
+        "financials": {"inflation_rate": 0.02, "discount_rate": 0.05},
+        "battery": {"temperature": 20.0},
+        "mode": {"fixed_azimuth": 180.0},
+        "constraints": {"budget": 100000, "max_area_m2": 100, "max_tilt_deg": 60},
+        "tariff": {
+            "schedule": "pt_mainland_2026_daily_bi",
+            "currency": "EUR",
+            "import_prices": {"peak": 0.50, "off_peak": 0.10},
+            "export_prices": {"all": 0.03},
+            "fixed_charge_per_day": 0.40,
+        },
+    }
+    return weather, load, config
+
+
+@pytest.fixture
+def small_mc_settings(tmp_path):
+    """Two Monte Carlo runs of two years over a two-year weather file, with yearly rows."""
+    from breos.montecarlo import MonteCarloSettings
+
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    return MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
+
+
+# ---------------------------------------------------------------------------
+# Sourced module datasheets in the catalog
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def trina(monkeypatch):
+    """Register the sourced Trina 450 W module in the catalog and return its key."""
+    from breos.pv_modules import MODULES
+    from tests.sourced_modules import TRINA_450, TRINA_KEY
+
+    monkeypatch.setitem(MODULES, TRINA_KEY, TRINA_450)
+    return TRINA_KEY
+
+
+@pytest.fixture
+def jinko(monkeypatch):
+    """Register the sourced Jinko 440 W module in the catalog and return its key."""
+    from breos.pv_modules import MODULES
+    from tests.sourced_modules import JINKO_440, JINKO_KEY
+
+    monkeypatch.setitem(MODULES, JINKO_KEY, JINKO_440)
+    return JINKO_KEY
+
+
+@pytest.fixture(autouse=True)
+def _fresh_solar_positions():
+    """Each test computes the sun afresh, so no test depends on which ran before it in the process."""
+    from breos.pv import model_options
+
+    model_options._SOLAR_POSITIONS.clear()

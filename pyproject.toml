@@ -99,6 +99,9 @@ testpaths = ["tests"]
 # and release gates both do this); `-m slow` on the command line
 # overrides this default marker expression.
 addopts = ["-m", "not slow"]
+# Nothing in BREOS or its tests may call an API deprecated for removal in
+# 0.9.0 outside pytest.warns; delete this filter with those APIs.
+filterwarnings = ["error:.*0\\.9\\.0:DeprecationWarning"]
 markers = [
     "slow: long-running endurance and multi-year integration tests; deselected by default, run with -m slow",
 ]

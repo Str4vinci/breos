@@ -11,20 +11,18 @@ from breos.app import App
 from breos.app_inputs import input_configuration_key
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
-BASE = {"location": "porto", "n_modules": 6, "annual_consumption_kwh": 3000, "projection_years": 1}
+# The weather CSVs these tests write carry no metadata sidecar, so the sun
+# position is pinned at the step labels rather than left to "auto".
+BASE = {
+    "location": "porto",
+    "n_modules": 6,
+    "annual_consumption_kwh": 3000,
+    "projection_years": 1,
+    "solar_position": "interval-start",
+}
 COMMITTED_TMY = (
     Path(__file__).resolve().parents[1] / "validation" / "data" / "weather" / "porto_tmy_2005_2023_pvgis-sarah3.csv.gz"
 )
-
-
-@pytest.fixture
-def no_fetch(monkeypatch):
-    """Fail if App falls back to a PVGIS fetch; these tests are offline."""
-
-    def _fail(*args, **kwargs):
-        raise AssertionError("App fetched PVGIS weather instead of reading weather_file")
-
-    monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fail)
 
 
 @pytest.fixture

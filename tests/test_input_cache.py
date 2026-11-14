@@ -8,7 +8,7 @@ unless it truly leaves the inputs unchanged.
 
 import csv
 import pickle
-from unittest import mock
+from dataclasses import replace
 
 import pandas as pd
 import pytest
@@ -22,6 +22,9 @@ from breos.app_inputs import (
     reuse_prepared_inputs,
 )
 from breos.economics import default_amount_cost_keys
+from breos.pv import model_options
+from breos.pv_modules import MODULES
+from tests.offline_app import offline_weather
 from tools.generate_app_golden import _fake_fetch
 
 BASE = {
@@ -107,10 +110,10 @@ CHANGES = {
 
 
 def _prepared(config):
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    # Each run computes the sun afresh: the pickles below compare bytes, and
+    # pandas fills private caches on the objects a computation touches.
+    model_options._SOLAR_POSITIONS.clear()
+    with offline_weather():
         app = App(config)
         return prepare_simulation_inputs(app._resolved.cfg, app._resolved, app._runtime_dependencies())
 
@@ -155,16 +158,13 @@ def test_a_value_json_cannot_hold_is_not_cached():
 
 
 def test_inputs_are_prepared_once_per_input_config_inside_the_block_only(monkeypatch):
-    import breos.runners.app as runner
-
     calls = []
-    prepare = runner.prepare_simulation_inputs
 
     def counting(*args):
         calls.append(args[0]["n_modules"])
-        return prepare(*args)
+        return prepare_simulation_inputs(*args)
 
-    monkeypatch.setattr(runner, "prepare_simulation_inputs", counting)
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", counting)
     monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fake_fetch)
     monkeypatch.setattr("breos.app.load_weather", lambda **_kwargs: None)
 
@@ -201,17 +201,7 @@ def test_inputs_are_prepared_once_per_input_config_inside_the_block_only(monkeyp
     assert calls == [8]
 
 
-def test_a_different_preparation_function_is_not_served_from_the_cache():
-    from breos.app_inputs import prepare_simulation_inputs_cached
-
-    app = App(BASE)
-    with reuse_prepared_inputs():
-        first = prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, None, prepare=lambda *_: ["a"])
-        second = prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, None, prepare=lambda *_: ["b"])
-    assert (first, second) == (["a"], ["b"])
-
-
-def test_an_unhashable_dependency_prepares_afresh():
+def test_an_unhashable_dependency_prepares_afresh(monkeypatch):
     from breos.app_inputs import prepare_simulation_inputs_cached
 
     app = App(BASE)
@@ -221,9 +211,10 @@ def test_an_unhashable_dependency_prepares_afresh():
         calls.append(1)
         return "inputs"
 
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", prepare)
     with reuse_prepared_inputs():
         for _ in range(2):
-            assert prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, [], prepare=prepare) == "inputs"
+            assert prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, []) == "inputs"
     assert calls == [1, 1]
 
 
@@ -262,18 +253,15 @@ n_modules = [8, 10]
 def test_a_sweep_writes_the_same_csv_bytes_with_and_without_the_cache(monkeypatch, tmp_path):
     import contextlib
 
-    import breos.runners.app as runner
-
     monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fake_fetch)
     monkeypatch.setattr("breos.app.load_weather", lambda **_kwargs: None)
     calls = []
-    prepare = runner.prepare_simulation_inputs
 
     def counting(*args):
         calls.append(args[0]["n_modules"])
-        return prepare(*args)
+        return prepare_simulation_inputs(*args)
 
-    monkeypatch.setattr(runner, "prepare_simulation_inputs", counting)
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", counting)
     config_path = tmp_path / "sweep.toml"
     config_path.write_text(SWEEP_CONFIG, encoding="utf-8")
 
@@ -296,3 +284,119 @@ def test_a_sweep_writes_the_same_csv_bytes_with_and_without_the_cache(monkeypatc
     assert [row["param_n_modules"] for row in rows[:4]] == ["8", "10", "8", "10"]
     # The runs differ, so the equality is not between identical rows.
     assert len({row["grid_import_cost_year1_prices"] for row in rows}) > 8
+
+
+def test_a_registered_modules_parameters_are_part_of_the_cache_key(monkeypatch):
+    resolved = App(BASE)._resolved
+    key = _input_cache_key(resolved.cfg)
+    monkeypatch.setitem(MODULES, resolved.pv_module_key, replace(MODULES[resolved.pv_module_key], bypass_diodes=2))
+    assert _input_cache_key(App(BASE)._resolved.cfg) != key
+
+
+def test_an_app_keeps_the_module_it_resolved_after_the_catalogue_changes(monkeypatch):
+    first = App(BASE)._resolved
+    name = first.pv_module_key
+    monkeypatch.setitem(MODULES, name, replace(MODULES[name], gamma_pmp=-0.5))
+    second = App(BASE)._resolved
+    assert _input_cache_key(first.cfg, first) != _input_cache_key(second.cfg, second)
+
+
+def test_the_inverter_curve_row_an_app_resolved_is_part_of_the_cache_key(monkeypatch):
+    # Each array's module sets the curve row of steps without PV when the App
+    # is built, so two Apps around different catalogue entries for the second
+    # module must not share prepared inputs.
+    from breos.app_inputs import prepare_simulation_inputs_cached
+
+    inverter = {
+        "nominal_power_w": 5000,
+        "max_dc_voltage_v": 1000,
+        "min_mppt_voltage_v": 80,
+        "max_mppt_voltage_v": 800,
+        "startup_voltage_v": 80,
+        "mppts": [{"max_input_current_a": 25, "max_short_circuit_current_a": 40, "max_strings": 1}] * 2,
+        "efficiency_curve": {
+            "output_fraction": [0.5, 1.0],
+            "efficiency": [[0.95, 0.94], [0.97, 0.96], [0.96, 0.95]],
+            "voltages_v": [250.0, 400.0, 550.0],
+        },
+    }
+    config = {
+        **{k: v for k, v in BASE.items() if k != "n_modules"},
+        "electrical_fidelity": "string",
+        "pv_arrays": [
+            {"modules": 7, "module": "Generic_400W", "tilt": 30, "azimuth": 180},
+            {"modules": 7, "module": "Erlangen_445W", "tilt": 30, "azimuth": 90},
+        ],
+        "inverters": [inverter],
+        "electrical_environment": {"min_design_temp_c": -5, "max_ambient_temp_c": 40},
+        "pv_strings": [
+            {"inverter": 0, "mppt": 0, "array": 0, "modules": 7},
+            {"inverter": 0, "mppt": 1, "array": 1, "modules": 7},
+        ],
+    }
+    first = App(config)._resolved
+    monkeypatch.setitem(MODULES, "Erlangen_445W", replace(MODULES["Erlangen_445W"], Vmp=30.0, Imp=14.8))
+    second = App(config)._resolved
+    assert second.inverter_conversion.curve_row != first.inverter_conversion.curve_row
+
+    def prepare(cfg, resolved, deps):
+        return resolved.inverter_conversion.curve_row
+
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", prepare)
+    with reuse_prepared_inputs():
+        cached = [prepare_simulation_inputs_cached(r.cfg, r, None) for r in (first, second)]
+    assert cached == [first.inverter_conversion.curve_row, second.inverter_conversion.curve_row]
+
+
+def test_an_inherited_array_module_is_the_one_the_app_resolved():
+    # An array without a module takes the catalogue's first, so reordering the
+    # catalogue changes it for an App built afterwards only.
+    config = {
+        **{k: v for k, v in BASE.items() if k != "n_modules"},
+        "pv_arrays": [{"modules": 4, "module": "Generic_400W"}, {"modules": 4, "azimuth": 90}],
+    }
+    first = App(config)._resolved
+    saved = dict(MODULES)
+    try:
+        MODULES.clear()
+        MODULES.update({"Erlangen_445W": saved["Erlangen_445W"], **saved})
+        second = App(config)._resolved
+    finally:
+        MODULES.clear()
+        MODULES.update(saved)
+    assert first.pv_arrays[1]["module"] != second.pv_arrays[1]["module"]
+    assert _input_cache_key(first.cfg, first) != _input_cache_key(second.cfg, second)
+
+
+def test_a_second_modules_diodes_are_part_of_the_cache_key(monkeypatch):
+    # A string's shading is bound to its array's module's bypass diodes when
+    # the App is built.
+    config = {
+        **{k: v for k, v in BASE.items() if k != "n_modules"},
+        "pv_arrays": [{"modules": 4, "module": "Generic_400W"}, {"modules": 4, "module": "Erlangen_445W"}],
+    }
+    first = App(config)._resolved
+    monkeypatch.setitem(MODULES, "Erlangen_445W", replace(MODULES["Erlangen_445W"], bypass_diodes=2))
+    second = App(config)._resolved
+    assert _input_cache_key(first.cfg, first) != _input_cache_key(second.cfg, second)
+
+
+def test_a_module_an_app_inherited_before_a_reorder_is_read_as_it_is_now(monkeypatch):
+    config = {
+        **{k: v for k, v in BASE.items() if k != "n_modules"},
+        "pv_arrays": [{"modules": 4, "module": "Generic_400W"}, {"modules": 4, "azimuth": 90}],
+    }
+    resolved = App(config)._resolved
+    inherited = resolved.pv_arrays[1]["module"]
+    saved = dict(MODULES)
+    try:
+        MODULES.clear()
+        MODULES.update({"Erlangen_445W": saved["Erlangen_445W"], **saved})
+        before = _input_cache_key(resolved.cfg, resolved)
+        MODULES[inherited] = replace(saved[inherited], gamma_pmp=-0.5)
+        after = _input_cache_key(resolved.cfg, resolved)
+    finally:
+        MODULES.clear()
+        MODULES.update(saved)
+    assert inherited != "Erlangen_445W"
+    assert before != after

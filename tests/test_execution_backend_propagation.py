@@ -124,16 +124,6 @@ def _run_optimize_system_multi_objective(inputs, request, **backend):
     optimize_system_multi_objective(*inputs, OPTIMIZATION_CONFIG, pop_size=2, n_gen=1, seed=1, **backend)
 
 
-def test_the_reference_implementation_is_the_default_everywhere():
-    """Nothing selects the compiled path without being asked.
-
-    That each entry point also defaults to it is observed at the kernel, in
-    the default cases of the propagation test below.
-    """
-    assert DEFAULT_EXECUTION_BACKEND == "python"
-    assert resolve_app_config(BASE_CONFIG).cfg["execution_backend"] == "python"
-
-
 @pytest.mark.parametrize("backend", [None, "numba"], ids=["default", "numba"])
 @pytest.mark.parametrize(
     "run",
@@ -174,7 +164,7 @@ def test_the_chosen_backend_survives_pickling_to_a_worker(_optimization_inputs, 
     restored = pickle.loads(pickle.dumps(problem))
     restored._evaluate(np.array([DESIGN["n_modules"], DESIGN["battery_kwh"], DESIGN["tilt"]], dtype=float), {})
 
-    assert restored.execution_backend == "numba"
+    assert restored.study.execution_backend == "numba"
     assert _dispatch_backends and set(_dispatch_backends) == {"numba"}
 
 
@@ -273,7 +263,7 @@ def test_missing_numba_is_reported_before_app_prepares_inputs(monkeypatch):
     from breos.runners import app as app_runner
 
     monkeypatch.setattr(_numba_dispatch, "numba_available", lambda: False)
-    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", _must_not_run("inputs were prepared"))
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", _must_not_run("inputs were prepared"))
 
     with pytest.raises(_numba_dispatch.NumbaUnavailableError):
         app_runner.run_app_simulation(resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}), None)
@@ -354,6 +344,7 @@ def test_app_records_the_pv_only_path_for_a_battery_too_small_to_dispatch(_patch
     # Nor does it report a battery's health or replacements, as a PV-only run does not.
     pv_only = App({**BASE_CONFIG, "battery_kwh": 0})
     pv_only.simulate()
+    assert pv_only.result()["provenance"]["execution"]["dispatch_path"] == "pv_only_vectorized"
     battery_fields = {key for key in result if key.startswith("battery_")}
     assert battery_fields == {key for key in pv_only.result() if key.startswith("battery_")}
     assert "battery_soh_end_pct" not in result

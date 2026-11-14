@@ -35,6 +35,7 @@ flag. For the step-by-step flows of the first year, use
 | `financial` | Yearly financial projection rows (year 0 = investment) |
 | `yearly` | Per-year breakdown of production, load, imports, exports |
 | `pv_loss_waterfall` | Year 1 PV loss waterfall from the irradiance reference through the static PVWatts losses, with inverter and dispatch blocks beside it (see [PV loss waterfall](#pv-loss-waterfall)) |
+| `electrical` | How energy was modelled and the result of the string topology check (see [Electrical check](#electrical-check)) |
 | `degradation` | Battery degradation engine, model, initial and final state of health and replacement events |
 | `smart_charging` | Present with [smart charging](configuration.md#smart-charging): grid charging, delivery by origin and stored energy by origin |
 | `pv_arrays` | Present with `pv_arrays` (see [Multi-array systems](#multi-array-systems)) |
@@ -263,12 +264,103 @@ When `pv_arrays` is set, the result also contains a `pv_arrays` list with
 each array's resolved configuration: `modules`, `module`, `tilt`, `azimuth`,
 and `tracking`, plus the resolved tracker geometry for a tracking array.
 
+## Electrical check
+
+`electrical` is in every result:
+
+| Key | Meaning |
+|---|---|
+| `fidelity` | How energy was modelled. `"aggregate"`: the array's DC output feeds one AC rating, whatever the string topology. `"string"`: each MPPT input's voltage range, current and power limits, the inverter's power limit and its start-up voltage applied (see [String-level energy](configuration.md#string-level-energy)) |
+| `status` | `"not_evaluated"` without a [string topology](configuration.md#string-topology-checks); otherwise `"fail"` on any error, `"incomplete"` on missing data, `"warning"` on any warning, else `"pass"` |
+| `findings` | One record per finding, in a stable order |
+| `solver` | Runtime single-diode recovery counts: `recovered_steps`, the number of distinct timesteps recovered anywhere in PV preparation; `by_stage`, those counts within each solve stage. A timestep recovered in several stages counts once overall. With no recoveries: `{"recovered_steps": 0, "by_stage": {}}` |
+| `dc_wiring` | Present with [DC cables](configuration.md#dc-cables): `conductor_temp_c`, the temperature the cable resistances are taken at; `conductor_temp_stated`, false when the 50 °C default was assumed; and one record per string with its `string` position, loop `resistance_ohm` and `stc_loss_pct`, the share of its STC power its cable dissipates at the STC maximum power current |
+
+Both electrical fidelities check single-diode operating points. A lit point
+with finite inputs counts as a solver failure if its result is missing or
+physically invalid. BREOS retries that point with Brent's bracketing method.
+A successful retry is recorded as a recovery. Valid primary values are kept.
+
+If the retry also fails, BREOS raises `ValueError`. Non-finite diode inputs
+raise a separate `ValueError` without a retry. Both errors name the stage,
+step, known equipment indices and diode parameters. Darkness, bypass
+conduction and an inverter with no feasible operating point do not count
+as solver failures.
+Photocurrent below one billionth of the module's reference is treated as exactly dark.
+
+Counts stay with the prepared PV inputs. Cached runs and revaluation retain
+the same diagnostics. Projection years do not multiply the counts.
+
+Stage names identify module, string and cable MPPs (`module_mpp`,
+`string_mpp`, `cable_mpp`), short-circuit currents (`substring_isc`,
+`string_isc`, `input_isc`),
+part and half-chain voltages (`part_voltage`, `half_voltage`,
+`half_reverse_voltage`), string and
+input limit solves (`string_current_limit`, `string_voltage_limit`,
+`input_current_limit`, `input_voltage_limit`), and string, group and parallel
+IV evaluations (`string_voc`, `string_current`, `string_reverse_current`, `group_voc`, `group_current`,
+`parallel_voc`, `parallel_current`, `input_voc`, `input_open_circuit`).
+
+Each finding has `code`, `severity` and `message`; `value` and `limit` in
+`unit`; `limit_field`, the datasheet value the limit came from; and the
+location fields `inverter`, `mppt`, `string` and `array`. `string` is the
+position of the `pv_strings` entry. `field` names the datasheet value a
+`missing` finding needs. A field that does not apply is `null`. Severities:
+
+| Severity | Meaning |
+|---|---|
+| `error` | A hard limit is broken (voltage, short-circuit current, string count, maximum generator power) or the wiring is inconsistent. The design is not buildable as declared |
+| `warning` | An operating or yield limit is exceeded. The equipment is safe, but it loses energy or may not restart on the hottest days |
+| `missing` | A datasheet value the check needs is unknown, so that check did not run |
+
+The codes, their severities and units are fixed, and
+{py:data}`breos.electrical.FINDING_CODES` holds the same table. A later release
+may add codes.
+
+| Code | Severity | Unit | `limit_field` | Located by |
+|---|---|---|---|---|
+| `no_inverters` | error | | | |
+| `no_strings` | error | | | |
+| `unknown_array` | error | | | inverter, mppt, string, array |
+| `unknown_inverter` | error | | | inverter, mppt, string, array |
+| `unknown_mppt` | error | | | inverter, mppt, string, array |
+| `unconnected_modules` | error | count | | array |
+| `array_overcommitted` | error | count | `modules` | array |
+| `cold_voc_above_limit` | error | V | `max_dc_voltage_v` or `Max_System_Voltage`; one finding per ceiling exceeded | inverter, mppt, string, array |
+| `hot_voc_below_startup` | warning | V | `startup_voltage_v` | inverter, mppt, string, array |
+| `hot_vmp_below_mppt_min` | warning | V | `min_mppt_voltage_v` | inverter, mppt, string, array |
+| `vmp_above_mppt_max` | warning | V | `max_mppt_voltage_v` | inverter, mppt, string, array |
+| `parallel_strings_mismatch` | error | | | inverter, mppt |
+| `too_many_strings` | error | count | `max_strings` | inverter, mppt |
+| `isc_above_mppt_limit` | error | A | `max_short_circuit_current_a` | inverter, mppt |
+| `imp_above_mppt_limit` | warning | A | `max_input_current_a` | inverter, mppt |
+| `isc_above_string_limit` | error | A | `max_string_short_circuit_current_a` of the input | inverter, mppt, string, array |
+| `imp_above_string_limit` | warning | A | `max_string_input_current_a` of the input | inverter, mppt, string, array |
+| `mppt_dc_power_above_max` | error | W | `max_dc_power_w` of the input | inverter, mppt |
+| `isc_above_inverter_limit` | error | A | `max_short_circuit_current_a` of the inverter | inverter |
+| `dc_power_above_max` | error | W | `max_dc_power_w` | inverter |
+| `dc_power_above_recommended` | warning | W | `recommended_dc_power_w` | inverter |
+| `dc_ac_ratio_outside_range` | warning | ratio | | inverter |
+| `missing_value` | missing | | | the owner of `field`: inverter, inverter and mppt, or array |
+
+A design with `status = "fail"` is still simulated, so its numbers can explain
+why it loses against a buildable one. They do not describe a system that can be
+built.
+
 ## PV loss waterfall
 
 `pv_loss_waterfall` reports the year 1 PV production chain in kWh. Its
 ordered `stages` cover only the linear PV-model chain: horizontal reference,
 transposition, front-side incidence-angle modifier, optional bifacial rear
-gain, cell temperature, and static PVWatts losses. There is no degradation
+gain, cell temperature, and static PVWatts losses, then `dc_wiring` with
+[DC cables](configuration.md#dc-cables), and `parallel_mismatch` and
+`mppt_limits` with [string-level energy](configuration.md#string-level-energy).
+`parallel_mismatch` appears only when an input holds more than one string
+curve: two or more module-shaded strings, strings from more than one array, or
+strings of one array with different DC cables. Its loss is about 0 where those
+curves happen to match.
+`pv_loss_waterfall.parallel_mismatch` then lists each such input
+with its strings and loss; otherwise it is `null`. There is no degradation
 stage because year 1 has none (see [Module aging](../api/pv.md#module-aging)),
 so the last stage equals `energy_balance.pv_dc.generation_kwh`. Dispatch
 is a branching flow and is therefore reported under `energy_balance`, not
@@ -278,14 +370,42 @@ The `bifacial` block identifies the resolved model and per-array module factor
 and geometry. It reports rear gain in effective-DC-equivalent kWh and as a
 percentage of front effective irradiance. The same block is retained under
 `provenance.pv_model.bifacial` so serialized results carry the assumptions that
-produced the gain.
+produced the gain. `provenance.pv_model.solar_position` records the
+`solar_position` method asked for (`requested`), the method it resolved to on
+the run's weather (`resolved`; `"auto"` resolves to `"weather"` or
+`"interval-start"`) and the offset after each label at which the sun was
+evaluated (`offset_minutes`); see
+[Solar position](configuration.md#solar-position).
 
 The `pvwatts` block contains fixed-loss percentages and attributed kWh. The
 `inverter` block reports AC rating plus separate direct-PV and
-battery-discharge conversion losses. `energy_balance.pv_dc` reconciles PV
+battery-discharge conversion losses. With an
+[efficiency curve](configuration.md#inverter-efficiency-curve) it adds
+`efficiency_curve`: the `row_position` the curve was read at, its `voltage_v`
+and the `voltage_basis`. That is `"fixed"`, or `"operating"` when
+string-level energy reads each step's operating voltage; then
+`operating_voltage_v` is that voltage's mean, weighted by the DC, and
+`row_position` and `voltage_v` are the row of the steps without PV. With a
+stated `night_consumption_w` it adds `night_consumption`: its `power_w`, the
+year's `energy_kwh` and the `hours` it drew. With an [AC cable](configuration.md#ac-cable) it adds `ac_cable`:
+`conductor_resistance_ohm`, `conductor_temp_c`, `conductor_temp_stated`,
+`loss_kwh` (part of `conversion_loss_kwh`) and `loss_pct_at_nameplate`. With
+temperature derating it adds `temperature_derating`: the `ambient` source
+(`"weather"` or `"stated"`), the year's `min_output_fraction` and its
+`derated_hours`. `energy_balance.pv_dc` reconciles PV
 routing; `energy_balance.ac_delivery` reconciles delivered/exported AC; and
 `energy_balance.battery_stored_energy` reconciles beginning/end energy,
 charge, discharge, standby, capacity-window, and replacement boundary flows.
+
+With an AC-coupled battery (`battery_coupling = "ac"`) the `inverter` block
+is the PV inverter's alone: its `conversion_loss_kwh` is the direct-PV loss
+and `battery_discharge_conversion_loss_kwh` is 0. A `battery_inverter` block
+reports the battery inverter: `ac_capacity_kw`, `efficiency_pct`,
+`charge_conversion_loss_kwh` (PV and grid charge), `discharge_conversion_loss_kwh`
+and their sum, `conversion_loss_kwh`. `energy_balance.ac_delivery` adds
+`pv_to_battery_kwh`, the PV inverter's AC sent to the battery, which is not
+part of `usable_system_production_kwh`; that energy reaches the load as
+`pv_origin_battery_to_load_kwh`.
 
 Use {py:func}`breos.plotting.plot_pv_loss_waterfall` to render the same
 block as a PV loss diagram.
@@ -545,7 +665,8 @@ by feature:
   `settings` and `runtime_weather.metadata` record `irradiance_resampling`
   (requested) and `irradiance_resampling_resolved`, with per-component
   fallback and zero-support counts and the observational
-  `irradiance_closure` residuals. `irradiance_resampling` is in
+  `irradiance_closure` residuals, and under `"quadrature"` the
+  `irradiance_quadrature` record. `irradiance_resampling` is in
   `resolved_config` and in the optimizer's `simulation` config, and
   optimizer provenance carries `simulation`, `weather` and, for a real
   weather sequence, `weather_by_year`. See
@@ -599,7 +720,7 @@ Other keys keep the spelling you configured.
 
 | 0.6.2 key or flag | 0.7.0 replacement or action |
 |---|---|
-| App `dc_coupled`, `breos run --dc-coupled`, optimizer `battery.dc_coupled` | Remove. BREOS always uses its DC-coupled/hybrid dispatch. |
+| App `dc_coupled`, `breos run --dc-coupled`, optimizer `battery.dc_coupled` | Remove. 0.7.0 always uses its DC-coupled/hybrid dispatch; from 0.8.0 `battery_coupling` selects the topology. |
 | `load_profile = "1"` or `"default"` | `"demandlib_h0"` |
 | `load_profile = "4"`, `"5"`, `"6"` | `"eredes_btn_a"`, `"eredes_btn_b"`, `"eredes_btn_c"` |
 | `load_profile = "7"`, `"8"` | `"bdew_h0"`, `"ree_2.0td"` |

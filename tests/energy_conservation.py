@@ -16,6 +16,9 @@ import pandas as pd
 # Absent columns count as zero.
 GRID_TO_BATTERY = "Grid_AC_To_Battery"
 GRID_CHARGE_COLUMNS = (GRID_TO_BATTERY, "Grid_DC_To_Battery", "Grid_Charge_Conversion_Loss")
+# PV inverter AC an AC-coupled battery inverter takes in, and that inverter's
+# charging loss on it (ADR 0004 C8). Internal flows: zero unless AC-coupled.
+PV_AC_CHARGE_COLUMNS = ("PV_AC_To_Battery", "PV_Charge_Conversion_Loss")
 
 
 # Every column the identities read, apart from the optional grid charging.
@@ -63,7 +66,8 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
     ``config`` is the run's :class:`breos.battery.BatteryConfig`, for the
     charge efficiency, which is fixed unless resistance fade is enabled.
     """
-    columns = [*LEDGER_COLUMNS, *(column for column in GRID_CHARGE_COLUMNS if column in results.columns)]
+    optional = (*GRID_CHARGE_COLUMNS, *PV_AC_CHARGE_COLUMNS, "Inverter_Night_Consumption")
+    columns = [*LEDGER_COLUMNS, *(column for column in optional if column in results.columns)]
     ledger = results[columns].to_numpy(dtype=float)
     # assert_allclose treats NaN as equal to NaN, so a NaN row would pass
     # every identity.
@@ -79,11 +83,28 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
     grid_dc_to_battery = _column(results, "Grid_DC_To_Battery")
     grid_conversion_loss = _column(results, "Grid_Charge_Conversion_Loss")
     _assert_balanced(grid_to_battery, grid_dc_to_battery + grid_conversion_loss, atol, "grid-charge conversion")
+    pv_ac_to_battery = _column(results, "PV_AC_To_Battery")
+    pv_charge_conversion_loss = _column(results, "PV_Charge_Conversion_Loss")
     _assert_balanced(
         results["Battery_Charge_Input"],
-        results["PV_DC_To_Battery"] + grid_dc_to_battery,
+        results["PV_DC_To_Battery"] + pv_ac_to_battery - pv_charge_conversion_loss + grid_dc_to_battery,
         atol,
         "charge input split",
+    )
+    # Idle-inverter draw is served after the house load, before charging or
+    # export (ADR 0004 M9). Derive its PV share from the existing ledger.
+    night = _column(results, "Inverter_Night_Consumption")
+    pv_surplus = (results["PV_DC_To_Inverter"] - results["PV_Direct_Inverter_Loss"] - results["PV_AC_To_Load"]).clip(
+        lower=0.0
+    )
+    pv_to_night = np.minimum(pv_surplus, night)
+    # What the PV inverter takes in and loses leaves it as AC: to the house,
+    # idle inverters, export, or an AC-coupled battery inverter.
+    _assert_balanced(
+        results["PV_DC_To_Inverter"] - results["PV_Direct_Inverter_Loss"],
+        results["PV_AC_To_Load"] + pv_to_night + results["PV_AC_Export"] + pv_ac_to_battery,
+        atol,
+        "PV inverter output",
     )
     _assert_balanced(
         results["PV_DC"],
@@ -91,9 +112,14 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
         atol,
         "PV DC split",
     )
+    # Import also feeds grid charging and the part of the draw PV cannot cover.
     _assert_balanced(
         results["Houseload"],
-        results["PV_AC_To_Load"] + results["Battery_AC_To_Load"] + results["Import_From_Grid"] - grid_to_battery,
+        results["PV_AC_To_Load"]
+        + results["Battery_AC_To_Load"]
+        + results["Import_From_Grid"]
+        - grid_to_battery
+        - (night - pv_to_night),
         atol,
         "load supply",
     )
@@ -111,6 +137,35 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
             atol,
             "charge efficiency",
         )
+        # Each source's charge stores into its own origin (ADR 0002 A8,
+        # ADR 0004 C8): PV's DC, as DC or after the battery inverter.
+        pv_origin_stored = _column(results, "PV_Origin_Battery_Charge_Stored")
+        grid_origin_stored = _column(results, "Grid_Origin_Battery_Charge_Stored")
+        _assert_balanced(
+            pv_origin_stored,
+            (results["PV_DC_To_Battery"] + pv_ac_to_battery - pv_charge_conversion_loss) * config.charge_efficiency,
+            atol,
+            "PV-origin charge stored",
+        )
+        _assert_balanced(
+            grid_origin_stored, grid_dc_to_battery * config.charge_efficiency, atol, "grid-origin charge stored"
+        )
+    if getattr(config, "coupling", "dc") == "ac":
+        # No PV DC reaches the battery, and the battery inverter's AC rating
+        # bounds what enters it, PV and grid together, and what leaves it.
+        _assert_balanced(results["PV_DC_To_Battery"], 0.0, 0.0, "AC coupling stores no PV DC")
+        rating = config.battery_inverter_ac_capacity_w
+        if rating is not None:
+            entering = pv_ac_to_battery + grid_to_battery
+            for label, flow in (
+                ("battery inverter AC in", entering),
+                ("battery inverter AC out", results["Battery_AC_To_Load"]),
+            ):
+                if (flow > rating + atol).any():
+                    raise AssertionError(f"{label} exceeds its rating at {flow.idxmax()}: {flow.max()} > {rating}")
+    else:
+        _assert_balanced(pv_ac_to_battery, 0.0, 0.0, "a hybrid inverter takes no PV AC into the battery")
+        _assert_balanced(pv_charge_conversion_loss, 0.0, 0.0, "a hybrid inverter has no PV charging conversion")
     _assert_balanced(
         results["Battery_Energy_Delta"],
         results["Battery_Charge_Stored"]
@@ -129,10 +184,13 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
         "inverter loss split",
     )
     # PV, grid charging and replacement-added energy are the external inputs.
+    # PV_AC_To_Battery is internal: it leaves the PV inverter and enters the
+    # battery inverter, so it is in neither side.
     # Delivered energy, losses, net battery movement, and energy removed with
     # a replaced pack are outputs.
     outputs = (
         results["PV_AC_To_Load"]
+        + pv_to_night
         + results["PV_AC_Export"]
         + results["Battery_AC_To_Load"]
         + results["PV_DC_Curtailed"]
@@ -141,6 +199,7 @@ def assert_energy_conservation(results: pd.DataFrame, config, *, atol: float = 1
         + results["PV_Direct_Inverter_Loss"]
         + results["Battery_Inverter_Loss"]
         + grid_conversion_loss
+        + pv_charge_conversion_loss
         + results["Standby_Loss"]
         + results["Capacity_Window_Loss"]
         + results["Battery_Replacement_Energy_Removed"]

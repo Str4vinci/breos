@@ -34,6 +34,10 @@ from numba.extending import register_jitable
 from breos import _dispatch
 
 for _helper in (
+    _dispatch._curve_efficiency,
+    _dispatch._curve_ac,
+    _dispatch._curve_dc,
+    _dispatch._cable_gross,
     _dispatch._dc_ac,
     _dispatch._dc_for_ac,
     _dispatch.lfp_capacity_factor,
@@ -43,6 +47,9 @@ for _helper in (
     _dispatch._grid_charge,
     _dispatch._combined_conversion,
     _dispatch._dispatch_dc_step,
+    _dispatch._battery_inverter_charge,
+    _dispatch._battery_inverter_charge_input,
+    _dispatch._dispatch_ac_step,
 ):
     register_jitable(fastmath=False)(_helper)
 

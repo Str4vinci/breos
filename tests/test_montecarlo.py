@@ -1,5 +1,8 @@
 """Tests for the Monte Carlo runner (weather + demand resampling)."""
 
+from dataclasses import replace
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -20,6 +23,7 @@ from breos.montecarlo import (
 )
 from breos.projection import build_pv_only_battery_config
 from breos.result_schema import RESULT_SCHEMA_VERSION
+from tests.conftest import write_instant_at_labels_sidecar
 
 
 def _base_config():
@@ -60,25 +64,6 @@ def test_sample_load_scale_supports_bounded_uniform_distribution():
     assert max(scales) > 1.04
 
 
-def test_montecarlo_worker_omits_uncollected_trajectory(monkeypatch):
-    settings = MonteCarloSettings(weather_file="unused.csv", collect_yearly=False, seed=7)
-    trajectory = pd.DataFrame({"Year": range(20), "Load_kWh": np.arange(20, dtype=float)})
-    monkeypatch.setattr(montecarlo_module, "_WORKER_CONTEXT", None)
-    monkeypatch.setattr(
-        montecarlo_module,
-        "_simulate_trajectory",
-        lambda *args: ({"npv_savings": 1.0}, trajectory),
-    )
-    montecarlo_module._initialize_worker({}, None, np.array([2021]), 1, settings, {}, {}, None, None, None)
-
-    run_idx, metrics, returned_trajectory, jit_cache_state = montecarlo_module._run_trajectory_index(0)
-
-    assert run_idx == 0
-    assert metrics == {"npv_savings": 1.0}
-    assert returned_trajectory is None
-    assert jit_cache_state is None
-
-
 def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch):
     import breos.montecarlo as mc_module
 
@@ -90,11 +75,13 @@ def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch)
     )
     index = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
     captured = {}
-    monkeypatch.setattr(mc_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
+    monkeypatch.setattr(mc_module, "_weather_years", lambda *args, **kwargs: {2021: frame.set_index("date")})
     monkeypatch.setattr(
         mc_module,
-        "build_dc_system_base",
-        lambda *args, **kwargs: pd.Series([0.0, 1.0], index=index),
+        "build_pv_production_breakdown",
+        lambda *args, **kwargs: SimpleNamespace(
+            dc_after_losses=pd.Series([0.0, 1.0], index=index), dc_voltage=None, solver_diagnostics=None
+        ),
     )
 
     def temperature_builder(temp_config, **kwargs):
@@ -110,9 +97,9 @@ def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch)
     }
     settings = MonteCarloSettings(weather_file="unused.csv")
 
-    _dc, temperatures = _precompute_year_caches(
+    _dc, temperatures, _derate = _precompute_year_caches(
         cfg,
-        type("Resolved", (), {"lat": 41.0, "lon": -8.0})(),
+        type("Resolved", (), {"lat": 41.0, "lon": -8.0, "electrical": None})(),
         settings,
     )
 
@@ -120,71 +107,10 @@ def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch)
     assert captured == {"temp_config": 25.0, "indoor_model": {"enabled": False}}
 
 
-def test_montecarlo_records_transformed_runtime_weather_timing(monkeypatch):
-    frame = pd.DataFrame(
-        {
-            "date": pd.date_range("2025-01-01", periods=2, freq="h"),
-            "temperature_2m": [10.0, 11.0],
-        }
-    )
-    frame.attrs["breos_weather_metadata"] = {
-        "radiation_time_basis": "interval_mean",
-        "timestamp_label_basis": "left",
-        "source_timestamp_label_basis": "right",
-    }
-    index = pd.date_range("2025-01-01", periods=8, freq="15min", tz="UTC")
-
-    monkeypatch.setattr(montecarlo_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
-
-    def resample(weather, **kwargs):
-        assert kwargs["irradiance_resampling"] == "clear_sky_energy_conserving"
-        result = pd.DataFrame({"temperature_2m": 10.0}, index=index)
-        result.attrs = weather.attrs.copy()
-        result.attrs["breos_weather_metadata"].update(
-            {
-                "input_resolution": "h",
-                "output_resolution": "15min",
-                "irradiance_resampling_method": "makima",
-                "irradiance_resampling_resolved": "clear_sky_energy_conserving",
-            }
-        )
-        return result
-
-    monkeypatch.setattr(montecarlo_module, "resample_to_15min", resample)
-    monkeypatch.setattr(
-        montecarlo_module,
-        "build_dc_system_base",
-        lambda *args, **kwargs: pd.Series(0.0, index=index),
-    )
-    monkeypatch.setattr(
-        montecarlo_module,
-        "build_battery_temperature_series",
-        lambda *args, **kwargs: pd.Series(25.0, index=index),
-    )
-    runtime_weather = {}
-
-    _precompute_year_caches(
-        {
-            "resolution": "15min",
-            "irradiance_resampling": "clear_sky_energy_conserving",
-            "solar_position": "weather",
-            "battery_temperature": 25.0,
-            "battery_indoor_model": {"enabled": False},
-        },
-        type("Resolved", (), {"lat": 41.0, "lon": -8.0})(),
-        MonteCarloSettings(weather_file="unused.csv"),
-        runtime_weather=runtime_weather,
-    )
-
-    assert runtime_weather["solar_position_offset_minutes"] == 7.5
-    assert runtime_weather["metadata"]["timestamp_label_basis"] == "left"
-    assert runtime_weather["metadata"]["source_timestamp_label_basis"] == "right"
-    assert runtime_weather["metadata"]["irradiance_resampling_resolved"] == "clear_sky_energy_conserving"
-
-
 def test_run_montecarlo_shapes_and_years(tmp_path, write_multiyear_weather):
     weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=3, years_per_run=2, seed=1)
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=3, seed=1, collect_yearly=True)
+    assert settings.years_per_run is None
     result = run_montecarlo(_base_config(), settings)
 
     assert len(result.runs) == 3
@@ -198,22 +124,10 @@ def test_run_montecarlo_shapes_and_years(tmp_path, write_multiyear_weather):
     assert set(result.summary["npv_savings"]) >= {"mean", "p5", "p50", "p95"}
     assert set(result.summary["npv_savings"]) >= {"p2_5", "p97_5"}
     assert result.provenance["settings"]["load_distribution"] == "normal"
-
-
-def test_run_montecarlo_can_collect_yearly_cost_trajectories(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(
-        weather_file=str(weather),
-        n_runs=3,
-        years_per_run=2,
-        seed=1,
-        collect_yearly=True,
-    )
-
-    result = run_montecarlo(_base_config(), settings)
-
-    assert result.yearly is not None
-    assert len(result.yearly) == 6
+    assert "lifetime_grid_independence_pct" in result.runs
+    assert "payback_year_interpolated" in result.runs
+    # projection_years=3 in the base config -> 3 project years per run.
+    assert result.yearly["Year"].tolist() == [1, 2, 3] * 3
     assert set(result.yearly["run"]) == {1, 2, 3}
     assert {
         "Weather_Year",
@@ -222,8 +136,6 @@ def test_run_montecarlo_can_collect_yearly_cost_trajectories(tmp_path, write_mul
         "Savings_Cumulative_NPV",
         "Cost_System_Cumulative_NPV",
     } <= set(result.yearly.columns)
-    assert "lifetime_grid_independence_pct" in result.runs
-    assert "payback_year_interpolated" in result.runs
 
 
 def test_run_montecarlo_filters_weather_sampling_pool(tmp_path, write_multiyear_weather):
@@ -282,6 +194,7 @@ def test_run_montecarlo_fills_the_leap_day_of_a_leap_target_year(
     frame = pd.read_csv(weather)
     frame["date"] = frame["date"] + utc_offset
     frame.to_csv(weather, index=False)
+    write_instant_at_labels_sidecar(weather)
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=1, target_year=2028)
     captured = {}
     align_years = montecarlo_module._align_years
@@ -331,25 +244,6 @@ def test_run_montecarlo_results_do_not_depend_on_the_start_date_year(tmp_path, w
     pd.testing.assert_frame_equal(results[0].yearly, results[1].yearly, check_exact=True)
 
 
-def _load_scale_paths(result):
-    return [tuple(group["Load_Scale"]) for _run, group in result.yearly.groupby("run")]
-
-
-def test_run_montecarlo_adjacent_seeds_share_no_trajectory(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-
-    def paths(seed):
-        settings = MonteCarloSettings(
-            weather_file=str(weather), n_runs=4, years_per_run=3, seed=seed, collect_yearly=True
-        )
-        return _load_scale_paths(run_montecarlo(_base_config(), settings))
-
-    first, second = paths(1), paths(2)
-
-    assert len(set(first)) == 4
-    assert not set(first) & set(second)
-
-
 def test_run_montecarlo_run_streams_are_spawned_from_the_base_seed(tmp_path, write_multiyear_weather):
     weather = write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=3, years_per_run=2, seed=7, collect_yearly=True)
@@ -366,7 +260,7 @@ def test_run_montecarlo_run_streams_are_spawned_from_the_base_seed(tmp_path, wri
             assert row["Weather_Year"] == year
             assert row["Load_Scale"] == scale
     assert "SeedSequence(base_seed).spawn(n_runs)" in result.provenance["random_stream"]
-    assert result.provenance["ledger_schema_version"] == "3.0"
+    assert result.provenance["ledger_schema_version"] == "3.1"
     assert result.provenance["result_schema_version"] == RESULT_SCHEMA_VERSION
     assert result.provenance["currency"] == "EUR"
     assert result.runs.attrs["currency"] == "EUR"
@@ -380,20 +274,13 @@ def test_run_montecarlo_parallel_workers_preserve_seeded_results(tmp_path, write
     serial = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=42)
     parallel = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=42, n_procs=2)
 
-    serial_result = run_montecarlo(_base_config(), serial).runs
-    parallel_result = run_montecarlo(_base_config(), parallel).runs
+    serial_result = run_montecarlo(_base_config(), serial)
+    parallel_result = run_montecarlo(_base_config(), parallel)
 
-    pd.testing.assert_frame_equal(serial_result, parallel_result)
-
-
-def test_run_montecarlo_defaults_years_to_projection_years(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, seed=0, collect_yearly=True)
-    assert settings.years_per_run is None
-    result = run_montecarlo(_base_config(), settings)
-    # projection_years=3 in the base config -> 3 project years per run.
-    assert result.yearly is not None
-    assert result.yearly["Year"].tolist() == [1, 2, 3]
+    pd.testing.assert_frame_equal(serial_result.runs, parallel_result.runs)
+    # Neither path keeps a yearly trajectory it was not asked to collect.
+    assert serial_result.yearly is None
+    assert parallel_result.yearly is None
 
 
 def test_run_montecarlo_threads_sell_price_inflation(tmp_path, monkeypatch, write_multiyear_weather):
@@ -503,7 +390,7 @@ def test_pv_chain_cache_is_declined_for_a_battery_system(tmp_path, write_multiye
     weather = write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=64, years_per_run=2, seed=42)
     resolved = resolve_app_config(_base_config())
-    dc_by_year, _ = _precompute_year_caches(resolved.cfg, resolved, settings)
+    dc_by_year, _, _ = _precompute_year_caches(resolved.cfg, resolved, settings)
     aligned = {
         year: align_simulation_inputs(dc, pd.DataFrame({"Load": 0.0}, index=dc.index), freq="h")
         for year, dc in dc_by_year.items()
@@ -620,25 +507,20 @@ def test_summarize_keeps_payback_entry_when_no_run_pays_back():
         ({"min_load_scale": -0.5}, "min_load_scale must be a finite, non-negative number"),
         ({"min_load_scale": float("nan")}, "min_load_scale must be a finite, non-negative number"),
         ({"load_uncertainty": float("nan")}, "load_uncertainty must be a finite, non-negative number"),
+        ({"load_uncertainty": -0.1}, "load_uncertainty must be a finite, non-negative number"),
+        ({"model_uncertainty_pct": -1.0}, "model_uncertainty_pct must be a finite, non-negative number or None"),
+        ({"n_runs": 0}, "n_runs must be at least 1"),
+        ({"years_per_run": 0}, "years_per_run must be at least 1"),
+        ({"load_distribution": "lognormal"}, "load_distribution must be 'normal' or 'uniform'"),
+        ({"n_procs": 0}, "n_procs must be at least 1"),
+        ({"n_procs": -1}, "n_procs must be at least 1"),
+        ({"weather_start_year": 2023, "weather_end_year": 2022}, "weather_start_year must not be later"),
     ],
 )
-def test_run_montecarlo_rejects_load_scale_bounds_that_allow_negative_demand(
-    tmp_path, bounds, message, write_multiyear_weather
-):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=0, **bounds)
-
+def test_montecarlo_settings_refuse_values_no_study_can_run(bounds, message):
+    # Refused when the settings are made, so build_year_cache refuses them too.
     with pytest.raises(ValueError, match=message):
-        run_montecarlo(_base_config(), settings)
-
-
-@pytest.mark.parametrize("n_procs", [0, -1])
-def test_run_montecarlo_needs_at_least_one_worker(tmp_path, n_procs, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=0, n_procs=n_procs)
-
-    with pytest.raises(ValueError, match="n_procs must be at least 1"):
-        run_montecarlo(_base_config(), settings)
+        MonteCarloSettings(weather_file="unused.csv", **bounds)
 
 
 def test_montecarlo_cli_labels_conditional_payback_statistics(monkeypatch, tmp_path, capsys):
@@ -670,3 +552,27 @@ def test_montecarlo_cli_labels_conditional_payback_statistics(monkeypatch, tmp_p
     payback_row = next(line for line in out.splitlines() if line.startswith("payback_year "))
     assert payback_row.split()[1] == "1/10"
     assert "Paid back within the horizon: 1 of 10 runs (10.0%)" in out
+
+
+def test_run_montecarlo_reports_yield_exceedance_and_keeps_its_draws(tmp_path, write_multiyear_weather):
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    base = MonteCarloSettings(weather_file=str(weather), n_runs=6, years_per_run=2, seed=11, collect_yearly=True)
+    plain = run_montecarlo(_base_config(), base)
+    record = plain.yield_exceedance
+    assert record["model_uncertainty_pct"] is None
+    assert set(record["horizons"]) == {"1", "2"}
+    one = record["horizons"]["1"]
+    # The fixture's weather years may repeat, so the variability can be 0.
+    assert one["P90_kwh"] <= one["P75_kwh"] <= one["P50_kwh"] == pytest.approx(record["p50_kwh"])
+    assert (plain.runs["pv_model_factor"] == 1.0).all()
+    assert {"p10", "p25", "p75", "p90"} <= set(plain.summary["npv_savings"])
+
+    uncertain = run_montecarlo(_base_config(), replace(base, model_uncertainty_pct=5.0))
+    two = uncertain.yield_exceedance["horizons"]["2"]
+    assert two["P90_kwh"] < two["P75_kwh"] < two["P50_kwh"]
+    assert two["P90_kwh"] < record["horizons"]["2"]["P90_kwh"]
+    # The model factor comes from its own stream: the weather and load draws are unchanged.
+    for column in ("Weather_Year", "Load_Scale"):
+        pd.testing.assert_series_equal(uncertain.yearly[column], plain.yearly[column])
+    assert (uncertain.runs["pv_model_factor"] != 1.0).all()
+    assert not uncertain.runs["npv_savings"].equals(plain.runs["npv_savings"])

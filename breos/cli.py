@@ -13,7 +13,7 @@ import sys
 import tomllib
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from breos.app import App
 from breos.app_config import (
@@ -28,6 +28,7 @@ from breos.app_config import (
 )
 from breos.app_inputs import _input_cache_key, reuse_prepared_inputs
 from breos.config_schema import MappingOf
+from breos.constants import _ROUND_TRIP_EFFICIENCY
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.execution import EXECUTION_BACKENDS
 from breos.io import nonfinite_to_none
@@ -82,24 +83,8 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
             continue
         overrides[key] = value
 
-    return _deep_merge(override_config(config, overrides), overrides)
-
-
-def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    """Return ``base`` with ``overrides`` applied, merging nested tables key by key.
-
-    An override table replaces only the keys it sets, so a flag that sets one
-    ``[tariff]`` key keeps the rest of the file's table. Neither input is
-    changed.
-    """
-    merged = dict(base)
-    for key, value in overrides.items():
-        current = merged.get(key)
-        if isinstance(current, dict) and isinstance(value, dict):
-            merged[key] = _deep_merge(current, value)
-        else:
-            merged[key] = value
-    return merged
+    # Every flag sets one top-level scalar, which replaces the file's value.
+    return {**override_config(config, overrides), **overrides}
 
 
 def _json_text(data: Any, what: str, **kwargs: Any) -> str:
@@ -197,7 +182,7 @@ def _config_summary(resolved: ResolvedAppConfig) -> dict[str, Any]:
     summary["inverter"]["ac_rating_kw"] = (resolved.inverter_ac_capacity_w or 0.0) / 1000
     summary["load"].update(load_profile_file=profile_file, load_profile_file_error=profile_file_error)
     summary["battery"].update(
-        round_trip_efficiency=cfg["battery_rte"] if cfg["battery_rte"] is not None else 0.95,
+        round_trip_efficiency=cfg["battery_rte"] if cfg["battery_rte"] is not None else _ROUND_TRIP_EFFICIENCY,
         model_profile=(
             get_battery_model_profile(cfg["blast_model"]).as_dict() if cfg["blast_model"] is not None else None
         ),
@@ -581,7 +566,7 @@ def _sweep(args: argparse.Namespace) -> int:
     for varied, run_config in _sweep_run_configs(config, grid):
         resolved = resolve_app_config(run_config)
         runs.append((varied, run_config, _config_summary(resolved)))
-        input_keys.append(_input_cache_key(resolved.cfg))
+        input_keys.append(_input_cache_key(resolved.cfg, resolved))
     first_seen: dict[str | None, int] = {}
     for index, key in enumerate(input_keys):
         first_seen.setdefault(key, index)
@@ -617,42 +602,32 @@ def _montecarlo(args: argparse.Namespace) -> int:
 
     # Report a typo such as [montecarlo].weather_fille before a missing-file
     # error. The runner validates the full App config before weather access.
-    validate_montecarlo_config(config)
-    mc_cfg = config.get("montecarlo", {})
+    mc_cfg = validate_montecarlo_config(config)
 
     weather_file = args.weather_file or mc_cfg.get("weather_file")
     if not weather_file:
         raise ValueError("Monte Carlo needs a weather file: set [montecarlo].weather_file or pass --weather-file.")
 
-    # Each setting's flag and conversion; None for a setting with no flag or
-    # no conversion. A flag beats [montecarlo], and a setting neither gives
+    # A flag beats the checked [montecarlo] table, and a setting neither gives
     # keeps its MonteCarloSettings default. An unset execution_backend lets
     # run_montecarlo fall back to the top-level key, the same order a Python
     # caller gets.
-    options: dict[str, tuple[Any, Callable[[Any], Any] | None]] = {
-        "n_runs": (args.runs, int),
-        "years_per_run": (args.years, None),
-        "load_uncertainty": (args.load_uncertainty, float),
-        "load_distribution": (args.load_distribution, str),
-        "target_year": (args.target_year, int),
-        "weather_start_year": (args.weather_start_year, None),
-        "weather_end_year": (args.weather_end_year, None),
-        "seed": (args.seed, None),
-        "min_load_scale": (None, float),
-        "max_load_scale": (None, None),
-        "collect_yearly": (args.collect_yearly, bool),
-        "n_procs": (args.n_procs, int),
-        "execution_backend": (args.execution_backend, None),
+    flags = {
+        "n_runs": args.runs,
+        "years_per_run": args.years,
+        "load_uncertainty": args.load_uncertainty,
+        "load_distribution": args.load_distribution,
+        "target_year": args.target_year,
+        "weather_start_year": args.weather_start_year,
+        "weather_end_year": args.weather_end_year,
+        "seed": args.seed,
+        "collect_yearly": args.collect_yearly,
+        "n_procs": args.n_procs,
+        "execution_backend": args.execution_backend,
+        "model_uncertainty_pct": args.model_uncertainty,
     }
-    chosen: dict[str, Any] = {}
-    for name, (cli_value, convert) in options.items():
-        if cli_value is not None:
-            value = cli_value
-        elif name in mc_cfg:
-            value = mc_cfg[name]
-        else:
-            continue
-        chosen[name] = convert(value) if convert is not None else value
+    chosen = {name: value for name, value in mc_cfg.items() if name != "weather_file"}
+    chosen.update({name: value for name, value in flags.items() if value is not None})
     settings = MonteCarloSettings(weather_file=str(weather_file), **chosen)
 
     result = run_montecarlo(config, settings)
@@ -682,6 +657,8 @@ def _montecarlo(args: argparse.Namespace) -> int:
         "yearly_csv_sha256": _sha256(yearly_path) if yearly_path is not None else None,
         # A statistic with no defined value is written as null.
         "summary": nonfinite_to_none(result.summary),
+        "yield_exceedance": result.yield_exceedance,
+        "solver": result.solver,
     }
     # The load profile's file and hash come from the run's provenance
     # (load_profile.file, load_profile.sha256); these keys repeat them for an
@@ -705,6 +682,8 @@ def _montecarlo(args: argparse.Namespace) -> int:
             "currency": result.provenance["currency"],
             "settings": settings.__dict__,
             "summary": nonfinite_to_none(result.summary),
+            "yield_exceedance": result.yield_exceedance,
+            "solver": result.solver,
             "available_years": result.available_years,
             "results_csv": str(out_path),
             "yearly_csv": str(yearly_path) if yearly_path is not None else None,
@@ -734,6 +713,20 @@ def _montecarlo(args: argparse.Namespace) -> int:
         print(
             f"{metric:<28}{runs:>12}{stats['mean']:>12.2f}{stats['p5']:>12.2f}{stats['p50']:>12.2f}{stats['p95']:>12.2f}"
         )
+    exceedance = result.yield_exceedance
+    if exceedance is not None:
+        model = exceedance["model_uncertainty_pct"]
+        basis = f"weather variability {exceedance['variability_pct']:.1f} %" + (
+            f" and model uncertainty {model:.1f} %" if model else ", no model uncertainty stated"
+        )
+        print(f"Annual AC yield exceeded with each probability ({basis}):")
+        print(f"{'horizon':<28}{'P50':>12}{'P75':>12}{'P90':>12}{'P99':>12}")
+        for horizon, values in exceedance["horizons"].items():
+            label = "1 year" if horizon == "1" else f"{horizon}-year mean"
+            print(
+                f"{label:<28}{values['P50_kwh']:>12.0f}{values['P75_kwh']:>12.0f}"
+                f"{values['P90_kwh']:>12.0f}{values['P99_kwh']:>12.0f}"
+            )
     payback = result.summary.get("payback_year")
     if payback is not None:
         print(
@@ -809,6 +802,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--load-uncertainty",
         type=float,
         help="Demand uncertainty: normal standard deviation or uniform half-width around 1.",
+    )
+    mc.add_argument(
+        "--model-uncertainty",
+        type=float,
+        help=(
+            "One-sigma uncertainty of the PV model's annual yield, in percent: irradiance data, transposition, "
+            "PV model and losses together. Adds it to the P50/P90 yield and to each trajectory's PV."
+        ),
     )
     mc.add_argument(
         "--load-distribution",

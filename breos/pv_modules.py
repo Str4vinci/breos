@@ -22,9 +22,10 @@ Usage:
     resized = replace(custom, Mpp=560, Vmp=42.4, Imp=13.21)
 """
 
+import json
 import math
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from numbers import Integral, Real
 from typing import Any, ClassVar, Dict, List, Optional
 
@@ -76,10 +77,32 @@ class PVModuleParams:
     # Appended after all pre-0.5 fields to preserve positional construction.
     bifaciality: Optional[float] = None  # Metadata: rear/front maximum-power ratio (inert by itself)
     NOCT: Optional[float] = None  # Metadata: nominal operating cell temperature (°C), required by noct-sam
+    # Electrical-check metadata, read only by breos.electrical; the energy
+    # models never use them.
+    T_Vmp_pct: Optional[float] = None  # %/°C - Vmp temperature coefficient
+    Max_System_Voltage: Optional[float] = None  # V - IEC maximum system voltage rating
+    # A - the datasheet's maximum series fuse rating (IEC 61730 reverse
+    # current overload); None when unpublished.
+    Max_Series_Fuse_A: Optional[float] = None
+    # Bypass diodes, each across one section of the module; read by
+    # module-level shading (breos.pv.mismatch).
+    bypass_diodes: int = 3
+    # Cell strings in parallel within each section: 1 for a full-cell module,
+    # 2 for a half-cut one, whose top and bottom halves share each diode. A
+    # section's strings hold N_Cells / (cell_strings_in_parallel *
+    # bypass_diodes) cells in series each, a whole number.
+    cell_strings_in_parallel: int = 1
+    # The cell's reverse breakdown voltage, negative, in V; None when unknown.
+    # A shaded cell driven past its short-circuit current holds there and
+    # passes the current; unknown, it carries no more and its bypass diode
+    # takes the section. Datasheets do not state it.
+    breakdown_voltage_v: Optional[float] = None
 
     _POSITIVE_FIELDS = frozenset({"Mpp", "Vmp", "Imp", "Voc", "Isc"})
     _STC_POINT_FIELDS = ("Mpp", "Vmp", "Imp")
-    _FINITE_FIELDS = frozenset({"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct", "alpha_sc_abs", "beta_voc_abs", "gamma_pmp"})
+    _FINITE_FIELDS = frozenset(
+        {"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct", "alpha_sc_abs", "beta_voc_abs", "gamma_pmp", "T_Vmp_pct"}
+    )
     _MPP_RELATIVE_TOLERANCE = 0.02
 
     # Set per instance once __post_init__ has checked the STC point.
@@ -94,11 +117,23 @@ class PVModuleParams:
                 self._validate_number(name, value)
             if name == "T_Pmax_pct" and float(value) >= 0:
                 raise ValueError("T_Pmax_pct must be negative")
-        elif name == "N_Cells":
+        elif name in ("N_Cells", "bypass_diodes", "cell_strings_in_parallel"):
             if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
-                raise ValueError("N_Cells must be a positive integer")
+                raise ValueError(f"{name} must be a positive integer")
+            if self._module_params_ready:
+                layout = {
+                    field: getattr(self, field) for field in ("N_Cells", "cell_strings_in_parallel", "bypass_diodes")
+                }
+                layout[name] = value
+                self._check_cell_strings(layout["N_Cells"], layout["cell_strings_in_parallel"], layout["bypass_diodes"])
         elif name == "Module_Efficiency" and value is not None:
             self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
+        elif name == "breakdown_voltage_v" and value is not None:
+            self._validate_number(name, value)
+            if float(value) >= 0:
+                raise ValueError("breakdown_voltage_v must be negative")
+        elif name in ("Max_System_Voltage", "Max_Series_Fuse_A") and value is not None:
+            self._validate_number(name, value, minimum=0.0, minimum_strict=True)
         elif name == "NOCT" and value is not None:
             self._validate_number(name, value, minimum=0.0, maximum=100.0, minimum_strict=True)
         elif name == "bifaciality" and value is not None:
@@ -116,6 +151,9 @@ class PVModuleParams:
             point[name] = value
             self._validate_stc_point(point["Mpp"], point["Vmp"], point["Imp"])
 
+        if name == "bypass_diodes":
+            # A built-in int, so the count serialises wherever it is reported.
+            value = int(value)
         object.__setattr__(self, name, value)
 
     @staticmethod
@@ -168,9 +206,42 @@ class PVModuleParams:
             return float(self.gamma_pmp)
         return float(self.T_Pmax_pct)
 
+    @property
+    def T_Vmp_pct_effective(self) -> float:
+        """Vmp temperature coefficient in %/°C: ``T_Vmp_pct`` if set, else derived.
+
+        Datasheets rarely publish it. Since ``Pmp = Vmp * Imp``, to first order
+        the power coefficient is the sum of the Vmp and Imp coefficients, and
+        with the Imp coefficient taken as the Isc one the Vmp coefficient is the
+        power coefficient minus the Isc one, ``gamma_pmp_effective - 100 *
+        alpha_sc / Isc``, which honours ``gamma_pmp`` and ``alpha_sc_abs``.
+        Using the power coefficient alone would understate how far Vmp moves
+        with temperature. The derived value is an estimate for crystalline
+        silicon; prefer a published coefficient near a sizing boundary.
+        """
+        if self.T_Vmp_pct is not None:
+            return float(self.T_Vmp_pct)
+        return float(self.gamma_pmp_effective - 100.0 * self.alpha_sc / self.Isc)
+
     def __post_init__(self) -> None:
         self._validate_stc_point(self.Mpp, self.Vmp, self.Imp)
+        self._check_cell_strings(self.N_Cells, self.cell_strings_in_parallel, self.bypass_diodes)
         object.__setattr__(self, "_module_params_ready", True)
+
+    @staticmethod
+    def _check_cell_strings(cells: int, strings: int, diodes: int) -> None:
+        # Built-in ints: NumPy's fixed-width product can wrap.
+        cells, strings, diodes = int(cells), int(strings), int(diodes)
+        if cells % (strings * diodes):
+            raise ValueError(
+                f"N_Cells ({cells}) must divide into cell_strings_in_parallel ({strings}) strings on each of "
+                f"bypass_diodes ({diodes}) sections, every string of whole cells"
+            )
+
+    @property
+    def cells_in_series(self) -> int:
+        """Cell positions in series across the module: ``N_Cells / cell_strings_in_parallel``."""
+        return self.N_Cells // self.cell_strings_in_parallel
 
 
 # =============================================================================
@@ -191,7 +262,8 @@ MODULES: Dict[str, PVModuleParams] = {
         T_Pmax_pct=-0.34,  # %/°C - Power temperature coefficient
         T_Voc_pct=-0.26,  # %/°C - Voltage temperature coefficient
         T_Isc_pct=0.05,  # %/°C - Current temperature coefficient
-        N_Cells=6 * 24,  # 144 cells
+        N_Cells=6 * 24,  # 144 half-cells
+        cell_strings_in_parallel=2,  # half-cut: top and bottom halves on each diode
         Name="Suntech_STP550S-C72/Vmh",
     ),
     # -------------------------------------------------------------------------
@@ -211,7 +283,9 @@ MODULES: Dict[str, PVModuleParams] = {
         T_Pmax_pct=-0.30,  # %/°C - Power temperature coefficient
         T_Voc_pct=-0.24,  # %/°C - Voltage temperature coefficient
         T_Isc_pct=0.04,  # %/°C - Current temperature coefficient
+        # 144 cells at a 52.6 V open circuit are 72 in series: half-cut.
         N_Cells=144,
+        cell_strings_in_parallel=2,
     ),
     # -------------------------------------------------------------------------
     # Generic 400W Module (common 72-cell / 144-half-cell residential panel)
@@ -232,6 +306,7 @@ MODULES: Dict[str, PVModuleParams] = {
         T_Voc_pct=-0.265,  # %/°C - Voltage temperature coefficient
         T_Isc_pct=0.05,  # %/°C - Current temperature coefficient
         N_Cells=144,  # 72-cell module (144 half-cells)
+        cell_strings_in_parallel=2,
         Name="Generic 400W (LONGi LR4-72HPH-400M ref)",
     ),
     # -------------------------------------------------------------------------
@@ -258,6 +333,7 @@ MODULES: Dict[str, PVModuleParams] = {
         T_Voc_pct=-0.26,
         T_Isc_pct=0.046,
         N_Cells=144,
+        cell_strings_in_parallel=2,  # 144 half-cells
         bifaciality=0.70,
         Name="Generic 600W bifacial (Trina Vertex bifaciality ref)",
     ),
@@ -339,6 +415,15 @@ Efficiency: {f"{m.Module_Efficiency * 100:.1f} %" if m.Module_Efficiency is not 
 Bifaciality: {f"{m.bifaciality * 100:.1f} %" if m.bifaciality is not None else "n/a"}
 NOCT:       {f"{m.NOCT:.1f} °C" if m.NOCT is not None else "n/a (not sourced in bundled catalog)"}
 """
+
+
+def catalogue_snapshot() -> str:
+    """The catalogue's modules and parameters, in its order, as canonical JSON.
+
+    The order matters because the first module is the default.
+    """
+    entries = [[name, asdict(module)] for name, module in MODULES.items()]
+    return json.dumps(entries, sort_keys=True, default=str)
 
 
 def add_module(name: str, params: PVModuleParams) -> None:

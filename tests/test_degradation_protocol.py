@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.battery import _detect_cycles_rainflow_arrays
+from breos.degradation.native import _detect_cycles_rainflow_arrays
 from breos.degradation.protocol import (
     DegradationDay,
     NativeDegradationAdapter,
@@ -137,16 +137,68 @@ def test_native_rainflow_stream_matches_nested_cross_midnight_whole_trace():
     observed = [*first_step.cycle_records, *second_step.cycle_records]
     expected = _detect_cycles_rainflow_arrays(trace, time_ticks, ticks_per_second)
     assert len(observed) == len(expected)
-    for actual, reference in zip(observed, expected, strict=True):
-        assert (actual["start_idx"], actual["end_idx"]) == (reference["start_idx"], reference["end_idx"])
-        np.testing.assert_allclose(
-            [actual[key] for key in ("doc", "mean_soc", "count", "mean_c_rate")],
-            [reference[key] for key in ("doc", "mean_soc", "count", "mean_c_rate")],
-            rtol=0.0,
-            atol=1e-12,
-        )
+    assert [_cycle_fields(cycle) for cycle in observed] == [_cycle_fields(cycle) for cycle in expected]
     assert any(cycle["start_idx"] <= 5 and cycle["end_idx"] >= 6 for cycle in observed)
     assert second_step.fec == pytest.approx(sum(cycle["doc"] * cycle["count"] for cycle in expected))
+
+
+_CYCLE_KEYS = ("start_idx", "end_idx", "doc", "mean_soc", "count", "mean_c_rate")
+
+
+def _cycle_fields(cycle):
+    return tuple(cycle[key] for key in _CYCLE_KEYS)
+
+
+def _soc_trace(rng, kind, n):
+    if kind == "walk":
+        x = np.cumsum(rng.normal(0.0, 0.05, n))
+        return 0.1 + 0.8 * (x - x.min()) / max(np.ptp(x), 1e-9)
+    if kind == "daily":
+        t = np.arange(n) / 24.0
+        return 0.5 + 0.4 * np.sin(2 * np.pi * t) * rng.uniform(0.3, 1.0, n) + rng.normal(0.0, 0.01, n)
+    # Dispatch-like: quantised moves that sit on both SOC limits.
+    x = np.empty(n)
+    x[0] = rng.uniform(0.1, 0.9)
+    for i in range(1, n):
+        x[i] = np.clip(round(x[i - 1] + rng.choice([-0.2, -0.1, 0.0, 0.0, 0.1, 0.2]), 3), 0.1, 0.9)
+    return x
+
+
+@pytest.mark.parametrize("kind", ["walk", "daily", "plateau"])
+def test_native_rainflow_matches_the_reference_counter_bit_for_bit_across_restored_windows(kind):
+    # The simulation counts cycles one window at a time and carries the open
+    # turning points through a snapshot; the reference counts the whole trace
+    # with the rainflow package. Every cycle must match exactly, and no
+    # window may emit a cycle its own samples have not closed.
+    rng = np.random.default_rng(20261019)
+    ticks_per_second = 1_000_000.0
+    for _ in range(40):
+        n = int(rng.integers(30, 24 * 15))
+        trace = np.asarray(_soc_trace(rng, kind, n), dtype=float)
+        ticks = np.arange(n, dtype=np.int64) * int(3600 * ticks_per_second)
+        cuts = sorted(set(rng.integers(2, n - 1, size=int(rng.integers(0, 10))).tolist()))
+        bounds = [1, *cuts, n]
+        counter = _NativeRainflowCounter()
+        observed = []
+        for start, stop in zip(bounds[:-1], bounds[1:]):
+            counter = _NativeRainflowCounter(counter.snapshot())
+            emitted = counter.step(
+                DegradationDay(
+                    soc=trace[start:stop],
+                    time_ticks=ticks[start:stop],
+                    ticks_per_second=ticks_per_second,
+                    temperature_c=np.full(stop - start, 25.0),
+                    step_seconds=3600.0,
+                    start_soc=trace[start - 1],
+                    start_temperature_c=25.0,
+                    finalize_cycles=stop == n,
+                )
+            )
+            assert all(cycle["end_idx"] < stop for cycle in emitted)
+            observed.extend(emitted)
+
+        expected = _detect_cycles_rainflow_arrays(trace, ticks, ticks_per_second)
+        assert [_cycle_fields(cycle) for cycle in observed] == [_cycle_fields(cycle) for cycle in expected]
 
 
 def test_native_rainflow_uses_plateau_end_and_counts_exact_one_percent_cycle():

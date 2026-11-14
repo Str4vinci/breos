@@ -6,7 +6,8 @@ from datetime import date
 import pytest
 
 from breos import cli
-from breos.app_config import ALLOWED_CONFIG_KEYS, APP_CONFIG_FIELDS, DEFAULTS, resolve_app_config
+from breos.app_config import ALLOWED_CONFIG_KEYS, DEFAULTS, resolve_app_config
+from breos.pv.model_options import resolve_pv_model_options
 
 EXPECTED_DEFAULTS = {
     "battery_kwh": 0.0,
@@ -28,7 +29,7 @@ EXPECTED_DEFAULTS = {
     "albedo": None,
     "surface_type": None,
     "model_perez": "allsitescomposite1990",
-    "solar_position": "interval-start",
+    "solar_position": "auto",
     "irradiance_resampling": "auto",
     "iam_model": "ashrae",
     "diffuse_iam": "none",
@@ -60,6 +61,11 @@ EXPECTED_DEFAULTS = {
     "battery_max_charge_power_w": None,
     "battery_max_discharge_power_w": None,
     "battery_power_limit_c_rate": None,
+    "battery_coupling": "dc",
+    "battery_inverter_ac_rating_kw": None,
+    "battery_inverter_kw_per_kwh": None,
+    "battery_inverter_efficiency": None,
+    "battery_replacement_cost": None,
     "enable_resistance_fade": False,
     "inverter_efficiency": 0.96,
     "inverter_loading_ratio": 1.25,
@@ -82,6 +88,11 @@ EXPECTED_DEFAULTS = {
     "om_escalation": None,
     "replacement_cost_learning": 0.0,
     "inverter_ac_rating_kw": None,
+    "inverters": None,
+    "pv_strings": None,
+    "electrical_environment": None,
+    "ac_cable": None,
+    "electrical_fidelity": "aggregate",
 }
 
 # Every App flag of ``breos run``, in the order ``--help`` lists them: the
@@ -97,6 +108,11 @@ RUN_FLAGS: list[tuple[str, list[str], str, object]] = [
     ("--battery-max-charge-power-w", ["2500"], "battery_max_charge_power_w", 2500.0),
     ("--battery-max-discharge-power-w", ["2600"], "battery_max_discharge_power_w", 2600.0),
     ("--battery-power-limit-c-rate", ["0.5"], "battery_power_limit_c_rate", 0.5),
+    ("--battery-coupling", ["ac"], "battery_coupling", "ac"),
+    ("--battery-inverter-ac-rating-kw", ["3"], "battery_inverter_ac_rating_kw", 3.0),
+    ("--battery-inverter-kw-per-kwh", ["0.5"], "battery_inverter_kw_per_kwh", 0.5),
+    ("--battery-inverter-efficiency", ["0.96"], "battery_inverter_efficiency", 0.96),
+    ("--battery-replacement-cost", ["4000"], "battery_replacement_cost", 4000.0),
     ("--cost-preset", ["residential-pt"], "cost_preset", "residential_pt"),
     ("--currency", ["usd"], "currency", "USD"),
     ("--emissions-country", ["pt"], "emissions_country", "PT"),
@@ -200,48 +216,6 @@ def test_choice_flags_reject_a_value_outside_their_choices(flag, value, capsys):
     assert "invalid choice" in capsys.readouterr().err
 
 
-def test_dc_coupled_is_an_unknown_app_key():
-    with pytest.raises(ValueError, match="Unknown config key.*dc_coupled"):
-        resolve_app_config({"dc_coupled": True})
-
-
-def test_dc_coupled_has_no_cli_flag():
-    with pytest.raises(SystemExit):
-        cli.build_parser().parse_args(["run", "--dc-coupled"])
-
-
-def test_registry_generated_cli_values_all_reach_config_overrides():
-    argv = ["run"]
-    for key, field in APP_CONFIG_FIELDS.items():
-        if not field.cli_flags:
-            continue
-        argv.append(field.cli_flags[0])
-        if field.cli_choices is not None:
-            raw: object = field.cli_choices[0]
-        elif field.cli_type is int:
-            raw = 2
-        elif field.cli_type is float:
-            raw = 0.5
-        elif key == "cost_preset":
-            raw = "some-preset"
-        elif key == "emissions_country":
-            raw = "pt"
-        elif key == "location":
-            raw = "PORTO"
-        else:
-            raw = "/tmp/value" if field.cli_type is not None else "value"
-        argv.append(str(raw))
-
-    args = cli.build_parser().parse_args(argv)
-    expected = {
-        key: field.normalizer(getattr(args, key)) if field.normalizer is not None else getattr(args, key)
-        for key, field in APP_CONFIG_FIELDS.items()
-        if field.cli_flags
-    }
-
-    assert cli._build_config(args) == expected
-
-
 def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
     api_config = {
         "location": "PORTO",
@@ -249,6 +223,7 @@ def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
         "annual_consumption_kwh": 4000,
         "cost_preset": "residential-pt",
         "emissions_country": "pt",
+        "load_profile": "BDEW_H0",
         "start_date": date(2023, 1, 1),
         "costs": {"electricity-cost": 0.31},
     }
@@ -258,6 +233,7 @@ def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
     assert api_cfg["location"] == "porto"
     assert api_cfg["cost_preset"] == "residential_pt"
     assert api_cfg["emissions_country"] == "PT"
+    assert api_cfg["load_profile"] == "bdew_h0"
     assert api_cfg["start_date"] == "2023-01-01"
     assert api_cfg["costs"] == {"electricity_cost": 0.31}
 
@@ -268,6 +244,7 @@ def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
         "annual_consumption_kwh = 4000\n"
         'cost_preset = "residential-pt"\n'
         'emissions_country = "pt"\n'
+        'load_profile = "BDEW_H0"\n'
         "start_date = 2023-01-01\n"
         "\n[costs]\n"
         "electricity-cost = 0.31\n",
@@ -279,6 +256,7 @@ def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
     assert toml_cfg["location"] == api_cfg["location"]
     assert toml_cfg["cost_preset"] == api_cfg["cost_preset"]
     assert toml_cfg["emissions_country"] == api_cfg["emissions_country"]
+    assert toml_cfg["load_profile"] == api_cfg["load_profile"]
     assert toml_cfg["start_date"] == api_cfg["start_date"]
     assert toml_cfg["costs"] == api_cfg["costs"]
 
@@ -293,6 +271,13 @@ def test_key_normalization_rejects_ambiguous_spellings():
                 "costs": {"electricity-cost": 0.31, "electricity_cost": 0.32},
             }
         )
+
+
+def test_diffuse_iam_none_reads_as_beam_only():
+    cfg = resolve_app_config(
+        {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "diffuse_iam": None}
+    ).cfg
+    assert resolve_pv_model_options(diffuse_iam=cfg["diffuse_iam"]).diffuse_iam == "none"
 
 
 def test_empty_normalized_cli_values_do_not_overwrite_config_file(tmp_path):

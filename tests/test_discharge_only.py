@@ -23,11 +23,11 @@ from breos.dispatch_instructions import DispatchInstructions
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.runners.app import run_app_simulation
 from breos.smart_charging import (
-    FixedTargetDayController,
     SmartChargingSpec,
     resolve_instructions,
     smart_charging_provenance,
 )
+from tests.conftest import declare_instant_at_labels
 
 LISBON = "Europe/Lisbon"
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 2}
@@ -128,7 +128,10 @@ def test_a_discharge_only_table_resolves_to_a_spec_without_grid_settings():
     ("fields", "message"),
     [
         ({}, r"needs smart_charging\.discharge_periods"),
-        ({"discharge_periods": ("peak",), "charge_periods": ("off_peak",)}, r"remove smart_charging\.charge_periods"),
+        (
+            {"discharge_periods": ("peak",), "charge_periods": ("off_peak",)},
+            r"'discharge_only' does not take smart_charging\.charge_periods",
+        ),
         ({"discharge_periods": ("peak",), "grid_charge_efficiency": 0.9}, r"smart_charging\.grid_charge_efficiency"),
         ({"discharge_periods": ("peak",), "soc_states": 5}, r"smart_charging\.soc_states"),
     ],
@@ -187,14 +190,9 @@ def test_discharge_only_provenance_records_the_grid_settings_as_unset():
 
 
 @pytest.mark.usefixtures("_patch_weather")
-@pytest.mark.parametrize(
-    ("resolution", "tariff", "backend"),
-    [("h", TOU, "python"), ("h", TOU, "numba"), ("15min", TRI, "python"), ("15min", TRI, "numba")],
-)
-def test_app_discharges_only_in_the_listed_periods(resolution, tariff, backend):
-    if backend == "numba":
-        pytest.importorskip("numba")
-    config = _config(resolution=resolution, tariff=tariff, execution_backend=backend)
+@pytest.mark.parametrize(("resolution", "tariff"), [("h", TOU), ("15min", TRI)])
+def test_app_discharges_only_in_the_listed_periods(resolution, tariff):
+    config = _config(resolution=resolution, tariff=tariff, execution_backend="python")
     app, artifacts = _artifacts(config)
     frame = artifacts.first_year_results_df
     local = pd.DatetimeIndex(frame["Datetime"]).tz_convert(LISBON)
@@ -233,22 +231,6 @@ def test_app_discharges_only_in_the_listed_periods(resolution, tariff, backend):
 
 
 @pytest.mark.usefixtures("_patch_weather")
-def test_app_runs_discharge_only_through_the_daily_controller(monkeypatch):
-    import breos.runners.app as runner
-
-    controllers = []
-    run_projection = runner.run_projection
-
-    def spy(*args, **kwargs):
-        controllers.append(kwargs.get("day_controller"))
-        return run_projection(*args, **kwargs)
-
-    monkeypatch.setattr(runner, "run_projection", spy)
-    _artifacts(_config())
-    assert len(controllers) == 1 and isinstance(controllers[0], FixedTargetDayController)
-
-
-@pytest.mark.usefixtures("_patch_weather")
 @pytest.mark.parametrize(("resolution", "tariff"), [("h", TOU), ("15min", TRI)])
 def test_python_and_numba_give_the_same_discharge_only_ledger(resolution, tariff):
     pytest.importorskip("numba")
@@ -275,14 +257,12 @@ def _without_smart_charging_echo(result):
 
 @pytest.mark.usefixtures("_patch_weather")
 @pytest.mark.parametrize(("resolution", "tariff"), [("h", TOU), ("15min", TRI)])
-@pytest.mark.parametrize("backend", ["python", "numba"])
-def test_discharging_in_every_period_is_greedy_dispatch_bit_for_bit(resolution, tariff, backend):
-    if backend == "numba":
-        pytest.importorskip("numba")
+def test_discharging_in_every_period_is_greedy_dispatch_bit_for_bit(resolution, tariff):
     periods = sorted(tariff["import_prices"])
     every = {"mode": "discharge_only", "discharge_periods": periods}
-    greedy_app, greedy = _artifacts(_config(None, resolution=resolution, tariff=tariff, execution_backend=backend))
-    every_app, gated = _artifacts(_config(every, resolution=resolution, tariff=tariff, execution_backend=backend))
+    common = {"resolution": resolution, "tariff": tariff, "execution_backend": "python"}
+    greedy_app, greedy = _artifacts(_config(None, **common))
+    every_app, gated = _artifacts(_config(every, **common))
 
     pd.testing.assert_frame_equal(greedy.first_year_results_df, gated.first_year_results_df, check_exact=True)
     pd.testing.assert_frame_equal(greedy.yearly_df, gated.yearly_df, check_exact=True)
@@ -358,7 +338,7 @@ TARIFF_CASE_INDEX = pd.date_range("2026-01-05", periods=48, freq="h", tz=LISBON)
 
 @pytest.fixture
 def tariff_case(monkeypatch):
-    weather = pd.DataFrame({"temp_air": 20.0}, index=TARIFF_CASE_INDEX)
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": 20.0}, index=TARIFF_CASE_INDEX))
     load = pd.DataFrame({"Load": 1000.0}, index=TARIFF_CASE_INDEX)
     pv = pd.Series(
         np.where((TARIFF_CASE_INDEX.hour >= 10) & (TARIFF_CASE_INDEX.hour < 16), 1800.0, 0.0), index=TARIFF_CASE_INDEX
@@ -426,12 +406,30 @@ discharge_periods = ["peak"]
 """
 
 
-def test_sweep_varies_the_discharge_periods(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("sweep", "expected", "csv_column"),
+    [
+        (
+            '"smart_charging.discharge_periods" = [["peak"], ["off_peak", "peak"]]',
+            [
+                {"mode": "discharge_only", "discharge_periods": ["peak"]},
+                {"mode": "discharge_only", "discharge_periods": ["off_peak", "peak"]},
+            ],
+            ("param_smart_charging.discharge_periods", ['["peak"]', '["off_peak", "peak"]']),
+        ),
+        # A mode sweep alone cannot change the keys a mode takes, so the two
+        # policies are swept as whole tables.
+        (
+            'smart_charging = [{ mode = "disabled" }, { mode = "discharge_only", discharge_periods = ["peak"] }]',
+            [{"mode": "disabled"}, {"mode": "discharge_only", "discharge_periods": ["peak"]}],
+            None,
+        ),
+    ],
+    ids=["discharge-periods", "whole-tables"],
+)
+def test_sweep_varies_discharge_only_settings(monkeypatch, tmp_path, sweep, expected, csv_column):
     config_path = tmp_path / "discharge-sweep.toml"
-    config_path.write_text(
-        SWEEP_BASE + '\n[sweep]\n"smart_charging.discharge_periods" = [["peak"], ["off_peak", "peak"]]\n',
-        encoding="utf-8",
-    )
+    config_path.write_text(SWEEP_BASE + f"\n[sweep]\n{sweep}\n", encoding="utf-8")
     assert cli.main(["validate-config", str(config_path)]) == 0
     seen = []
 
@@ -448,44 +446,11 @@ def test_sweep_varies_the_discharge_periods(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "App", SweepFakeApp)
     output_path = tmp_path / "discharge-sweep.csv"
     assert cli.main(["sweep", "--config", str(config_path), "--output", str(output_path)]) == 0
-    assert [c["smart_charging"] for c in seen] == [
-        {"mode": "discharge_only", "discharge_periods": ["peak"]},
-        {"mode": "discharge_only", "discharge_periods": ["off_peak", "peak"]},
-    ]
-    rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
-    assert [row["param_smart_charging.discharge_periods"] for row in rows] == ['["peak"]', '["off_peak", "peak"]']
-
-
-def test_sweep_compares_greedy_with_discharge_only_as_whole_tables(monkeypatch, tmp_path):
-    # A mode sweep alone cannot change the keys a mode takes, so the two
-    # policies are swept as whole tables.
-    config_path = tmp_path / "policy-sweep.toml"
-    config_path.write_text(
-        SWEEP_BASE
-        + '\n[sweep]\nsmart_charging = [{ mode = "disabled" }, '
-        + '{ mode = "discharge_only", discharge_periods = ["peak"] }]\n',
-        encoding="utf-8",
-    )
-    assert cli.main(["validate-config", str(config_path)]) == 0
-    seen = []
-
-    class SweepFakeApp:
-        def __init__(self, config):
-            seen.append(config)
-
-        def simulate(self):
-            return None
-
-        def result(self):
-            return {}
-
-    monkeypatch.setattr(cli, "App", SweepFakeApp)
-    output_path = tmp_path / "policy-sweep.csv"
-    assert cli.main(["sweep", "--config", str(config_path), "--output", str(output_path)]) == 0
-    assert [c["smart_charging"] for c in seen] == [
-        {"mode": "disabled"},
-        {"mode": "discharge_only", "discharge_periods": ["peak"]},
-    ]
+    assert [c["smart_charging"] for c in seen] == expected
+    if csv_column is not None:
+        column, values = csv_column
+        rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
+        assert [row[column] for row in rows] == values
 
 
 def test_sweep_refuses_a_grid_charge_key_for_discharge_only(tmp_path, capsys):

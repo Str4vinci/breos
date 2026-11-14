@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import warnings
 from collections.abc import Hashable, Iterable
 from copy import deepcopy
 from datetime import timedelta
@@ -22,20 +23,84 @@ import numpy as np
 import pandas as pd
 import pvlib
 from pvlib.location import Location
-from scipy.interpolate import Akima1DInterpolator
+from scipy.interpolate import Akima1DInterpolator, interp1d
 
+from breos.constants import (
+    DEFAULT_INDOOR_CEILING_C,
+    DEFAULT_INDOOR_COUPLING_ALPHA,
+    DEFAULT_INDOOR_FLOOR_C,
+    DEFAULT_INDOOR_MODEL_ENABLED,
+    DEFAULT_INDOOR_SETPOINT_C,
+)
 from breos.utils import (
     _datetime_index_seconds,
+    find_irradiance_column,
+    find_met_column,
     get_hours_per_step,
     irradiance_component,
     is_leap_year,
     normalise_frequency,
+    remap_datetime_index_years,
     safe_path_slug,
 )
 
 logger = logging.getLogger(__name__)
 
-IRRADIANCE_RESAMPLING_POLICIES = ("auto", "clear_sky", "clear_sky_energy_conserving")
+IRRADIANCE_RESAMPLING_POLICIES = ("auto", "clear_sky", "clear_sky_energy_conserving", "quadrature")
+
+# Conservative tolerances for measured irradiance, in W/m² except the fraction.
+IRRADIANCE_LOW_GHI = 1.0
+IRRADIANCE_LOW_GHI_MAX_DHI = 20.0
+IRRADIANCE_ABSOLUTE_TOLERANCE = 50.0
+IRRADIANCE_RELATIVE_TOLERANCE = 0.10
+
+
+def validate_weather_irradiance(weather: pd.DataFrame, irradiance: dict[str, np.ndarray] | None = None) -> None:
+    """Refuse non-finite components and gross GHI/DHI inconsistencies.
+
+    Validate only the components present, without changing the frame. PV
+    extraction can pass its already converted arrays under their actual column
+    names; resampling and horizon processing validate source columns directly.
+    Night rows follow the same policy as daylight rows.
+
+    The GHI/DHI rule checks source data. Weather whose metadata records that
+    :func:`resample_to_15min` produced it skips that rule, because the
+    resampler reconstructs GHI and DHI separately and can break it on a few
+    steps although its hourly source passed; the source was checked before
+    resampling. Non-finite values are refused in every frame.
+    """
+    if irradiance is None:
+        irradiance = {
+            str(column): pd.to_numeric(weather[column], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+            for column in weather.columns
+            if irradiance_component(column) is not None
+        }
+    for column, values in irradiance.items():
+        bad = ~np.isfinite(values)
+        if bad.any():
+            raise ValueError(
+                f"weather column {column!r} has {int(bad.sum())} values that are not finite numbers "
+                f"(first at {weather.index[int(np.flatnonzero(bad)[0])]}). Fill them explicitly before computing PV."
+            )
+
+    metadata = weather.attrs.get(WEATHER_METADATA_KEY)
+    if isinstance(metadata, dict) and "irradiance_resampling_method" in metadata:
+        return
+    ghi_column = find_irradiance_column(irradiance, "ghi")
+    dhi_column = find_irradiance_column(irradiance, "dhi")
+    if ghi_column is None or dhi_column is None:
+        return
+    ghi, dhi = irradiance[ghi_column], irradiance[dhi_column]
+    tolerance = np.maximum(IRRADIANCE_ABSOLUTE_TOLERANCE, IRRADIANCE_RELATIVE_TOLERANCE * np.maximum(ghi, 0))
+    bad = ((ghi <= IRRADIANCE_LOW_GHI) & (dhi > IRRADIANCE_LOW_GHI_MAX_DHI)) | (dhi - ghi > tolerance)
+    if bad.any():
+        first = int(np.flatnonzero(bad)[0])
+        raise ValueError(
+            f"weather columns {ghi_column!r} and {dhi_column!r} have {int(bad.sum())} rows with inconsistent "
+            f"irradiance (first at {weather.index[first]}: GHI={ghi[first]:g}, DHI={dhi[first]:g} W/m²). "
+            "DHI must not exceed GHI by more than max(50 W/m², 10% of GHI), or exceed 20 W/m² when GHI is "
+            "at most 1 W/m². Repair these values explicitly before computing PV, preserving a regular time grid."
+        )
 
 
 def validate_irradiance_resampling(value: Any) -> str:
@@ -51,9 +116,6 @@ _WEATHER_METADATA_SCHEMA_VERSION = 1
 
 # Timestamp column names a weather or temperature CSV may use, in any case.
 _DATE_COLUMNS = ("date", "datetime", "time")
-# Air-temperature column names, in order of preference: pvlib (PVGIS TMY),
-# Open-Meteo, then generic spellings.
-_AIR_TEMPERATURE_COLUMNS = ("temp_air", "temperature_2m", "temp", "air_temperature")
 
 
 def _find_date_column(columns: Iterable[Hashable]) -> Hashable | None:
@@ -128,14 +190,14 @@ def _load_weather_metadata_sidecar(filepath: str | os.PathLike[str], weather_sha
     return metadata
 
 
-def warn_if_naive_weather_timestamps(timestamps, metadata: dict[str, Any], label: str) -> None:
+def warn_if_naive_weather_timestamps(timestamps: pd.DatetimeIndex, metadata: dict[str, Any], label: str) -> None:
     """Log a warning when weather timestamps carry no timezone BREOS knows of.
 
     Naive weather timestamps are read as UTC. That is right for files BREOS
     wrote itself, whose metadata records ``timestamp_timezone``, but a file on
     a local clock would shift the sun by its UTC offset.
     """
-    if getattr(timestamps, "tz", None) is None and not metadata.get("timestamp_timezone"):
+    if timestamps.tz is None and not metadata.get("timestamp_timezone"):
         logger.warning(
             "%s has timestamps without a timezone; BREOS reads them as UTC. If they are local clock "
             "times, the sun is shifted by the UTC offset: write them with their offset "
@@ -229,16 +291,6 @@ def relabel_right_labeled_interval_means(weather: pd.DataFrame) -> pd.DataFrame:
     metadata["timestamp_relabel_shift_seconds"] = -float(step.total_seconds())
     relabeled.attrs[WEATHER_METADATA_KEY] = metadata
     return relabeled
-
-
-def _relabel_weather_date_column(
-    weather: pd.DataFrame, metadata: dict[str, Any]
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Apply interval-label metadata to a frame whose timestamps are in ``date``."""
-    indexed = weather.set_index("date")
-    indexed.attrs[WEATHER_METADATA_KEY] = deepcopy(metadata)
-    relabeled = relabel_right_labeled_interval_means(indexed)
-    return relabeled.reset_index(), weather_metadata(relabeled)
 
 
 # Optional imports for API calls
@@ -436,23 +488,78 @@ def read_weather_csv(filepath: str | os.PathLike[str]) -> pd.DataFrame:
     return df
 
 
-def _read_weather_frame(filepath: str | os.PathLike[str]) -> pd.DataFrame:
-    """Read a weather CSV into a frame indexed by its timestamps."""
-    df = pd.read_csv(filepath, index_col=0, parse_dates=True)
+def _parse_weather_timestamps(values: Any, *, allow_mixed_offsets: bool = True) -> pd.DatetimeIndex:
+    """Parse the timestamp text of a weather file.
 
-    # Parse datetime index if it didn't work from index_col=0
-    if not isinstance(df.index, pd.DatetimeIndex):
-        # Try converting the existing index (handles timezone-aware strings)
+    ISO 8601 first, as BREOS writes it. Offsets that change within the file,
+    such as local times across a DST change, are read as UTC instants, or
+    refused when ``allow_mixed_offsets`` is false. Then day-first
+    ``dd/mm/YYYY HH:MM`` with or without seconds, then pandas' inference for
+    each element. Values that are not text, such as a row-number column,
+    raise ``TypeError``.
+    """
+    if not pd.api.types.is_string_dtype(values) and not pd.api.types.is_object_dtype(values):
+        raise TypeError("weather timestamps must be text")
+    with warnings.catch_warnings():
+        # pandas 2 warns, and builds an object index, where pandas 3 raises.
+        warnings.filterwarnings("error", message=".*mixed time zones.*", category=FutureWarning)
         try:
-            df.index = pd.to_datetime(df.index, utc=True)
-        except (ValueError, TypeError):
-            # Fall back to looking for named datetime columns
-            df = pd.read_csv(filepath)
-            date_col = _find_date_column(df.columns)
-            if date_col is not None:
-                df[date_col] = pd.to_datetime(df[date_col])
-                df.set_index(date_col, inplace=True)
-    return df
+            return pd.DatetimeIndex(pd.to_datetime(values, format="ISO8601"))
+        except (ValueError, FutureWarning):
+            pass
+    try:
+        instants = pd.DatetimeIndex(pd.to_datetime(values, format="ISO8601", utc=True))
+    except ValueError:
+        pass
+    else:
+        if not allow_mixed_offsets:
+            raise ValueError(
+                "the timestamps' UTC offset changes within the file, as local times across a DST change do; "
+                "write them in UTC or at one fixed offset"
+            )
+        return instants
+    for day_first in ("%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S"):
+        try:
+            return pd.DatetimeIndex(pd.to_datetime(values, format=day_first))
+        except ValueError:
+            pass
+    return pd.DatetimeIndex(pd.to_datetime(values, format="mixed"))
+
+
+def _index_on_timestamps(df: pd.DataFrame, column: Hashable, **parse: Any) -> pd.DataFrame:
+    """``df`` indexed by the timestamps in ``column``.
+
+    A leading row-number column, as ``to_csv`` writes by default, is dropped.
+    A timestamp column without a header leaves the index unnamed.
+    """
+    index = _parse_weather_timestamps(df[column], **parse)
+    unnamed = str(column).startswith("Unnamed: ")
+    index.name = None if unnamed else column
+    drop = [column]
+    first = df.columns[0]
+    if first != column and str(first).startswith("Unnamed: ") and pd.api.types.is_integer_dtype(df[first]):
+        drop.append(first)
+    return df.drop(columns=drop).set_axis(index)
+
+
+def _read_weather_frame(filepath: str | os.PathLike[str]) -> pd.DataFrame:
+    """Read a weather CSV into a frame indexed by its timestamps.
+
+    The timestamps are the first column, or else the first column named like
+    one (``date``, ``datetime``, ``time``). A file with neither raises
+    ``ValueError``.
+    """
+    df = pd.read_csv(filepath)
+    try:
+        return _index_on_timestamps(df, df.columns[0])
+    except (ValueError, TypeError, IndexError):
+        date_col = _find_date_column(df.columns)
+        if date_col is None:
+            raise ValueError(
+                f"Weather file {filepath} has no timestamps: its first column, or a column named "
+                f"{', '.join(_DATE_COLUMNS)}, must hold them"
+            ) from None
+        return _index_on_timestamps(df, date_col)
 
 
 def _local_weather_metadata(
@@ -633,6 +740,48 @@ def fetch_tmy_weather_data(
     return tmy_data, metadata
 
 
+# Open-Meteo hourly fields of a weather file, as BREOS names them.
+_OPENMETEO_METEO_FIELDS = ("temperature_2m", "wind_speed_10m")
+_OPENMETEO_RADIATION_FIELDS = (
+    "shortwave_radiation",
+    "direct_radiation",
+    "diffuse_radiation",
+    "direct_normal_irradiance",
+)
+FORECAST_ARCHIVE_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
+SATELLITE_ARCHIVE_URL = "https://satellite-api.open-meteo.com/v1/archive"
+HISTORICAL_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+
+
+_OPENMETEO_IMPORT_HINT = (
+    "openmeteo_requests is required to fetch Open-Meteo weather. Install with: pip install 'breos[weather]'"
+)
+
+
+def _openmeteo_hourly(url: str, request: dict[str, Any], names: Sequence[str]) -> pd.DataFrame:
+    """One Open-Meteo request's hourly variables, as ``names`` in request order, indexed by ``date``.
+
+    The client caches responses in ``.cache.sqlite`` in the working directory
+    for 30 days, so a bad response is not served forever, and retries server
+    errors.
+    """
+    if not HAS_OPENMETEO:
+        raise ImportError(_OPENMETEO_IMPORT_HINT)
+    cache_session = requests_cache.CachedSession(".cache", expire_after=timedelta(days=30))
+    retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
+    cache_session.mount("https://", HTTPAdapter(max_retries=retries))
+    cache_session.mount("http://", HTTPAdapter(max_retries=retries))
+    hourly = openmeteo_requests.Client(session=cache_session).weather_api(url, params=request)[0].Hourly()
+    index = pd.date_range(
+        start=pd.to_datetime(hourly.Time(), unit="s"),
+        end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
+        freq=pd.Timedelta(seconds=hourly.Interval()),
+        inclusive="left",
+        name="date",
+    )
+    return pd.DataFrame({name: hourly.Variables(i).ValuesAsNumpy() for i, name in enumerate(names)}, index=index)
+
+
 def fetch_weather_data(
     latitude: float,
     longitude: float,
@@ -683,10 +832,7 @@ def fetch_weather_data(
     """
     freq = normalise_frequency(freq)
     if not HAS_OPENMETEO:
-        raise ImportError(
-            "openmeteo_requests is required for historical weather data. "
-            "Install with: uv add openmeteo-requests requests-cache"
-        )
+        raise ImportError(_OPENMETEO_IMPORT_HINT)
 
     if radiation_time_basis not in {"interval_mean", "instant"}:
         raise ValueError("radiation_time_basis must be 'interval_mean' or 'instant'")
@@ -702,15 +848,6 @@ def fetch_weather_data(
         (f"terrestrial_radiation{radiation_suffix}", "terrestrial_radiation"),
     )
 
-    # Setup the Open-Meteo API client with cache and retry. Cache expires
-    # after 30 days so we don't serve indefinitely-stale entries if a single
-    # bad response was ever written.
-    cache_session = requests_cache.CachedSession(".cache", expire_after=timedelta(days=30))
-    retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
-    cache_session.mount("https://", HTTPAdapter(max_retries=retries))
-    cache_session.mount("http://", HTTPAdapter(max_retries=retries))
-    openmeteo = openmeteo_requests.Client(session=cache_session)
-
     # Preceding-hour means are labelled at the end of their hour, so the
     # hours of [start_date, end_date] carry the labels from start_date 01:00
     # through the midnight after end_date. Fetch one extra day to get that
@@ -720,7 +857,6 @@ def fetch_weather_data(
     last_label = pd.Timestamp(end_date) + pd.Timedelta(days=1)
     request_end_date = last_label.strftime("%Y-%m-%d") if right_labelled else end_date
 
-    url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
         "latitude": latitude,
         "longitude": longitude,
@@ -732,27 +868,9 @@ def fetch_weather_data(
         "tilt": tilt,
         "azimuth": azimuth,
     }
-
-    responses = openmeteo.weather_api(url, params=params)
-    response = responses[0]
-
-    # Process hourly data
-    hourly = response.Hourly()
-    hourly_data = {
-        "date": pd.date_range(
-            start=pd.to_datetime(hourly.Time(), unit="s"),
-            end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
-            freq=pd.Timedelta(seconds=hourly.Interval()),
-            inclusive="left",
-        ),
-        **{
-            output_name: hourly.Variables(index).ValuesAsNumpy()
-            for index, (_provider_name, output_name) in enumerate(hourly_fields)
-        },
-    }
-
-    hourly_dataframe = pd.DataFrame(data=hourly_data)
-    hourly_dataframe.set_index("date", inplace=True)
+    hourly_dataframe = _openmeteo_hourly(
+        HISTORICAL_ARCHIVE_URL, params, [output_name for _provider_name, output_name in hourly_fields]
+    )
     if right_labelled:
         index = hourly_dataframe.index
         hourly_dataframe = hourly_dataframe[(index > first_label) & (index <= last_label)]
@@ -773,31 +891,13 @@ def fetch_weather_data(
         hourly_dataframe = resample_to_15min(hourly_dataframe, method="makima", latitude=latitude, longitude=longitude)
 
     if save_to_file:
-        start_year = start_date[:4]
-        end_year = end_date[:4]
-        if location_name:
-            loc_slug = safe_path_slug(location_name)
-        else:
-            loc_slug = f"lat{latitude:.0f}_lon{longitude:.0f}"
-        filename = os.path.join(output_dir, f"{loc_slug}_historical_{start_year}_{end_year}_openmeteo.csv")
+        loc_slug = _location_slug(latitude, longitude, location_name)
+        filename = os.path.join(output_dir, f"{loc_slug}_historical_{start_date[:4]}_{end_date[:4]}_openmeteo.csv")
         os.makedirs(output_dir, exist_ok=True)
         save_weather_csv(hourly_dataframe, filename)
         logger.info("Saved weather data and provenance sidecar to %s", filename)
 
     return hourly_dataframe
-
-
-# Open-Meteo hourly fields of a weather file, as BREOS names them.
-_OPENMETEO_METEO_FIELDS = ("temperature_2m", "wind_speed_10m")
-_OPENMETEO_RADIATION_FIELDS = (
-    "shortwave_radiation",
-    "direct_radiation",
-    "diffuse_radiation",
-    "direct_normal_irradiance",
-)
-FORECAST_ARCHIVE_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
-SATELLITE_ARCHIVE_URL = "https://satellite-api.open-meteo.com/v1/archive"
-HISTORICAL_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
 
 def _openmeteo_year(url: str, params: dict[str, Any], fields: Sequence[str], year: int) -> pd.DataFrame:
@@ -806,15 +906,6 @@ def _openmeteo_year(url: str, params: dict[str, Any], fields: Sequence[str], yea
     The year's hours carry the labels from 1 January 01:00 to the next
     1 January 00:00, so the request runs one day past the year's end.
     """
-    if not HAS_OPENMETEO:
-        raise ImportError(
-            "openmeteo_requests is required to fetch Open-Meteo weather. Install with: pip install 'breos[weather]'"
-        )
-    cache_session = requests_cache.CachedSession(".cache", expire_after=timedelta(days=30))
-    retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
-    cache_session.mount("https://", HTTPAdapter(max_retries=retries))
-    cache_session.mount("http://", HTTPAdapter(max_retries=retries))
-    client = openmeteo_requests.Client(session=cache_session)
     request = {
         **params,
         "start_date": f"{year}-01-01",
@@ -823,15 +914,7 @@ def _openmeteo_year(url: str, params: dict[str, Any], fields: Sequence[str], yea
         "timezone": "GMT",
         "wind_speed_unit": "ms",
     }
-    hourly = client.weather_api(url, params=request)[0].Hourly()
-    index = pd.date_range(
-        start=pd.to_datetime(hourly.Time(), unit="s"),
-        end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
-        freq=pd.Timedelta(seconds=hourly.Interval()),
-        inclusive="left",
-    )
-    frame = pd.DataFrame({name: hourly.Variables(i).ValuesAsNumpy() for i, name in enumerate(fields)}, index=index)
-    frame.index.name = "date"
+    frame = _openmeteo_hourly(url, request, fields)
     frame = frame[(frame.index > pd.Timestamp(f"{year}-01-01")) & (frame.index <= pd.Timestamp(f"{year + 1}-01-01"))]
     expected = pd.date_range(f"{year}-01-01 01:00", f"{year + 1}-01-01 00:00", freq="h")
     if not frame.index.equals(expected):
@@ -976,6 +1059,182 @@ def fetch_satellite_weather(
     return frame
 
 
+def _require_regular_hourly_index(df_hourly: pd.DataFrame, policy: str) -> None:
+    if len(df_hourly.index) > 1:
+        intervals = df_hourly.index[1:] - df_hourly.index[:-1]
+        if not np.all(intervals == pd.Timedelta(hours=1)):
+            raise ValueError(f"irradiance_resampling={policy} requires a regular hourly index")
+
+
+def _interpolate(x_original: np.ndarray, y_original: np.ndarray, x_target: np.ndarray, method: str) -> np.ndarray:
+    """``y_original`` read at ``x_target`` with ``method``.
+
+    Makima does not extrapolate, so target points before the first or after
+    the last source point hold the edge value; the scipy ``interp1d`` kinds
+    extrapolate.
+    """
+    if method != "makima":
+        return interp1d(x_original, y_original, kind=method, fill_value="extrapolate")(x_target)
+    values = Akima1DInterpolator(x_original, y_original, method="makima")(x_target)
+    values[x_target < x_original[0]] = y_original[0]
+    values[x_target > x_original[-1]] = y_original[-1]
+    return values
+
+
+def _clear_sky_ratio_interpolation(
+    x_original: np.ndarray,
+    y_original: np.ndarray,
+    source_clear_sky: np.ndarray,
+    x_target: np.ndarray,
+    target_clear_sky: np.ndarray,
+    *,
+    method: str,
+    epsilon: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Interpolate one component's clear-sky ratio between its source points.
+
+    Returns the reconstruction, before night is zeroed or overshoot clipped,
+    and the mask of target points the dawn/dusk linear fallback supplied.
+    """
+    k_hourly = np.clip(y_original / (source_clear_sky + epsilon), 0, None)
+    reconstructed = _interpolate(x_original, k_hourly, x_target, method) * (target_clear_sky + epsilon)
+    # Brackets are evaluated on representative times, including provider offsets.
+    right = np.clip(np.searchsorted(x_original, x_target, side="right"), 1, len(x_original) - 1)
+    left = right - 1
+    fallback = (source_clear_sky[left] <= epsilon) | (source_clear_sky[right] <= epsilon)
+    # Outside the source range use the edge point's support, not an
+    # unrelated neighbouring hour; np.interp holds that edge value.
+    fallback[x_target < x_original[0]] = source_clear_sky[0] <= epsilon
+    fallback[x_target > x_original[-1]] = source_clear_sky[-1] <= epsilon
+    reconstructed[fallback] = np.interp(x_target[fallback], x_original, y_original)
+    return reconstructed, fallback
+
+
+_QUADRATURE_SAMPLES_PER_STEP = 15  # one-minute samples per quarter-hour
+_QUADRATURE_DARK_ZENITH = 95.0  # degrees; a step centred at a larger zenith is dark throughout
+
+
+def _quadrature_irradiance(
+    df_hourly: pd.DataFrame,
+    irrad_col_map: dict[Hashable, str],
+    site: Location,
+    source_offset: pd.Timedelta,
+    cs_hourly: pd.DataFrame,
+    representative_times: pd.DatetimeIndex,
+    step_zenith: np.ndarray,
+    *,
+    interval_mean: bool,
+    method: str,
+    epsilon: float,
+    fallback_counts: dict[str, int],
+    zero_support_counts: dict[str, int],
+) -> tuple[dict[Hashable, np.ndarray], dict[str, Any]]:
+    """Reconstruct DNI and DHI on a one-minute grid and derive GHI from them.
+
+    Each quarter-hour is the mean of the 15 one-minute samples centred on its
+    representative time. GHI = DNI·max(cos(apparent zenith), 0) + DHI holds in
+    every sample, so a quarter-hour's GHI is its DHI plus the mean of DNI·cos
+    over its samples; it does not equal its mean DNI times the cosine of any
+    single zenith. An interval-mean
+    source hour spreads each component over its 60 samples in proportion to
+    that component's clear-sky irradiance, which conserves the hour's DNI and
+    DHI means; a positive hour without clear-sky support is spread evenly and
+    counted. Instant samples interpolate the clear-sky ratio as ``"clear_sky"``
+    does, at each one-minute sample, and conserve nothing. Updates the
+    fallback and zero-support counts in place.
+
+    Returns:
+        Tuple of (quarter-hour values by column, ``irradiance_quadrature``
+        provenance record)
+    """
+    samples = _QUADRATURE_SAMPLES_PER_STEP
+    n_steps = len(representative_times)
+    sample_offsets = pd.to_timedelta(np.tile(np.arange(samples) - samples // 2, n_steps), unit="min")
+    sample_times = representative_times.repeat(samples) + sample_offsets
+    # The sun's zenith moves at most 0.25 degrees a minute, so no sample of a
+    # step whose centre is more than five degrees below the horizon is lit.
+    # Leaving those samples dark halves the cost of the solar position.
+    lit = np.repeat(step_zenith < _QUADRATURE_DARK_ZENITH, samples)
+    solar_position = site.get_solarposition(sample_times[lit])
+    lit_clear_sky = site.get_clearsky(sample_times[lit], solar_position=solar_position)
+    cos_zenith = np.zeros(len(sample_times))
+    cos_zenith[lit] = np.maximum(np.cos(np.deg2rad(solar_position["apparent_zenith"].to_numpy())), 0.0)
+    clear_sky = {}
+    for component in ("dni", "dhi"):
+        clear_sky[component] = np.zeros(len(sample_times))
+        clear_sky[component][lit] = lit_clear_sky[component].to_numpy(dtype=float)
+    x_source = _datetime_index_seconds(df_hourly.index + source_offset)
+    x_samples = _datetime_index_seconds(sample_times)
+
+    def step_means(values: np.ndarray) -> np.ndarray:
+        return values.reshape(n_steps, samples).mean(axis=1)
+
+    sampled: dict[Hashable, np.ndarray] = {}
+    for col, component in irrad_col_map.items():
+        if component == "ghi":
+            continue
+        sample_clear_sky = clear_sky[component]
+        if interval_mean:
+            hourly_values = df_hourly[col].to_numpy(dtype=float)
+            weights = sample_clear_sky.reshape(len(df_hourly), -1)
+            support = weights.sum(axis=1)
+            supported = support > 0.0
+            values = np.repeat(hourly_values[:, None], weights.shape[1], axis=1)
+            values[supported] *= weights[supported] * (weights.shape[1] / support[supported, None])
+            zero_support_counts[component] += int(np.sum((~supported) & (hourly_values > 0.0)))
+            sampled[col] = values.reshape(-1)
+        else:
+            values, fallback = _clear_sky_ratio_interpolation(
+                x_source,
+                df_hourly[col].to_numpy(dtype=float),
+                cs_hourly[component].to_numpy(dtype=float),
+                x_samples,
+                sample_clear_sky,
+                method=method,
+                epsilon=epsilon,
+            )
+            daylight_fallback = fallback & (sample_clear_sky > 0.0)
+            fallback_counts[component] += int(np.sum(daylight_fallback.reshape(n_steps, samples).any(axis=1)))
+            values[sample_clear_sky <= 0.0] = 0.0
+            sampled[col] = values
+        sampled[col] = np.clip(sampled[col], 0.0, None)
+
+    columns = {col: step_means(values) for col, values in sampled.items()}
+    dni = sampled[find_irradiance_column(sampled, "dni")]
+    dhi = sampled[find_irradiance_column(sampled, "dhi")]
+    ghi = step_means(dni * cos_zenith + dhi)
+    ghi_columns = [col for col, component in irrad_col_map.items() if component == "ghi"]
+    for col in ghi_columns:
+        columns[col] = ghi
+
+    # Compare the derived GHI with the input at the source steps: an hour's
+    # mean for interval means, the quarter-hour centred on the sample time
+    # for instant samples.
+    ghi_column = find_irradiance_column(df_hourly.columns, "ghi")
+    source_ghi = df_hourly[ghi_column].to_numpy(dtype=float)
+    derived_ghi = ghi.reshape(len(df_hourly), 4).mean(axis=1) if interval_mean else ghi[::4]
+    # Without input GHI energy the fractions are undefined, not zero.
+    energy = float(source_ghi.sum())
+    record = {
+        "sample_seconds": 60,
+        "samples_per_step": samples,
+        "derived_components": ["ghi"],
+        "conserved_components": ["dni", "dhi"] if interval_mean else [],
+        "ghi_reconciliation": {
+            "energy_change_fraction": float(derived_ghi.sum() / energy - 1.0) if energy > 0 else None,
+            "absolute_residual_energy_fraction": (
+                float(np.abs(derived_ghi - source_ghi).sum() / energy) if energy > 0 else None
+            ),
+        },
+    }
+    return columns, record
+
+
+# Name parts of the solar and wind columns beside the GHI/DNI/DHI components,
+# such as global_tilted_irradiance or wind_speed_10m, that cannot be negative.
+_NON_NEGATIVE_NAME_PARTS = ("irrad", "radiation", "tilted", "terrestrial", "wind", "speed")
+
+
 def resample_to_15min(
     df_hourly: pd.DataFrame,
     method: str = "makima",
@@ -1012,6 +1271,10 @@ def resample_to_15min(
             otherwise. "clear_sky_energy_conserving" explicitly requests
             conservation and requires interval-mean metadata. Components
             are independent: no irradiance closure is imposed.
+            "quadrature" derives GHI from DNI and DHI in one-minute samples
+            and averages the samples into quarter-hours; it conserves
+            interval-mean DNI and DHI and needs coordinates and three finite
+            irradiance components.
         altitude: Site elevation in metres for the clear-sky model (optional;
             pvlib looks it up from the coordinates when omitted)
 
@@ -1021,6 +1284,7 @@ def resample_to_15min(
     Raises:
         ValueError: If DataFrame doesn't have DatetimeIndex
     """
+    validate_weather_irradiance(df_hourly)
     df_hourly = relabel_right_labeled_interval_means(df_hourly)
     weather_metadata = deepcopy(df_hourly.attrs.get(WEATHER_METADATA_KEY) or {})
     requested_policy = validate_irradiance_resampling(irradiance_resampling)
@@ -1058,10 +1322,6 @@ def resample_to_15min(
     target_offset = _representative_time_offset(weather_metadata, pd.Timedelta(minutes=15), require_metadata=False)
     x_original = _datetime_index_seconds(df_hourly.index) + (source_offset - target_offset).total_seconds()
     x_target = _datetime_index_seconds(target_index)
-    # Makima does not extrapolate: quarter-hours before the first or after the
-    # last representative time hold the edge value.
-    before_first = x_target < x_original[0]
-    after_last = x_target > x_original[-1]
 
     # Map column names to irradiance type (supports TMY and Open-Meteo conventions)
     irrad_col_map = {}  # column_name -> clear-sky component ('ghi', 'dni', 'dhi')
@@ -1077,9 +1337,6 @@ def resample_to_15min(
     epsilon = 5.0  # Regularise ratios; low clear-sky support uses direct linear interpolation.
     fallback_counts = dict.fromkeys(irrad_col_map.values(), 0)
     zero_support_counts = dict.fromkeys(irrad_col_map.values(), 0)
-    # Brackets are evaluated on representative times, including provider offsets.
-    right = np.clip(np.searchsorted(x_original, x_target, side="right"), 1, len(x_original) - 1)
-    left = right - 1
 
     if use_clearsky:
         site = Location(latitude, longitude, altitude=altitude)
@@ -1088,63 +1345,64 @@ def resample_to_15min(
         solar_position_15min = site.get_solarposition(target_index + target_offset)
         cs_15min = site.get_clearsky(target_index + target_offset, solar_position=solar_position_15min)
 
+    quadrature_columns: dict[Hashable, np.ndarray] = {}
+    quadrature_record: dict[str, Any] = {}
+    if resolved_policy == "quadrature":
+        if not use_clearsky:
+            raise ValueError("irradiance_resampling='quadrature' requires latitude and longitude")
+        missing = [component for component in ("ghi", "dni", "dhi") if component not in irrad_col_map.values()]
+        if missing:
+            raise ValueError(
+                "irradiance_resampling='quadrature' requires GHI, DNI and DHI columns; missing: " + ", ".join(missing)
+            )
+        _require_regular_hourly_index(df_hourly, resolved_policy)
+        quadrature_columns, quadrature_record = _quadrature_irradiance(
+            df_hourly,
+            irrad_col_map,
+            site,
+            source_offset,
+            cs_hourly,
+            target_index + target_offset,
+            solar_position_15min["zenith"].to_numpy(dtype=float),
+            interval_mean=time_basis == "interval_mean",
+            method=method,
+            epsilon=epsilon,
+            fallback_counts=fallback_counts,
+            zero_support_counts=zero_support_counts,
+        )
+
     # Get numeric columns only
     numeric_df = df_hourly.select_dtypes(include=[np.number])
 
     for col in numeric_df.columns:
         y_original = numeric_df[col].values
 
-        if use_clearsky and col in irrad_col_map:
+        if col in quadrature_columns:
+            df_15min[col] = quadrature_columns[col]
+        elif use_clearsky and col in irrad_col_map:
             # Clear-sky scaling: interpolate clearness index, not raw irradiance
             cs_comp = irrad_col_map[col]
-            k_hourly = np.clip(y_original / (cs_hourly[cs_comp].values + epsilon), 0, None)
-
-            if method == "makima":
-                interp_k = Akima1DInterpolator(x_original, k_hourly, method="makima")
-            else:
-                from scipy.interpolate import interp1d
-
-                interp_k = interp1d(x_original, k_hourly, kind=method, fill_value="extrapolate")
-            k_15min = interp_k(x_target)
-            if method == "makima":
-                k_15min[before_first] = k_hourly[0]
-                k_15min[after_last] = k_hourly[-1]
             clear_sky = cs_15min[cs_comp].to_numpy(dtype=float)
-            reconstructed = k_15min * (clear_sky + epsilon)
-            source_clear_sky = cs_hourly[cs_comp].to_numpy(dtype=float)
-            fallback = (source_clear_sky[left] <= epsilon) | (source_clear_sky[right] <= epsilon)
-            # Outside the source range use the edge point's support, not an
-            # unrelated neighbouring hour; np.interp holds that edge value.
-            fallback[before_first] = source_clear_sky[0] <= epsilon
-            fallback[after_last] = source_clear_sky[-1] <= epsilon
-            reconstructed[fallback] = np.interp(x_target[fallback], x_original, y_original)
+            reconstructed, fallback = _clear_sky_ratio_interpolation(
+                x_original,
+                y_original,
+                cs_hourly[cs_comp].to_numpy(dtype=float),
+                x_target,
+                clear_sky,
+                method=method,
+                epsilon=epsilon,
+            )
             # Count only the quarter-hours the fallback supplies; night ones are zeroed next.
             fallback_counts[cs_comp] += int(np.sum(fallback & (clear_sky > 0.0)))
             reconstructed[clear_sky <= 0.0] = 0.0
             df_15min[col] = np.clip(reconstructed, 0, None)
         else:
-            # Direct interpolation for non-irradiance columns
-            if method == "makima":
-                interp = Akima1DInterpolator(x_original, y_original, method="makima")
-            else:
-                from scipy.interpolate import interp1d
-
-                interp = interp1d(x_original, y_original, kind=method, fill_value="extrapolate")
-            interpolated = interp(x_target)
-            if method == "makima":
-                interpolated[before_first] = y_original[0]
-                interpolated[after_last] = y_original[-1]
+            interpolated = _interpolate(x_original, y_original, x_target, method)
+            # The interpolant can overshoot below zero, which irradiance and
+            # wind cannot; the clear-sky paths clip their own.
+            if col in irrad_col_map or any(part in col.lower() for part in _NON_NEGATIVE_NAME_PARTS):
+                interpolated = np.clip(interpolated, 0, None)
             df_15min[col] = interpolated
-
-    # Clip negative values in the solar and wind columns that clear-sky
-    # scaling has not already clipped
-    for col in df_15min.columns:
-        if col in irrad_col_map and use_clearsky:
-            continue
-        if col in irrad_col_map or any(
-            x in col.lower() for x in ["irrad", "radiation", "tilted", "terrestrial", "wind", "speed"]
-        ):
-            df_15min[col] = np.clip(df_15min[col], 0, None)
 
     # Diagnostics describe quarter-hours before and after hourly conservation,
     # at exactly the representative solar times used by clear-sky reconstruction.
@@ -1167,10 +1425,7 @@ def resample_to_15min(
 
     closure_before = closure_diagnostic()
     if resolved_policy == "clear_sky_energy_conserving" and irrad_col_map:
-        if len(df_hourly.index) > 1:
-            intervals = df_hourly.index[1:] - df_hourly.index[:-1]
-            if not np.all(intervals == pd.Timedelta(hours=1)):
-                raise ValueError("irradiance_resampling=clear_sky_energy_conserving requires a regular hourly index")
+        _require_regular_hourly_index(df_hourly, resolved_policy)
         expected_rows = len(df_hourly) * 4
         if len(df_15min) != expected_rows:
             raise ValueError(
@@ -1196,13 +1451,17 @@ def resample_to_15min(
             "irradiance_resampling": requested_policy,
             "irradiance_resampling_resolved": resolved_policy,
             "irradiance_resampling_method": method,
-            "irradiance_resampling_reconstruction": "clear_sky_ratio" if use_clearsky else "direct",
+            "irradiance_resampling_reconstruction": (
+                "one_minute_quadrature" if quadrature_columns else "clear_sky_ratio" if use_clearsky else "direct"
+            ),
             "irradiance_resampling_fallback_counts": fallback_counts,
             "irradiance_resampling_zero_support_counts": zero_support_counts,
         }
     )
     if closure_before is not None:
         weather_metadata["irradiance_closure"] = {"before": closure_before, "after": closure_diagnostic()}
+    if quadrature_record:
+        weather_metadata["irradiance_quadrature"] = quadrature_record
     df_15min.attrs[WEATHER_METADATA_KEY] = weather_metadata
 
     return df_15min
@@ -1217,7 +1476,7 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
     with a warning.
 
     Returns:
-        Tuple of (source year -> frame with a ``date`` column, file metadata)
+        Tuple of (source year -> frame indexed by ``date``, file metadata)
     """
     df = pd.read_csv(csv_file_path)
     if "date" not in df.columns:
@@ -1226,30 +1485,30 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
             "timestamp column named 'date', as `tools/fetch_weather.py historical` writes; a "
             "single-year TMY cannot be sampled by year."
         )
+    # The years are split on the file's own clock, so its offset must not change.
     try:
-        df["date"] = pd.to_datetime(df["date"], format="ISO8601")
-    except ValueError:
-        try:
-            df["date"] = pd.to_datetime(df["date"], format="%d/%m/%Y %H:%M")
-        except ValueError:
-            df["date"] = pd.to_datetime(df["date"], format="mixed")
+        df = _index_on_timestamps(df, "date", allow_mixed_offsets=False)
+    except ValueError as exc:
+        raise ValueError(f"Weather file {csv_file_path}: {exc}") from exc
 
     metadata = weather_file_metadata(csv_file_path)
-    warn_if_naive_weather_timestamps(df["date"].dt, metadata, f"Weather file {csv_file_path}")
-    df, metadata = _relabel_weather_date_column(df, metadata)
-    df = df[~((df["date"].dt.month == 2) & (df["date"].dt.day == 29))]
+    warn_if_naive_weather_timestamps(df.index, metadata, f"Weather file {csv_file_path}")
+    df.attrs[WEATHER_METADATA_KEY] = metadata
+    df = relabel_right_labeled_interval_means(df)
+    metadata = weather_metadata(df)
+    df = df[~((df.index.month == 2) & (df.index.day == 29))]
 
-    step = df["date"].diff().median()
+    step = df.index.to_series().diff().median()
     if len(df) < 2 or pd.isna(step) or step <= pd.Timedelta(0):
         logger.warning("Weather file %s has no usable timestep, so it has no complete year", csv_file_path)
         return {}, metadata
     expected_rows = int(round(pd.Timedelta(days=365) / step))
 
-    years = df["date"].dt.year
+    years = df.index.year
     complete: Dict[int, pd.DataFrame] = {}
     incomplete: List[str] = []
     for year in years.unique():
-        year_data = df[years == year].reset_index(drop=True)
+        year_data = df[years == year]
         if len(year_data) == expected_rows:
             complete[int(year)] = year_data
         else:
@@ -1265,10 +1524,15 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
     return complete, metadata
 
 
-def _remap_weather_year(year_data: pd.DataFrame, source_year: int, target_year: int) -> pd.DataFrame:
-    remapped = year_data.copy()
-    remapped["date"] = remapped["date"] + pd.DateOffset(years=target_year - source_year)
-    return remapped
+def _weather_years(csv_file_path: str, target_year: int) -> Dict[int, pd.DataFrame]:
+    """The complete years of a multi-year weather CSV, indexed by their timestamps moved to ``target_year``."""
+    by_year, metadata = _complete_weather_years(csv_file_path)
+    result: Dict[int, pd.DataFrame] = {}
+    for year, year_data in by_year.items():
+        remapped = remap_datetime_index_years(year_data, target_year - year)
+        remapped.attrs[WEATHER_METADATA_KEY] = deepcopy(metadata)
+        result[year] = remapped
+    return result
 
 
 def preload_weather_by_year(
@@ -1287,15 +1551,10 @@ def preload_weather_by_year(
         target_year: Calendar year to remap all dates to
 
     Returns:
-        Dict mapping original year → DataFrame with target-year dates, indexed by 'date'
+        Dict mapping original year → DataFrame with target-year timestamps in
+        its first column, ``date``, and a row-number index
     """
-    by_year, metadata = _complete_weather_years(csv_file_path)
-    result: Dict[int, pd.DataFrame] = {}
-    for year, year_data in by_year.items():
-        remapped = _remap_weather_year(year_data, year, target_year)
-        remapped.attrs[WEATHER_METADATA_KEY] = deepcopy(metadata)
-        result[year] = remapped
-    return result
+    return {year: frame.reset_index() for year, frame in _weather_years(csv_file_path, target_year).items()}
 
 
 def read_epw_file(
@@ -1359,10 +1618,8 @@ def extract_ambient_temperature(weather_df: pd.DataFrame) -> Optional[pd.Series]
     Returns:
         pd.Series of temperatures, or None if no recognised column found.
     """
-    for col in _AIR_TEMPERATURE_COLUMNS:
-        if col in weather_df.columns:
-            return weather_df[col]
-    return None
+    column = find_met_column(weather_df.columns, "temp_air")
+    return None if column is None else weather_df[column]
 
 
 _TEMPERATURE_FILE_VALUE_COLUMNS = ("temp", "temperature", "t_cell", "t_amb")
@@ -1467,6 +1724,36 @@ def _read_temperature_file(path: str) -> pd.Series:
     return pd.Series(df[val_col].to_numpy(), index=pd.DatetimeIndex(stamps), name=val_col)
 
 
+def apply_indoor_temperature_model(
+    outdoor_temperature: pd.Series,
+    setpoint_c: float = DEFAULT_INDOOR_SETPOINT_C,
+    coupling_alpha: float = DEFAULT_INDOOR_COUPLING_ALPHA,
+    floor_c: float = DEFAULT_INDOOR_FLOOR_C,
+    ceiling_c: float = DEFAULT_INDOOR_CEILING_C,
+) -> pd.Series:
+    """
+    Transform outdoor temperature to indoor temperature for battery simulation.
+
+    Residential batteries are installed indoors where building thermal mass
+    buffers outdoor extremes. This stateless preprocessing applies a weighted
+    blend with clamp before temperatures enter the simulation loop.
+
+    T_indoor = clamp(alpha * T_outdoor + (1 - alpha) * T_setpoint, floor, ceiling)
+
+    Args:
+        outdoor_temperature: Outdoor ambient temperature series (°C)
+        setpoint_c: Indoor comfort midpoint (°C)
+        coupling_alpha: How much outdoor temp influences indoor (0=insulated, 1=outdoor)
+        floor_c: Minimum indoor temperature (°C)
+        ceiling_c: Maximum indoor temperature (°C)
+
+    Returns:
+        Indoor temperature series (°C), same index as input
+    """
+    t_indoor = coupling_alpha * outdoor_temperature + (1.0 - coupling_alpha) * setpoint_c
+    return t_indoor.clip(lower=floor_c, upper=ceiling_c)
+
+
 def build_battery_temperature_series(
     temp_config: Any,
     index: pd.DatetimeIndex,
@@ -1535,17 +1822,7 @@ def build_battery_temperature_series(
         )
 
     indoor_model = indoor_model or {}
-    from breos.constants import (
-        DEFAULT_INDOOR_CEILING_C,
-        DEFAULT_INDOOR_COUPLING_ALPHA,
-        DEFAULT_INDOOR_FLOOR_C,
-        DEFAULT_INDOOR_MODEL_ENABLED,
-        DEFAULT_INDOOR_SETPOINT_C,
-    )
-
     if indoor_model.get("enabled", DEFAULT_INDOOR_MODEL_ENABLED):
-        from breos.battery import apply_indoor_temperature_model
-
         result = apply_indoor_temperature_model(
             result,
             setpoint_c=indoor_model.get("setpoint_c", DEFAULT_INDOOR_SETPOINT_C),

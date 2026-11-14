@@ -86,9 +86,10 @@ def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mappi
 
     Tables merge key by key, so after a currency change every amount the old
     run set and the changes do not restate would be read in the new currency:
-    each non-zero cost under ``[costs]``, and each non-zero price list, fixed
-    charge and network-credit amount of a ``[tariff]`` or
-    ``[reference_tariff]`` the run keeps. A key set to None, or a table
+    each non-zero cost under ``[costs]``, a non-zero
+    ``battery_replacement_cost``, and each non-zero price list, fixed charge
+    and network-credit amount of a ``[tariff]`` or ``[reference_tariff]`` the
+    run keeps. A key set to None, or a table
     removed, counts as restated. A cost preset carries its own currency and
     is checked when the new configuration resolves. The planner's wear
     weight is not a revaluation key, so a non-zero one cannot be restated.
@@ -98,6 +99,8 @@ def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mappi
         return
     move = f"revalue() moves the run from {old.currency} to {currency}"
     kept = _kept_amounts(old.cfg.get("costs") or {}, changes.get("costs"), sorted(old.cfg.get("costs") or {}), "costs")
+    if old.cfg.get("battery_replacement_cost") and "battery_replacement_cost" not in changes:
+        kept.append("battery_replacement_cost")
     for name in ("tariff", "reference_tariff"):
         table = old.cfg.get(name)
         if not isinstance(table, Mapping) or (name in changes and changes[name] is None):
@@ -121,13 +124,8 @@ def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mappi
         )
 
 
-# The keys App.revalue may change: the economics section of the resolved
-# configuration, except the horizon, which sets how many years are simulated.
-REVALUATION_KEYS = frozenset(
-    key
-    for key, field in APP_CONFIG_FIELDS.items()
-    if field.summary is not None and field.summary.startswith("economics.") and key != "projection_years"
-)
+# The keys App.revalue may change: the prices (AppConfigField.revalue).
+REVALUATION_KEYS = frozenset(key for key, field in APP_CONFIG_FIELDS.items() if field.revalue)
 
 
 class App:
@@ -191,12 +189,14 @@ class App:
         ``reference_tariff.import_prices``) replaces the old one whole. Only
         the economics keys in :data:`REVALUATION_KEYS` may change: ``costs``,
         ``cost_preset``, ``currency``, ``tariff``, ``reference_tariff``, the
-        discount rate, the escalators and ``terminal_value``. The estimated battery residual
+        discount rate, the escalators, ``battery_replacement_cost`` and
+        ``terminal_value``. The estimated battery residual
         value is recomputed from retained final health without simulating again.
 
         A change of the run's currency must restate every money input in the
         new currency, since tables merge key by key: each non-zero cost the
-        old ``costs`` table set, and each non-zero price list, fixed charge
+        old ``costs`` table set, a non-zero ``battery_replacement_cost``, and
+        each non-zero price list, fixed charge
         and ``annual_network_credit`` amount of a ``tariff`` or
         ``reference_tariff`` the run keeps (a key set to None, or a table
         removed, counts), and a cost preset in the new currency or none. A

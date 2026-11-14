@@ -102,6 +102,8 @@ def test_noop_changes_nothing():
     np.testing.assert_array_equal(noop.reserve_fraction, np.zeros(4))
     assert np.isnan(noop.grid_target_fraction).all()
     assert (noop.grid_charge_efficiency, noop.grid_import_limit_w) == (1.0, math.inf)
+    # One no-op set is shared by every run of a length, so it is read-only.
+    assert not noop.grid_target_fraction.flags.writeable
     assert len(DispatchInstructions.noop(0)) == 0
     with pytest.raises(ValueError, match="non-negative integer"):
         DispatchInstructions.noop(-1)
@@ -148,3 +150,23 @@ def test_instructions_survive_pickling():
     assert restored.instruction_hash() == instructions.instruction_hash()
     assert not restored.grid_target_fraction.flags.writeable
     assert not restored.discharge_allowed.flags.writeable
+
+
+def test_take_keeps_the_scalars_for_a_slice_or_step_positions():
+    instructions = _instructions(grid_charge_efficiency=None, grid_import_limit_w=math.inf)
+
+    head = instructions.take(slice(2))
+    picked = instructions.take(np.array([2, 0, 2]))
+
+    assert head == _instructions(
+        discharge_allowed=[True, False],
+        reserve_fraction=[0.0, 0.0],
+        grid_target_fraction=[np.nan, 0.5],
+        grid_charge_efficiency=None,
+        grid_import_limit_w=math.inf,
+    )
+    assert picked.discharge_allowed.tolist() == [False, True, False]
+    assert picked.reserve_fraction.tolist() == [0.2, 0.0, 0.2]
+    assert np.isnan(picked.grid_target_fraction).all()
+    assert (picked.grid_charge_efficiency, picked.grid_import_limit_w) == (None, math.inf)
+    assert not picked.reserve_fraction.flags.writeable

@@ -1,0 +1,33 @@
+# ============================================================================
+# BREOS run config — a battery added to an existing PV system (AC-coupled)
+#
+# The battery has its own inverter on the AC bus, beside the PV inverter: the
+# PV inverter converts as without a battery, and PV AC the house does not use
+# charges the battery through the battery inverter. See "AC-coupled
+# batteries" in docs/getting-started/configuration.md.
+#
+#   breos run --config configs/examples/ac-coupled-battery.toml
+#
+# The battery inverter's efficiency and price below are placeholders: take
+# them from the product you study. BREOS has no default for either.
+# ============================================================================
+
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+pv_module = "Suntech_STP550S_STC"
+cost_preset = "residential_pt"
+emissions_country = "PT"
+
+# --- The existing PV inverter -------------------------------------------------
+inverter_efficiency = 0.96
+inverter_ac_rating_kw = 4.0
+
+# --- The added battery and its own inverter ----------------------------------
+battery_kwh = 5.0
+battery_coupling = "ac"
+battery_inverter_kw_per_kwh = 0.5   # 2.5 kW for 5 kWh; or battery_inverter_ac_rating_kw
+battery_inverter_efficiency = 0.95  # placeholder: the product's nominal efficiency
+
+[costs]
+battery_inverter_cost_per_kw = 150.0  # placeholder; 0 if storage_cost_per_kwh includes the inverter

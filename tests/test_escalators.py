@@ -1,14 +1,14 @@
 """Separate escalators for import, O&M and replacement learning (ADR 0003 E1, E2)."""
 
-from unittest import mock
-
 import numpy as np
 import pandas as pd
 import pytest
 
 from breos import App, optimization
 from breos.economics import cost_analysis_projection, projection_rates_record
-from tools.generate_app_golden import SCENARIOS, _fake_fetch
+from breos.optimization_config import resolve_optimization_config
+from tests.offline_app import offline_weather
+from tools.generate_app_golden import SCENARIOS
 
 COSTS = {
     "total_initial_cost": 6000.0,
@@ -91,10 +91,10 @@ def test_provenance_records_the_rates_used():
 @pytest.mark.parametrize(
     ("config", "message"),
     [
-        ({"import_price_escalation": -1.0}, "'import_price_escalation' must be greater than -1"),
-        ({"om_escalation": -2}, "'om_escalation' must be greater than -1"),
-        ({"replacement_cost_learning": 1.0}, "'replacement_cost_learning' must be at least 0 and below 1"),
-        ({"replacement_cost_learning": -0.1}, "'replacement_cost_learning' must be at least 0 and below 1"),
+        ({"import_price_escalation": -1.0}, "'import_price_escalation' must be > -1"),
+        ({"om_escalation": -2}, "'om_escalation' must be > -1"),
+        ({"replacement_cost_learning": 1.0}, "'replacement_cost_learning' must be between 0 and 1"),
+        ({"replacement_cost_learning": -0.1}, "'replacement_cost_learning' must be between 0 and 1"),
     ],
 )
 def test_escalator_config_is_checked(config, message):
@@ -113,10 +113,7 @@ def app_replacement_runs():
         "replacement_cost_learning": {"replacement_cost_learning": 0.2},
     }
     runs = {}
-    with (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    ):
+    with offline_weather():
         for name, change in changes.items():
             app = App({**config, **change})
             app.simulate()
@@ -184,11 +181,35 @@ def test_optimizer_prices_and_records_its_financials_escalators(monkeypatch):
 @pytest.mark.parametrize(
     ("financials", "message"),
     [
-        ({"inflation_rate": -1.0}, "financials.inflation_rate must be greater than -1"),
-        ({"om_escalation": -1.5}, "financials.om_escalation must be greater than -1"),
-        ({"replacement_cost_learning": 1.0}, "financials.replacement_cost_learning must be at least 0 and below 1"),
+        ({"inflation_rate": -1.0}, "'financials.inflation_rate' must be > -1"),
+        ({"om_escalation": -1.5}, "'financials.om_escalation' must be > -1"),
+        ({"replacement_cost_learning": 1.0}, "'financials.replacement_cost_learning' must be between 0 and 1"),
     ],
 )
 def test_optimizer_rejects_invalid_financials_rates(monkeypatch, financials, message):
     with pytest.raises(ValueError, match=message):
         _optimizer_case(monkeypatch, financials)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("inflation_rate", -1.0),
+        ("inflation_rate", -2.0),
+        ("discount_rate", -1.0),
+        ("sell_price_inflation", 1.5),
+        ("sell_price_inflation", 1.0),
+        ("sell_price_inflation", -1.0),
+        ("import_price_escalation", -1.0),
+        ("om_escalation", -1.5),
+        ("replacement_cost_learning", 1.0),
+        ("replacement_cost_learning", 3.0),
+        ("replacement_cost_learning", -0.1),
+    ],
+)
+def test_optimizer_refuses_the_rates_app_refuses(key, value):
+    with pytest.raises(ValueError, match=f"'{key}'"):
+        App({"location": "porto", "n_modules": 6, "annual_consumption_kwh": 3000, key: value})
+    config = {"location": {"latitude": 41.15, "longitude": -8.61}, "financials": {key: value}}
+    with pytest.raises(ValueError, match=f"'financials.{key}'"):
+        resolve_optimization_config(config)

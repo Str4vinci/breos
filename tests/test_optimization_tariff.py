@@ -11,6 +11,8 @@ from breos import optimization
 from breos.execution import limit_worker_threads
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.utils import package_version
+from tests.conftest import declare_instant_at_labels
+from tests.offline_app import serve_app_inputs
 
 TARIFF = {
     "schedule": "pt_mainland_2026_daily_bi",
@@ -56,7 +58,7 @@ CUSTOM_TARIFF = {
 @pytest.fixture
 def tariff_case(monkeypatch):
     index = pd.date_range("2026-01-05", periods=48, freq="h", tz="Europe/Lisbon")
-    weather = pd.DataFrame({"temp_air": 20.0}, index=index)
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": 20.0}, index=index))
     load = pd.DataFrame({"Load": 1000.0}, index=index)
     pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
     monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())
@@ -159,26 +161,6 @@ def test_optimizer_prices_fixed_target_charging(tariff_case, overlap):
     assert "smart_charging" not in greedy.provenance
 
 
-@pytest.mark.parametrize("overlap", [False, True])
-def test_optimizer_search_shares_fixed_target_scoring_and_provenance(tariff_case, overlap):
-    pytest.importorskip("pymoo")
-    weather, load, config = tariff_case
-    config["smart_charging"] = {
-        **FIXED_TARGET,
-        **({"overlap_policy": "hold_target", "discharge_periods": ["peak", "off_peak"]} if overlap else {}),
-    }
-    fixed = evaluate((weather, load, config), battery_kwh=5.0)
-    problem = optimization.SolarDesignProblem(weather, load, config)
-    restored = pickle.loads(pickle.dumps(problem))
-    out = {}
-    restored._evaluate(np.array([4, 5.0, 30.0]), out)
-
-    assert out["Projected_NPV"] == fixed.metrics["Projected_NPV"]
-    assert restored.pricing.instructions == problem.pricing.instructions
-    result = optimization.optimize_system_multi_objective(weather, load, config, pop_size=4, n_gen=1, seed=42)
-    assert result.details["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]
-
-
 def test_optimizer_fixed_target_needs_a_battery(tariff_case):
     weather, load, config = tariff_case
     config["smart_charging"] = FIXED_TARGET
@@ -228,39 +210,38 @@ def test_optimizer_money_matches_the_step_ledger(tariff_case, monkeypatch):
     assert result.provenance["tariff"]["calendar_policy"] == "replay_start_year"
 
 
-def test_search_and_fixed_design_share_tariff_scoring_and_pickle(tariff_case):
+@pytest.mark.parametrize(
+    ("case", "battery_kwh"),
+    [("named", 0.0), ("custom", 0.0), ("fixed-target", 5.0), ("fixed-target-overlap", 5.0)],
+)
+def test_the_pickled_search_problem_scores_a_design_like_the_fixed_evaluation(tariff_case, case, battery_kwh):
     pytest.importorskip("pymoo")
     weather, load, config = tariff_case
-    fixed = evaluate(tariff_case)
+    if case == "custom":
+        config["tariff"] = deepcopy(CUSTOM_TARIFF)
+    elif case.startswith("fixed-target"):
+        overlap = {"overlap_policy": "hold_target", "discharge_periods": ["peak", "off_peak"]}
+        config["smart_charging"] = {**FIXED_TARGET, **(overlap if case.endswith("overlap") else {})}
+    fixed = evaluate(tariff_case, battery_kwh=battery_kwh)
+
     problem = optimization.SolarDesignProblem(weather, load, config)
+    if case == "custom":
+        assert problem.config["tariff"]["custom_schedule"] == CUSTOM_TARIFF["custom_schedule"]
+        assert problem.tariff.schedule.identifier == "optimizer_custom_weekly"
+    # The problem a worker process receives.
     restored = pickle.loads(pickle.dumps(problem))
     out = {}
-    restored._evaluate(np.array([4, 0.0, 30.0]), out)
+    restored._evaluate(np.array([4, battery_kwh, 30.0]), out)
 
     assert out["Projected_NPV"] == fixed.metrics["Projected_NPV"]
     assert out["F"][1] == -fixed.metrics["Projected_NPV"]
-    assert restored.tariff.schedule_hash == fixed.provenance["tariff"]["schedule_hash"]
+    assert restored.pricing.instructions == problem.pricing.instructions
+    assert restored.tariff.schedule_hash == problem.tariff.schedule_hash == fixed.provenance["tariff"]["schedule_hash"]
     with pytest.raises(TypeError):
         restored.tariff.prices.import_prices["peak"] = 100
-
-
-def test_custom_schedule_is_resolved_and_pickles_into_optimizer_worker(tariff_case):
-    pytest.importorskip("pymoo")
-    weather, load, config = tariff_case
-    config["tariff"] = deepcopy(CUSTOM_TARIFF)
-    expected = evaluate(tariff_case)
-
-    problem = optimization.SolarDesignProblem(weather, load, config)
-    assert problem.config["tariff"]["custom_schedule"] == CUSTOM_TARIFF["custom_schedule"]
-    assert problem.tariff.schedule.identifier == "optimizer_custom_weekly"
-
-    worker_problem = pickle.loads(pickle.dumps(problem))
-    out = {}
-    worker_problem._evaluate(np.array([4, 0.0, 30.0]), out)
-
-    assert out["Projected_NPV"] == expected.metrics["Projected_NPV"]
-    assert worker_problem.pricing.instructions == problem.pricing.instructions
-    assert worker_problem.tariff.schedule_hash == problem.tariff.schedule_hash
+    if case.startswith("fixed-target"):
+        result = optimization.optimize_system_multi_objective(weather, load, config, pop_size=4, n_gen=1, seed=42)
+        assert result.details["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]
 
 
 def test_search_result_records_tariff_provenance(tariff_case):
@@ -306,14 +287,13 @@ def test_optimizer_workers_start_with_one_native_thread(tariff_case, monkeypatch
     ids=["greedy", "fixed-target", "discharge-only"],
 )
 @pytest.mark.parametrize(("freq", "backend"), [("h", "python"), ("15min", "numba")])
+@pytest.mark.parametrize("coupling", ["dc", "ac"])
 def test_three_year_tariff_design_reproduces_through_app(
-    monkeypatch, open_meteo_weather, freq, backend, smart_charging
+    monkeypatch, open_meteo_weather, freq, backend, smart_charging, coupling
 ):
     import breos.app as app_module
     from breos import App
-    from breos.app_inputs import AppRuntimeDependencies
     from breos.economics import COST_CONFIG_KEY_TO_PARAM
-    from breos.weather import build_battery_temperature_series
 
     if backend == "numba":
         pytest.importorskip("numba")
@@ -325,6 +305,10 @@ def test_three_year_tariff_design_reproduces_through_app(
         tariff.update(
             schedule="pt_mainland_2026_weekly_tri", import_prices={"off_peak": 0.10, "mid_peak": 0.25, "peak": 0.50}
         )
+    ac = coupling == "ac"
+    if ac and smart_charging and "grid_charge_efficiency" in smart_charging:
+        # The battery inverter converts grid charge (ADR 0004 C7).
+        smart_charging = {key: value for key, value in smart_charging.items() if key != "grid_charge_efficiency"}
     app_config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "Europe/Lisbon"},
         "n_modules": 8,
@@ -341,15 +325,18 @@ def test_three_year_tariff_design_reproduces_through_app(
         "execution_backend": backend,
         "tariff": tariff,
         **({"smart_charging": smart_charging} if smart_charging else {}),
+        **(
+            {
+                "battery_coupling": "ac",
+                "battery_inverter_kw_per_kwh": 0.5,
+                "battery_inverter_efficiency": 0.95,
+                "costs": {"battery_inverter_cost_per_kw": 120.0},
+            }
+            if ac
+            else {}
+        ),
     }
-    dependencies = AppRuntimeDependencies(
-        load_profile=lambda **kwargs: load.copy(),
-        load_weather=lambda **kwargs: None,
-        fetch_tmy_weather_data=lambda **kwargs: (weather.copy(), {}),
-        resample_to_15min=lambda frame, **kwargs: frame,
-        build_battery_temperature_series=build_battery_temperature_series,
-    )
-    monkeypatch.setattr(App, "_runtime_dependencies", staticmethod(lambda: dependencies))
+    serve_app_inputs(monkeypatch, weather, load)
     artifacts = []
     run_app = app_module.run_app_simulation
 
@@ -365,13 +352,19 @@ def test_three_year_tariff_design_reproduces_through_app(
         key: getattr(params, field)
         for key, field in COST_CONFIG_KEY_TO_PARAM.items()
         if key not in ("electricity_cost", "electricity_sold_cost", "daily_power_cost")
+        and getattr(params, field) is not None
     }
     costs["dc_ac_ratio"] = cfg["inverter_loading_ratio"]
     config = {
         "location": cfg["location"],
         "simulation": {"resolution": freq, "years_projection": 3},
         "pv": {"module": cfg["pv_module"], "degradation_rate": cfg["pv_degradation_rate"]},
-        "battery": {"temperature": 20.0, "eol_percentage": 0.99, "enable_resistance_fade": True},
+        "battery": {
+            "temperature": 20.0,
+            "eol_percentage": 0.99,
+            "enable_resistance_fade": True,
+            **({"coupling": "ac", "inverter_kw_per_kwh": 0.5, "inverter_efficiency": 0.95} if ac else {}),
+        },
         "costs": costs,
         "financials": {
             "discount_rate": cfg["discount_rate"],
@@ -392,6 +385,13 @@ def test_three_year_tariff_design_reproduces_through_app(
     )
     assert fixed.metrics["Projected_Total_Replacements"] > 0
     assert result["npv_savings"] == pytest.approx(fixed.metrics["Projected_NPV"], abs=0.0051, rel=0)
+    assert result["total_investment"] == pytest.approx(fixed.metrics["Projected_Initial_Cost"], abs=0.0051, rel=0)
+    if ac:
+        assert fixed.metrics["Battery_Inverter_AC_Rating_kW"] == 2.5
+        assert fixed.metrics["Projected_Battery_Inverter_Cost"] == pytest.approx(300.0, rel=1e-15)
+        assert fixed.yearly["PV_AC_To_Battery_kWh"].min() > 0.0
+    else:
+        assert "Battery_Inverter_AC_Rating_kW" not in fixed.metrics
     assert result["provenance"]["tariff"] == fixed.provenance["tariff"]
     if smart_charging:
         assert result["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]
@@ -424,3 +424,50 @@ def test_search_records_its_resolved_bounds_and_scores_emissions(tariff_case):
     assert provenance["constraints"]["max_modules"] == 60
     # [emissions] reaches the search, not only the fixed-design evaluator.
     assert result.details["pareto"]["Projected_CO2_Avoided_Total_kg"].gt(0).all()
+
+
+AC_STUDY = {
+    "battery": {"temperature": 20.0, "coupling": "ac", "inverter_kw_per_kwh": 0.5, "inverter_efficiency": 0.95},
+    "costs": {"battery_inverter_cost_per_kw": 120.0},
+}
+
+
+def test_an_ac_search_exports_each_candidates_battery_inverter_and_its_settings(tariff_case):
+    pytest.importorskip("pymoo")
+    weather, load, config = tariff_case
+    config = {**config, **AC_STUDY, "optimization": {"pop_size": 4, "seed": 42}}
+    result = optimization.optimize_system_multi_objective(weather, load, config, n_gen=1)
+    pareto = result.details["pareto"]
+    battery = pareto["Battery_kWh"].to_numpy()
+    rating = pareto["Battery_Inverter_AC_Rating_kW"].to_numpy()
+    # The rating follows each candidate's nominal capacity; no battery, no inverter.
+    np.testing.assert_allclose(rating, np.where(battery * 1000.0 > 1.0, 0.5 * battery, 0.0), rtol=1e-12)
+    np.testing.assert_allclose(pareto["Projected_Battery_Inverter_Cost"], 120.0 * rating, rtol=1e-12)
+    treatment = result.details["provenance"]["battery_replacement_treatment"]
+    assert treatment["coupling"] == "ac"
+    assert treatment["battery_inverter"] == {
+        "inverter_ac_rating_kw": None,
+        "inverter_kw_per_kwh": 0.5,
+        "rating_basis": "per kWh of each candidate's nominal capacity",
+        "inverter_efficiency": 0.95,
+        "cost_per_kw": 120.0,
+        "rating_column": "Battery_Inverter_AC_Rating_kW",
+    }
+
+
+def test_a_fixed_ac_design_records_its_settings_and_prices_no_inverter_below_one_wh(tariff_case):
+    weather, load, config = tariff_case
+    config = {**config, **AC_STUDY}
+    design = optimization.evaluate_projected_design(
+        weather, load, config, n_modules=4, battery_kwh=4.0, tilt=30.0, azimuth=180.0
+    )
+    assert design.metrics["Battery_Inverter_AC_Rating_kW"] == 2.0
+    assert design.provenance["battery_replacement_treatment"]["battery_inverter"]["inverter_efficiency"] == 0.95
+    for tiny in (0.0005, 0.001):
+        small = optimization.evaluate_projected_design(
+            weather, load, config, n_modules=4, battery_kwh=tiny, tilt=30.0, azimuth=180.0
+        )
+        assert small.metrics["Battery_Inverter_AC_Rating_kW"] == 0.0
+        assert small.metrics["Projected_Battery_Inverter_Cost"] == 0.0
+    dc = evaluate(tariff_case, battery_kwh=4.0)
+    assert "battery_inverter" not in dc.provenance["battery_replacement_treatment"]

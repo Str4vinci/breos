@@ -3,6 +3,7 @@ Utility functions for breos library.
 """
 
 import re
+import warnings
 from importlib.metadata import PackageNotFoundError, version
 
 import numpy as np
@@ -281,8 +282,30 @@ def find_irradiance_column(columns, component: str) -> str | None:
     return None
 
 
+# Air-temperature and wind-speed column names, in order of preference: pvlib
+# (PVGIS TMY), Open-Meteo, then generic spellings. Matched exactly.
+MET_COLUMN_ALIASES = {
+    "temp_air": ("temp_air", "temperature_2m", "temp", "air_temperature"),
+    "wind_speed": ("wind_speed", "wind_speed_10m", "ws", "WS10m"),
+}
+
+
+def find_met_column(columns, quantity: str) -> str | None:
+    """Return the column holding ``quantity`` (``"temp_air"`` or ``"wind_speed"``), preferring the earlier aliases."""
+    return next((alias for alias in MET_COLUMN_ALIASES[quantity] if alias in columns), None)
+
+
 def format_years_months(years_decimal) -> str:
-    """Format a decimal number of years as ``"4y"`` or ``"4y 2m"``; None is ``"N/A"``."""
+    """Format a decimal number of years as ``"4y"`` or ``"4y 2m"``; None is ``"N/A"``.
+
+    .. deprecated:: 0.8.0
+       Nothing in BREOS uses it; it will be removed in 0.9.0.
+    """
+    warnings.warn(
+        "breos.utils.format_years_months is deprecated and will be removed in BREOS 0.9.0",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if years_decimal is None:
         return "N/A"
     years = int(years_decimal)
