@@ -13,9 +13,10 @@ Each resolution case goes through these steps, each in a fresh child process:
    order), evaluation count and generation count. A fixed witness design is
    evaluated with ``evaluate_projected_design`` and run through ``breos.App``
    on both backends: the metrics, yearly and financial tables, every
-   year's per-step ledger and the degradation state must be equal. The
-   witness must charge from the grid and replace its battery, or the check
-   proves nothing. A case whose parity fails is not timed.
+   year's per-step ledger and carried degradation state, and the first
+   year's degradation rows must be equal. The witness must charge from the
+   grid and replace its battery, or the check proves nothing. A case whose
+   parity fails is not timed.
 2. Cold. One run per backend. The Numba child gets an empty
    ``NUMBA_CACHE_DIR``, so its time includes the first compilation. The
    Python child's first run is the cold baseline.
@@ -762,28 +763,41 @@ def _run_app(inputs: dict[str, Any], backend: str) -> dict[str, Any]:
         resample_to_15min=lambda frame, **kwargs: frame,
         build_battery_temperature_series=build_battery_temperature_series,
     )
-    ledgers: list[dict[str, pd.DataFrame]] = []
-    simulate = projection._simulate_detailed_run
+    ledgers: list[dict[str, Any]] = []
+    first_year_degradation: list[pd.DataFrame] = []
+    run_year, simulate = projection._run_frame_year, projection._simulate_detailed_run
+
+    def recording_year(*args: Any, **kwargs: Any) -> Any:
+        outcome = run_year(*args, **kwargs)
+        # Only the first year builds a results frame; every year keeps the
+        # step columns it was reduced from and the state the next resumes on.
+        steps = pd.DataFrame(dict(outcome.step_columns.items())).drop(columns="Datetime", errors="ignore")
+        ledgers.append({"results": steps, "degradation_state": outcome.carry.degradation_state})
+        return outcome
 
     def recording_simulate(**kwargs: Any) -> Any:
         output = simulate(**kwargs)
-        ledgers.append({"results": output.results_df, "degradation": output.degradation_df})
+        first_year_degradation.append(output.degradation_df)
         return output
 
-    # App fixed targets run through the civil-day controller. Record that
-    # path's assembled year, including the ledger and closed aging windows.
+    # App fixed targets run through the civil-day controller. Record every
+    # year's ledger and carried aging state, and the first year's closed
+    # aging windows, the only ones App keeps.
+    projection._run_frame_year = recording_year  # type: ignore[assignment]
     projection._simulate_detailed_run = recording_simulate  # type: ignore[assignment]
     try:
         app = App({**inputs["app_config"], "execution_backend": backend})
         app._runtime_dependencies = lambda: dependencies  # type: ignore[method-assign]
         app.simulate()
     finally:
+        projection._run_frame_year = run_year  # type: ignore[assignment]
         projection._simulate_detailed_run = simulate  # type: ignore[assignment]
     artifacts = app._artifacts
     assert artifacts is not None
     return {
         "ledgers": ledgers,
         "first_year_results": artifacts.first_year_results_df,
+        "first_year_degradation": first_year_degradation,
         "yearly": artifacts.yearly_df,
         "cost_projection": artifacts.cost_projection,
         "degradation_summary": artifacts.degradation_summary,
@@ -862,7 +876,14 @@ def _child_parity(spec: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any
                 expected_years=years,
             )
         )
-    for part in ("ledgers", "first_year_results", "yearly", "cost_projection", "degradation_summary"):
+    for part in (
+        "ledgers",
+        "first_year_results",
+        "first_year_degradation",
+        "yearly",
+        "cost_projection",
+        "degradation_summary",
+    ):
         checks.append(_check(f"app_{part}_identical", value_differences(app["python"][part], app["numba"][part], part)))
     checks.append(
         _check(

@@ -45,7 +45,8 @@ solution has to be physical.
 """
 
 import warnings
-from typing import Tuple
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
 import numpy as np
 from pvlib.pvsystem import i_from_v, max_power_point
@@ -136,6 +137,46 @@ _ADJUST_LIMIT = 100.0
 _SANITY_PMP_TOL = 0.015
 _SANITY_IOC_TOL = 0.015
 _SANITY_SLOPE_POINTS = 100
+
+
+@dataclass(frozen=True)
+class IscAdjustment:
+    """The fit raised the short-circuit current above the datasheet value.
+
+    SAM's heuristic raises ``Isc`` by 1 % per step, up to five steps, when no
+    solution matches the datasheet at the stated value. The fitted curve then
+    passes through ``fitted_isc_a`` at standard test conditions, not the
+    datasheet's ``datasheet_isc_a``; ``percent`` is the rise.
+    """
+
+    datasheet_isc_a: float
+    fitted_isc_a: float
+    percent: float
+
+
+class CecFitParams(Tuple[float, float, float, float, float, float]):
+    """``(I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust)`` with the fit's record.
+
+    A plain tuple of the six parameters in every use; ``isc_adjustment`` is
+    an :class:`IscAdjustment` when the fit raised ``Isc``, else None.
+    """
+
+    isc_adjustment: Optional[IscAdjustment]
+
+    def __new__(
+        cls, params: Tuple[float, float, float, float, float, float], isc_adjustment: Optional[IscAdjustment] = None
+    ) -> "CecFitParams":
+        fitted = super().__new__(cls, params)
+        fitted.isc_adjustment = isc_adjustment
+        return fitted
+
+
+def _isc_adjustment(datasheet_isc: float, bump: int) -> Optional[IscAdjustment]:
+    """The record of a fit made at ``Isc * 1.01**bump``, None at the datasheet value."""
+    if bump == 0:
+        return None
+    fitted = datasheet_isc * (1.01**bump)
+    return IscAdjustment(datasheet_isc, fitted, 100.0 * (fitted / datasheet_isc - 1.0))
 
 
 def _exp(x):
@@ -376,7 +417,7 @@ def fit_cec_params(
     beta_voc: float,
     gamma_pmp: float,
     cells_in_series: int,
-) -> Tuple[float, float, float, float, float, float]:
+) -> CecFitParams:
     """Fit the CEC single-diode reference parameters from datasheet values.
 
     Replacement for :func:`pvlib.ivtools.sdm.fit_cec_sam` at its default 25 °C
@@ -399,7 +440,9 @@ def fit_cec_params(
 
     Returns:
         ``(I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust)`` — the same tuple,
-        in the same order, that ``fit_cec_sam`` returns.
+        in the same order, that ``fit_cec_sam`` returns, as a
+        :class:`CecFitParams` whose ``isc_adjustment`` records a raised
+        ``Isc`` (datasheet and fitted value, and the rise in percent).
 
     Raises:
         RuntimeError: if no physical parameter set can be found.
@@ -427,12 +470,12 @@ def fit_cec_params(
             five = _from_unknowns(x)
             if residual <= _GAMMA_TOL:
                 i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref = five
-                return (i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref, adjust)
+                return CecFitParams((i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref, adjust), _isc_adjustment(Isc, bump))
             if fallback is None or residual < fallback[1]:
-                fallback = ((five, adjust), residual)
+                fallback = ((five, adjust), residual, bump)
 
     if fallback is not None:
-        (five, adjust), residual = fallback
+        (five, adjust), residual, bump = fallback
         warnings.warn(
             "CEC parameter fit returned the closest physical solution without "
             f"meeting the gamma tolerance (absolute residual {residual:.6g} %/°C).",
@@ -440,6 +483,6 @@ def fit_cec_params(
             stacklevel=2,
         )
         i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref = five
-        return (i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref, adjust)
+        return CecFitParams((i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref, adjust), _isc_adjustment(Isc, bump))
 
     raise RuntimeError("CEC parameter fit did not converge to a physical solution.")

@@ -474,3 +474,41 @@ def test_compiled_kernel_does_not_start_its_own_threads():
     # kernel inside each worker would oversubscribe the machine.
     options = _kernel().targetoptions
     assert not options.get("parallel", False)
+
+
+_JIT_DISABLED = """
+import sys
+sys.path.insert(0, "tools/parity")
+from harness import FREQ, SCENARIOS, build_any
+from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.execution import resolve_execution_backend
+
+assert resolve_execution_backend("auto") == "python"
+pv, load, temp, cfg, kwargs = build_any(SCENARIOS[0], FREQ)
+runs = [
+    simulate_energy_balance(
+        pv_dc=pv, houseload=load, battery_config=BatteryConfig(**cfg), freq=FREQ,
+        temperature_series=temp, execution_backend=backend, **kwargs,
+    )[0]
+    for backend in ("python", "numba")
+]
+assert runs[0].equals(runs[1])
+print("ok")
+"""
+
+
+def test_jit_disabled_runs_auto_on_python_and_numba_uncompiled():
+    """NUMBA_DISABLE_JIT=1 turns the kernels into plain functions: "auto" picks Python, "numba" still runs."""
+    import os
+    import subprocess
+
+    completed = subprocess.run(
+        [sys.executable, "-c", _JIT_DISABLED],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "NUMBA_DISABLE_JIT": "1"},
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    assert completed.stdout.strip() == "ok"

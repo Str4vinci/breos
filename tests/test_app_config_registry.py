@@ -74,7 +74,7 @@ EXPECTED_DEFAULTS = {
     "horizon_profile": None,
     "battery_temperature": "weather",
     "battery_indoor_model": None,
-    "execution_backend": "python",
+    "execution_backend": "auto",
     "weather_file": None,
     "weather_source": None,
     "load_profile_file": None,
@@ -161,7 +161,7 @@ RUN_FLAGS: list[tuple[str, list[str], str, object]] = [
 ]
 
 # The ``breos run`` options that are not App config keys.
-RUN_COMMAND_OPTIONS = ("-h", "--help", "--config", "--output", "--indent", "--dry-run")
+RUN_COMMAND_OPTIONS = ("-h", "--help", "--config", "--output", "--indent", "--dry-run", "--json")
 
 
 def _run_config(*argv: str) -> dict[str, object]:

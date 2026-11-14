@@ -89,8 +89,9 @@ def _record_montecarlo_backend(monkeypatch):
 
     observed = {}
 
-    def fake_backend_provenance(execution_backend, *, pv_only=False):
+    def fake_backend_provenance(execution_backend, *, pv_only=False, requested=None):
         observed["execution_backend"] = execution_backend
+        observed["requested"] = requested
         raise _BackendChosen
 
     monkeypatch.setattr(montecarlo, "backend_provenance", fake_backend_provenance)
@@ -112,21 +113,26 @@ def _montecarlo_config(tmp_path, *, top_level=None, section=None):
 
 
 @pytest.mark.parametrize(
-    ("top_level", "section", "flag", "expected"),
+    ("top_level", "section", "flag", "requested"),
     [
-        (None, None, None, "python"),
+        (None, None, None, "auto"),
         ("numba", None, None, "numba"),
         ("numba", "python", None, "python"),
         ("python", None, "numba", "numba"),
         ("numba", "numba", "python", "python"),
+        ("python", "auto", None, "auto"),
+        ("python", None, "auto", "auto"),
     ],
 )
-def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch, top_level, section, flag, expected):
-    # Flag, then [montecarlo], then the top-level key, then "python"; the
+def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch, top_level, section, flag, requested):
+    # Flag, then [montecarlo], then the top-level key, then "auto"; the
     # Python API must pick the same backend for the same config.
     import tomllib
 
+    from breos.execution import resolve_execution_backend
     from breos.montecarlo import MonteCarloSettings, run_montecarlo
+
+    expected = resolve_execution_backend(requested)
 
     config_path = _montecarlo_config(tmp_path, top_level=top_level, section=section)
     observed = _record_montecarlo_backend(monkeypatch)
@@ -136,6 +142,7 @@ def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch,
     with pytest.raises(_BackendChosen):
         cli._montecarlo(cli.build_parser().parse_args(argv))
     assert observed.pop("execution_backend") == expected
+    assert observed.pop("requested") == requested
 
     if flag is None:
         config = tomllib.loads(config_path.read_text(encoding="utf-8"))
@@ -143,6 +150,7 @@ def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch,
         with pytest.raises(_BackendChosen):
             run_montecarlo(config, settings)
         assert observed["execution_backend"] == expected
+        assert observed["requested"] == requested
 
 
 def test_montecarlo_reports_unknown_setting_before_weather_lookup(tmp_path, capsys):
@@ -775,3 +783,28 @@ def test_sweep_builds_each_app_only_when_it_runs(monkeypatch, tmp_path):
     assert cli.main(["sweep", "--config", str(config_path), "--output", str(tmp_path / "out.csv")]) == 0
     # A finished run's App, and its result, is not held until the sweep ends.
     assert events == [("build", 8), ("run", 8), ("build", 10), ("run", 10)]
+
+
+def test_validate_config_accepts_a_sweep_that_supplies_a_required_key(tmp_path, capsys):
+    # The sweep never runs the base, so the base may leave out a key every
+    # grid point supplies.
+    config_path = tmp_path / "grid-modules.toml"
+    config_path.write_text(
+        """
+location = "porto"
+annual_consumption_kwh = 4000
+
+[sweep]
+n_modules = [8, 10]
+""".strip()
+    )
+
+    assert cli.main(["validate-config", str(config_path)]) == 0
+    out = capsys.readouterr().out
+    assert "Sweep: 2 points, each valid; the lines below describe the first" in out
+    assert "PV: 8 modules" in out
+
+    assert cli.main(["validate-config", "--json", str(config_path)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["sweep"] == {"points": 2, "summary_of": "the first point"}
+    assert payload["pv"]["n_modules"] == 8

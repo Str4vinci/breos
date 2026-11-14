@@ -78,7 +78,8 @@ from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
     EXECUTION_BACKENDS,
     config_has_battery,
-    validate_execution_backend,
+    resolve_execution_backend,
+    validate_requested_backend,
 )
 from breos.inverter import AcCable, InverterConversion, inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
@@ -1279,13 +1280,14 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--execution-backend",),
         cli_choices=EXECUTION_BACKENDS,
         cli_help=(
-            "Within-day dispatch implementation. 'python' is the numerical reference; "
-            "'numba' is an optional compiled path that reproduces it bit for bit and "
-            'needs the extra: pip install "breos[fast]".'
+            "Within-day dispatch implementation. 'auto' runs 'numba' when Numba is installed and "
+            "'python' otherwise; 'python' is the numerical reference; 'numba' is the optional "
+            'compiled path that reproduces it bit for bit and needs the extra: pip install "breos[fast]".'
         ),
         doc=(
-            'Within-day dispatch implementation. `"python"` is the numerical reference; `"numba"` is an optional '
-            'compiled path that reproduces it bit for bit and needs `pip install "breos[fast]"`'
+            'Within-day dispatch implementation. `"auto"` runs `"numba"` when Numba is installed and `"python"` '
+            'otherwise; `"python"` is the numerical reference; `"numba"` is the optional compiled path that '
+            'reproduces it bit for bit and needs `pip install "breos[fast]"`. Results do not depend on the choice'
         ),
         summary="simulation.execution_backend",
     ),
@@ -1570,6 +1572,9 @@ class ResolvedAppConfig:
     emissions_params: EmissionsParams | None
     # The currency of every money input and output (run_currency).
     currency: str
+    # The execution_backend the config asked for, "auto" by default. cfg holds
+    # the backend that runs, "python" or "numba"; provenance records both.
+    requested_execution_backend: str
     # The configured [period], or None for the whole calendar year of start_date.
     period: SimulationPeriod | None = None
     # The configured [reference_tariff], or None: the no-system baseline is
@@ -2951,9 +2956,9 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     cfg["battery_replacement_min_remaining_years"] = float(cfg["battery_replacement_min_remaining_years"])
 
     # Validated through breos.execution so App and Monte Carlo cannot disagree
-    # about which names exist. The default stays "python": the compiled path is
-    # an optimisation that must be asked for, never selected by ambient state.
-    cfg["execution_backend"] = validate_execution_backend(cfg["execution_backend"])
+    # about which names exist. "auto" is kept here and resolved once, in
+    # resolve_app_config, so a community's shared settings keep the request.
+    cfg["execution_backend"] = validate_requested_backend(cfg["execution_backend"])
 
     degradation_engine = str(cfg["degradation_engine"]).strip().lower()
     if degradation_engine not in DEGRADATION_ENGINES:
@@ -3381,6 +3386,10 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         cfg["inverter_loading_ratio"] = None
     _normalise_config_values(cfg)
     specs = validate_config(cfg)
+    # Resolved once, before anything runs: every later reader of cfg sees
+    # "python" or "numba", and the request is kept for the provenance.
+    requested_execution_backend = cfg["execution_backend"]
+    cfg["execution_backend"] = resolve_execution_backend(requested_execution_backend)
     tariff = specs.tariff
     if cfg.get("pv_arrays"):
         # The result echoes the tables as plain floats, whatever numbers they came as.
@@ -3484,6 +3493,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         period=resolve_period(cfg, timezone),
         reference_tariff=specs.reference_tariff,
         currency=specs.currency,
+        requested_execution_backend=requested_execution_backend,
         electrical=electrical,
         ac_cable=ac_cable,
         inverter_conversion=_inverter_conversion(electrical, ac_cable, pv_arrays, pv_params),

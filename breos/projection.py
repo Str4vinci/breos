@@ -3,8 +3,8 @@
 App (``breos.runners.app``) and Monte Carlo (``breos.montecarlo``) simulate a
 configured system year by year. The battery each year runs, the state carried
 between years, the year row, and the loop itself are defined here once, so
-neither can drift from the other (#179). App runs every year with per-step
-frames; Monte Carlo runs summaries.
+neither can drift from the other (#179). App runs every year step by step
+and keeps the first year's per-step frame; Monte Carlo runs summaries.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from breos.battery import (
     EndOfLifeEvent,
     SimulationSummary,
     _build_simulation_summary,
+    _CoreRun,
     _simulate_core,
     _simulate_detailed_run,
     frame_replaced_capacity_wh,
@@ -908,9 +909,11 @@ class _YearOutcome:
     span_events: Sequence[EndOfLifeEvent]
     # T_cell summed through the step that retires the pack; None if none does.
     retiring_t_cell_sum: float | None
-    # Per-step years only: the year's frame, the sets a year planner returned
-    # and the instructions a daily controller executed.
+    # Per-step years only: the year's frame (built only when the caller keeps
+    # it), its per-step columns by frame name, the sets a year planner
+    # returned and the instructions a daily controller executed.
     results_df: pd.DataFrame | None = None
+    step_columns: pd.DataFrame | Mapping[str, np.ndarray] | None = None
     vehicle_events: Sequence[EndOfLifeEvent] = ()
     vehicle_short_departures: int = 0
     planned: tuple[DispatchInstructions, ...] = ()
@@ -926,18 +929,34 @@ def _run_summary_year(
     weights: Mapping[str, tuple[str, np.ndarray]] | None,
 ) -> _YearOutcome:
     """Run one year from aligned inputs, as a summary without per-step frames."""
+    core: _CoreRun | None = None
     if common.get("vehicle_config") is None:
         summary = simulate_energy_balance_summary(aligned=aligned, weights=weights, **common)
     else:
         core_kwargs = {key: value for key, value in common.items() if key != "return_degradation_state"}
         core = _simulate_core(aligned=aligned, summary_only=True, **core_kwargs)
         summary = _build_simulation_summary(core, return_degradation_state=True, weights=weights)
+    return _summary_outcome(core, summary, common, carry, has_battery=has_battery)
+
+
+def _summary_outcome(
+    core: _CoreRun | None,
+    summary: SimulationSummary,
+    common: Mapping[str, Any],
+    carry: CarryState,
+    *,
+    has_battery: bool,
+) -> _YearOutcome:
+    """A year's outcome from its summary; ``core`` is needed only for a vehicle run's departures."""
     batt_cfg: BatteryConfig = common["battery_config"]
+    vehicle = common.get("vehicle_config") is not None
+    if vehicle:
+        assert core is not None
     return _YearOutcome(
         carry=carry.after_summary(summary, has_battery=has_battery, resistance_fade=batt_cfg.enable_resistance_fade),
-        vehicle_events=summary.vehicle_end_of_life_events if common.get("vehicle_config") is not None else (),
+        vehicle_events=summary.vehicle_end_of_life_events if vehicle else (),
         vehicle_short_departures=int(np.count_nonzero(core.buffers.columns["Vehicle_Departure_Shortfall"]))
-        if common.get("vehicle_config") is not None
+        if core is not None and vehicle
         else 0,
         sums_w=summary.column_sums,
         weighted_w=summary.weighted_sums,
@@ -963,8 +982,15 @@ def _run_frame_year(
     day_controller: DailyDispatchController | None,
     tariff: ResolvedTariff | None,
     replay_seam: bool,
+    keep_frame: bool = True,
 ) -> _YearOutcome:
-    """Run one year with per-step frames: greedy or on static instructions, from a year planner, or day by day."""
+    """Run one year step by step: greedy or on static instructions, from a year planner, or day by day.
+
+    With ``keep_frame`` false the year is reduced from the core's arrays as a
+    summary year is, without building its per-step frame: only the first
+    year's frame is kept, and building one costs about a fifth of a 15-minute
+    battery year. Both reductions report the same floats.
+    """
     assert year.pv_dc is not None and year.houseload is not None
     step_inputs: dict[str, Any] = {
         "pv_dc": year.pv_dc,
@@ -982,6 +1008,42 @@ def _run_frame_year(
         step_inputs["vehicle_temperature_series"] = vehicle_temperature
     planned: list[DispatchInstructions] = []
     executed = None
+    core_kwargs = {key: value for key, value in common.items() if key != "return_degradation_state"}
+    if planner is not None:
+        batt_cfg: BatteryConfig = common["battery_config"]
+
+        def plan_year(state: ControllerBatteryState) -> DispatchInstructions:
+            chosen = planner(YearStart(year_idx, year, batt_cfg, state))
+            planned.append(chosen)
+            return chosen
+
+        run_kwargs: dict[str, Any] = {"instruction_planner": plan_year}
+    elif day_controller is not None:
+        run_kwargs = {
+            "day_controller": day_controller,
+            "controller_tariff": tariff,
+            "controller_carry": carry.controller_carry,
+            "projection_year": year_idx,
+            "replay_seam": replay_seam,
+        }
+    else:
+        run_kwargs = {}
+    if not keep_frame:
+        core = _simulate_core(**step_inputs, **run_kwargs, **core_kwargs, summary_only=True)
+        outcome = _summary_outcome(
+            core,
+            _build_simulation_summary(core, return_degradation_state=True, weights=weights),
+            common,
+            carry,
+            has_battery=has_battery,
+        )
+        if day_controller is not None:
+            outcome = replace(
+                outcome,
+                carry=replace(outcome.carry, controller_carry=core.controller_carry),
+                executed=core.controller_instructions,
+            )
+        return replace(outcome, step_columns=core.buffers.columns, planned=tuple(planned))
     if planner is None and day_controller is None and common.get("vehicle_config") is None:
         results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
             "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
@@ -989,26 +1051,6 @@ def _run_frame_year(
         )
         carry = carry.after_frames(results_df, degradation_df, state, has_battery=has_battery)
     else:
-        core_kwargs = {key: value for key, value in common.items() if key != "return_degradation_state"}
-        if planner is not None:
-            batt_cfg: BatteryConfig = common["battery_config"]
-
-            def plan_year(state: ControllerBatteryState) -> DispatchInstructions:
-                chosen = planner(YearStart(year_idx, year, batt_cfg, state))
-                planned.append(chosen)
-                return chosen
-
-            run_kwargs: dict[str, Any] = {"instruction_planner": plan_year}
-        elif day_controller is not None:
-            run_kwargs = {
-                "day_controller": day_controller,
-                "controller_tariff": tariff,
-                "controller_carry": carry.controller_carry,
-                "projection_year": year_idx,
-                "replay_seam": replay_seam,
-            }
-        else:
-            run_kwargs = {}
         detailed = _simulate_detailed_run(**step_inputs, **run_kwargs, **core_kwargs)
         results_df, n_rep, degradation_df = detailed.results_df, detailed.n_replacements, detailed.degradation_df
         carry = carry.after_frames(
@@ -1053,6 +1095,7 @@ def _run_frame_year(
             float(np.sum(results_df["T_cell"].to_numpy()[: last_served + 1])) if last_served is not None else None
         ),
         results_df=results_df,
+        step_columns=results_df,
         vehicle_events=tuple(
             EndOfLifeEvent.from_record(record) for record in results_df.attrs.get("vehicle_end_of_life_events", ())
         ),
@@ -1065,13 +1108,14 @@ def _run_frame_year(
 
 
 def _step_flows(
-    results_df: pd.DataFrame, previous: Mapping[str, np.ndarray], *, vehicle: bool = False
+    columns: pd.DataFrame | Mapping[str, np.ndarray], previous: Mapping[str, np.ndarray], *, vehicle: bool = False
 ) -> dict[str, np.ndarray]:
     """A year's per-step priced flows; a flow equal to the year before's is that array, kept once."""
     flows: dict[str, np.ndarray] = {}
     for column in (*_PRICED_FLOW_COLUMNS, *(("Vehicle_Drive_Unserved",) if vehicle else ())):
-        # A copy, so the year's frame is not kept alive by a view.
-        values = results_df[column].to_numpy(dtype=float, copy=True)
+        # A copy, so neither the year's frame nor its buffers are kept alive
+        # by a view.
+        values = np.array(columns[column], dtype=float, copy=True)
         same = previous.get(column)
         flows[column] = same if same is not None and np.array_equal(same, values) else values
     return flows
@@ -1268,14 +1312,19 @@ def project_years(
                 day_controller=day_controller,
                 tariff=tariff,
                 replay_seam=replay_seam,
+                # Only the first year's frame is kept; later years are reduced
+                # from the core's arrays.
+                keep_frame=first_year_results_df is None,
             )
             if first_year_results_df is None:
                 first_year_results_df = outcome.results_df
             if record_priced_flows:
-                assert outcome.results_df is not None
+                assert outcome.step_columns is not None
                 priced_flows.append(
                     _step_flows(
-                        outcome.results_df, priced_flows[-1] if priced_flows else {}, vehicle=vehicle_config is not None
+                        outcome.step_columns,
+                        priced_flows[-1] if priced_flows else {},
+                        vehicle=vehicle_config is not None,
                     )
                 )
         carry = outcome.carry

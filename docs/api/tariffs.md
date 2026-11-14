@@ -103,7 +103,11 @@ table prices the periods that season's rules use, and no others.
 
 Rules use the same semantics as bundled schedules: `days` is `weekday`,
 `saturday`, `sunday`, or `all`; `season` is `standard`, `dst`, or `all`, or
-with [month seasons](#month-seasons) a season name or `all`. Every
+with [month seasons](#month-seasons) a season name or `all`. A step is in the
+`dst` season while the location's clock is on the larger of its two UTC
+offsets that year, and in `standard` otherwise, so a zone without clock changes
+is always `standard`. The offsets decide rather than the timezone database's
+DST flag, which marks Irish winter time, not summer time, as the exception. Every
 day-type/season combination must resolve to exactly one rule. Period intervals
 are inclusive at the start and exclusive at the end, and must tile the local
 day from `00:00` through `24:00` without gaps or overlaps. `24:00` is valid

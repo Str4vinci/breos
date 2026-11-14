@@ -31,6 +31,11 @@ def test_app_witness_records_every_controller_year(tmp_path):
 
     assert len(run["ledgers"]) == 3
     assert all(len(ledger["results"]) == len(weather) for ledger in run["ledgers"])
+    # The first year's ledger is its results frame; every year carries its aging state on.
+    first = run["ledgers"][0]["results"]
+    np.testing.assert_array_equal(first.to_numpy(), run["first_year_results"][first.columns].to_numpy())
+    assert all(ledger["degradation_state"]["fec_cum"] > 0.0 for ledger in run["ledgers"])
+    assert len(run["first_year_degradation"]) == 1 and not run["first_year_degradation"][0].empty
     grid_kwh = sum(ledger["results"]["Grid_AC_To_Battery"].sum() / 1000.0 for ledger in run["ledgers"])
     assert grid_kwh > 0.0
     assert grid_kwh == pytest.approx(run["yearly"]["Grid_AC_To_Battery_kWh"].sum(), rel=1e-15)

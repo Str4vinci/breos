@@ -8,9 +8,9 @@ import pandas as pd
 import pytest
 
 import breos.app as app_module
-import breos.projection as projection_module
 from breos.app import App
 from breos.app_config import merge_defaults, validate_config
+from tests.project_year_runs import record_project_years
 from tools.generate_app_golden import _fake_fetch as golden_fetch
 
 _SIX_MODULE_BASE = {"location": "porto", "n_modules": 6, "annual_consumption_kwh": 3000}
@@ -1016,25 +1016,7 @@ class TestAppSimulateWithBattery:
 
 def test_multiyear_battery_inventory_and_pv_origin_cross_year_boundary(_patch_weather, monkeypatch):
 
-    original = projection_module.simulate_energy_balance
-    calls = []
-
-    def _capture(*args, **kwargs):
-        output = original(*args, **kwargs)
-        results = output[0]
-        calls.append(
-            {
-                "initial_energy_wh": kwargs.get("initial_energy_wh"),
-                "initial_pv_origin_energy_wh": kwargs.get("initial_pv_origin_energy_wh"),
-                "ending_energy_wh": float(results["Battery_Energy_End"].iloc[-1]),
-                "ending_pv_origin_energy_wh": float(results["Battery_PV_Origin_Energy_End"].iloc[-1]),
-                "beginning_energy_wh": float(results["Battery_Energy_Beginning"].iloc[0]),
-                "beginning_pv_origin_energy_wh": float(results["Battery_PV_Origin_Energy_Beginning"].iloc[0]),
-            }
-        )
-        return output
-
-    monkeypatch.setattr(projection_module, "simulate_energy_balance", _capture)
+    runs = record_project_years(monkeypatch)
     app = App(
         {
             **_SIX_MODULE_BASE,
@@ -1045,7 +1027,19 @@ def test_multiyear_battery_inventory_and_pv_origin_cross_year_boundary(_patch_we
     )
     app.simulate()
     result = app.result()
+    calls = [
+        {
+            "initial_energy_wh": run.kwargs.get("initial_energy_wh"),
+            "initial_pv_origin_energy_wh": run.kwargs.get("initial_pv_origin_energy_wh"),
+            "ending_energy_wh": float(run.results_df["Battery_Energy_End"].iloc[-1]),
+            "ending_pv_origin_energy_wh": float(run.results_df["Battery_PV_Origin_Energy_End"].iloc[-1]),
+            "beginning_energy_wh": float(run.results_df["Battery_Energy_Beginning"].iloc[0]),
+            "beginning_pv_origin_energy_wh": float(run.results_df["Battery_PV_Origin_Energy_Beginning"].iloc[0]),
+        }
+        for run in runs
+    ]
 
+    assert len(calls) == 2
     assert calls[0]["initial_energy_wh"] is None
     assert calls[0]["initial_pv_origin_energy_wh"] is None
     assert calls[0]["ending_pv_origin_energy_wh"] > 0

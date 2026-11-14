@@ -56,7 +56,7 @@ SCHEDULE_CYCLES = frozenset({"flat", "daily", "weekly", "custom"})
 _PERIOD_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 _CLOCK_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$")
 _DAY_TYPES = ("weekday", "saturday", "sunday")
-# The seasons of a schedule without month seasons: whether DST is in force.
+# The seasons of a schedule without month seasons: whether the clock is on its larger UTC offset.
 _DST_SEASONS = ("standard", "dst")
 # Names a month season cannot take: the rule wildcard and the DST seasons.
 _RESERVED_SEASON_NAMES = frozenset({"all", *_DST_SEASONS})
@@ -576,7 +576,7 @@ class ScheduleDefinition:
 
     Every day type and season is matched by exactly one rule. A holiday takes
     the rule of ``holidays.day_type``. Without ``seasons`` the seasons are
-    ``standard`` and ``dst``, whether DST is in force; with them they are the
+    ``standard`` and ``dst``, whether the clock is on its larger UTC offset; with them they are the
     named month seasons, and a rule may not select ``standard`` or ``dst``.
     Season names must differ from period names. The values are immutable and pickle,
     so a definition can travel to optimizer worker processes. The bundled
@@ -651,7 +651,7 @@ class ScheduleDefinition:
         return self.seasons.names if self.seasons is not None else _DST_SEASONS
 
     def season_of(self, timestamp: pd.Timestamp) -> str:
-        """The season of a local timestamp: its month's season, or whether DST is in force."""
+        """The season of a local timestamp: its month's season, or whether the clock is on its larger offset."""
         if self.seasons is not None:
             return self.seasons.season_of_month(timestamp.month)
         return _season(timestamp)
@@ -882,7 +882,10 @@ def _validate_schedule_resolution(
         )
 
 
-def _holiday_dates(identifier: str, holidays: HolidayCalendar | None, years: set[int]) -> frozenset[date]:
+def _holiday_dates(
+    identifier: str, holidays: HolidayCalendar | None, years: set[int], touched: set[int]
+) -> frozenset[date]:
+    """The known holidays of every ``touched`` year; a calendar is required for each of ``years``."""
     if holidays is None:
         return frozenset()
     if holidays.years is not None:
@@ -894,7 +897,7 @@ def _holiday_dates(identifier: str, holidays: HolidayCalendar | None, years: set
                 f"holiday calendar for {', '.join(map(str, missing))} (it has {known}). The calendar is published "
                 "every year; simulate a year it covers."
             )
-    return frozenset(day for day in holidays.dates if day.year in years)
+    return frozenset(day for day in holidays.dates if day.year in touched)
 
 
 def _day_type(
@@ -907,9 +910,26 @@ def _day_type(
     return "saturday" if timestamp.weekday() == 5 else "sunday"
 
 
+@lru_cache(maxsize=None)
+def _year_offset_range(tz: Any, year: int) -> tuple[pd.Timedelta, pd.Timedelta]:
+    """The smallest and largest UTC offsets a zone uses in one year, read at each UTC midnight."""
+    instants = pd.date_range(f"{year}-01-01", f"{year + 1}-01-01", freq="D", tz="UTC")
+    offsets = instants.tz_convert(tz).tz_localize(None) - instants.tz_localize(None)
+    return offsets.min(), offsets.max()
+
+
 def _season(timestamp: pd.Timestamp) -> str:
-    offset = timestamp.dst()
-    return "dst" if offset is not None and offset.total_seconds() > 0 else "standard"
+    """``dst`` while the zone is on the larger of its year's UTC offsets, else ``standard``.
+
+    The offsets decide, not the zone's DST flag: the time-zone database gives
+    Europe/Dublin a negative DST offset in winter, so the flag would leave it
+    without a summer season.
+    """
+    offset = timestamp.utcoffset()
+    if offset is None:
+        return "standard"
+    low, high = _year_offset_range(timestamp.tz, timestamp.year)
+    return "dst" if high > low and offset == high else "standard"
 
 
 def _validate_study_date(
@@ -971,7 +991,7 @@ def classify_tariff_periods(
     """Classify instants with a schedule in the configured civil time.
 
     A step's season is its civil month's season in a schedule with month
-    seasons, and whether DST is in force otherwise; its day type is the
+    seasons, and whether the clock is on its larger UTC offset otherwise; its day type is the
     weekday or holiday of its civil date.
 
     ``schedule`` is a bundled schedule identifier or a
@@ -1066,11 +1086,13 @@ def _classify_steps(
     holidays = definition.holidays
     # A year the index only grazes (the last UTC hour of a year is already the
     # next local year east of UTC) needs no calendar: its steps are fewer than
-    # one civil day. Every year the index covers for a day or more does.
+    # one civil day. Every year the index covers for a day or more does. The
+    # holidays a calendar does know apply in every year the index touches,
+    # grazed or not.
     years, counts = np.unique(local_index.year, return_counts=True)
     step_hours = (local_index[1] - local_index[0]).total_seconds() / 3600 if len(local_index) > 1 else 24.0
     covered = {int(year) for year, count in zip(years, counts, strict=True) if count * step_hours >= 24}
-    holiday_dates = _holiday_dates(metadata.identifier, holidays, covered)
+    holiday_dates = _holiday_dates(metadata.identifier, holidays, covered, {int(year) for year in years})
     holiday_day_type = holidays.day_type if holidays is not None else "sunday"
     if not len(local_index):
         return (), ()

@@ -1,10 +1,10 @@
 [project]
 name = "breos"
-version = "0.7.0"
+version = "0.7.1"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
-requires-python = ">=3.11"
+requires-python = ">=3.11.5"
 authors = [
     {name = "Leonardo Rodrigues", email = "lrodrigues@fe.up.pt"},
 ]
@@ -42,7 +42,6 @@ dependencies = [
     "numpy>=2.0",
     "pandas>=2.3.3",
     "pvlib>=0.14.0,<0.16",
-    "rainflow>=3.2.0",
     "scipy>=1.14",
     "threadpoolctl>=3.5.0",
 ]
@@ -77,6 +76,7 @@ dev = [
     "numba>=0.63.1",
     "openmeteo-requests>=1.7.4",
     "pymoo>=0.6.1.6",
+    "rainflow>=3.2.0",
     "requests-cache>=1.2.1",
     "timezonefinder>=8.2.1",
 ]
@@ -95,8 +95,8 @@ docs = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Slow endurance/multi-year tests are deselected by default so the normal suite
-# stays fast. Run them explicitly with `pytest -m slow` (the scheduled CI job
-# and the release verification both do this); `-m slow` on the command line
+# stays fast. Run them explicitly with `pytest -m slow` (manual CI runs
+# and release gates both do this); `-m slow` on the command line
 # overrides this default marker expression.
 addopts = ["-m", "not slow"]
 # Nothing in BREOS or its tests may call an API deprecated for removal in
@@ -180,7 +180,6 @@ module = [
     "mpl_toolkits.*",
     "pvlib.*",
     "pymoo.*",
-    "rainflow.*",
     "requests.*",
     "scipy.*",
     "threadpoolctl.*",

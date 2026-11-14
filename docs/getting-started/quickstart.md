@@ -173,6 +173,16 @@ breos run --config quickstart.toml --output result.json
 
 The CLI writes the same JSON-serializable dict that `App.result()` returns.
 
+In a terminal, `breos run` also prints a short summary: the system, the
+year 1 energy, the battery's health at the end and the lifetime economics.
+Without `--output` the summary is all it prints. When you pipe or redirect
+the command, or add `--json`, it prints the full JSON instead:
+
+```bash
+breos run --config quickstart.toml | jq .npv_savings
+breos run --config quickstart.toml --json
+```
+
 ## Next steps
 
 - See the [case examples](../gallery/index.rst) for stored runs that answer
