@@ -1,10 +1,10 @@
 {
  "case": "which_tariff",
  "title": "Simple, bi-hourly and tri-hourly tariffs",
- "breos_version": "0.7.0",
- "git_describe": "v0.7.0-332-g464baad-dirty",
- "generated_utc": "2026-10-28T13:38:20+00:00",
- "runtime_s": 21.1,
+ "breos_version": "0.8.0",
+ "git_describe": "v0.7.1-409-g2a964f2-dirty",
+ "generated_utc": "2026-11-14T15:07:54+00:00",
+ "runtime_s": 16.3,
  "cheap": false,
  "configs": {
   "configs/examples/tariff-comparison.toml": "7ffde52188a4e89f76c91f3cc58225b558992cbb82df06ce55602487b6ee7540"
@@ -16,7 +16,7 @@
   }
  },
  "dependencies": {
-  "python": "3.12.13",
+  "python": "3.13.14",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
@@ -76,6 +76,6 @@
   5.0
  ],
  "files": {
-  "offers.csv": "5ef243ffc2756502825722bb00a60760d602736ac4e2c741afc04036ad39aaf2"
+  "offers.csv": "68bee078f04a6b963d37a5f0b7aea24390ad990eef3ac1f4ef6224be3bf5c694"
  }
 }

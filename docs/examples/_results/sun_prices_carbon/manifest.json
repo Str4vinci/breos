@@ -1,10 +1,10 @@
 {
  "case": "sun_prices_carbon",
  "title": "Porto and Berlin compared",
- "breos_version": "0.7.0",
- "git_describe": "v0.7.0-332-g464baad-dirty",
- "generated_utc": "2026-10-28T13:32:44+00:00",
- "runtime_s": 5.7,
+ "breos_version": "0.8.0",
+ "git_describe": "v0.7.1-409-g2a964f2-dirty",
+ "generated_utc": "2026-11-14T15:03:58+00:00",
+ "runtime_s": 4.4,
  "cheap": true,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
@@ -20,7 +20,7 @@
   }
  },
  "dependencies": {
-  "python": "3.12.13",
+  "python": "3.13.14",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
@@ -41,6 +41,6 @@
   }
  },
  "files": {
-  "sites.json": "b018ff97b384887b4d3609eacd3d889881e4ef74637f30d9af990e880a6571fd"
+  "sites.json": "20dee329e5e8f9e2f51d04b783cee1bb7fd312a0798c3cf5416f17011358c17b"
  }
 }

@@ -14,6 +14,6 @@ or that the implementation does differently.
 | [0004: AC-coupled batteries](0004-ac-coupled-batteries.md) | Accepted 2026-10-04, amended 2026-10-13; implemented for 0.8.0 |
 | [0005: Vehicle-to-home](0005-vehicle-to-home.md) | Accepted 2026-10-24, including implemented interpretations and final amendments; implemented for 0.8.0 |
 | [0006: Collective self-consumption](0006-collective-self-consumption.md) | Accepted 2026-10-24; PRs 1–5 implemented for 0.8.0; money interpretations and retention accepted, producer-credit warning and metered-import coverage presentation decided |
-| [0007: String topology and electrical checks](0007-string-topology-and-electrical-checks.md) | Proposed 2026-10-11; checks and energy per MPPT implemented, several inverters without a battery |
-| [0008: Shading as an input](0008-shading-input.md) | Accepted 2026-10-12; level 1 implemented |
-| [0009: Module electrical layout](0009-module-electrical-layout.md) | Accepted 2026-10-13; `bypass_diodes` on the module implemented |
+| [0007: String topology and electrical checks](0007-string-topology-and-electrical-checks.md) | Accepted; D1–D10 implemented for 0.8.0, including multiple PV inverters with an AC-coupled battery |
+| [0008: Shading as an input](0008-shading-input.md) | Accepted 2026-10-12; levels 1 and 2 implemented for 0.8.0; series input deferred |
+| [0009: Module electrical layout](0009-module-electrical-layout.md) | Accepted 2026-10-13; M1, M2, M3 and M6 implemented for 0.8.0 |

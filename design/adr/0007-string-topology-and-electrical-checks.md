@@ -1,7 +1,8 @@
 # 0007 — String topology and electrical checks
 
-- **Status:** Proposed. D1–D10 are implemented; several inverters with a
-  battery wait for ADR 0004 (D10).
+- **Status:** Accepted and implemented for 0.8.0 (D1–D10). Several PV
+  inverters can share an AC-coupled battery; DC-coupled batteries and Monte
+  Carlo retain the documented restrictions.
 - **Date:** 2026-10-11
 
 ## Context
@@ -268,10 +269,10 @@ model adds to it rather than replacing it.
 
 The model runs for one inverter, whose rating, part-load curve and battery
 coupling are the existing aggregate ones, or for several in a system without a
-battery (D10). With a battery, several inverters need the converter topology of
-ADR 0004 (#419); until then, string mode refuses them. It also refuses a wiring with
-structural errors and an input without the limits it needs, rather than fall
-back to the aggregate model. A design that breaks a hard limit but is wired
+battery (D10). Several PV inverters may also share an AC-coupled battery under
+ADR 0004 (#419); a DC-coupled battery with several inverters is refused. It
+also refuses a wiring with structural errors and an input without the limits it
+needs, rather than fall back to the aggregate model. A design that breaks a hard limit but is wired
 definitely, such as one with an overvoltage, still gets string energy as a
 diagnostic.
 
@@ -380,9 +381,9 @@ rating. String mode with several inverters therefore runs each on its own:
    inverter's year-1 DC input, clipping, conversion loss, cable loss, AC
    output and night draw.
 5. A battery behind one inverter needs the others' AC to reach it, which is
-   AC coupling (ADR 0004, #419). Until then, string mode refuses several
-   inverters with a battery, and Monte Carlo, which carries one DC series
-   through one inverter, refuses several inverters in string mode. Aggregate
+   AC coupling (ADR 0004, #419). Several inverters with a battery therefore
+   require AC coupling. Monte Carlo, which carries one DC series through one
+   inverter, refuses several inverters in string mode. Aggregate
    mode keeps one inverter of the combined nameplate (D5) and refuses
    per-inverter curves, derating and cables.
 6. The check warns when an inverter's DC/AC ratio lies outside 0.8 to 1.6.
@@ -395,7 +396,7 @@ linear. D5's and D7's equality with aggregate mode holds for one inverter.
 
 These are additive and do not change a field above:
 
-- Several inverters with a battery, after ADR 0004 (#419), and in Monte Carlo.
+- Several inverters in Monte Carlo.
 - The DC link's voltage while only the battery discharges, for the curve row
   of those steps.
 

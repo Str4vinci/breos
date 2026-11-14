@@ -170,7 +170,7 @@
    "usable_ac_system_production_kwh": 7740.96,
    "curtailment_dc_kwh": 0.0,
    "consumption_kwh": 4000.0,
-   "self_consumption_kwh": 3102.49,
+   "self_consumption_kwh": 3102.48,
    "grid_import_kwh": 893.61,
    "grid_export_kwh": 4638.48,
    "grid_independence_pct": 77.66,
@@ -180,7 +180,7 @@
    "year": 12,
    "pv_dc_generation_kwh": 8197.65,
    "direct_pv_ac_load_kwh": 1976.12,
-   "pv_origin_battery_ac_load_kwh": 1116.16,
+   "pv_origin_battery_ac_load_kwh": 1116.17,
    "usable_ac_system_production_kwh": 7704.7,
    "curtailment_dc_kwh": 0.0,
    "consumption_kwh": 4000.0,
@@ -272,7 +272,7 @@
    "grid_import_kwh": 1103.5,
    "grid_export_kwh": 4603.03,
    "grid_independence_pct": 72.41,
-   "soh_pct": 74.86
+   "soh_pct": 74.85
   },
   {
    "year": 19,
@@ -884,7 +884,7 @@
     "to_inverter_kwh": 7297.47,
     "to_battery_kwh": 1363.12,
     "curtailed_kwh": 1.76,
-    "residual_kwh": 0.0
+    "residual_kwh": -0.0
    },
    "ac_delivery": {
     "direct_pv_to_load_kwh": 1991.23,
@@ -916,7 +916,7 @@
   }
  },
  "provenance": {
-  "breos_version": "0.7.0",
+  "breos_version": "0.8.0",
   "ledger_schema_version": "3.1",
   "currency": "EUR",
   "resolved_config": {
@@ -1098,7 +1098,7 @@
   "execution": {
    "execution_backend": "python",
    "requested_execution_backend": "python",
-   "python": "3.12.13",
+   "python": "3.13.14",
    "numpy": "2.4.6",
    "pandas": "3.0.5"
   },
@@ -1459,11 +1459,11 @@
   {
    "year": 18,
    "in_service": true,
-   "soh_pct": 74.86,
+   "soh_pct": 74.85,
    "capacity_kwh": 3.743,
    "usable_capacity_kwh": 2.994,
    "replacements": 0,
-   "charge_throughput_kwh": 1058.99,
+   "charge_throughput_kwh": 1058.98,
    "discharge_throughput_kwh": 1031.38,
    "fec": 274.87,
    "cumulative_fec": 2157.97,
