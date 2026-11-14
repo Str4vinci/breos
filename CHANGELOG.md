@@ -431,6 +431,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   reference. Code that calls `rainflow.extract_cycles` itself, as an earlier
   entry suggested for counting cycles outside a simulation, must now install
   `rainflow` on its own.
+- `breos run` prints a short summary in a terminal instead of the full JSON
+  result: the system, the year 1 energy, the battery's health at the end and
+  the lifetime economics, one value per line with its unit. When the output
+  is piped or redirected, or with the new `--json` flag, it prints the JSON
+  as before, byte for byte. With `--output` the file is unchanged and the
+  terminal shows the summary and the file name. Warnings raised by BREOS
+  print as one `breos: warning:` line, without the source path and code line.
 
 ### Deprecated
 

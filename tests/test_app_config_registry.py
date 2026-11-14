@@ -161,7 +161,7 @@ RUN_FLAGS: list[tuple[str, list[str], str, object]] = [
 ]
 
 # The ``breos run`` options that are not App config keys.
-RUN_COMMAND_OPTIONS = ("-h", "--help", "--config", "--output", "--indent", "--dry-run")
+RUN_COMMAND_OPTIONS = ("-h", "--help", "--config", "--output", "--indent", "--dry-run", "--json")
 
 
 def _run_config(*argv: str) -> dict[str, object]:
