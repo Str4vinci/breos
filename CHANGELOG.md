@@ -574,6 +574,19 @@ removed in 0.9.0.
   `[tariff]` or `[reference_tariff]`. Weather year boundaries, the PVGIS
   New Year offset lookup and battery plot date filters now handle missing
   or repeated midnights too. Results in unaffected timezones are unchanged.
+- Weather and temperature timestamps (#438). A complete right-labelled
+  hourly year, such as an Open-Meteo file, now covers the simulated year at
+  every resolution; it was refused at hourly steps for a missing first hour.
+  `load_weather` selects historical years by the start of each interval, so a
+  year no longer gains the previous year's last hour and loses its own.
+  `preload_weather_by_year` (Monte Carlo) reads local times across a DST
+  change on the clock of the file's New Year offset, so every civil year stays
+  complete, and battery-temperature CSVs read such times as instants instead
+  of failing. Representative-year temperatures are restamped on their own
+  clock, as the App restamps a TMY, and repeat across the year edge, so
+  named-zone and UTC sources fit a civil calendar. `read_epw_file` puts a
+  typical-year EPW whose months come from several years on one year, so it
+  resamples to 15 minutes; `source_years` records the originals.
 
 ### Documentation
 
