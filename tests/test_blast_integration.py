@@ -21,6 +21,7 @@ from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.runners import app as app_runner
 from breos.solar import PVProductionBreakdown
 from tests.energy_conservation import assert_energy_conservation
+from tests.project_year_runs import keep_every_frame, record_project_years
 
 # ---------------------------------------------------------------------------
 # Test 2: BLAST at 15-minute resolution
@@ -133,17 +134,6 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
     monkeypatch.setattr(projection_module, "build_costs_dict", lambda cfg, resolved: costs)
 
-    # Wrap (do not mock) the real degradation call to retain each year's frames.
-    captured_years: list[tuple] = []
-    real_simulate = projection_module.simulate_energy_balance
-
-    def _capturing_simulate(*args, **kwargs):
-        result = real_simulate(*args, **kwargs)
-        captured_years.append(result)
-        return result
-
-    monkeypatch.setattr(projection_module, "simulate_energy_balance", _capturing_simulate)
-
     inflation_rate = 0.03
     max_soc = 0.9
     battery_kwh = 5.0
@@ -166,12 +156,24 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     )
     cfg = resolved.cfg
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        artifacts = app_runner.run_app_simulation(resolved, deps=SimpleNamespace())
+    def run(*, every_frame: bool):
+        # Wrap (do not mock) the real year runs to retain each year's run.
+        with warnings.catch_warnings(), monkeypatch.context() as patch:
+            warnings.simplefilter("ignore")
+            if every_frame:
+                keep_every_frame(patch)
+            years = record_project_years(patch)
+            return app_runner.run_app_simulation(resolved, deps=SimpleNamespace()), years
 
-    assert len(captured_years) == cfg["projection_years"]
-    per_year_counts = [year_result[3] for year_result in captured_years]
+    artifacts, captured_years = run(every_frame=False)
+    # Only the first year keeps its degradation-tracking rows; the daily SOH
+    # checks below read every year's from a run that keeps them all, which
+    # must otherwise be this run.
+    framed_artifacts, framed_years = run(every_frame=True)
+    pd.testing.assert_frame_equal(framed_artifacts.yearly_df, artifacts.yearly_df, check_exact=True)
+    assert len(captured_years) == len(framed_years) == cfg["projection_years"]
+    assert all(year_run.degradation_df is not None for year_run in framed_years)
+    per_year_counts = [year_run.n_replacements for year_run in captured_years]
     # The economics prices each replacement at the pack's t = 0 price (ADR 0003 E4).
     per_year_costs = artifacts.yearly_df["Replacement_Cost"].tolist()
     assert per_year_costs == [count * battery_kwh * 500.0 for count in per_year_counts]
@@ -210,10 +212,12 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     replacement_reset_energy = battery_kwh * 1000.0 * max_soc
     battery = projection_module.build_battery_config(cfg, resolved, initial_soh=100.0)
     replacement_years_seen = 0
-    for year_idx, year_result in enumerate(captured_years):
-        results_df = year_result[0]
-        degradation_df = year_result[4]
-        year_replacements = year_result[3]
+    for year_run, framed_run in zip(captured_years, framed_years, strict=True):
+        results_df = year_run.results_df
+        pd.testing.assert_frame_equal(framed_run.results_df, results_df, check_exact=True)
+        degradation_df = framed_run.degradation_df
+        year_replacements = year_run.n_replacements
+        assert framed_run.n_replacements == year_replacements
 
         # Ledger closes on every row of every year, including replacement rows.
         assert_energy_conservation(results_df, battery)

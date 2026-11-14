@@ -827,8 +827,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--execution-backend",
         choices=EXECUTION_BACKENDS,
         help=(
-            "Within-day dispatch implementation. 'python' (default) is the numerical reference; "
-            "'numba' is the optional compiled backend and needs: pip install \"breos[fast]\"."
+            "Within-day dispatch implementation. 'auto' (default) runs 'numba' when Numba is installed "
+            "and 'python' otherwise; 'python' is the numerical reference; 'numba' is the optional "
+            'compiled backend and needs: pip install "breos[fast]".'
         ),
     )
     mc.add_argument("--output", type=Path, help="Per-run results CSV path (default: monte_carlo_results.csv).")

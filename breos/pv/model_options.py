@@ -12,7 +12,6 @@ from __future__ import annotations
 import math
 import os
 import warnings
-from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -22,8 +21,8 @@ from typing import Any, Iterator, Mapping
 import numpy as np
 import pandas as pd
 from pvlib.albedo import SURFACE_ALBEDOS
-from pvlib.location import Location
 
+from breos._sun_cache import sun_frame
 from breos.utils import get_hours_per_step
 from breos.weather import weather_metadata, weather_representative_time_offset
 
@@ -375,37 +374,6 @@ def solar_position_time_offset(method: str, weather: pd.DataFrame, freq: str) ->
     return pd.Timedelta(0)
 
 
-# The sun positions computed last, by everything they depend on. The sun is
-# most of a PV run's time, and the optimizer, the terrain horizon and sweeps
-# ask for the same grid again and again. At most about 20 MB: 45 hourly
-# years or 11 quarter-hourly ones, the oldest dropped first.
-_SOLAR_POSITIONS: OrderedDict[tuple, pd.DataFrame] = OrderedDict()
-_SOLAR_POSITIONS_MAX_ROWS = 400_000
-_PVLIB_SOLAR_POSITION = Location.get_solarposition
-
-
-def _solar_position_key(location: Any, times: pd.DatetimeIndex, offset: pd.Timedelta) -> tuple | None:
-    """What pvlib's sun position at ``times + offset`` depends on, or None if it is not kept.
-
-    Only a plain pvlib ``Location`` with pvlib's own method is kept: a
-    subclass or a replaced method may compute something else for the site.
-    pvlib reads the instants in UTC, so the time zone is not part of the key.
-    """
-    if (
-        type(location) is not Location
-        or Location.get_solarposition is not _PVLIB_SOLAR_POSITION
-        or "get_solarposition" in vars(location)
-    ):
-        return None
-    return (
-        location.latitude,
-        location.longitude,
-        location.altitude,
-        offset.value,
-        times.as_unit("ns").asi8.tobytes(),  # type: ignore[attr-defined]  # pandas-stubs omits asi8
-    )
-
-
 def solar_position_record(method: str, weather: pd.DataFrame, freq: str) -> dict[str, Any]:
     """The solar-position method asked for, the one ``weather`` resolves it to, and its offset.
 
@@ -431,17 +399,8 @@ def solar_position_at_labels(
     method = resolve_solar_position_for_weather(solar_position, weather)
     offset = solar_position_time_offset(method, weather, freq)
     warn_solar_position_fallback(solar_position, method)
-    key = _solar_position_key(location, times, offset)
-    if key is not None and key in _SOLAR_POSITIONS:
-        _SOLAR_POSITIONS.move_to_end(key)
-        solarpos = _SOLAR_POSITIONS[key]
-    else:
-        solarpos = location.get_solarposition(times=times + offset)
-        if key is not None and len(times) <= _SOLAR_POSITIONS_MAX_ROWS:
-            _SOLAR_POSITIONS[key] = solarpos
-            while sum(len(frame) for frame in _SOLAR_POSITIONS.values()) > _SOLAR_POSITIONS_MAX_ROWS:
-                _SOLAR_POSITIONS.popitem(last=False)
-    solarpos = solarpos.copy()
+    shifted = times + offset
+    solarpos = sun_frame("solar_position", location, shifted, lambda: location.get_solarposition(times=shifted))
     solarpos.index = times
     return solarpos, method
 

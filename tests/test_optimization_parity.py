@@ -116,11 +116,21 @@ def test_optimizer_passes_load_with_original_timestamps(monkeypatch):
     tmy_index = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
     load_index = pd.date_range("2024-01-01 00:00", periods=2, freq="h", tz="Europe/Lisbon")
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=load_index)
-    captured = _run_evaluate(monkeypatch, _problem_config(), houseload, tmy_index)
+    import breos.optimization as optimization
 
-    # The load must reach simulate_energy_balance with its real timestamps —
-    # its internal alignment (UTC instants, year remap) does the rest.
-    assert captured["houseload"].index.equals(load_index)
+    aligned_loads = []
+    align = optimization.align_simulation_inputs
+
+    def spy(pv_dc, load, *args, **kwargs):
+        aligned_loads.append(load)
+        return align(pv_dc, load, *args, **kwargs)
+
+    monkeypatch.setattr(optimization, "align_simulation_inputs", spy)
+    _run_evaluate(monkeypatch, _problem_config(), houseload, tmy_index)
+
+    # The load must reach the energy balance's own alignment with its real
+    # timestamps; that alignment (UTC instants, year remap) does the rest.
+    assert aligned_loads and all(load.index.equals(load_index) for load in aligned_loads)
 
 
 def test_projected_design_forwards_pv_model_options(monkeypatch):

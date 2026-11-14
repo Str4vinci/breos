@@ -291,6 +291,9 @@ def _provenance(
     cfg = resolved.cfg
     normalized_cfg = {
         **cfg,
+        # The request, "auto" by default, as for solar_position: the record
+        # replays on a machine without Numba. The execution block names what ran.
+        "execution_backend": resolved.requested_execution_backend,
         "location": {
             "preset": resolved.loc_key,
             "latitude": resolved.lat,

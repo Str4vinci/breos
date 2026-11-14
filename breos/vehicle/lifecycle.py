@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -33,7 +33,9 @@ from breos.vehicle.state import VehicleCarry
 VEHICLE_END_OF_LIFE_EVENTS_ATTR = "vehicle_end_of_life_events"
 
 
-def _build_vehicle_lifecycle(config: VehicleConfig, carry: VehicleCarry | None) -> DegradationLifecycle:
+def _build_vehicle_lifecycle(
+    config: VehicleConfig, carry: VehicleCarry | None, rainflow_kernel: Callable[..., int] | None = None
+) -> DegradationLifecycle:
     state = {} if carry is None else (carry.degradation_state or {})
     if state and state.get("degradation_engine") != config.degradation_engine:
         raise ValueError("vehicle degradation engine differs from the carried lifecycle")
@@ -69,6 +71,7 @@ def _build_vehicle_lifecycle(config: VehicleConfig, carry: VehicleCarry | None) 
         cycle_step=_update_battery_soh_from_cycles,
         calendar_step=update_battery_soh_calendar,
         initial_rainflow_state=state.get("native_rainflow_state"),
+        rainflow_kernel=rainflow_kernel,
     )
 
 
@@ -76,11 +79,18 @@ class VehicleLifecycle:
     """The independent vehicle pack, advanced only between dispatch windows."""
 
     def __init__(
-        self, config: VehicleConfig, carry: VehicleCarry | None, *, initial_soc: float, initial_temperature: float
+        self,
+        config: VehicleConfig,
+        carry: VehicleCarry | None,
+        *,
+        initial_soc: float,
+        initial_temperature: float,
+        rainflow_kernel: Callable[..., int] | None = None,
     ) -> None:
+        """``rainflow_kernel`` is the compiled native rainflow day scan (numba backend), else None."""
         self.config = config
         self.initial_carry = carry
-        self.lifecycle = _build_vehicle_lifecycle(config, carry)
+        self.lifecycle = _build_vehicle_lifecycle(config, carry, rainflow_kernel)
         self.soh = self.lifecycle.soh()
         if not math.isfinite(self.soh) or not 0.0 <= self.soh <= 1.0:
             raise ValueError("vehicle health must be finite and between 0 and 1")

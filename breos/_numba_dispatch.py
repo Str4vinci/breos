@@ -16,7 +16,7 @@ compiled and cached.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 from breos._dispatch import _day_arguments
 
@@ -32,6 +32,19 @@ def numba_available() -> bool:
     except ImportError:
         return False
     return True
+
+
+def numba_jit_enabled() -> bool:
+    """Return whether Numba compiles, which ``NUMBA_DISABLE_JIT=1`` switches off.
+
+    With the switch on, the decorated kernels are plain Python functions:
+    they still run, but far slower than the Python backend's own code.
+    """
+    try:
+        from numba.core import config
+    except ImportError:
+        return False
+    return not getattr(config, "DISABLE_JIT", False)
 
 
 def numba_versions() -> dict[str, str]:
@@ -85,16 +98,22 @@ def _kernel() -> Any:
 
 def _dispatch_day_numba(out: Any, *args: Any, **state: Any) -> None:
     """Run the compiled ``_dispatch_day``; takes the arguments of ``_day_arguments``."""
+    _run_packed_numba(_day_arguments(out, *args, **state))
+
+
+def _run_packed_numba(arguments: Sequence[Any]) -> None:
+    """Run the compiled ``_dispatch_day`` on a packing of ``_day_arguments``."""
     global _JIT_CACHE_STATE
 
     kernel = _kernel()
-    observe_cache = _JIT_CACHE_STATE is None
+    # Under NUMBA_DISABLE_JIT the kernel is a plain function, with no cache to observe.
+    observe_cache = _JIT_CACHE_STATE is None and hasattr(kernel, "signatures")
     if observe_cache:
         had_compiled_signature = bool(kernel.signatures)
         cache_hits_before = _cache_event_count(kernel.stats.cache_hits)
         cache_misses_before = _cache_event_count(kernel.stats.cache_misses)
 
-    kernel(*_day_arguments(out, *args, **state))
+    kernel(*arguments)
     if observe_cache:
         cache_hits_after = _cache_event_count(kernel.stats.cache_hits)
         cache_misses_after = _cache_event_count(kernel.stats.cache_misses)
@@ -126,3 +145,19 @@ def require_numba_dispatch_day() -> Any:
             'Install it with: pip install "breos[fast]"'
         )
     return _dispatch_day_numba
+
+
+def require_numba_dispatch_candidates() -> Any:
+    """Return the compiled :func:`breos._dispatch._dispatch_day_candidates`, or explain what is missing."""
+    require_numba_dispatch_day()
+    from breos._numba_dispatch_kernels import _dispatch_day_candidates_kernel
+
+    return _dispatch_day_candidates_kernel
+
+
+def require_numba_rainflow_day() -> Any:
+    """Return the compiled :func:`breos.degradation._rainflow_kernel.rainflow_day`, or explain what is missing."""
+    require_numba_dispatch_day()
+    from breos._numba_dispatch_kernels import _rainflow_day_kernel
+
+    return _rainflow_day_kernel

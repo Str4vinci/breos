@@ -677,7 +677,11 @@ def run_app_simulation(
     # Asked the way the dispatch asks it, so the run and its provenance agree
     # on what counts as PV-only.
     has_battery = config_has_battery(cfg)
-    execution = backend_provenance(execution_backend, pv_only=not has_battery and resolved.vehicle is None)
+    execution = backend_provenance(
+        execution_backend,
+        pv_only=not has_battery and resolved.vehicle is None,
+        requested=resolved.requested_execution_backend,
+    )
     spec = resolved.smart_charging
     planned = instructions is None and spec is not None and spec.mode in PLANNER_MODES and has_battery
     if planned and execution_backend == "python" and cfg["resolution"] == "15min":
@@ -685,7 +689,8 @@ def run_app_simulation(
         # program every simulated day, which the Python backend runs slowly.
         warnings.warn(
             "smart_charging mode = 'daily_persistence' re-plans every day, which is slow on the Python backend "
-            "at 15-minute resolution; set execution_backend = 'numba' (the breos[fast] extra) for this mode.",
+            "at 15-minute resolution; install the breos[fast] extra, and leave execution_backend at 'auto' or "
+            "set it to 'numba', for this mode.",
             UserWarning,
             stacklevel=3,
         )

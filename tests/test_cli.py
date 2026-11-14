@@ -89,8 +89,9 @@ def _record_montecarlo_backend(monkeypatch):
 
     observed = {}
 
-    def fake_backend_provenance(execution_backend, *, pv_only=False):
+    def fake_backend_provenance(execution_backend, *, pv_only=False, requested=None):
         observed["execution_backend"] = execution_backend
+        observed["requested"] = requested
         raise _BackendChosen
 
     monkeypatch.setattr(montecarlo, "backend_provenance", fake_backend_provenance)
@@ -112,21 +113,26 @@ def _montecarlo_config(tmp_path, *, top_level=None, section=None):
 
 
 @pytest.mark.parametrize(
-    ("top_level", "section", "flag", "expected"),
+    ("top_level", "section", "flag", "requested"),
     [
-        (None, None, None, "python"),
+        (None, None, None, "auto"),
         ("numba", None, None, "numba"),
         ("numba", "python", None, "python"),
         ("python", None, "numba", "numba"),
         ("numba", "numba", "python", "python"),
+        ("python", "auto", None, "auto"),
+        ("python", None, "auto", "auto"),
     ],
 )
-def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch, top_level, section, flag, expected):
-    # Flag, then [montecarlo], then the top-level key, then "python"; the
+def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch, top_level, section, flag, requested):
+    # Flag, then [montecarlo], then the top-level key, then "auto"; the
     # Python API must pick the same backend for the same config.
     import tomllib
 
+    from breos.execution import resolve_execution_backend
     from breos.montecarlo import MonteCarloSettings, run_montecarlo
+
+    expected = resolve_execution_backend(requested)
 
     config_path = _montecarlo_config(tmp_path, top_level=top_level, section=section)
     observed = _record_montecarlo_backend(monkeypatch)
@@ -136,6 +142,7 @@ def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch,
     with pytest.raises(_BackendChosen):
         cli._montecarlo(cli.build_parser().parse_args(argv))
     assert observed.pop("execution_backend") == expected
+    assert observed.pop("requested") == requested
 
     if flag is None:
         config = tomllib.loads(config_path.read_text(encoding="utf-8"))
@@ -143,6 +150,7 @@ def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch,
         with pytest.raises(_BackendChosen):
             run_montecarlo(config, settings)
         assert observed["execution_backend"] == expected
+        assert observed["requested"] == requested
 
 
 def test_montecarlo_reports_unknown_setting_before_weather_lookup(tmp_path, capsys):

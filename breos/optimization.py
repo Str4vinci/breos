@@ -6,7 +6,9 @@ This module provides the NSGA-II multi-objective design search
 (:func:`evaluate_projected_design`) behind it.
 """
 
+import threading
 import warnings
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
@@ -14,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from breos.app_inputs import resample_hourly_weather
-from breos.battery import BatteryConfig
+from breos.battery import AlignedSimulationInputs, BatteryConfig, align_simulation_inputs
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
     calculate_costs,
@@ -30,7 +32,7 @@ from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
     limit_worker_threads,
     require_backend,
-    validate_execution_backend,
+    resolve_execution_backend,
 )
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.optimization_config import (
@@ -385,15 +387,22 @@ def _evaluate_projected_design_metrics(
     inverter_ac_capacity_w: Optional[float],
     emissions_params: Optional[EmissionsParams] = None,
     return_tables: bool = False,
-    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
+    execution_backend: str = "python",
     ac_output_scale: float = 1.0,
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
     reference_tariff: ResolvedTariff | None = None,
     reference_import_price_escalation: Optional[float] = None,
     currency: str = DEFAULT_CURRENCY,
+    align_year: Optional[Callable[[pd.Series, bool], AlignedSimulationInputs]] = None,
 ) -> Dict[str, Any]:
     """Evaluate one design over the projected horizon using production engines.
+
+    Every year runs as a summary from aligned inputs, as Monte Carlo runs
+    its years: the same physics and the same reductions as a run with
+    per-step frames, without building the frames. ``align_year(dc, has_battery)``
+    aligns one year's DC output with the load and, with a battery, the
+    temperature; None aligns all three with :func:`align_simulation_inputs`.
 
     ``base_dc_power`` is normally one weather year, repeated for every
     projected year and scaled by PV degradation. Passing a sequence of series
@@ -452,13 +461,23 @@ def _evaluate_projected_design_metrics(
             ac_output_scale=ac_output_scale,
         )
 
+    if align_year is None:
+
+        def align_year(dc: pd.Series, with_battery: bool) -> AlignedSimulationInputs:
+            return align_simulation_inputs(dc, houseload, temperature_series if with_battery else None, freq=freq)
+
+    # One alignment per distinct series; a repeated weather year aligns once.
+    aligned_by_series: Dict[int, AlignedSimulationInputs] = {}
+
     def year_inputs(year_idx: int) -> ProjectionYear:
         degradation_factor = (1.0 - float(degradation_rate)) ** year_idx
+        series = dc_by_year[year_idx]
+        aligned = aligned_by_series.get(id(series))
+        if aligned is None:
+            aligned = aligned_by_series[id(series)] = align_year(series, has_battery)
+        # Scaling after alignment is exact: reindexing only selects elements.
         return ProjectionYear(
-            pv_degradation_factor=degradation_factor,
-            pv_dc=dc_by_year[year_idx] * degradation_factor,
-            houseload=houseload,
-            temperature_series=temperature_series,
+            pv_degradation_factor=degradation_factor, aligned=aligned.scaled(pv_factor=degradation_factor)
         )
 
     projection = project_years(
@@ -696,36 +715,70 @@ def _layout_arrays(layout: str, n_modules: int, tilt: Any, azimuth: Any) -> list
 
 
 def _layout_dc_production(
-    arrays: Sequence[Tuple[int, Any, Any]],
-    *,
-    weather_data: pd.DataFrame,
-    location: Any,
-    pv_params: PVModuleParams,
-    freq: str,
-    model_options: Mapping[str, Any],
+    arrays: Sequence[Tuple[int, Any, Any]], array_dc: Callable[[int, Any, Any], pd.Series]
 ) -> pd.Series:
     """The DC output of every array, summed as the App sums ``[[pv_arrays]]``.
 
-    Each array is its own fixed-tilt PV model run, and the series are added
-    in order with ``fill_value=0``, as ``calculate_multi_array_production``
-    does, so an East-West design gives the App's floats.
+    ``array_dc(modules, tilt, azimuth)`` is one array's fixed-tilt PV model
+    run. The series are added in order with ``fill_value=0``, as
+    ``calculate_multi_array_production`` does, so an East-West design gives
+    the App's floats.
     """
     total: Optional[pd.Series] = None
     for modules, tilt, azimuth in arrays:
-        series = calculate_pv_production_dc(
-            weather_data=weather_data,
-            location=location,
-            tilt=tilt,
-            surface_azimuth=azimuth,
-            n_modules=modules,
-            pv_params=pv_params,
-            freq=freq,
-            **model_options,
-        )
+        series = array_dc(modules, tilt, azimuth)
         total = series if total is None else total.add(series, fill_value=0.0)
     if total is None:
         raise ValueError("a design needs at least one PV array")
     return total
+
+
+def _exact_key(value: Any) -> Any:
+    """``value`` as a key that tells apart any two values a PV run could tell apart, -0.0 and 0.0 included."""
+    if value is None:
+        return None
+    return type(value).__name__, np.float64(value).tobytes()
+
+
+class _ArrayDcCache:
+    """Each PV array's DC output, by weather frame and array, kept up to ``max_values`` floats.
+
+    Designs of one search share arrays: those that differ only in battery
+    size share all of them, and East-West designs a module apart share one.
+    A pickled cache arrives empty, so a worker task does not carry it. A
+    lock guards the store, for runners that score designs on threads; two
+    threads may both compute a missing array, and the first stored is kept.
+    """
+
+    def __init__(self, max_values: int = 16_000_000) -> None:
+        self.max_values = max_values
+        self.entries: "OrderedDict[Tuple[Any, ...], pd.Series]" = OrderedDict()
+        self.values = 0
+        self.lock = threading.Lock()
+
+    def __reduce__(self) -> Tuple[Any, ...]:
+        return (_ArrayDcCache, (self.max_values,))
+
+    def get(self, key: Tuple[Any, ...], compute: Callable[[], pd.Series]) -> pd.Series:
+        """The series stored under ``key``, computed and stored first if it is not there."""
+        with self.lock:
+            series = self.entries.get(key)
+            if series is not None:
+                self.entries.move_to_end(key)
+                return series
+        series = compute()
+        with self.lock:
+            stored = self.entries.get(key)
+            if stored is not None:
+                self.entries.move_to_end(key)
+                return stored
+            self.entries[key] = series
+            self.values += len(series)
+            # The oldest go first, and a series larger than the bound is not kept.
+            while self.values > self.max_values:
+                _, dropped = self.entries.popitem(last=False)
+                self.values -= len(dropped)
+        return series
 
 
 # eq=False: a study is compared by identity; its frames have no truth value.
@@ -756,6 +809,10 @@ class _DesignStudy:
     battery_replacement_treatment: Dict[str, Any]
     execution_backend: str
     solar_position: Dict[str, Any]
+    dc_cache: _ArrayDcCache = field(default_factory=_ArrayDcCache, repr=False)
+    # The study calendar with its aligned load and temperature, keyed by
+    # whether the design has a battery (a PV-only run reads 25 C).
+    calendars: Dict[bool, AlignedSimulationInputs] = field(default_factory=dict, repr=False)
 
     @classmethod
     @solar_position_warning_scope()
@@ -848,25 +905,34 @@ class _DesignStudy:
         """
         scale = self.config["dc_output_scale"]
 
-        def dc_for(frame: pd.DataFrame) -> pd.Series:
-            series = _layout_dc_production(
-                arrays,
-                weather_data=frame,
-                location=self.location,
-                pv_params=self.pv_params,
-                freq=self.config["simulation"]["resolution"],
-                model_options=self.model_options,
-            )
-            return series if scale == 1.0 else series * scale
+        def dc_for(frame: pd.DataFrame, frame_index: int) -> pd.Series:
+            def array_dc(modules: int, tilt: Any, azimuth: Any) -> pd.Series:
+                return self.dc_cache.get(
+                    (frame_index, modules, _exact_key(tilt), _exact_key(azimuth)),
+                    lambda: calculate_pv_production_dc(
+                        weather_data=frame,
+                        location=self.location,
+                        tilt=tilt,
+                        surface_azimuth=azimuth,
+                        n_modules=modules,
+                        pv_params=self.pv_params,
+                        freq=self.config["simulation"]["resolution"],
+                        **self.model_options,
+                    ),
+                )
+
+            series = _layout_dc_production(arrays, array_dc)
+            # A copy: a stored series must not take the index set below, nor any later edit.
+            return series.copy() if scale == 1.0 else series * scale
 
         if self.weather_by_year is None:
-            return dc_for(self.weather)
+            return dc_for(self.weather, 0)
         # Every year must land on the same intra-year index, because the load
         # profile and the battery temperature series are aligned to it once.
-        reference = dc_for(self.weather_by_year[0])
+        reference = dc_for(self.weather_by_year[0], 0)
         series = [reference]
-        for frame in self.weather_by_year[1:]:
-            year_dc = dc_for(frame)
+        for frame_index, frame in enumerate(self.weather_by_year[1:], start=1):
+            year_dc = dc_for(frame, frame_index)
             if len(year_dc) != len(reference):
                 raise ValueError(
                     "every weather_by_year frame must produce the same number of "
@@ -875,6 +941,23 @@ class _DesignStudy:
             year_dc.index = reference.index
             series.append(year_dc)
         return series
+
+    def align_year(self, dc: pd.Series, has_battery: bool) -> AlignedSimulationInputs:
+        """One year's DC output on the study calendar; the load and temperature are aligned once per study."""
+        calendar = self.calendars.get(has_battery)
+        if calendar is not None and len(dc) and dc.index[0] == calendar.index[0] and dc.index[-1] == calendar.index[-1]:
+            return calendar.with_pv_dc(dc)
+        calendar = align_simulation_inputs(
+            dc,
+            self.houseload,
+            self.temperature_series if has_battery else None,
+            freq=self.config["simulation"]["resolution"],
+        )
+        # Every later design reads these arrays; none may write them.
+        calendar.load_w.setflags(write=False)
+        calendar.temperature_c.setflags(write=False)
+        self.calendars[has_battery] = calendar
+        return calendar
 
     def score(
         self,
@@ -910,6 +993,7 @@ class _DesignStudy:
             reference_tariff=self.pricing.reference_tariff,
             reference_import_price_escalation=self.pricing.reference_import_price_escalation,
             currency=self.pricing.currency,
+            align_year=self.align_year,
         )
 
     def provenance(self, **extra: Any) -> Dict[str, Any]:
@@ -994,7 +1078,7 @@ def evaluate_projected_design(
     # Before the PV production model runs, not after it. Computing a year of
     # irradiance and then failing on a missing import wastes the expensive part
     # and reports the cheap problem late.
-    require_backend(execution_backend)
+    execution_backend = require_backend(execution_backend)
 
     study = _DesignStudy.resolve(
         tmy_data,
@@ -1095,7 +1179,7 @@ try:
             # Candidate scoring is the hottest loop in the package, which makes
             # it exactly the place where a silently-inherited backend would be
             # hardest to notice and hardest to attribute afterwards.
-            backend = validate_execution_backend(execution_backend)
+            backend = resolve_execution_backend(execution_backend)
             # Checked and defaulted once, before any model preparation: an
             # unknown key raises, and every default is in the resolved config.
             config = resolve_optimization_config(config)
@@ -1478,7 +1562,7 @@ def optimize_system_multi_objective(
     # Before the worker pool exists. An NSGA-II run is long and a missing
     # optional dependency should not surface as a traceback from inside a pool
     # that then has to be torn down.
-    require_backend(execution_backend)
+    execution_backend = require_backend(execution_backend)
 
     # Invalid tariffs must fail before a worker pool is created.
     problem = SolarDesignProblem(

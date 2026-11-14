@@ -61,7 +61,8 @@ from breos.execution import (
     limit_worker_threads,
     observed_jit_cache_state,
     reset_jit_cache_observation,
-    validate_execution_backend,
+    resolve_execution_backend,
+    validate_requested_backend,
 )
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import (
@@ -143,11 +144,12 @@ class MonteCarloSettings:
     max_load_scale: float | None = None
     collect_yearly: bool = False
     n_procs: int = 1
-    # "python" is the reference implementation and the default. "numba"
-    # selects the optional compiled within-day dispatch kernel and requires
-    # breos[fast]; it is checked before any trajectory starts. None inherits
-    # the App config's top-level ``execution_backend``, which itself defaults
-    # to "python"; see :func:`run_montecarlo`.
+    # "python" is the reference implementation. "numba" selects the optional
+    # compiled within-day dispatch kernel and requires breos[fast]; it is
+    # checked before any trajectory starts. "auto" runs "numba" when Numba is
+    # installed and "python" otherwise. None inherits the App config's
+    # top-level ``execution_backend``, which itself defaults to "auto"; see
+    # :func:`run_montecarlo`.
     execution_backend: str | None = None
     # One-sigma uncertainty of the PV model's annual yield, in percent: the
     # irradiance data, transposition, PV model and loss assumptions together.
@@ -187,7 +189,7 @@ class MonteCarloSettings:
         if self.n_procs < 1:
             raise ValueError("n_procs must be at least 1")
         if self.execution_backend is not None:
-            validate_execution_backend(self.execution_backend)
+            validate_requested_backend(self.execution_backend)
         if (
             self.weather_start_year is not None
             and self.weather_end_year is not None
@@ -1196,11 +1198,13 @@ def run_montecarlo(
     weather, as in the App.
 
     The dispatch backend is ``settings.execution_backend`` when set, else the
-    config's top-level ``execution_backend``, else ``"python"``. The CLI
+    config's top-level ``execution_backend``, else ``"auto"``. The CLI
     applies the same order after its own ``--execution-backend`` flag and
     ``[montecarlo].execution_backend``, so a study selects the same backend
-    from Python and from ``breos montecarlo``. The returned result's
-    ``settings`` records the backend that ran.
+    from Python and from ``breos montecarlo``. ``"auto"`` is resolved once,
+    before any trajectory, so every worker runs the parent's backend. The
+    returned result's ``settings`` records the backend that ran, and
+    ``provenance["execution"]["requested_execution_backend"]`` the name asked for.
 
     Returns:
         A :class:`MonteCarloResult` with one row per run and summary statistics.
@@ -1211,7 +1215,11 @@ def run_montecarlo(
     _reject_planned_smart_charging(resolved)
     _reject_several_string_inverters(resolved)
     if settings.execution_backend is None:
+        requested_backend = resolved.requested_execution_backend
         settings = replace(settings, execution_backend=cfg["execution_backend"])
+    else:
+        requested_backend = settings.execution_backend
+        settings = replace(settings, execution_backend=resolve_execution_backend(settings.execution_backend))
     if cfg["degradation_engine"] == "blast":
         raise ValueError("degradation_engine='blast' is not supported with Monte Carlo yet")
     _reject_period(cfg)
@@ -1227,7 +1235,11 @@ def run_montecarlo(
     # optional dependency stops a 10,000-trajectory study immediately rather
     # than hours into it.
     has_battery = config_has_battery(cfg)
-    execution = backend_provenance(settings.execution_backend, pv_only=not has_battery and resolved.vehicle is None)
+    execution = backend_provenance(
+        settings.execution_backend,
+        pv_only=not has_battery and resolved.vehicle is None,
+        requested=requested_backend,
+    )
 
     # One "auto" fallback warning per study. A year cache that reuses its PV
     # layer builds nothing that warns, so the study warns from its weather
@@ -1359,7 +1371,9 @@ def run_montecarlo(
             "result_schema_version": RESULT_SCHEMA_VERSION,
             # Every money column and summary is in this currency; BREOS does not convert.
             "currency": currency,
-            "resolved_config": cfg,
+            # The config's own request, "auto" by default; settings and the
+            # execution block name the backend that ran.
+            "resolved_config": {**cfg, "execution_backend": resolved.requested_execution_backend},
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
             "solver": deepcopy(solver),

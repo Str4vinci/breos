@@ -24,7 +24,10 @@ from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its nam
     _ROW,
     _ROW_COLUMNS,
     LEDGER_SCHEMA_VERSION,
+    _day_arguments,
     _dispatch_day_python,
+    _restate_day,
+    _run_packed_python,
     compute_cell_temperature,
 )
 from breos.constants import (
@@ -420,6 +423,13 @@ def _align_curve_rows(inverter_curve_row: Optional[pd.Series], rng: pd.DatetimeI
     return array
 
 
+def _align_pv_dc(pv_dc: pd.Series, rng: pd.DatetimeIndex) -> np.ndarray:
+    """Reindex PV DC power onto ``rng`` as float64, refusing a step without a finite value."""
+    pv_values = pv_dc.reindex(rng)
+    _require_complete_series(pv_values, "pv_dc")
+    return pv_values.values.astype(np.float64)
+
+
 def _align_input_arrays(
     pv_dc: pd.Series,
     houseload: pd.DataFrame,
@@ -435,8 +445,7 @@ def _align_input_arrays(
     than the simulation window, and it repeats across the year edge (see
     :func:`_repeat_annual_load_across_year_edges`).
     """
-    pv_values = pv_dc.reindex(rng)
-    _require_complete_series(pv_values, "pv_dc")
+    pv_values = _align_pv_dc(pv_dc, rng)
 
     if isinstance(houseload.index, pd.DatetimeIndex):
         houseload_series = houseload.iloc[:, 0].copy()
@@ -471,7 +480,7 @@ def _align_input_arrays(
         houseload_series.index = new_load_idx
     else:
         houseload_series = houseload.iloc[:, 0].copy()
-        houseload_series.index = pv_values.index
+        houseload_series.index = rng
     houseload_series = houseload_series.reindex(rng)
     _require_complete_series(houseload_series, "houseload")
     negative = houseload_series.to_numpy(dtype=float) < 0.0
@@ -489,7 +498,7 @@ def _align_input_arrays(
         _require_complete_series(temperature_series, "temperature_series")
 
     return (
-        pv_values.values.astype(np.float64),
+        pv_values,
         houseload_series.values.astype(np.float64),
         temperature_series.values.astype(np.float64),
     )
@@ -558,6 +567,27 @@ class AlignedSimulationInputs:
             freq=self.freq,
             pv_chain=self.pv_chain if pv_factor == 1.0 else None,
             pv_chain_key=self.pv_chain_key if pv_factor == 1.0 else None,
+            inverter_ac_derate=self.inverter_ac_derate,
+            inverter_curve_row=self.inverter_curve_row,
+        )
+
+    def with_pv_dc(self, pv_dc: pd.Series) -> "AlignedSimulationInputs":
+        """Return the same calendar, load and temperature with ``pv_dc`` aligned onto it as the PV.
+
+        ``pv_dc`` must start and end where this calendar does. The PV is then
+        reindexed and checked exactly as :func:`align_simulation_inputs`
+        does, so the result equals what that function builds from ``pv_dc``
+        and this calendar's load and temperature, without aligning the load
+        again. A design sweep on one weather year aligns its load once.
+        """
+        if len(pv_dc.index) == 0 or pv_dc.index[0] != self.index[0] or pv_dc.index[-1] != self.index[-1]:
+            raise ValueError("pv_dc must start and end where the aligned calendar does")
+        return AlignedSimulationInputs(
+            index=self.index,
+            pv_dc_w=_align_pv_dc(pv_dc, self.index),
+            load_w=self.load_w,
+            temperature_c=self.temperature_c,
+            freq=self.freq,
             inverter_ac_derate=self.inverter_ac_derate,
             inverter_curve_row=self.inverter_curve_row,
         )
@@ -819,6 +849,7 @@ def _build_degradation_lifecycle(
     initial_calendar_seconds: float,
     default_day_start_soc: float,
     default_day_start_t_cell: float,
+    rainflow_kernel: Optional[Callable[..., int]] = None,
 ) -> Tuple[DegradationLifecycle, float, float]:
     """Construct the degradation backend and its first day-boundary state.
 
@@ -837,6 +868,7 @@ def _build_degradation_lifecycle(
             cycle_step=_update_battery_soh_from_cycles,
             calendar_step=update_battery_soh_calendar,
             initial_rainflow_state=state_payload.get("native_rainflow_state"),
+            rainflow_kernel=rainflow_kernel,
         )
         return (
             lifecycle,
@@ -1461,6 +1493,18 @@ def _dispatch_no_battery_vectorized(
     out.columns["Inverter_Loss"][steps] = conversion_w
 
 
+def _mean(values: np.ndarray) -> float:
+    """``float(np.mean(values))``, without np.mean's wrapper for float64.
+
+    For float64, np.mean is add.reduce divided by the count, so this returns
+    the same bits; any other dtype goes to np.mean, which may accumulate in
+    another precision.
+    """
+    if values.dtype == np.float64 and values.size:
+        return float(np.add.reduce(values)) / values.size
+    return float(np.mean(values))
+
+
 def _apply_daily_degradation(
     aging: _AgingState,
     lifecycle: DegradationLifecycle,
@@ -1469,7 +1513,7 @@ def _apply_daily_degradation(
     degradation_tracking: List[Dict[str, Any]],
     *,
     step_index: int,
-    step_time: pd.Timestamp,
+    step_times: pd.DatetimeIndex,
     time_ticks: np.ndarray,
     ticks_per_second: float,
     soc_absolute_day: np.ndarray,
@@ -1481,12 +1525,14 @@ def _apply_daily_degradation(
     grid_origin_energy_wh: float,
     battery_energy_beginning: float,
     replacement_skipped_by: Optional[str] = None,
+    keep_record: bool = True,
 ) -> Tuple[float, float, float]:
     """Close out one degradation period, returning ``(energy, pv_origin, grid_origin)``.
 
     Runs the lifecycle step, optional resistance fade and the end-of-life
     replacement check in that order, mutating *aging* in place and appending
-    one row to *degradation_tracking*. The stored-energy values are
+    one row to *degradation_tracking*, unless ``keep_record`` is false (a
+    summary run, which builds no degradation frame). The stored-energy values are
     returned rather than carried on *aging* because the per-step loop owns
     them and only a replacement changes them here.
 
@@ -1512,8 +1558,10 @@ def _apply_daily_degradation(
     day_end_soc_absolute = float(soc_absolute_day[-1])
     day_end_t_cell = float(t_cell_day[-1])
 
-    mean_soc_abs = float(np.mean(soc_absolute_day))
-    mean_t_cell = float(np.mean(t_cell_day))
+    # np.mean is add.reduce over the size; doing it directly skips ~4 us of
+    # wrapper per call and returns the same bits.
+    mean_soc_abs = _mean(soc_absolute_day)
+    mean_t_cell = _mean(t_cell_day)
     effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
 
     degradation_step = lifecycle.step(
@@ -1526,6 +1574,8 @@ def _apply_daily_degradation(
             start_soc=aging.day_start_soc,
             start_temperature_c=aging.day_start_t_cell,
             finalize_cycles=finalize_cycles,
+            soc_mean=mean_soc_abs,
+            temperature_mean_c=mean_t_cell,
         )
     )
     aging.soh_fraction = degradation_step.soh_fraction
@@ -1558,7 +1608,7 @@ def _apply_daily_degradation(
         and not aging.retired
     ):
         aging.end_of_life_events.append(
-            EndOfLifeEvent(step_index, step_time, "replaced", "end_of_life", aging.soh_percent)
+            EndOfLifeEvent(step_index, step_times[step_index], "replaced", "end_of_life", aging.soh_percent)
         )
         cycle_degradation_for_row = degradation_step.cycle_degradation + _settle_terminal_cycles(aging, lifecycle)
         battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh, day_end_soc_absolute = (
@@ -1584,7 +1634,9 @@ def _apply_daily_degradation(
             assert reason is not None
             retire = battery_config.skipped_replacement_action == "retire"
             aging.end_of_life_events.append(
-                EndOfLifeEvent(step_index, step_time, "retired" if retire else "kept", reason, aging.soh_percent)
+                EndOfLifeEvent(
+                    step_index, step_times[step_index], "retired" if retire else "kept", reason, aging.soh_percent
+                )
             )
             aging.past_end_of_life = True
         if not retire and not aging.retired and aging.soh_fraction <= 0.0:
@@ -1592,7 +1644,7 @@ def _apply_daily_degradation(
             # is retired as a skipped swap's "retire" retires one.
             retire = True
             aging.end_of_life_events.append(
-                EndOfLifeEvent(step_index, step_time, "retired", "zero_health", aging.soh_percent)
+                EndOfLifeEvent(step_index, step_times[step_index], "retired", "zero_health", aging.soh_percent)
             )
         if retire:
             # The pack's last cycles end here: the energy it holds is
@@ -1611,8 +1663,12 @@ def _apply_daily_degradation(
                 )
             )
 
+    if not keep_record:
+        aging.day_start_soc = day_end_soc_absolute
+        aging.day_start_t_cell = day_end_t_cell
+        return battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh
     degradation_record = {
-        "Datetime": step_time,
+        "Datetime": step_times[step_index],
         "SOH": aging.soh_percent,
         "Cycle_Degradation": cycle_degradation_for_row,
         "Calendar_Degradation": degradation_step.calendar_degradation,
@@ -1732,6 +1788,29 @@ def _resolve_dispatch_day(execution_backend: str) -> Any:
     return require_numba_dispatch_day()
 
 
+def _resolve_packed_day(dispatch_day: Any) -> Optional[Callable[[List[Any]], None]]:
+    """The callable that runs a span's packing of ``_day_arguments`` on *dispatch_day*'s backend.
+
+    None for any other callable, a test's stand-in for one, which then gets
+    the per-day call it was written for.
+    """
+    if dispatch_day is _dispatch_day_python:
+        return _run_packed_python
+    from breos._numba_dispatch import _dispatch_day_numba, _run_packed_numba
+
+    return _run_packed_numba if dispatch_day is _dispatch_day_numba else None
+
+
+def _resolve_rainflow_kernel(execution_backend: str) -> Optional[Callable[..., int]]:
+    """The compiled native rainflow day scan for the numba backend; None (numpy and Python) otherwise."""
+    validate_execution_backend(execution_backend)
+    if execution_backend == "python":
+        return None
+    from breos._numba_dispatch import require_numba_rainflow_day
+
+    return require_numba_rainflow_day()
+
+
 @dataclass(slots=True)
 class _CoreRun:
     """Everything one simulated span produced, before any result is shaped.
@@ -1748,6 +1827,8 @@ class _CoreRun:
     lifecycle: DegradationLifecycle
     degradation_tracking: List[Dict[str, Any]]
     hours_per_step: float
+    # The degradation periods closed; a summary run keeps no tracking rows.
+    degradation_periods: int = 0
     # The daily controller's carry; None without a controller.
     controller_carry: Optional[ControllerCarry] = None
     # A copy of the instructions a daily controller's decisions dispatched,
@@ -1897,7 +1978,7 @@ def _build_simulation_summary(
         carried_energy_wh=float(buffers.columns["Battery_Energy"][-1]),
         carried_pv_origin_energy_wh=float(buffers.columns["Battery_PV_Origin_Energy_End"][-1]),
         carried_grid_origin_energy_wh=float(buffers.columns["Battery_Grid_Origin_Energy_End"][-1]),
-        has_degradation_rows=bool(core.degradation_tracking),
+        has_degradation_rows=core.degradation_periods > 0,
         fec_cum=aging.fec_cum,
         cumulative_calendar_seconds=aging.cumulative_cal_seconds,
         cumulative_cycle_degradation=aging.cumulative_cycle_deg,
@@ -2214,6 +2295,7 @@ def _simulate_core(
         )
 
     degradation_tracking: List[Dict[str, Any]] = []
+    degradation_periods = 0
 
     n_steps = len(rng)
 
@@ -2260,6 +2342,7 @@ def _simulate_core(
         initial_calendar_seconds=start.calendar_seconds,
         default_day_start_soc=degradation_day_start_soc,
         default_day_start_t_cell=degradation_day_start_t_cell,
+        rainflow_kernel=_resolve_rainflow_kernel(execution_backend),
     )
 
     battery_soh_decimal = degradation_lifecycle.soh()
@@ -2441,6 +2524,7 @@ def _simulate_core(
             vehicle_carry,
             initial_soc=energy_v / capacity_v if capacity_v > 0.0 else 0.0,
             initial_temperature=float(vehicle_temp[0]),
+            rainflow_kernel=_resolve_rainflow_kernel(execution_backend),
         )
         charge_v = np.zeros(n_steps, dtype=np.bool_)
         discharge_v = np.ones(n_steps, dtype=np.bool_)
@@ -2528,6 +2612,8 @@ def _simulate_core(
             cap_charge_wh=cap_charge_wh,
             cap_discharge_wh=cap_discharge_wh,
             instructions=instructions,
+            ac_derate=_ones,
+            curve_rows=_own_curve_rows,
             stationary_active=False,
             **vehicle_state,
         )
@@ -2553,8 +2639,13 @@ def _simulate_core(
     # The dispatch reads instructions at global positions; a controller's
     # buffer is filled day by day ahead of each segment.
     dispatch_arrays: Any = instructions if session is None else session.instructions
-    # The kernels read a per-step rating fraction; one array of ones serves every day.
-    _full_rating = np.ones(n_steps) if _derate_vals is None else _derate_vals
+    # The kernels read a per-step rating fraction and curve row. Without
+    # per-step series, one array of each serves every day: _day_arguments
+    # would otherwise build a whole-run array for every day it packs.
+    _ones = np.ones(n_steps)
+    _full_rating = _ones if _derate_vals is None else _derate_vals
+    _own_curve_rows = np.full(n_steps, battery_config.conversion.curve_row)
+    _dispatch_curve_rows = _own_curve_rows if _curve_rows is None else _curve_rows
 
     # PV-only balance is already vectorized with NumPy and does not need the
     # general per-step dispatcher. This common path is faster than either the
@@ -2584,6 +2675,7 @@ def _simulate_core(
             aging=aging,
             lifecycle=degradation_lifecycle,
             degradation_tracking=degradation_tracking,
+            degradation_periods=degradation_periods,
             hours_per_step=hours_per_step,
             vehicle_carry=final_vehicle_carry(),
             vehicle_end_of_life_events=() if vehicle_lifecycle is None else tuple(vehicle_lifecycle.events),
@@ -2618,6 +2710,28 @@ def _simulate_core(
     # (see BatteryConfig.replacement_min_remaining_years).
     steps_after_span = battery_config.replacement_years_after_span * n_steps
     min_remaining_steps = battery_config.replacement_min_remaining_years * n_steps
+    # Everything the day loop passes but the day's bounds and starting state
+    # is the span's.
+    span_dispatch: Dict[str, Any] = dict(
+        battery_config=battery_config,
+        hours_per_step=hours_per_step,
+        standby_loss_per_step_wh=standby_loss_per_step_wh,
+        cap_wh=cap_wh,
+        cap_charge_wh=cap_charge_wh,
+        cap_discharge_wh=cap_discharge_wh,
+        cap_stored_wh=cap_stored_wh,
+        instructions=dispatch_arrays,
+        ac_derate=_full_rating,
+        curve_rows=_dispatch_curve_rows,
+        pv_chain=ac_pv_chain,
+    )
+    # Without a vehicle or a daily controller nothing else changes between
+    # days either, so the span packs _day_arguments once, on its first day,
+    # and restates only the day's bounds and state after that. A vehicle's
+    # state reaches derived arguments, and a controller can rebind the
+    # instructions' scalars each day; both pack every day.
+    run_packed = _resolve_packed_day(dispatch_day) if session is None and vehicle_config is None else None
+    packed: Optional[List[Any]] = None
     window_start = 0
     while window_start < n_steps:
         window_end = min(window_start + steps_per_day, n_steps)
@@ -2654,33 +2768,40 @@ def _simulate_core(
                 out.columns["Battery_SOH"][segment_start:segment_end] = aging.soh_percent
                 if vehicle_config is not None:
                     dispatch_vehicle_only(segment_start, segment_end)
-            else:
-                dispatch_day(
-                    out,
-                    _pv_dc_vals,
-                    _load_vals,
-                    _temp_vals,
+            elif packed is not None:
+                assert run_packed is not None
+                _restate_day(
+                    packed,
                     segment_start,
                     segment_end,
-                    battery_config=battery_config,
+                    Battery_Energy_Wh,
+                    Battery_PV_Origin_Energy_Wh,
+                    Battery_Grid_Origin_Energy_Wh,
+                    battery_soh_decimal,
+                    eff_charge,
+                    eff_discharge,
+                )
+                run_packed(packed)
+            else:
+                day_state: Dict[str, Any] = dict(
                     battery_soh_decimal=battery_soh_decimal,
                     Battery_Energy_Wh=Battery_Energy_Wh,
                     Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
                     Battery_Grid_Origin_Energy_Wh=Battery_Grid_Origin_Energy_Wh,
                     eff_charge=eff_charge,
                     eff_discharge=eff_discharge,
-                    hours_per_step=hours_per_step,
-                    standby_loss_per_step_wh=standby_loss_per_step_wh,
-                    cap_wh=cap_wh,
-                    cap_charge_wh=cap_charge_wh,
-                    cap_discharge_wh=cap_discharge_wh,
-                    cap_stored_wh=cap_stored_wh,
-                    instructions=dispatch_arrays,
-                    ac_derate=_full_rating if _derate_vals is None else _derate_vals,
-                    curve_rows=_curve_rows,
-                    pv_chain=ac_pv_chain,
+                    **span_dispatch,
                     **vehicle_state,
                 )
+                if run_packed is None:
+                    dispatch_day(out, _pv_dc_vals, _load_vals, _temp_vals, segment_start, segment_end, **day_state)
+                else:
+                    packed = list(
+                        _day_arguments(
+                            out, _pv_dc_vals, _load_vals, _temp_vals, segment_start, segment_end, **day_state
+                        )
+                    )
+                    run_packed(packed)
             if session is not None:
                 session.complete_segment(_pv_dc_vals, _load_vals, _temp_vals)
             segment_last = segment_end - 1
@@ -2699,6 +2820,7 @@ def _simulate_core(
         # The window's closing row, written by its final segment, holds the
         # state the day close continues from.
         battery_energy_beginning = float(out.columns["Battery_Energy_Beginning"][last_step])
+        degradation_periods += 1
         Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _apply_daily_degradation(
             aging,
             degradation_lifecycle,
@@ -2706,9 +2828,11 @@ def _simulate_core(
             out,
             degradation_tracking,
             step_index=last_step,
-            # Timestamps are read once per closed day rather than once per
-            # step; nothing inside the window depends on the calendar.
-            step_time=rng[last_step],
+            # The timestamp is read only for a record or an end-of-life
+            # event; nothing inside the window depends on the calendar.
+            step_times=rng,
+            # A summary reads only whether any period closed.
+            keep_record=not summary_only,
             time_ticks=time_ticks[window_start:window_end],
             ticks_per_second=ticks_per_second,
             # Copied before the call so a replacement rewriting the closing
@@ -2744,6 +2868,7 @@ def _simulate_core(
         aging=aging,
         lifecycle=degradation_lifecycle,
         degradation_tracking=degradation_tracking,
+        degradation_periods=degradation_periods,
         hours_per_step=hours_per_step,
         vehicle_carry=final_vehicle_carry(),
         vehicle_end_of_life_events=() if vehicle_lifecycle is None else tuple(vehicle_lifecycle.events),

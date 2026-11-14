@@ -94,7 +94,9 @@ def simulate_app(app, monkeypatch):
 
     def record(*args, **kwargs):
         outcome = actual(*args, **kwargs)
-        frames.append(outcome.results_df)
+        # Only the first year keeps a results frame; every year keeps the
+        # step columns its priced flows are read from.
+        frames.append(outcome.step_columns)
         return outcome
 
     with monkeypatch.context() as context:
@@ -111,7 +113,7 @@ def assert_same_projection(actual, expected, year_frames=None):
     expected_flows = expected.priced_flows
     if expected_flows is None:
         assert year_frames is not None, "capture App's years when its controller disables priced-flow retention"
-        expected_flows = [{key: frame[key].to_numpy() for key in actual.priced_flows[0]} for frame in year_frames]
+        expected_flows = [{key: np.asarray(frame[key]) for key in actual.priced_flows[0]} for frame in year_frames]
     for left, right in zip(actual.priced_flows, expected_flows):
         assert left.keys() == right.keys()
         for column in left:
@@ -158,8 +160,8 @@ def test_q2_standalone_identity_closure_and_asset_physics(community_case, offlin
         assert_energy_conservation(site_run.projection.first_year_results_df, battery)
         for year_idx, meter in enumerate(site_run.meters):
             powers = year_frames[year_idx]
-            assert_bits(meter.import_wh, powers["Import_From_Grid"] * 0.25)
-            assert_bits(meter.export_wh, powers["PV_AC_Export"] * 0.25)
+            assert_bits(meter.import_wh, np.asarray(powers["Import_From_Grid"]) * 0.25)
+            assert_bits(meter.export_wh, np.asarray(powers["PV_AC_Export"]) * 0.25)
     roof = run.sites["roof"]
     assert not np.any(roof.load_w)
     assert np.any(roof.meters[0].import_wh > 0), "actual inverter night import is retained"

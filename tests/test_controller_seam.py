@@ -18,7 +18,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import breos.projection as projection_module
 from breos._controller import ControllerDayDecision, ControllerDayInput
 from breos._dispatch import _ROW_COLUMNS
 from breos.battery import BatteryConfig, _simulate_core
@@ -26,6 +25,7 @@ from breos.dispatch_instructions import DispatchInstructions
 from breos.projection import ProjectionYear, project_years
 from breos.smart_charging import FixedTargetDayController, SmartChargingSpec, resolve_instructions
 from breos.tariffs import ResolvedTariff, TariffPrices, TariffSchedule, resolve_tariff
+from tests.project_year_runs import record_project_years
 
 BACKENDS = ["python", "numba"]
 FREQS = ["h", "15min"]
@@ -349,22 +349,8 @@ def test_a_replacement_inside_a_civil_day_matches_the_static_ledger(freq, backen
 
 def _project(scenario: _Scenario, backend: str, years: int, *, controller=None, replay_seam=True):
     """Run ``years`` replayed years, returning the run and every year's frame and controller carry."""
-    per_year: list[tuple[pd.DataFrame, object]] = []
-    detailed, balance = projection_module._simulate_detailed_run, projection_module.simulate_energy_balance
-
-    def recording_detailed(**kwargs):
-        run = detailed(**kwargs)
-        per_year.append((run.results_df, run.controller_carry))
-        return run
-
-    def recording_balance(**kwargs):
-        result = balance(**kwargs)
-        per_year.append((result[0], None))
-        return result
-
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(projection_module, "_simulate_detailed_run", recording_detailed)
-        patch.setattr(projection_module, "simulate_energy_balance", recording_balance)
+        runs = record_project_years(patch)
         run = project_years(
             years,
             lambda _year: ProjectionYear(
@@ -379,7 +365,8 @@ def _project(scenario: _Scenario, backend: str, years: int, *, controller=None, 
             day_controller=controller,
             replay_seam=replay_seam,
         )
-    return run, per_year
+    assert len(runs) == years
+    return run, [(year.results_df, year.controller_carry) for year in runs]
 
 
 @pytest.mark.parametrize("zone", ["Europe/Lisbon", "Europe/Berlin"])

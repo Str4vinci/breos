@@ -212,7 +212,7 @@ def test_solar_design_problem_uses_configured_resolution(monkeypatch):
     assert captured["freq"] == "15min"
     # Two 15-minute steps at 400 W are 0.2 kWh, not the 0.8 kWh of two hours.
     assert out["Projected_PV_Production_Year1_kWh"] == pytest.approx(0.2)
-    assert list(captured["temperature_series"]) == [20.0, 20.0]
+    assert list(captured["aligned"].temperature_c) == [20.0, 20.0]
 
 
 def test_solar_design_problem_scores_zeb_from_explicit_ac_ledger(monkeypatch, tiny_inputs):
@@ -759,3 +759,113 @@ def test_evaluated_designs_record_the_currency_of_the_search(monkeypatch):
     assert evaluated.attrs["currency"] == result.details["provenance"]["currency"] == "EUR"
     with pytest.raises(ValueError, match="records its currency as 'EUR'"):
         plot_pareto_front(evaluated, currency="USD")
+
+
+# --- the PV memo -------------------------------------------------------------
+
+
+@pytest.fixture
+def sunny_inputs():
+    """One clear-ish hourly day of weather and a flat 500 W load."""
+    idx = pd.date_range("2025-06-01 00:00", periods=24, freq="h", tz="UTC")
+    sun = np.clip(np.sin(np.pi * (np.arange(24) - 6) / 14), 0.0, None)
+    weather = pd.DataFrame(
+        {"ghi": 900.0 * sun, "dni": 700.0 * sun, "dhi": 150.0 * sun, "temp_air": 20.0, "wind_speed": 2.0}, index=idx
+    )
+    return declare_instant_at_labels(weather), pd.DataFrame({"Load": 500.0}, index=idx)
+
+
+def _counting_pv(monkeypatch):
+    """Count the PV model runs a study makes, by array."""
+    from breos import optimization
+
+    calls = []
+    original = optimization.calculate_pv_production_dc
+
+    def counted(**kwargs):
+        calls.append((kwargs["n_modules"], kwargs["tilt"], kwargs["surface_azimuth"]))
+        return original(**kwargs)
+
+    monkeypatch.setattr(optimization, "calculate_pv_production_dc", counted)
+    return calls
+
+
+def test_a_pv_array_is_modelled_once_per_search_and_handed_out_as_a_copy(sunny_inputs, monkeypatch):
+    tmy_data, houseload = sunny_inputs
+    study = SolarDesignProblem(tmy_data, houseload, _config()).study
+    calls = _counting_pv(monkeypatch)
+    first = study.dc_power([(4, 30.0, 180.0)])
+    noon = first.iloc[12]
+    first.iloc[12] = noon + 1.0
+    second = study.dc_power([(4, 30.0, 180.0)])
+    assert len(calls) == 1
+    assert noon > 0.0 and second.iloc[12] == noon
+    # -0.0 is not 0.0 to a sine, so it is its own array.
+    study.dc_power([(4, -0.0, 180.0)])
+    study.dc_power([(4, 0.0, 180.0)])
+    assert len(calls) == 3
+
+
+def test_east_west_designs_a_module_apart_share_an_array(sunny_inputs, monkeypatch):
+    from breos.optimization import _layout_arrays
+
+    tmy_data, houseload = sunny_inputs
+    study = SolarDesignProblem(tmy_data, houseload, _config()).study
+    calls = _counting_pv(monkeypatch)
+    study.dc_power(_layout_arrays("east_west", 8, 30.0, None))
+    study.dc_power(_layout_arrays("east_west", 9, 30.0, None))
+    assert len(calls) == 3
+
+
+def test_a_pickled_study_carries_no_pv_memo(sunny_inputs):
+    import pickle
+
+    tmy_data, houseload = sunny_inputs
+    study = SolarDesignProblem(tmy_data, houseload, _config()).study
+    study.dc_power([(4, 30.0, 180.0)])
+    assert len(study.dc_cache.entries) == 1
+    assert len(pickle.loads(pickle.dumps(study)).dc_cache.entries) == 0
+
+
+def test_the_pv_memo_drops_the_least_recently_used_array_past_its_bound():
+    from breos.optimization import _ArrayDcCache
+
+    cache = _ArrayDcCache(max_values=4)
+    for key in ("a", "b"):
+        cache.get((key,), lambda: pd.Series([1.0, 2.0]))
+    cache.get(("a",), lambda: pytest.fail("'a' is stored"))
+    cache.get(("c",), lambda: pd.Series([3.0, 4.0]))
+    assert list(cache.entries) == [("a",), ("c",)]
+    assert cache.values == 4
+
+
+def test_the_pv_memo_keeps_no_series_larger_than_its_bound():
+    from breos.optimization import _ArrayDcCache
+
+    cache = _ArrayDcCache(max_values=4)
+    cache.get(("a",), lambda: pd.Series([1.0, 2.0]))
+    big = cache.get(("big",), lambda: pd.Series([1.0, 2.0, 3.0, 4.0, 5.0]))
+    assert len(big) == 5
+    assert not cache.entries and cache.values == 0
+
+
+def test_threads_scoring_one_array_share_one_stored_series():
+    import threading
+
+    from breos.optimization import _ArrayDcCache
+
+    cache = _ArrayDcCache(max_values=1000)
+    barrier = threading.Barrier(4)
+    results = []
+
+    def compute():
+        barrier.wait()
+        return pd.Series([1.0, 2.0])
+
+    threads = [threading.Thread(target=lambda: results.append(cache.get(("a",), compute))) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert cache.values == 2
+    assert all(result is results[0] for result in results[1:])

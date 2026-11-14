@@ -64,7 +64,7 @@ def scripted(monkeypatch):
         def tracking_fields(self, step):
             return {}
 
-    monkeypatch.setattr(lifecycle, "_build_vehicle_lifecycle", lambda cfg, carry: Engine(carry))
+    monkeypatch.setattr(lifecycle, "_build_vehicle_lifecycle", lambda cfg, carry, rainflow_kernel=None: Engine(carry))
     return health, instances
 
 

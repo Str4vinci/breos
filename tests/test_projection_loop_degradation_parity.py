@@ -24,6 +24,7 @@ from breos.montecarlo import MonteCarloSettings, _simulate_trajectory, _Study
 from breos.runners import app as app_runner
 from breos.solar import PVProductionBreakdown
 from tests.conftest import declare_instant_at_labels
+from tests.project_year_runs import record_project_years
 
 # The rates resolve_optimization_config fills in; the private evaluator reads
 # them from the resolved financials rather than defaulting them again.
@@ -86,10 +87,7 @@ def _spy(monkeypatch, module, name, records, calls):
     def _wrapped(*args, **kwargs):
         calls.append(kwargs.get("finalize_degradation"))
         output = real(*args, **kwargs)
-        if name == "simulate_energy_balance_summary":
-            records.append(_state_record(output.final_degradation_state, output.n_replacements))
-        else:
-            records.append(_state_record(output[-1], output[3]))
+        records.append(_state_record(output.final_degradation_state, output.n_replacements))
         return output
 
     monkeypatch.setattr(module, name, _wrapped)
@@ -125,32 +123,37 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
         pv_breakdown=_pv_breakdown(pv),
     )
     monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
-    # App and the optimizer both run the shared loop's simulate_energy_balance,
-    # so each run gets its own spy.
+    # App runs the shared loop's per-step years: simulate_energy_balance for
+    # the first, the core reduced to a summary for the rest. Monte Carlo and
+    # the optimizer run its aligned summaries. Each run gets its own spy.
     with monkeypatch.context() as patch:
-        _spy(patch, projection_module, "simulate_energy_balance", app_records, app_calls)
+        app_years = record_project_years(patch)
         app_artifacts = app_runner.run_app_simulation(resolved, deps=SimpleNamespace())
+    for year in app_years:
+        app_calls.append(year.kwargs.get("finalize_degradation"))
+        app_records.append(_state_record(year.degradation_state, year.n_replacements))
 
     # Monte Carlo: one trajectory with a single weather year and no load
     # uncertainty, so the draw is the App's inputs exactly.
     mc_records, mc_calls = [], []
-    _spy(monkeypatch, projection_module, "simulate_energy_balance_summary", mc_records, mc_calls)
-    mc_metrics, _trajectory = _simulate_trajectory(
-        _Study(
-            cfg,
-            resolved,
-            np.array([2025]),
-            PROJECTION_YEARS,
-            # run_montecarlo resolves an unset backend; this calls the trajectory directly.
-            MonteCarloSettings(weather_file="unused.csv", load_uncertainty=0.0, execution_backend="python"),
-            {2025: align_simulation_inputs(pv, load, temperature, freq="h")},
-        ),
-        np.random.default_rng(0),
-    )
+    with monkeypatch.context() as patch:
+        _spy(patch, projection_module, "simulate_energy_balance_summary", mc_records, mc_calls)
+        mc_metrics, _trajectory = _simulate_trajectory(
+            _Study(
+                cfg,
+                resolved,
+                np.array([2025]),
+                PROJECTION_YEARS,
+                # run_montecarlo resolves an unset backend; this calls the trajectory directly.
+                MonteCarloSettings(weather_file="unused.csv", load_uncertainty=0.0, execution_backend="python"),
+                {2025: align_simulation_inputs(pv, load, temperature, freq="h")},
+            ),
+            np.random.default_rng(0),
+        )
 
     # Projected optimization: the year loop behind evaluate_projected_design.
     opt_records, opt_calls = [], []
-    _spy(monkeypatch, projection_module, "simulate_energy_balance", opt_records, opt_calls)
+    _spy(monkeypatch, projection_module, "simulate_energy_balance_summary", opt_records, opt_calls)
     batt_spec = {
         "min_soc": cfg["battery_min_soc"],
         "max_soc": cfg["battery_max_soc"],
