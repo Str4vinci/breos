@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.app import _revalued_config
+from breos.app import App, _revalued_config
 from breos.app_config import build_costs_dict, resolve_app_config
 from breos.projection import build_battery_config, build_pv_only_battery_config
 from breos.vehicle import VehicleConfig
@@ -248,7 +248,7 @@ def test_charger_premium_counted_once_and_wear_does_not_change_system_npv(app):
     free = revalue_offline(app, {"vehicle": {"charger_cost": 0}})
     original = app.result()
     assert free["total_investment"] == original["total_investment"] - VEHICLE["charger_cost"]
-    assert free["npv_savings"] == original["npv_savings"] + VEHICLE["charger_cost"]
+    assert free["npv_savings"] == pytest.approx(original["npv_savings"] + VEHICLE["charger_cost"], abs=1e-6)
     for name in ["vehicle_benefit", "household_adjusted_npv"]:
         assert free["vehicle"][name]["npv"] == pytest.approx(original["vehicle"][name]["npv"] + VEHICLE["charger_cost"])
     repriced = revalue_offline(app, {"vehicle": {"battery_cost_per_kwh": 240}})
@@ -557,3 +557,77 @@ def test_app_allows_vehicle_blast():
     for run in app._artifacts.vehicle_households.runs.values():
         assert run.carry.vehicle.degradation_state["degradation_engine"] == "blast"
         assert 0.0 < run.carry.vehicle.soh_fraction < 1.0
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+def test_period_vehicle_holds_departure_target_when_charge_period_is_absent(tmp_path, backend, resolution):
+    # Sunday has no off-peak hours; the named charging period exists only
+    # outside this public App window. The car starts at its departure target.
+    index = pd.date_range("2025-01-01", periods=8760, freq="h", tz="UTC")
+    weather_file = tmp_path / "weather.csv"
+    pd.DataFrame({"date": index, "ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 25.0, "wind_speed": 3.0}).to_csv(
+        weather_file, index=False
+    )
+    load_file = tmp_path / "load.csv"
+    pd.DataFrame({"load": np.full(len(index), 3000.0)}).to_csv(load_file, index=False)
+    config = {
+        "location": "porto",
+        "start_date": "2025-01-01",
+        "resolution": resolution,
+        "period": {"start": "2025-06-01", "end": "2025-06-02"},
+        "n_modules": 10,
+        "battery_kwh": 0.0,
+        "annual_consumption_kwh": 26280.0,
+        "weather_file": str(weather_file),
+        "solar_position": "interval-start",
+        "load_profile": "custom",
+        "load_profile_file": str(load_file),
+        "load_profile_unit": "W",
+        "cost_preset": "residential_pt",
+        "emissions_country": "PT",
+        "execution_backend": backend,
+        "tariff": {
+            "currency": "EUR",
+            "import_prices": {"peak": 0.3, "off_peak": 0.1},
+            "export_prices": {"all": 0.0},
+            "custom_schedule": {
+                "identifier": "vehicle_weekly",
+                "version": "1",
+                "timezone": "Europe/Lisbon",
+                "cycle": "weekly",
+                "periods": ["peak", "off_peak"],
+                "rules": [
+                    {"days": day, "season": "all", "intervals": {period: [["00:00", "24:00"]]}}
+                    for day, period in [("weekday", "off_peak"), ("saturday", "off_peak"), ("sunday", "peak")]
+                ],
+            },
+        },
+        "vehicle": {
+            "mode": "v2h",
+            "battery_kwh": 40.0,
+            "departure_soc": 0.8,
+            "min_soc": 0.1,
+            "max_soc": 1.0,
+            "v2h_min_soc": 0.3,
+            "charger_ac_rating_kw": 7.4,
+            "charger_efficiency": 0.95,
+            "charge_efficiency": 0.95,
+            "discharge_efficiency": 0.95,
+            "charge_periods": ["off_peak"],
+            "discharge_periods": ["peak"],
+            "charger_cost": 2500.0,
+            "battery_cost_per_kwh": 120.0,
+            "enable_replacement": False,
+            "schedule": {
+                day: {"arrive": "18:00", "depart": "03:00", "trip_kwh": 9.0} for day in ("weekday", "weekend")
+            },
+        },
+    }
+    app = App(config)
+    app.simulate()
+    frame = app.timeseries()
+    before_departure = frame.iloc[: 3 * (4 if resolution == "15min" else 1)]
+    assert (before_departure["Vehicle_AC_To_Load"] == 0.0).all()
+    assert (before_departure["Grid_AC_To_Vehicle"] == 0.0).all()
+    assert (before_departure["Vehicle_Energy"] == 32000.0).all()

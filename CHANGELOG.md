@@ -282,6 +282,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   shared payments, surplus income, NPVs against the no-system baseline and
   benefit against each household alone. A settlement ledger, provenance,
   Porto example and community guide explain the balances and assumptions.
+- `breos.cec_fit.fit_cec_params` records when it raised the short-circuit
+  current to make the fit feasible (SAM's heuristic: 1 % per step, up to
+  five steps). Its result is still the plain six-parameter tuple, now a
+  `CecFitParams` whose `isc_adjustment` holds the datasheet and fitted Isc
+  and the rise in percent, or None at the datasheet value; the Seraphim
+  SEG E11B 310 datasheet fits at 8.86 A × 1.01³ = 9.128 A, +3.03 %. No
+  fitted value changes, and no warning is raised.
 
 ### Changed
 
@@ -574,6 +581,154 @@ removed in 0.9.0.
   `[tariff]` or `[reference_tariff]`. Weather year boundaries, the PVGIS
   New Year offset lookup and battery plot date filters now handle missing
   or repeated midnights too. Results in unaffected timezones are unchanged.
+- Weather and temperature timestamps (#438). A complete right-labelled
+  hourly year, such as an Open-Meteo file, now covers the simulated year at
+  every resolution; it was refused at hourly steps for a missing first hour.
+  `load_weather` selects historical years by the start of each interval, so a
+  year no longer gains the previous year's last hour and loses its own.
+  `preload_weather_by_year` (Monte Carlo) reads local times across a DST
+  change on the clock of the file's New Year offset, so every civil year stays
+  complete, and battery-temperature CSVs read such times as instants instead
+  of failing. Representative-year temperatures are restamped on their own
+  clock, as the App restamps a TMY, and repeat across the year edge, so
+  named-zone and UTC sources fit a civil calendar. `read_epw_file` puts a
+  typical-year EPW whose months come from several years on one year, so it
+  resamples to 15 minutes; `source_years` records the originals.
+- Battery ageing and its records (#436). Calendar resistance growth now runs
+  from each period's start; it started one period late, so `enable_resistance_fade`
+  runs grew about 1.7 % less resistance over 10 years. A load that already holds
+  every simulated instant is used as it is, instead of being shifted onto another
+  year's readings. The degradation row of a battery replacement reports the new
+  pack's round-trip efficiency. A BLAST run continued from its returned state
+  carries the FEC and calendar counters, so each span reports its own FEC.
+- Optimisation, Monte Carlo and the CLI (#441). Serial Monte Carlo studies no
+  longer share a process-wide context, so two studies run from threads keep
+  their own inputs. `evaluate_projected_design` checks the battery prices for
+  the battery it installs, not the search bound, so a USD design no longer
+  reports EUR battery defaults. Tilt bounds that hold no multiple of 5° are
+  refused instead of returning a tilt outside them. An array that sets
+  `albedo` or `surface_type` replaces the top-level other, which used to fail
+  at simulation. `breos validate-config` checks a sweep's points without
+  requiring the base, which the sweep never runs, and says how many points it
+  checked.
+- `evaluate_projected_design` checks only what the design reads (#441). A
+  design without a battery is no longer asked for battery prices or for
+  `constraints.budget` in a non-EUR run, whatever the search bounds say; a
+  fixed design reads no `[constraints]`. An AC-coupled design with a battery
+  is asked for its inverter keys even when `constraints.max_battery_kwh` is 0,
+  where it used to fail with a `TypeError`. Tilt bounds without a multiple of
+  5° are refused only for a search with a tilt gene, not for a fixed design or
+  an East-West search. Results do not change.
+- A search that finds no feasible design raises `NoFeasibleDesignError`, a
+  `RuntimeError`, whose message names each constraint the scored designs
+  break and how many break it, and whose `evaluated` attribute holds the
+  table of scored designs. It used to give a bare message. Results do not
+  change.
+- Custom load profiles (#440). In a timezone whose clock moves by part of a
+  step, such as `Australia/Lord_Howe` (30 minutes), the rows are pinned at the
+  finer step and averaged back, so the winter load shape no longer flattens
+  into a constant. A profile with no energy and a positive
+  `annual_consumption_kwh` raises instead of returning 0 kWh. A numeric first
+  column is a row label only when it counts the rows; otherwise it is a value
+  column, so an undated file with two load columns asks for `load_profile_column`
+  instead of reading the second one.
+- Tariff classification (#437). Known holidays now apply in every year the
+  index touches, including a year it covers for less than a day: the last UTC
+  hours of a year east of UTC, or a short window, priced 1 January as an
+  ordinary day. A step is in the `dst` season while the clock is on the larger
+  of its year's two UTC offsets, so Europe/Dublin, which the timezone database
+  gives a negative winter DST offset, now has a summer season.
+- `calculate_costs` returns `land_cost` with the other CAPEX components, so
+  `pv_cost`, `inverter_cost`, `battery_cost`, `battery_inverter_cost`,
+  `installation_cost`, `other_costs` and `land_cost` sum to
+  `total_initial_cost`. Before, `land_cost` was counted in the total but
+  missing from the returned components. `total_initial_cost` and every
+  other number are unchanged.
+- A free battery replacement (`battery_replacement_cost = 0`) reports the
+  instant of its swap. The financial rows' `replacement_time_years` was
+  None in every year because the booking time was tied to a positive
+  replacement cost; it is now set in every year with a swap. The money
+  columns stay 0 for a free swap, and runs with a priced replacement are
+  bit-identical.
+- An hourly App or Monte Carlo run in a timezone with a fractional-hour UTC
+  offset, such as `Asia/Kolkata` (UTC+5:30), on weather stamped on whole UTC
+  hours now fails when the weather is loaded, with an error that names the
+  timezone and its offset and suggests `resolution = "15min"`. Before, the
+  weather and the load profile shared no instant, and the run failed late,
+  saying the house load had no finite value. Hourly weather already stamped
+  on the local hours is still accepted. Results do not change.
+- Hourly weather resampled to 15 minutes no longer gives direct normal
+  irradiance (DNI) above the extraterrestrial normal irradiance of its day
+  (1321 to 1413 W/m²). Near sunrise and sunset the clear-sky ratio divides
+  two small numbers, and the reconstructed DNI reached 2448 W/m² on the
+  committed Porto TMY file and 7264 W/m² on the New Delhi one. Every
+  `irradiance_resampling` policy now caps 15-minute DNI at that bound;
+  `"quadrature"` caps each one-minute sample before it derives GHI. The
+  removed energy is not redistributed, so a capped hour no longer keeps its
+  DNI mean under `"clear_sky_energy_conserving"` or `"quadrature"`. Weather
+  metadata and provenance record the number of capped quarter-hours in
+  `irradiance_resampling_capped_counts`. 15-minute results change: on the
+  Porto TMY file 13 quarter-hours are capped, annual 15-minute DNI falls
+  from 2009.40 to 2008.59 kWh/m², and the DC yield of a 10-module system
+  from 8674.75 to 8674.24 kWh (−0.006 %); on the New Delhi file it falls by
+  0.68 %. Weather that needs no cap, and every hourly run, are
+  bit-identical.
+- The committed PVGIS TMY files for Berlin, Golden (Colorado), Melbourne,
+  Nairobi, New Delhi and São Paulo now have a metadata sidecar, as Porto
+  already had. Each records the irradiance time offset PVGIS reports for the
+  site: 0.1838 h (Berlin), 0.0975 h (Nairobi) and 0.0577 h (São Paulo) for
+  SARAH3, and 0.5 h for the three ERA5 files. With the default
+  `solar_position = "auto"` these files no longer warn and fall back to the
+  step labels; the sun is placed at the recorded instant. The DC yield of a
+  10-module system changes by −0.04 % (Berlin), −0.2 % (Nairobi) and
+  +0.1 % (São Paulo), and by +1.5 % to +3.0 % on the ERA5 files (Golden
+  hourly 9937.05 to 10233.99 kWh). Runs with an explicit `solar_position`,
+  Porto, and the validation suite, which pins its sun position, do not
+  change. The example-gallery tool no longer hides this fallback warning.
+- A V2H vehicle with `charge_periods` no longer discharges below its
+  departure target when no charge-period step remains before the departure.
+  This includes a partial run with no occurrence of its configured charging
+  periods; an all-false period mask was mistaken for unrestricted charging.
+  It used to serve the house in the peak hours before a departure and then
+  buy the energy back from the grid at the peak price to meet the target.
+  Energy above the target is still discharged, and V2H without
+  `charge_periods` changes only where a discharge was too small for the
+  charger to deliver any AC: such a discharge is no longer taken. V2H
+  results change: on the bundled Portugal example, year-1 V2H to the house
+  falls from 137.1 to 118.2 kWh, R2's year-1 import cost from 524.64 to
+  522.47 EUR, and the vehicle benefit NPV rises from -2496.59 to
+  -2490.64 EUR. Runs without a vehicle and V1G runs do not change
+  (ADR 0005 A17).
+- Module-shaded strings in parallel on one input are now solved on their
+  exact curves. The input's best point was read off straight lines between
+  the points of each string's tabled curve, which lie below the curve, so
+  power read low and the shortfall was booked as parallel mismatch. Two
+  identical shaded strings now deliver twice one string; before, they fell
+  short on 279 of 297 test steps, by up to 0.34 %. Against a dense exact
+  search, two differently shaded strings read up to 0.23 % low per step and
+  0.06 % in energy; now within 3e-11. The input and string current limits
+  hold on the exact currents; before, the operating point could exceed them
+  slightly. Results for shaded strings in parallel change: in a year with
+  two shaded 10-module strings on one input, DC generation rises by
+  1.67 kWh (+0.025 %) and the parallel mismatch falls from 1.88 to
+  0.21 kWh, the gap to the same strings on separate inputs. Single strings,
+  unshaded strings and inputs with one string are unchanged.
+- Inverter temperature derating now only caps the AC output. It replaced
+  the inverter's rating by the derated rating everywhere, so the efficiency
+  curve and the PVWatts part-load ratio were read against the lower rating
+  and a derated inverter converted low power more efficiently than the same
+  inverter without derating: at 50 % derating on a 4 kW inverter, 200 W of
+  DC converted at 93.5 % instead of 88.9 % on a measured curve and at
+  91.9 % instead of 85.9 % with PVWatts. The curve and the part-load ratio
+  now stay on the nameplate, so below the derated limit AC output is the
+  same as without derating, and the DC above what the limit needs is
+  clipped. Results with temperature derating change: a 6.3 kWp Porto
+  system on a 5 kW inverter held to 80 % all year delivers 4.26 kWh less
+  AC in year 1 on a measured curve (−0.05 %) and 8.11 kWh less with
+  PVWatts (−0.09 %), with 6 to 7 kWh more clipped; with a 5 kWh battery,
+  15.68 kWh (−0.17 %) and 25.97 kWh (−0.29 %) less. In all four cases
+  self-consumption falls by 3.6 to 15.6 kWh, to its value without
+  derating. Runs without derating are unchanged.
 
 ### Documentation
 

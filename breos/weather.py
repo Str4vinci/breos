@@ -7,6 +7,7 @@ This module handles:
 - Converting between hourly and 15-minute resolutions using Makima interpolation
 """
 
+import calendar
 import hashlib
 import json
 import logging
@@ -16,8 +17,9 @@ import warnings
 from collections.abc import Hashable, Iterable
 from copy import deepcopy
 from datetime import timedelta
+from datetime import timezone as fixed_offset_zone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -455,18 +457,20 @@ def load_weather(
     logger.info("Found local weather file: %s", filepath)
 
     df = _read_weather_frame(filepath)
+    parsed_filename = {key: value for key, value in best.items() if key != "filepath"}
+    df.attrs[WEATHER_METADATA_KEY] = _local_weather_metadata(filepath, parsed_filename)
 
-    # Subset by year range for historical data
+    # Subset by year range for historical data. A row belongs to the year its
+    # interval starts in: a right-labelled interval mean stamped at midnight
+    # on 1 January is the last hour of the year before.
     if best["type"] == "historical" and start_year is not None and end_year is not None:
         file_start = int(best["year_start"])
         file_end = int(best["year_end"])
         if file_start < start_year or file_end > end_year:
-            mask = (df.index.year >= start_year) & (df.index.year <= end_year)
+            starts = relabel_right_labeled_interval_means(df).index if len(df) > 1 else df.index
+            mask = (starts.year >= start_year) & (starts.year <= end_year)
             df = df.loc[mask]
             logger.info("Subset to %s-%s (%d rows)", start_year, end_year, len(df))
-
-    parsed_filename = {key: value for key, value in best.items() if key != "filepath"}
-    df.attrs[WEATHER_METADATA_KEY] = _local_weather_metadata(filepath, parsed_filename)
 
     return df
 
@@ -489,12 +493,19 @@ def read_weather_csv(filepath: str | os.PathLike[str]) -> pd.DataFrame:
     return df
 
 
-def _parse_weather_timestamps(values: Any, *, allow_mixed_offsets: bool = True) -> pd.DatetimeIndex:
+# A UTC offset at the end of an ISO 8601 timestamp: Z, +01, +0100 or +01:00.
+_TRAILING_UTC_OFFSET = r"(?:[Zz]|[+-]\d{2}(?::?\d{2})?)$"
+
+
+def _parse_weather_timestamps(values: Any, *, mixed_offsets: str = "utc") -> pd.DatetimeIndex:
     """Parse the timestamp text of a weather file.
 
     ISO 8601 first, as BREOS writes it. Offsets that change within the file,
-    such as local times across a DST change, are read as UTC instants, or
-    refused when ``allow_mixed_offsets`` is false. Then day-first
+    such as local times across a DST change, are read as instants: in UTC
+    with ``mixed_offsets="utc"``, or with ``"new_year"`` on the fixed clock of
+    the offset in force in January, so each civil year starts at 1 January
+    00:00 and the file splits into years as one written at that offset would.
+    Then day-first
     ``dd/mm/YYYY HH:MM`` with or without seconds, then pandas' inference for
     each element. Values that are not text, such as a row-number column,
     raise ``TypeError``.
@@ -513,11 +524,13 @@ def _parse_weather_timestamps(values: Any, *, allow_mixed_offsets: bool = True) 
     except ValueError:
         pass
     else:
-        if not allow_mixed_offsets:
-            raise ValueError(
-                "the timestamps' UTC offset changes within the file, as local times across a DST change do; "
-                "write them in UTC or at one fixed offset"
-            )
+        if mixed_offsets == "new_year":
+            text = pd.Series(values, dtype="string").str.strip()
+            wall = pd.to_datetime(text.str.replace(_TRAILING_UTC_OFFSET, "", regex=True), format="ISO8601")
+            offsets = pd.Series(wall.to_numpy() - instants.tz_localize(None).to_numpy())
+            january = offsets[(wall.dt.month == 1).to_numpy()]
+            new_year = (january if len(january) else offsets).mode().iloc[0]
+            return instants.tz_convert(fixed_offset_zone(pd.Timedelta(new_year).to_pytimedelta()))
         return instants
     for day_first in ("%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S"):
         try:
@@ -1099,8 +1112,9 @@ def _clear_sky_ratio_interpolation(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Interpolate one component's clear-sky ratio between its source points.
 
-    Returns the reconstruction, before night is zeroed or overshoot clipped,
-    and the mask of target points the dawn/dusk linear fallback supplied.
+    Returns the reconstruction, before night is zeroed, negative overshoot
+    clipped or DNI capped at the extraterrestrial normal irradiance, and the
+    mask of target points the dawn/dusk linear fallback supplied.
     """
     k_hourly = np.clip(y_original / (source_clear_sky + epsilon), 0, None)
     reconstructed = _interpolate(x_original, k_hourly, x_target, method) * (target_clear_sky + epsilon)
@@ -1128,12 +1142,14 @@ def _quadrature_irradiance(
     cs_hourly: pd.DataFrame,
     representative_times: pd.DatetimeIndex,
     step_zenith: np.ndarray,
+    step_dni_extra: np.ndarray,
     *,
     interval_mean: bool,
     method: str,
     epsilon: float,
     fallback_counts: dict[str, int],
     zero_support_counts: dict[str, int],
+    capped_counts: dict[str, int],
 ) -> tuple[dict[Hashable, np.ndarray], dict[str, Any]]:
     """Reconstruct DNI and DHI on a one-minute grid and derive GHI from them.
 
@@ -1146,8 +1162,10 @@ def _quadrature_irradiance(
     that component's clear-sky irradiance, which conserves the hour's DNI and
     DHI means; a positive hour without clear-sky support is spread evenly and
     counted. Instant samples interpolate the clear-sky ratio as ``"clear_sky"``
-    does, at each one-minute sample, and conserve nothing. Updates the
-    fallback and zero-support counts in place.
+    does, at each one-minute sample, and conserve nothing. DNI samples are
+    capped at their step's extraterrestrial normal irradiance before GHI is
+    derived, so the cap removes energy from the hours it touches. Updates the
+    fallback, zero-support and capped counts in place.
 
     Returns:
         Tuple of (quarter-hour values by column, ``irradiance_quadrature``
@@ -1204,9 +1222,17 @@ def _quadrature_irradiance(
             values[sample_clear_sky <= 0.0] = 0.0
             sampled[col] = values
         sampled[col] = np.clip(sampled[col], 0.0, None)
+        if component == "dni":
+            sample_dni_extra = np.repeat(step_dni_extra, samples)
+            capped = sampled[col] > sample_dni_extra
+            capped_counts[component] += int(np.sum(capped.reshape(n_steps, samples).any(axis=1)))
+            sampled[col] = np.minimum(sampled[col], sample_dni_extra)
 
     columns = {col: step_means(values) for col, values in sampled.items()}
-    dni = sampled[find_irradiance_column(sampled, "dni")]
+    dni_column = find_irradiance_column(sampled, "dni")
+    # The mean of capped samples can round one unit in the last place above the cap.
+    columns[dni_column] = np.minimum(columns[dni_column], step_dni_extra)
+    dni = sampled[dni_column]
     dhi = sampled[find_irradiance_column(sampled, "dhi")]
     ghi = step_means(dni * cos_zenith + dhi)
     ghi_columns = [col for col, component in irrad_col_map.items() if component == "ghi"]
@@ -1280,7 +1306,11 @@ def resample_to_15min(
             "quadrature" derives GHI from DNI and DHI in one-minute samples
             and averages the samples into quarter-hours; it conserves
             interval-mean DNI and DHI and needs coordinates and three finite
-            irradiance components.
+            irradiance components. Under every policy the 15-minute DNI is
+            capped at the extraterrestrial normal irradiance of its step;
+            capped hours lose the excess, so their DNI mean is not conserved.
+            The metadata key ``irradiance_resampling_capped_counts`` records
+            the number of capped quarter-hours.
         altitude: Site elevation in metres for the clear-sky model (optional;
             pvlib looks it up from the coordinates when omitted)
 
@@ -1343,6 +1373,9 @@ def resample_to_15min(
     epsilon = 5.0  # Regularise ratios; low clear-sky support uses direct linear interpolation.
     fallback_counts = dict.fromkeys(irrad_col_map.values(), 0)
     zero_support_counts = dict.fromkeys(irrad_col_map.values(), 0)
+    capped_counts = dict.fromkeys((component for component in irrad_col_map.values() if component == "dni"), 0)
+    # No beam exceeds the extraterrestrial normal irradiance of its day.
+    dni_extra = pvlib.irradiance.get_extra_radiation(target_index + target_offset).to_numpy(dtype=float)
 
     if use_clearsky:
         site = Location(latitude, longitude, altitude=altitude)
@@ -1381,11 +1414,13 @@ def resample_to_15min(
             cs_hourly,
             target_index + target_offset,
             solar_position_15min["zenith"].to_numpy(dtype=float),
+            dni_extra,
             interval_mean=time_basis == "interval_mean",
             method=method,
             epsilon=epsilon,
             fallback_counts=fallback_counts,
             zero_support_counts=zero_support_counts,
+            capped_counts=capped_counts,
         )
 
     # Get numeric columns only
@@ -1461,6 +1496,19 @@ def resample_to_15min(
             blocks[~nonzero] = hourly_values[~nonzero, None]
             df_15min[col] = np.clip(blocks.reshape(-1), 0.0, None)
 
+    # A clear-sky ratio near sunrise or sunset divides two small numbers, and
+    # the conservation rescale can raise a quarter-hour further, so cap DNI
+    # last. The removed energy is not put back: capped hours lose DNI.
+    # Quadrature capped its one-minute samples before deriving GHI.
+    for col, component in irrad_col_map.items():
+        if component != "dni" or col not in df_15min.columns or col in quadrature_columns:
+            continue
+        values = df_15min[col].to_numpy(dtype=float)
+        capped = values > dni_extra
+        if capped.any():
+            capped_counts[component] += int(capped.sum())
+            df_15min[col] = np.where(capped, dni_extra, values)
+
     weather_metadata.update(
         {
             "input_resolution": "h",
@@ -1473,6 +1521,7 @@ def resample_to_15min(
             ),
             "irradiance_resampling_fallback_counts": fallback_counts,
             "irradiance_resampling_zero_support_counts": zero_support_counts,
+            "irradiance_resampling_capped_counts": capped_counts,
         }
     )
     if closure_before is not None:
@@ -1502,9 +1551,11 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
             "timestamp column named 'date', as `tools/fetch_weather.py historical` writes; a "
             "single-year TMY cannot be sampled by year."
         )
-    # The years are split on the file's own clock, so its offset must not change.
+    # The years are split on the file's own clock. Local times across a DST
+    # change are put on the clock of their New Year offset, where every civil
+    # year keeps its rows.
     try:
-        df = _index_on_timestamps(df, "date", allow_mixed_offsets=False)
+        df = _index_on_timestamps(df, "date", mixed_offsets="new_year")
     except ValueError as exc:
         raise ValueError(f"Weather file {csv_file_path}: {exc}") from exc
 
@@ -1574,6 +1625,38 @@ def preload_weather_by_year(
     return {year: frame.reset_index() for year, frame in _weather_years(csv_file_path, target_year).items()}
 
 
+def _coerce_epw_year(df: pd.DataFrame) -> pd.DataFrame:
+    """Put a typical-year EPW whose months come from several years on one calendar year.
+
+    A TMY EPW keeps each month's source year, so its index jumps between
+    years. The rows keep their month, day and time on one year: the most
+    common source year, moved to the previous year that matches the file's
+    29 February (a leap year when the file has one, else a common year). The
+    source years stay in the metadata as ``source_years``.
+    """
+    index = cast(pd.DatetimeIndex, df.index)
+    years = sorted({int(year) for year in index.year})
+    if len(years) < 2:
+        return df
+    has_leap_day = bool(((index.month == 2) & (index.day == 29)).any())
+    year = int(pd.Series(index.year).mode().iloc[0])
+    while calendar.isleap(year) != has_leap_day:
+        year -= 1
+    coerced = pd.to_datetime(
+        pd.DataFrame({"year": year, "month": index.month, "day": index.day, "hour": index.hour, "minute": index.minute})
+    )
+    result = df.copy()
+    result.index = (
+        pd.DatetimeIndex(coerced).tz_localize(index.tz) if index.tz is not None else pd.DatetimeIndex(coerced)
+    )
+    result.index.name = index.name
+    metadata = deepcopy(df.attrs.get(WEATHER_METADATA_KEY) or {})
+    metadata["source_years"] = years
+    metadata["coerced_year"] = year
+    result.attrs[WEATHER_METADATA_KEY] = metadata
+    return result
+
+
 def read_epw_file(
     filepath: str, freq: str = "h", latitude: Optional[float] = None, longitude: Optional[float] = None
 ) -> pd.DataFrame:
@@ -1587,6 +1670,10 @@ def read_epw_file(
         freq: Output frequency ('h' for hourly, '15min' for 15-minute)
         latitude: Override latitude for clear-sky scaling (auto-detected from EPW if None)
         longitude: Override longitude for clear-sky scaling (auto-detected from EPW if None)
+
+    A typical-year EPW whose months come from different years is put on one
+    calendar year first (see ``source_years`` and ``coerced_year`` in its
+    metadata), so it resamples as one contiguous year.
 
     Returns:
         DataFrame with standardized column names (ghi, dni, dhi, temp_air, wind_speed)
@@ -1614,6 +1701,7 @@ def read_epw_file(
         "timestamp_label_basis": "left",
         "horizon": _unknown_horizon_metadata("epw"),
     }
+    df = _coerce_epw_year(df)
 
     # Resample to 15-min if requested
     if freq == "15min":
@@ -1642,20 +1730,6 @@ def extract_ambient_temperature(weather_df: pd.DataFrame) -> Optional[pd.Series]
 _TEMPERATURE_FILE_VALUE_COLUMNS = ("temp", "temperature", "t_cell", "t_amb")
 
 
-def _shift_to_calendar_year(series: pd.Series, year: int) -> pd.Series:
-    """Restamp a one-year series onto ``year``, keeping month, day, and time.
-
-    29 February is dropped from a leap-year source, as the weather loaders do.
-    A non-leap source restamped onto a leap year has no 29 February, which the
-    coverage check then reports.
-    """
-    index = series.index
-    series = series[~((index.month == 2) & (index.day == 29))]
-    shifted = series.copy()
-    shifted.index = series.index + pd.DateOffset(years=year - int(series.index[0].year))
-    return shifted
-
-
 def _align_temperature_to_index(
     source: pd.Series,
     index: pd.DatetimeIndex,
@@ -1678,23 +1752,49 @@ def _align_temperature_to_index(
     if not finite.all():
         first = source.index[int(np.argmin(finite))]
         raise ValueError(f"{label} has {int((~finite).sum())} readings that are not finite numbers (first at {first})")
+    if align_calendar_year:
+        # A representative year is restamped on its own clock, by its dominant
+        # year, as the App restamps a TMY: converting it first can split it
+        # across two local years, and a wall-clock shift in a named zone can
+        # land on an hour a clock change skips.
+        from breos.app_inputs import remap_tmy_year
+
+        source_year = int(pd.Series(values.index.year).mode().iloc[0])
+        target_year = int(pd.Series(index.year).mode().iloc[0])
+        if source_year != target_year:
+            values = remap_tmy_year(values.to_frame(), target_year).iloc[:, 0]
     # Naive timestamps are read as UTC, as naive weather timestamps are.
+    own = values.index
     if index.tz is not None:
-        stamps = source.index if source.index.tz is not None else source.index.tz_localize("UTC")
+        stamps = own if own.tz is not None else own.tz_localize("UTC")
         values.index = stamps.tz_convert(index.tz)
-    elif source.index.tz is not None:
-        values.index = source.index.tz_convert("UTC").tz_localize(None)
+    elif own.tz is not None:
+        values.index = own.tz_convert("UTC").tz_localize(None)
     if not values.index.is_unique:
         raise ValueError(f"{label} has duplicate timestamps")
     values = values.sort_index()
     if values.empty:
         raise ValueError(f"{label} has no readings")
+    if align_calendar_year:
+        # A representative year repeats: a calendar that starts or ends in the
+        # neighbouring year on the source's clock (a civil year east or west of
+        # a UTC year) takes the same instant one year later or earlier. The
+        # source's own readings win, so a gap inside it still fails below.
+        utc = values.tz_convert("UTC") if values.index.tz is not None else values
+        parts = [utc]
+        start, end = (index.tz_convert("UTC"), values.index.tz) if index.tz is not None else (index, None)
+        if start[0] < utc.index[0]:
+            parts.append(remap_datetime_index_years(utc, -1))
+        if start[-1] > utc.index[-1]:
+            parts.append(remap_datetime_index_years(utc, 1))
+        if len(parts) > 1:
+            combined = pd.concat(parts)
+            combined = combined[~combined.index.duplicated(keep="first")].sort_index()
+            values = combined.tz_convert(end) if end is not None else combined
 
     source_years = values.index.year.unique()
     index_years = index.year.unique()
     years_differ = len(source_years) == 1 and len(index_years) == 1 and source_years[0] != index_years[0]
-    if align_calendar_year and years_differ:
-        values = _shift_to_calendar_year(values, int(index_years[0]))
 
     stamps = values.index
     step = (stamps[1:] - stamps[:-1]).median() if len(stamps) > 1 else pd.Timedelta(0)
@@ -1734,11 +1834,13 @@ def _read_temperature_file(path: str) -> pd.Series:
             f"({', '.join(_DATE_COLUMNS)}) and a temperature column "
             f"({', '.join(_TEMPERATURE_FILE_VALUE_COLUMNS)}); it has {', '.join(map(str, df.columns))}"
         )
+    # Parsed as weather timestamps are: local times across a DST change, with
+    # their changing offset, are read as UTC instants; naive ones stay naive.
     try:
-        stamps = pd.to_datetime(df[date_col])
+        stamps = _parse_weather_timestamps(df[date_col])
     except (ValueError, TypeError) as exc:
         raise ValueError(f"battery temperature file {path} has unreadable timestamps: {exc}") from exc
-    return pd.Series(df[val_col].to_numpy(), index=pd.DatetimeIndex(stamps), name=val_col)
+    return pd.Series(df[val_col].to_numpy(), index=stamps, name=val_col)
 
 
 def apply_indoor_temperature_model(

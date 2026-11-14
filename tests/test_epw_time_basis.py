@@ -1,6 +1,7 @@
 """EPW radiation is a left-labelled hourly interval mean (#213)."""
 
 import pandas as pd
+import pytest
 from pvlib.location import Location
 
 from breos.pv_modules import get_module
@@ -98,3 +99,38 @@ def test_solar_position_weather_runs_on_epw(tmp_path):
     # "weather" resolves a left-labelled hourly mean to the interval midpoint.
     pd.testing.assert_series_equal(by_weather, mid_interval)
     assert by_weather.sum() > 0
+
+
+def _write_mixed_year_epw(path):
+    """A typical-year EPW whose first half comes from 2001 and second half from 2002."""
+    rows = []
+    for start in pd.date_range("2001-01-01", periods=8760, freq="h"):
+        end = start + pd.Timedelta(hours=1)
+        hour = 24 if end.hour == 0 else end.hour
+        day = start if end.hour == 0 else end
+        if end.hour == 0 and start.month == 12 and start.day == 31:
+            day = start
+        year = 2001 if day.month <= 6 else 2002
+        ghi = 100 if 8 <= start.hour < 16 else 0
+        fields = [year, day.month, day.day, hour, 60, "?", 18.0, 10.0, 60, 101325, 9999, 9999, 350]
+        fields += [ghi, 0, ghi]
+        fields += [999999, 999999, 999999, 9999, 180, 2.0, 0, 0, 9999, 99999, 9, 999999999, 999, 0.999, 999, 99]
+        fields += [0.2, 0, 0]
+        rows.append(",".join(str(v) for v in fields))
+    path.write_text("\n".join(_HEADER + rows) + "\n")
+
+
+def test_a_mixed_year_epw_is_put_on_one_year_and_resamples(tmp_path):
+    path = tmp_path / "typical.epw"
+    _write_mixed_year_epw(path)
+
+    hourly = read_epw_file(str(path))
+    quarter = read_epw_file(str(path), freq="15min")
+
+    # July to December, from 2002, holds more hours than January to June.
+    assert set(hourly.index.year) == {2002}
+    assert hourly.index.is_monotonic_increasing and len(hourly) == 8760
+    metadata = hourly.attrs["breos_weather_metadata"]
+    assert metadata["source_years"] == [2001, 2002] and metadata["coerced_year"] == 2002
+    assert len(quarter) == 35040
+    assert quarter["ghi"].sum() / 4 == pytest.approx(hourly["ghi"].sum())

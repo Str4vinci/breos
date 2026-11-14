@@ -486,3 +486,15 @@ def test_definitions_validate_when_built_directly():
         HolidayCalendar(day_type="sunday", dates=frozenset({date(2027, 1, 1)}), years=frozenset({2026}))
     with pytest.raises(TypeError, match="bundled schedule identifier or a ScheduleDefinition"):
         classify_tariff_periods(pd.date_range("2026-01-01", periods=2, freq="h", tz=LISBON), schedule, timezone=LISBON)
+
+
+def test_a_known_holiday_applies_in_a_window_shorter_than_a_day():
+    # The window grazes 2026 for six hours; 1 January is still the known
+    # holiday, as it is in a whole-day window.
+    definition = _custom()
+    short = pd.date_range("2026-01-01 08:00", periods=36, freq="10min", tz=LISBON)
+    whole_day = pd.date_range("2026-01-01", periods=144, freq="10min", tz=LISBON)
+
+    labels = classify_tariff_periods(short, definition, timezone=LISBON)
+    assert labels == classify_tariff_periods(whole_day, definition, timezone=LISBON)[48:84]
+    assert set(labels) == {"off_peak"}

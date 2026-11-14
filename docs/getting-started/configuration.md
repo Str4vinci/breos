@@ -86,10 +86,18 @@ Without coordinates, direct interpolation replaces clear-sky reconstruction;
 the policy still controls hourly conservation. Already-quarter-hour weather
 is unchanged.
 
+Under every policy the resampled DNI is capped at the extraterrestrial normal
+irradiance of its step (1321 to 1413 W/m² over the year), which no beam can
+exceed. Near sunrise and sunset the clear-sky ratio divides two small numbers
+and can give DNI far above that bound. `"quadrature"` caps each one-minute
+sample before it derives GHI. The cap removes energy: a capped hour does not
+keep its DNI mean, even under the conserving policies.
+
 Apart from the per-sample closure of `"quadrature"`, no GHI/DNI/DHI closure is
 enforced, and DHI is never clipped to GHI. Weather metadata and result provenance record requested and resolved policy,
 interpolation method, the daylight quarter-hours filled by the dawn/dusk
-fallback and the zero-support hour counts, per component. With coordinates and all three components, `irradiance_closure`
+fallback and the zero-support hour counts, per component, and the capped DNI
+quarter-hours (`irradiance_resampling_capped_counts`). With coordinates and all three components, `irradiance_closure`
 records before/after conservation diagnostics over daylight quarter-hours:
 the GHI-weighted mean absolute residual in W/m² and the absolute residual
 energy divided by GHI energy. Solar position uses apparent zenith at the
@@ -948,11 +956,13 @@ discharge alike, as they share the inverter; beside an AC-coupled battery it
 is the PV inverter's alone, and the battery inverter keeps its PVWatts curve.
 `inverter_efficiency` is then not used for the conversion.
 
-`temperature_derating` lowers the AC rating in hot ambients: the allowed
+`temperature_derating` caps the AC output in hot ambients: the allowed
 output as a fraction of the nameplate at each ambient, linear between the
 points and held beyond them. The ambient is the weather's air temperature,
 for an inverter outdoors, or `electrical_environment.inverter_ambient_temp_c`
-when you state it, for one indoors. DC above the derated rating is clipped;
+when you state it, for one indoors. The efficiency curve and the part-load
+ratio stay on the nameplate, so below the cap the conversion is the same as
+without derating. DC above what the cap needs is clipped;
 a DC-coupled battery may still store it, an AC-coupled one cannot. With several inverters, both keys need
 string-level energy, which applies each to its own inverter. The planned
 charging targets of `daily_persistence` are chosen on one row, the row of
@@ -1459,7 +1469,10 @@ With a `[tariff]`, `charge_periods = ["off_peak"]` permits opportunistic grid
 charging in those periods. The guard may charge outside them. Grid charging
 stops at `departure_soc`; surplus PV may charge V1G/V2H to `max_soc`.
 `discharge_periods = ["peak"]` limits V2H discharge. Omit it to allow discharge
-at any time. Charge and discharge periods must be disjoint. Uncontrolled
+at any time. With `charge_periods` set, V2H does not discharge below
+`departure_soc` when no charge-period step remains before the next departure;
+energy above the target may still be discharged. Charge and discharge periods
+must be disjoint. Uncontrolled
 mode refuses period controls. The vehicle uses one direction per step.
 
 The shared site limit is `[smart_charging].grid_import_limit_w`. It counts

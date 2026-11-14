@@ -10,6 +10,7 @@ from breos._dispatch import (
     _VEHICLE_LEDGER_COLUMNS,
     _VEHICLE_STATE_COLUMNS,
     LEDGER_SCHEMA_VERSION,
+    _vehicle_charge_ahead,
 )
 from breos.battery import BatteryConfig, _build_simulation_summary, _simulate_core
 from breos.dispatch_instructions import DispatchInstructions
@@ -325,6 +326,85 @@ def test_periods_and_v2h_floor(backend):
     assert frame["Grid_AC_To_Vehicle"].iloc[1] == 0.0
     assert frame["Vehicle_AC_To_Load"].iloc[2] == 0.0
     assert frame["Vehicle_Energy"].iloc[-1] == 31600.0
+
+
+def run_tou(labels, energy, backend="python", *, charge_periods=("off_peak",)):
+    index = pd.date_range("2025-06-01", periods=len(labels), freq="h", tz="UTC")
+    tariff = resolve_tariff(
+        index,
+        labels,
+        TariffSchedule("test", "1", "UTC", "daily", ("peak", "off_peak")),
+        TariffPrices("EUR", {"peak": 0.3, "off_peak": 0.1}, {"all": 0.0}),
+        timezone="UTC",
+    )
+    cfg = vehicle(charge_periods=charge_periods, discharge_periods=("peak",))
+    n = len(labels)
+    countdown = list(range(n, 0, -1))
+    return run_home(
+        [0.0] * n, [3000.0] * n, energy, countdown, backend=backend, vehicle_config=cfg, vehicle_tariff=tariff
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("labels", [("off_peak", "peak", "peak"), ("peak", "peak", "peak")])
+def test_v2h_holds_target_without_a_charge_period_before_departure(backend, labels):
+    # Before the rule, step 1 discharged 3000 Wh to the house and step 2
+    # bought it back at the peak price before the departure.
+    frame = run_tou(labels, 32000.0, backend)
+    assert frame["Vehicle_AC_To_Load"].tolist() == [0.0, 0.0, 0.0]
+    assert frame["Grid_AC_To_Vehicle"].tolist() == [0.0, 0.0, 0.0]
+    assert frame["Vehicle_Energy"].tolist() == [32000.0, 32000.0, 32000.0]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_v2h_without_configured_charge_periods_keeps_deadline_charging(backend):
+    frame = run_tou(["peak", "peak", "peak"], 32000.0, backend, charge_periods=())
+    assert frame["Vehicle_AC_To_Load"].tolist() == [3000.0, 3000.0, 0.0]
+    assert frame["Grid_AC_To_Vehicle"].iloc[:2].sum() == 0.0
+    assert frame["Grid_AC_To_Vehicle"].iloc[-1] == pytest.approx(7358.571991346979, rel=1e-12)
+    assert frame["Vehicle_Energy"].iloc[-1] == 32000.0
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_v2h_with_no_matching_charge_period_uses_only_energy_above_target(backend):
+    frame = run_tou(["peak", "peak", "peak"], 33000.0, backend)
+    assert frame["Vehicle_AC_To_Load"].iloc[0] == pytest.approx(876.0417056376184, rel=1e-12)
+    assert frame["Vehicle_Energy"].tolist() == [32000.0, 32000.0, 32000.0]
+    assert frame["Grid_AC_To_Vehicle"].sum() == 0.0
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_v2h_below_target_unchanged_with_a_charge_period_before_departure(backend):
+    # Values written by the dispatch before the rule existed.
+    frame = run_tou(["peak", "off_peak", "peak"], 32000.0, backend)
+    assert frame["Vehicle_AC_To_Load"].tolist() == [3000.0, 0.0, 0.0]
+    assert frame["Grid_AC_To_Vehicle"].tolist() == [0.0, 3671.23679951335, 0.0]
+    assert frame["Vehicle_Energy"].tolist() == [28679.24634310047, 32000.0, 32000.0]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_v2h_discharges_energy_above_target_before_departure(backend):
+    frame = run_tou(["off_peak", "peak", "peak"], 33000.0, backend)
+    assert frame["Vehicle_AC_To_Load"].iloc[1] == pytest.approx(876.0417056376184, rel=1e-12)
+    assert frame["Vehicle_Energy"].tolist() == [33000.0, 32000.0, 32000.0]
+    assert frame["Grid_AC_To_Vehicle"].sum() == 0.0
+
+
+def test_v2h_target_rule_python_and_numba_agree():
+    pytest.importorskip("numba")
+    for labels, energy in ((["off_peak", "peak", "peak"], 32000.0), (["off_peak", "peak", "peak", "peak"], 33500.0)):
+        assert_frames_bit_equal(run_tou(labels, energy), run_tou(labels, energy, "numba"))
+
+
+def test_charge_ahead_counts_only_later_steps_before_departure():
+    countdown = np.array([4, 3, 2, 1, 0, 3, 2, 1, 3, 2])
+    charge = np.array([1, 0, 0, 0, 0, 0, 1, 0, 0, 0], dtype=bool)
+    ahead = _vehicle_charge_ahead(countdown, charge)
+    # Step 6 is a charge step, but none follows it before its departure;
+    # the last two steps depart past the end of the arrays.
+    assert ahead[[0, 1, 2, 3, 5, 6, 7, 8, 9]].tolist() == [False, False, False, False, True, False, False, True, True]
+    assert _vehicle_charge_ahead(countdown, None).all()
+    assert _vehicle_charge_ahead(countdown, np.zeros(10, dtype=bool)).tolist() == [False] * 8 + [True, True]
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
