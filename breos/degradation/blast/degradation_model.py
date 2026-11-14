@@ -1,5 +1,5 @@
 import numpy as np
-from .rainflow import count_cycles, extract_cycles
+from ..._rainflow import extract_cycles
 from .functions import rescale_soc
 from typing import Any
 
@@ -565,9 +565,6 @@ class BatteryDegradationModel:
         # While this will not be precise, it still helps get a guess as to where the plateaus of the anode-reference potential are.
         Ua = BatteryDegradationModel._get_Ua(soc)
 
-        cycles = count_cycles(soc)
-        cycles = sum(i for _, i in cycles)
-
         stressors = {
             "t_secs": t_secs,
             "delta_t_days": delta_t_days,
@@ -577,7 +574,6 @@ class BatteryDegradationModel:
             "dod": dod,
             "Ua": Ua,
             "Crate": Crate,
-            "cycles": cycles,
         }
 
         return stressors

@@ -1,8 +1,9 @@
 """One day of the native rainflow count on arrays, for the compiled backend.
 
-:class:`breos.degradation.protocol._NativeRainflowCounter` keeps its residue
-on a deque of tuples and finds reversals with numpy; that suits the Python
-backend. With ``execution_backend = "numba"``,
+:class:`breos._rainflow.RainflowCounter`, BREOS's one implementation of the
+counting rules, keeps its residue on a deque of tuples and finds reversals with
+numpy; :class:`breos.degradation.protocol._NativeRainflowCounter` formats its
+cycles for the native model. That suits the Python backend. With ``execution_backend = "numba"``,
 :class:`~breos.degradation.protocol._CompiledRainflowCounter` holds the same
 state in the arrays below and runs :func:`rainflow_day` compiled by
 :mod:`breos._numba_dispatch_kernels`, once per day.
@@ -66,7 +67,7 @@ def _emit_cycle(
 ) -> int:
     """Write the cycle between two residue points if it is deep enough; return the new cycle count.
 
-    The formulas are those of ``_NativeRainflowCounter._format_cycle``.
+    The formulas are those of ``_NativeRainflowCounter._format``.
     """
     soc1 = points_f[first, 0]
     soc2 = points_f[second, 0]
@@ -96,7 +97,7 @@ def _push_reversal(
     n_cycles: int,
     min_doc_fraction: float,
 ) -> tuple[int, int]:
-    """``_NativeRainflowCounter._push_reversal`` on the residue arrays; return ``(n_points, n_cycles)``."""
+    """``RainflowCounter._push`` for one reversal, on the residue arrays; return ``(n_points, n_cycles)``."""
     points_f[n_points, 0] = soc
     points_f[n_points, 1] = elapsed_seconds
     points_i[n_points] = index

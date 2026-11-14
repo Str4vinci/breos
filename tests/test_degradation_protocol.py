@@ -238,32 +238,33 @@ class _PerSampleRainflowCounter(_NativeRainflowCounter):
             return self.finish() if day.finalize_cycles else []
         if self._step_seconds is None:
             self._step_seconds = float(day.step_seconds)
-        cycles = []
-        if self._current is None:
-            anchor = (float(day.start_soc), 0.0, 0)
-            self._points.append(anchor)
-            first_sample = (float(day.soc[0]), day.step_seconds, 1)
-            self._previous = anchor
-            self._current = first_sample
-            self._last_delta = first_sample[0] - anchor[0]
-            self._has_nonflat_pair = self._last_delta != 0.0
-            self._next_index = 2
+        counter = self._counter
+        closed = []
+        if counter.current is None:
+            anchor = (float(day.start_soc), 0)
+            counter.points.append(anchor)
+            counter.previous = anchor
+            counter.current = (float(day.soc[0]), 1)
+            counter.last_delta = counter.current[0] - anchor[0]
+            counter.moved = counter.last_delta != 0.0
+            counter.next_index = 2
             samples = day.soc[1:]
         else:
             samples = day.soc
         for soc in samples:
-            next_point = (float(soc), self._next_index * day.step_seconds, self._next_index)
-            self._next_index += 1
-            if next_point[0] == self._current[0]:
-                self._current = next_point
+            next_point = (float(soc), counter.next_index)
+            counter.next_index += 1
+            if next_point[0] == counter.current[0]:
+                counter.current = next_point
                 continue
-            next_delta = next_point[0] - self._current[0]
-            if self._last_delta is not None and self._last_delta * next_delta < 0:
-                cycles.extend(self._push_reversal(self._current, min_doc_fraction=0.01))
-            self._previous = self._current
-            self._current = next_point
-            self._last_delta = next_delta
-            self._has_nonflat_pair = True
+            next_delta = next_point[0] - counter.current[0]
+            if counter.last_delta is not None and counter.last_delta * next_delta < 0:
+                closed.extend(counter._push((counter.current,)))
+            counter.previous = counter.current
+            counter.current = next_point
+            counter.last_delta = next_delta
+            counter.moved = True
+        cycles = self._format(closed)
         if day.finalize_cycles:
             cycles.extend(self.finish())
         return cycles
@@ -348,7 +349,7 @@ def test_native_rainflow_scan_matches_the_per_sample_loop_on_edge_cases(kind, ra
                 start_temperature_c=20.0,
                 finalize_cycles=d == days - 1 and rng.random() < 0.7,
             )
-            carried = reference._current
+            carried = reference._counter.current
             if carried is not None and not np.isclose(start, carried[0], rtol=0.0, atol=1e-9):
                 # A carry the next day does not start from (NaN never does) is refused.
                 with pytest.raises(ValueError, match="carry SOC"):
@@ -361,7 +362,7 @@ def test_native_rainflow_scan_matches_the_per_sample_loop_on_edge_cases(kind, ra
             if rng.random() < 0.2:
                 counter = make_counter(counter.snapshot())
                 reference = _PerSampleRainflowCounter(reference.snapshot())
-            start = float(soc[-1]) if reference._current is not None else start
+            start = float(soc[-1]) if reference._counter.current is not None else start
 
 
 def test_numba_backend_counts_native_rainflow_with_the_compiled_scan(monkeypatch):

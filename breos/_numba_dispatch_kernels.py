@@ -25,7 +25,7 @@ error live -- so this module is imported lazily from there, never at its top.
 One compiled function is not shared with the Python backend:
 :func:`breos.degradation._rainflow_kernel.rainflow_day`, the native rainflow
 count's daily scan on arrays. The Python backend keeps the numpy scan of
-``_NativeRainflowCounter``; the two repeat the same float64 arithmetic in the
+``breos._rainflow.RainflowCounter``; the two repeat the same float64 arithmetic in the
 same order, and ``tests/test_degradation_protocol.py`` holds both, and the
 interpreted kernel, to a per-sample reference by repr.
 
