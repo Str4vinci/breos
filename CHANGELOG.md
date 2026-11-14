@@ -587,6 +587,13 @@ removed in 0.9.0.
   named-zone and UTC sources fit a civil calendar. `read_epw_file` puts a
   typical-year EPW whose months come from several years on one year, so it
   resamples to 15 minutes; `source_years` records the originals.
+- Battery ageing and its records (#436). Calendar resistance growth now runs
+  from each period's start; it started one period late, so `enable_resistance_fade`
+  runs grew about 1.7 % less resistance over 10 years. A load that already holds
+  every simulated instant is used as it is, instead of being shifted onto another
+  year's readings. The degradation row of a battery replacement reports the new
+  pack's round-trip efficiency. A BLAST run continued from its returned state
+  carries the FEC and calendar counters, so each span reports its own FEC.
 
 ### Documentation
 
