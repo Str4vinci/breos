@@ -422,6 +422,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   hourly: 0.25 s to 0.17 s with Numba) and the 15-minute run uses about
   90 MiB less memory. `App.timeseries()` and `App.revalue` work as before,
   and results are bit-identical.
+- `rainflow` is no longer a runtime dependency. BREOS counts battery cycles
+  with one ASTM E1049-85 counter of its own, in `breos._rainflow`, which gives
+  the same cycles, value for value, as `rainflow.extract_cycles` 3.2.0. The
+  energy balance, `update_battery_soh_cyclewise` and the vendored BLAST-Lite
+  models all use it; before, each had its own copy of the counting rules.
+  Results are unchanged. `rainflow` stays in the `dev` extra as the tests'
+  reference. Code that calls `rainflow.extract_cycles` itself, as an earlier
+  entry suggested for counting cycles outside a simulation, must now install
+  `rainflow` on its own.
 
 ### Deprecated
 
