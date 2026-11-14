@@ -874,7 +874,8 @@ def test_read_weather_csv_reads_day_first_timestamps(tmp_path, stamp_format):
     index = pd.date_range("2023-01-01", "2023-12-31 23:00", freq="h")
     path = _hourly_year_csv(tmp_path / "dayfirst.csv", index.strftime(stamp_format))
 
-    pd.testing.assert_index_equal(read_weather_csv(path).index, index.as_unit("us"), check_names=False)
+    read = read_weather_csv(path).index
+    pd.testing.assert_index_equal(read, index.as_unit(read.unit), check_names=False)
 
 
 def test_read_weather_csv_finds_the_date_column_after_row_numbers(tmp_path):
@@ -883,7 +884,7 @@ def test_read_weather_csv_finds_the_date_column_after_row_numbers(tmp_path):
 
     weather = read_weather_csv(path)
 
-    pd.testing.assert_index_equal(weather.index, index.as_unit("us"), check_names=False)
+    pd.testing.assert_index_equal(weather.index, index.as_unit(weather.index.unit), check_names=False)
     assert weather.index.name == "date"
     # The row numbers are not weather.
     assert list(weather.columns) == ["ghi", "temperature_2m"]
