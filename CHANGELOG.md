@@ -703,6 +703,8 @@ removed in 0.9.0.
   change. The example-gallery tool no longer hides this fallback warning.
 - A V2H vehicle with `charge_periods` no longer discharges below its
   departure target when no charge-period step remains before the departure.
+  This includes a partial run with no occurrence of its configured charging
+  periods; an all-false period mask was mistaken for unrestricted charging.
   It used to serve the house in the peak hours before a departure and then
   buy the energy back from the grid at the peak price to meet the target.
   Energy above the target is still discharged, and V2H without

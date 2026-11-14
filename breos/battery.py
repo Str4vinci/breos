@@ -2549,7 +2549,9 @@ def _simulate_core(
             charge_v = np.isin(vehicle_tariff.period_labels, vehicle_config.charge_periods)
             if vehicle_config.discharge_periods:
                 discharge_v = np.isin(vehicle_tariff.period_labels, vehicle_config.discharge_periods)
-        ahead_v = _vehicle_charge_ahead(vehicle_schedule.steps_to_departure, charge_v)
+        ahead_v = _vehicle_charge_ahead(
+            vehicle_schedule.steps_to_departure, charge_v if vehicle_config.charge_periods else None
+        )
         charge_v.setflags(write=False)
         discharge_v.setflags(write=False)
         ahead_v.setflags(write=False)
