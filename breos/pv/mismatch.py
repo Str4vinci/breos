@@ -496,7 +496,9 @@ class ShadedStringCurve:
         self._extend_reverse(current[:, -1], np.arange(len(rows)))
         corners = []
         for substring in self._substrings:
-            if substring.section is not None:
+            # A section merged into an alike one has no split step and no
+            # reverse band of its own; _extend_reverse skips it the same way.
+            if substring.section is not None and substring.split.any():
                 corner = np.zeros(len(rows))
                 split = substring.split
                 mapping, reverse_i, _ = substring.section._reverse_bands[0]
@@ -800,6 +802,51 @@ class ShadedStringCurve:
             out[mismatched] = (scale[:, None] * values).reshape(target.shape)
         return out
 
+    def terminal_voltage(self, current: np.ndarray, positions: np.ndarray) -> np.ndarray:
+        """The string's voltage after its cable at module-level ``current``, exact.
+
+        ``current`` has one row per position among the mismatched steps and
+        any number of columns.
+        """
+        drop = self.scale[self.mismatched[positions]] * self.cable_ohm
+        return self._voltage(current, positions) - drop.reshape((-1,) + (1,) * (current.ndim - 1)) * current
+
+    def table_bounds(
+        self, low_v: np.ndarray, high_v: np.ndarray, positions: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Module-level currents of the table's points that bound the curve's at ``high_v`` from below and
+        at ``low_v`` from above, one per position among the mismatched steps."""
+        points = self._table_v.shape[1]
+        below = _table_position(self._table_v, positions, high_v) - 1
+        above = _table_position(self._table_v, positions, low_v)
+        return self._table_i[positions, np.maximum(below, 0)], self._table_i[positions, np.minimum(above, points - 1)]
+
+    def table_bracket(self, voltage: np.ndarray, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """The table's voltages two intervals below and above each ``voltage`` on the steps ``rows``.
+
+        These are initial search brackets, not bounds on the exact peak's
+        displacement from a chord's peak. The caller must check optima at
+        their edges. Repeated voltages count once; ``voltage`` itself on the
+        steps without a table.
+        """
+        below, above = voltage.astype(float), voltage.astype(float)
+        selected = np.flatnonzero(rows)
+        mismatched = np.isin(selected, self.mismatched)
+        if mismatched.any():
+            positions = np.searchsorted(self.mismatched, selected[mismatched])
+            target = voltage[mismatched]
+            select = np.repeat(positions, target.reshape(len(positions), -1).shape[1])
+            table_v, points = self._table_v, self._table_v.shape[1]
+            low, high = target.ravel(), target.ravel()
+            for _ in range(2):
+                # The next distinct voltage of the table on either side.
+                above_high = _table_position(table_v, select, high)
+                high = np.where(above_high > 0, table_v[select, np.maximum(above_high - 1, 0)], high)
+                below_low = _table_position(table_v, select, np.nextafter(low, -np.inf))
+                low = np.where(below_low < points, table_v[select, np.minimum(below_low, points - 1)], low)
+            below[mismatched], above[mismatched] = low.reshape(target.shape), high.reshape(target.shape)
+        return below, above
+
     def _extend_reverse(self, current: np.ndarray, select: np.ndarray) -> None:
         """Give each split substring enough reverse range for the string's current."""
         for substring in self._substrings:
@@ -893,6 +940,19 @@ def _part_voltage(
     )
     part = np.asarray(part, dtype=float)
     return np.where(current > short_circuit, breakdown, part)
+
+
+def _table_position(table_v: np.ndarray, select: np.ndarray, voltage: np.ndarray) -> np.ndarray:
+    """How many points of row ``select`` of the table lie above each ``voltage``, the voltages falling along it."""
+    points = table_v.shape[1]
+    low, high = np.zeros(voltage.size, dtype=int), np.full(voltage.size, points, dtype=int)
+    for _ in range(points.bit_length()):
+        middle = (low + high) // 2
+        greater = table_v[select, np.minimum(middle, points - 1)] > voltage
+        active = low < high
+        low = np.where(active & greater, middle + 1, low)
+        high = np.where(active & ~greater, middle, high)
+    return low
 
 
 def _table_current(table_v: np.ndarray, table_i: np.ndarray, voltage: np.ndarray, signed: bool = False) -> np.ndarray:

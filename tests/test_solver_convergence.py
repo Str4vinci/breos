@@ -141,13 +141,61 @@ def string_reference(curve, v_min=0.0, v_max=np.inf, current_limit=np.inf):
     return polish(grid, power)
 
 
-def parallel_reference(sources, v_min, v_max, current_limit, string_limit):
-    rows = np.ones(len(sources[0].mpp), dtype=bool)
-    upper = np.minimum(v_max, np.max([s.v_oc for s in sources], axis=0))
-    lower = np.full(len(upper), float(v_min))
+def exact_currents(sources, voltage):
+    """Each source's signed current at one voltage per step, bisected on its exact curve where it is tabled.
+
+    Above a tabled string's open-circuit voltage its reverse current is read
+    as the solver reads it.
+    """
+    rows = np.ones(len(voltage), dtype=bool)
+    out = []
+    for source in sources:
+        current = source.current(voltage, rows, signed=True)
+        curve = source.curve
+        steps = curve.mismatched
+        forward = steps[voltage[steps] <= curve.v_oc[steps]]
+        select = np.searchsorted(steps, forward)
+        low, high = np.zeros(forward.size), curve._table_i[select, -1].copy()
+        for _ in range(100):
+            middle = (low + high) / 2
+            above = curve._terminal_voltage(middle, select, True) > voltage[forward]
+            low, high = np.where(above, middle, low), np.where(above, high, middle)
+        current[forward] = curve.scale[forward] * (low + high) / 2
+        out.append(current)
+    return np.asarray(out)
+
+
+def dense_currents(sources, samples=40001):
+    """Each source's currents at any voltages per step, read off its exact curve densely sampled in current."""
+    readers = []
+    for source in sources:
+        curve = source.curve
+        steps = curve.mismatched
+        select = np.arange(steps.size)
+        grid = np.linspace(0.0, 1.0, samples) * curve._table_i[:, -1:]
+        grid = np.sort(np.concatenate((grid, np.clip(curve._table_i, 0.0, None)), axis=1), axis=1)
+        voltage = curve._voltage(grid, select) - (curve.scale[steps] * curve.cable_ohm)[:, None] * grid
+        readers.append((source, steps, voltage[:, ::-1], (curve.scale[steps][:, None] * grid)[:, ::-1]))
 
     def currents(voltage):
-        return np.asarray([s.current(voltage, rows, signed=True) for s in sources])
+        rows = np.ones(voltage.shape[0], dtype=bool)
+        out = []
+        for source, steps, rising_v, current in readers:
+            read = source.current(voltage, rows, signed=True)
+            query = voltage[steps].reshape(steps.size, -1)
+            dense = np.stack([np.interp(q, v, i) for q, v, i in zip(query, rising_v, current, strict=True)])
+            forward = query <= source.curve.v_oc[steps][:, None]
+            read[steps] = np.where(forward, dense, read[steps].reshape(query.shape)).reshape(read[steps].shape)
+            out.append(read)
+        return np.asarray(out)
+
+    return currents
+
+
+def parallel_reference(sources, v_min, v_max, current_limit, string_limit):
+    upper = np.minimum(v_max, np.max([s.v_oc for s in sources], axis=0))
+    lower = np.full(len(upper), float(v_min))
+    currents = dense_currents(sources)
 
     def allowed(voltage):
         each = currents(voltage)
@@ -202,7 +250,7 @@ def test_parallel_peak_convergence(diodes, parallel, breakdown):
     for limits in [(0.0, np.inf, np.inf, np.inf), (65.0, 130.0, 9.0, 4.0)]:
         _, production, voltage = _curves_power(sources, *limits)
         lit = production > 1e-6
-        each = np.asarray([source.current(voltage, np.ones(CASES, dtype=bool), signed=True) for source in sources])
+        each = exact_currents(sources, voltage)
         assert np.all(voltage[lit] >= limits[0] - 1e-7)
         assert np.all(voltage[lit] <= limits[1] + 1e-7)
         assert np.all(each[:, lit].sum(axis=0) <= limits[2] + 1e-7)

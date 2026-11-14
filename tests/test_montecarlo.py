@@ -99,7 +99,7 @@ def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch)
 
     _dc, temperatures, _derate = _precompute_year_caches(
         cfg,
-        type("Resolved", (), {"lat": 41.0, "lon": -8.0, "electrical": None})(),
+        type("Resolved", (), {"lat": 41.0, "lon": -8.0, "timezone": "Europe/Lisbon", "electrical": None})(),
         settings,
     )
 

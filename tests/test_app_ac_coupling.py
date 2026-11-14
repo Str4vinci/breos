@@ -137,6 +137,31 @@ def test_ac_prices_a_simple_pv_inverter_and_the_battery_inverter():
     assert ac_costs["replacement_cost_each"] == dc_costs["replacement_cost_each"]
 
 
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"battery_kwh": 0},
+        {"battery_kwh": 5, "costs": {"land_cost": 1500.0}},
+        {"battery_kwh": 5, **AC, "costs": {"battery_inverter_cost_per_kw": 120.0, "land_cost": 1500.0}},
+    ],
+    ids=["pv-only", "dc-land", "ac-land"],
+)
+def test_the_capex_components_sum_to_the_initial_cost(config):
+    resolved = _resolve(**config)
+    costs = build_costs_dict(resolved.cfg, resolved)
+    components = (
+        "pv_cost",
+        "inverter_cost",
+        "battery_cost",
+        "battery_inverter_cost",
+        "installation_cost",
+        "other_costs",
+        "land_cost",
+    )
+    assert costs["land_cost"] == resolved.cost_params.land_cost
+    assert sum(costs[key] for key in components) == pytest.approx(costs["total_initial_cost"], rel=1e-12)
+
+
 @pytest.mark.parametrize("coupling", [{}, AC], ids=["dc", "ac"])
 def test_battery_replacement_cost_prices_one_replacement(coupling):
     resolved = _resolve(battery_kwh=5, **coupling)

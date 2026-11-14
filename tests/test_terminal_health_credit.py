@@ -365,7 +365,7 @@ def test_montecarlo_values_each_trajectory_before_aggregation(monkeypatch):
         "breos.montecarlo._precompute_year_caches",
         lambda *args, **kwargs: ({2025: pv}, {2025: temp}, {2025: InverterSteps(None, None)}),
     )
-    monkeypatch.setattr("breos.montecarlo._run_trajectory_index", lambda i: outputs[i])
+    monkeypatch.setattr("breos.montecarlo._run_trajectory_index", lambda i, study=None: outputs[i])
     result = run_montecarlo(resolved.cfg, settings)
     for field in FIELDS:
         assert result.summary[field] == _summarize(result.runs)[field]

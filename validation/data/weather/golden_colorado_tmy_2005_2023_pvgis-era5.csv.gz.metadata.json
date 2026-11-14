@@ -1,0 +1,27 @@
+{
+  "breos_weather_metadata": {
+    "horizon": {
+      "profile": "provider_default",
+      "provider": "pvgis",
+      "status": "applied"
+    },
+    "irradiance_time_offset_hours": 0.5,
+    "provider_api_request": "https://re.jrc.ec.europa.eu/api/v5_3/tmy?lat=39.7407&lon=-105.1686&outputformat=json",
+    "radiation_time_basis": "instant",
+    "raw_radiation_variables": [
+      "G(h)",
+      "Gb(n)",
+      "Gd(h)"
+    ],
+    "source": "PVGIS_TMY",
+    "stored_radiation_variables": [
+      "ghi",
+      "dni",
+      "dhi"
+    ],
+    "timestamp_label_basis": "provider_hour",
+    "timestamp_timezone": "UTC"
+  },
+  "schema_version": 1,
+  "weather_sha256": "56a80c78411da83a66e0b7caccd78160f2887832ec1552d07941aaa3f6e12869"
+}

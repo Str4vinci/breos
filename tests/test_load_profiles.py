@@ -14,6 +14,7 @@ from breos.load_profiles import (
     PROFILES,
     _btn_day_type,
     _easter_sunday,
+    _localize_wall_clock_index,
     _parse_profile_timestamps,
     _portugal_national_holidays,
     _resample_load_to_15min,
@@ -986,3 +987,70 @@ def test_named_file_of_an_unknown_length_raises(tmp_path):
 
     with pytest.raises(ValueError, match="has 1000 data rows"):
         load_profile("custom", 1000, profile_file=tmp_path / "short.csv", profile_unit="W")
+
+
+def _evening_peak_csv(path):
+    index = pd.date_range("2025-01-01", periods=8760, freq="h")
+    watts = np.where((index.hour >= 18) & (index.hour < 22), 1000.0, 100.0)
+    pd.DataFrame({"DateTime": index, "power": watts}).to_csv(path, index=False)
+    return watts
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_a_half_hour_clock_change_keeps_the_seasons_load_shape(tmp_path, freq):
+    # Lord Howe's clock moves by 30 minutes, so its winter wall-clock hours
+    # fall between the summer's absolute hours. The evening peak must survive
+    # in both seasons, with the energy unchanged.
+    watts = _evening_peak_csv(tmp_path / "daily.csv")
+    annual_kwh = watts.sum() / 1000.0
+    load = load_profile(
+        "custom",
+        annual_kwh,
+        profile_file=tmp_path / "daily.csv",
+        profile_unit="W",
+        timezone="Australia/Lord_Howe",
+        freq=freq,
+    ).iloc[:, 0]
+
+    hours_per_step = 1.0 if freq == "h" else 0.25
+    assert load.sum() * hours_per_step / 1000.0 == pytest.approx(annual_kwh, rel=1e-12)
+    for day in ("2025-01-15", "2025-07-15"):
+        daily = load.loc[day]
+        assert daily.sum() * hours_per_step / 1000.0 == pytest.approx(6.0, rel=1e-9)
+        assert daily.max() > 500.0 and daily.min() < 150.0
+
+
+def test_a_half_hour_clock_change_places_each_wall_clock_hour_on_its_absolute_hours():
+    # In winter (+10:30) each absolute hour straddles two wall-clock hours, so
+    # the hour from 17:30 to 18:30 holds half the 18:00 peak.
+    index = pd.date_range("2025-07-15 17:30", periods=5, freq="h", tz="Australia/Lord_Howe")
+    df = pd.DataFrame({"Electrical Consumption [W]": 0.0}, index=pd.date_range("2025-01-01", periods=8760, freq="h"))
+    df.loc[(df.index.hour >= 18) & (df.index.hour < 22), "Electrical Consumption [W]"] = 1000.0
+    localized = _localize_wall_clock_index(df, "Australia/Lord_Howe", "h").iloc[:, 0]
+
+    assert localized.reindex(index).tolist() == [500.0, 1000.0, 1000.0, 1000.0, 500.0]
+
+
+def test_a_profile_without_energy_cannot_meet_a_positive_annual_target(tmp_path):
+    pd.DataFrame({"power": np.zeros(8760)}).to_csv(tmp_path / "zero.csv", index=False)
+    with pytest.raises(ValueError, match="has no energy, so it cannot be scaled to 4000 kWh"):
+        load_profile("custom", 4000, profile_file=tmp_path / "zero.csv", profile_unit="W")
+
+
+def test_an_undated_file_with_two_load_columns_needs_a_column_choice(tmp_path):
+    watts = _evening_peak_csv(tmp_path / "daily.csv")
+    pd.DataFrame({"House": watts, "Garage": np.full(8760, 100.0)}).to_csv(tmp_path / "multi.csv", index=False)
+
+    with pytest.raises(ValueError, match=r"2 value columns \(\['House', 'Garage'\]\)"):
+        load_profile("custom", 2190, profile_file=tmp_path / "multi.csv", profile_unit="W")
+    house = load_profile("custom", 2190, profile_file=tmp_path / "multi.csv", profile_unit="W", profile_column="House")
+    assert house.iloc[:, 0].nunique() == 2
+
+
+@pytest.mark.parametrize("first_label", [0, 1])
+def test_a_counting_first_column_is_still_a_row_label(tmp_path, first_label):
+    rows = np.arange(first_label, first_label + 8760)
+    pd.DataFrame({"row": rows, "power": np.full(8760, 100.0)}).to_csv(tmp_path / "labelled.csv", index=False)
+
+    load = load_profile("custom", 876, profile_file=tmp_path / "labelled.csv", profile_unit="W")
+    assert load.attrs["breos_load_profile"]["column"] == "power"

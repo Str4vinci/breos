@@ -727,3 +727,120 @@ def test_substrings_lit_alike_on_a_step_are_solved_once(monkeypatch):
     each = _curve(modules)
     np.testing.assert_allclose(merged.mpp_bare, each.mpp_bare, rtol=1e-12)
     np.testing.assert_allclose(merged.v_oc, each.v_oc, rtol=1e-12)
+
+
+# -- strings in parallel on their exact curves ----------------------------------------------------
+
+VARIED = 6
+
+
+def _varied_curve(modules: list[dict], cable_ohm: float = 0.0) -> ShadedStringCurve:
+    """A shaded string over six steps of rising irradiance and cell temperature."""
+    beam = np.array([150.0, 300.0, 450.0, 600.0, 800.0, 1000.0])
+    one = np.ones(VARIED)
+    parts = IrradianceParts(
+        beam=beam,
+        circumsolar=0.0 * one,
+        sky=0.12 * beam,
+        other=0.03 * beam,
+        temp_cell=np.linspace(10.0, 60.0, VARIED),
+        sun_azimuth=180.0 * one,
+        sun_elevation=50.0 * one,
+        pv_params=get_module("Generic_400W"),
+    )
+    return ShadedStringCurve(_shading(modules), parts, np.ones(VARIED), len(modules), cable_ohm=cable_ohm)
+
+
+def _shade(value: float) -> dict:
+    return {"beam_shaded_fraction": _table(value)}
+
+
+def _first() -> ShadedStringCurve:
+    corner = {"substrings": [_shade(0.9), _shade(0.0), _shade(0.0)]}
+    return _varied_curve([LIT, _shade(0.5), _shade(0.5), LIT, corner, LIT, LIT, _shade(0.3)], cable_ohm=0.4)
+
+
+def _second() -> ShadedStringCurve:
+    return _varied_curve([LIT] * 6 + [_shade(0.9)] * 2, cable_ohm=0.1)
+
+
+def _exact_string_current(curve: ShadedStringCurve, voltage: np.ndarray) -> np.ndarray:
+    """The string's current at one terminal voltage per step, bisected on its exact curve."""
+    select = np.arange(VARIED)
+    low, high = np.zeros(VARIED), curve._table_i[:, -1].copy()
+    for _ in range(100):
+        middle = (low + high) / 2
+        above = curve._terminal_voltage(middle, select, True) > voltage
+        low, high = np.where(above, middle, low), np.where(above, high, middle)
+    return curve.scale * (low + high) / 2
+
+
+def _dense_maximum(curves: list[ShadedStringCurve]) -> np.ndarray:
+    """Each step's best power of the strings in parallel: their exact curves densely sampled, then scanned."""
+    readers = []
+    for curve in curves:
+        grid = np.linspace(0.0, 1.0, 200001) * curve._table_i[:, -1:]
+        voltage = curve._voltage(grid, np.arange(VARIED)) - curve.cable_ohm * grid
+        readers.append((voltage[:, ::-1], grid[:, ::-1]))
+    best = np.zeros(VARIED)
+    for step in range(VARIED):
+        scan = np.linspace(0.0, min(curve.v_oc[step] for curve in curves), 200001)
+        current = sum(np.interp(scan, v[step], i[step]) for v, i in readers)
+        best[step] = (scan * current).max()
+    return best
+
+
+def test_identical_shaded_strings_in_parallel_deliver_twice_one_string():
+    curve = _first()
+    assert curve.mismatched.size == VARIED
+    unconstrained, limited, voltage = _curves_power(
+        [_CurveSource(curve), _CurveSource(curve)], 0.0, np.inf, np.inf, np.inf
+    )
+    # Read off the table's chords the pair fell short of twice one string, by up to 0.3 %.
+    np.testing.assert_allclose(limited, 2 * curve.mpp, rtol=1e-10)
+    np.testing.assert_allclose(voltage, curve.v_mp, rtol=1e-6)
+
+
+@pytest.mark.parametrize("v_min,v_max", [(0.0, np.inf), (463.0, np.inf), (0.0, 462.5)])
+def test_parallel_peak_outside_the_tabled_peak_bracket_is_not_lost(v_min, v_max):
+    fractions = [0.06, 0.46, 0.72, 0.49, 0.28, 0.57, 0.64, 0.69, 0.41, 0.01, 0.16, 0.98]
+    curve = _curve([_shade(fraction) for fraction in fractions])
+    source = _CurveSource(curve)
+    _, single, single_v = _curves_power([source], v_min, v_max, np.inf, np.inf)
+    _, limited, voltage = _curves_power([source, source], v_min, v_max, np.inf, np.inf)
+    # The exact peak is at 462.755797 V, below the tabled candidate's
+    # initial bracket at 463.363116 V: the old search stopped at that edge.
+    # Physical limits may instead make either edge the correct optimum.
+    np.testing.assert_allclose(limited, 2 * single, rtol=1e-9)
+    np.testing.assert_allclose(voltage, single_v, rtol=1e-6)
+
+
+def test_differently_shaded_strings_in_parallel_reach_their_exact_maximum():
+    first, second = _first(), _second()
+    assert first.mismatched.size == second.mismatched.size == VARIED
+    _, limited, voltage = _curves_power([_CurveSource(first), _CurveSource(second)], 0.0, np.inf, np.inf, np.inf)
+    reference = _dense_maximum([first, second])
+    gap = limited / reference - 1
+    # The dense samples' chords read at most about 1e-9 low.
+    assert np.all(gap > -1e-8), gap
+    assert np.all(gap < 1e-8), gap
+    # The power is the exact curves' at the operating voltage.
+    on_curve = voltage * (_exact_string_current(first, voltage) + _exact_string_current(second, voltage))
+    np.testing.assert_allclose(limited, on_curve, rtol=1e-10)
+
+
+def test_limits_on_parallel_strings_hold_on_their_exact_curves():
+    first, second = _first(), _second()
+    v_min, v_max, input_limit, string_limit = 230.0, 290.0, 9.0, 5.0
+    sources = [_CurveSource(first), _CurveSource(second)]
+    unconstrained, limited, voltage = _curves_power(sources, v_min, v_max, input_limit, string_limit)
+    lit = limited > 0
+    assert lit.sum() >= 4
+    each = np.array([_exact_string_current(first, voltage), _exact_string_current(second, voltage)])
+    assert np.all(voltage[lit] >= v_min - 1e-9) and np.all(voltage[lit] <= v_max + 1e-9)
+    # Read off the chords, the currents at the operating voltage were above the limits.
+    assert np.all(each[:, lit].sum(axis=0) <= input_limit + 1e-6)
+    assert np.all(each[:, lit].max(axis=0) <= string_limit + 1e-6)
+    np.testing.assert_allclose(limited[lit], (voltage * each.sum(axis=0))[lit], rtol=1e-10)
+    assert np.any(np.isclose(each[:, lit].sum(axis=0), input_limit, rtol=1e-6))
+    assert np.all(limited <= _dense_maximum([first, second]) * (1 + 1e-8))

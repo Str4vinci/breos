@@ -1,12 +1,20 @@
 """Tests for the pure-scipy CEC 6-parameter fit (``breos.cec_fit``)."""
 
+import pickle
 import warnings
 
 import numpy as np
 import pytest
 from pvlib.pvsystem import calcparams_cec, i_from_v, max_power_point
 
-from breos.cec_fit import _modeled_gamma, _passes_iv_checks, _solve_five_params, _to_unknowns, fit_cec_params
+from breos.cec_fit import (
+    IscAdjustment,
+    _modeled_gamma,
+    _passes_iv_checks,
+    _solve_five_params,
+    _to_unknowns,
+    fit_cec_params,
+)
 from breos.pv_modules import MODULES, get_module
 
 # A well-formed datasheet (Suntech STP550S) used for the focused single-module
@@ -246,3 +254,23 @@ class TestIVChecks:
         i_l, i_o, r_s, _r_sh, a = reference[:5]
         # A 2-ohm shunt drags the power at Vmp far below Vmp * Imp.
         assert not _passes_iv_checks((i_l, i_o, r_s, 2.0, a), inputs[1], inputs[2], inputs[3])
+
+
+class TestIscAdjustment:
+    def test_a_fit_that_raises_isc_records_it(self):
+        # Seraphim SEG E11B 310: no solution at the datasheet Isc; SAM's
+        # heuristic raises it three times by 1 %.
+        params = fit_cec_params("multiSi", 36.15, 8.58, 44.45, 8.86, 0.00886, -0.13335, -0.439, 340)
+        record = params.isc_adjustment
+        assert record == IscAdjustment(8.86, 8.86 * 1.01**3, pytest.approx(3.0301, abs=1e-9))
+        # The fitted curve passes through the raised value at STC.
+        i_l, i_o, r_s, r_sh, a, _adjust = params
+        assert float(i_from_v(0.0, i_l, i_o, r_s, r_sh, a)) == pytest.approx(record.fitted_isc_a, rel=1e-8)
+        assert pickle.loads(pickle.dumps(params)).isc_adjustment == record
+
+    def test_an_ordinary_fit_records_nothing_and_stays_a_plain_tuple(self):
+        params = fit_cec_params(**_KNOWN)
+        assert params.isc_adjustment is None
+        assert len(params) == 6 and params == tuple(params)
+        restored = pickle.loads(pickle.dumps(params))
+        assert restored == params and restored.isc_adjustment is None

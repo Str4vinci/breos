@@ -442,6 +442,7 @@
   "provenance.weather.irradiance_closure.before.absolute_residual_energy_fraction": 0.24042469656325827,
   "provenance.weather.irradiance_closure.before.ghi_weighted_mean_absolute_residual_w_m2": 82.55860358358366,
   "provenance.weather.irradiance_resampling": "auto",
+  "provenance.weather.irradiance_resampling_capped_counts.dni": 0,
   "provenance.weather.irradiance_resampling_fallback_counts.dhi": 2420,
   "provenance.weather.irradiance_resampling_fallback_counts.dni": 1548,
   "provenance.weather.irradiance_resampling_fallback_counts.ghi": 2220,
@@ -601,11 +602,11 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "464baadfa282a6e6918c24c51aad3686e4785bff",
+  "breos_commit": "92fc3c84f2d50b306b949f39433f5e7ea68e1a81",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
-  "python": "3.12.13"
+  "python": "3.13.14"
  },
  "scenario": "blast_15min_replacement",
  "schema": "breos-app-golden-v1"

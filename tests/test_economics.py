@@ -124,6 +124,18 @@ class TestCostDefaultsSingleSource:
         )
 
 
+# The returned CAPEX components; together they are total_initial_cost.
+CAPEX_COMPONENTS = (
+    "pv_cost",
+    "inverter_cost",
+    "battery_cost",
+    "battery_inverter_cost",
+    "installation_cost",
+    "other_costs",
+    "land_cost",
+)
+
+
 class TestCalculateCosts:
     def test_pv_only(self, cost_params):
         costs = calculate_costs(
@@ -167,6 +179,29 @@ class TestCalculateCosts:
         # module's, which let the budget pass a design over budget (#157).
         with pytest.raises(ValueError, match="costs.panel_wp was removed"):
             cost_params_from_config(dict(base, panel_wp=500.0), {"project_lifespan": 1})
+
+    @pytest.mark.parametrize(
+        "battery_wh, params, coupling",
+        [
+            (0.0, CostParams(), "dc"),
+            (5000.0, CostParams(), "dc"),
+            (0.0, CostParams(land_cost=1000.0), "dc"),
+            (5000.0, CostParams(land_cost=1000.0, other_cost_fixed=250.0), "dc"),
+            (5000.0, CostParams(land_cost=1000.0, battery_inverter_cost_per_kw=120.0), "ac"),
+        ],
+        ids=["pv-only", "battery", "pv-only-land", "battery-land", "ac-battery-land"],
+    )
+    def test_capex_components_sum_to_the_total(self, battery_wh, params, coupling):
+        costs = calculate_costs(
+            8,
+            550.0,
+            battery_wh,
+            params,
+            battery_coupling=coupling,
+            battery_inverter_ac_capacity_w=3000.0 if coupling == "ac" else None,
+        )
+        assert costs["land_cost"] == params.land_cost
+        assert sum(costs[key] for key in CAPEX_COMPONENTS) == pytest.approx(costs["total_initial_cost"], rel=1e-12)
 
 
 def test_cost_projection_needs_year_rows():
@@ -419,6 +454,43 @@ class TestReplacementBookingInProjection:
         others = row["Cost_System_Annual"] - row["Cost_Replacement"]
         discounted_outlay = row["Cost_System_Annual_NPV"] - others / (1 + self.DISCOUNT) ** 11
         assert discounted_outlay == pytest.approx(row["Cost_Replacement"] / (1 + self.DISCOUNT) ** booked_at)
+
+    def test_a_free_swap_reports_its_instant_and_no_outlay(self):
+        # battery_replacement_cost = 0: the pack is still swapped, so the
+        # year books the swap's instant; only the money is zero.
+        years = list(range(1, 5))
+        yearly = pd.DataFrame(
+            {
+                "Year": years,
+                "Load_kWh": [4000.0] * 4,
+                "PV_Production_kWh": [5000.0] * 4,
+                "Import_kWh": [1500.0] * 4,
+                "Export_kWh": [2000.0] * 4,
+                "PV_Degradation_Factor": [1.0] * 4,
+                "Replacements": [0, 1, 0, 2],
+                "Replacement_Cost": [0.0] * 4,
+                "Replacement_Year_Fraction": [np.nan, 0.25, np.nan, 0.5],
+            }
+        )
+        projection = cost_analysis_projection(
+            yearly,
+            costs={
+                "electricity_cost": 0.22,
+                "electricity_sold_cost": 0.05,
+                "daily_power_cost": 0.30,
+                "annual_operation_cost": 100.0,
+                "total_initial_cost": 12000.0,
+            },
+            num_years=4,
+            inflation_rate=self.INFLATION,
+            discount_rate=self.DISCOUNT,
+        )
+
+        times = projection["Replacement_Time_Years"].to_numpy()
+        assert np.isnan(times[[0, 2]]).all()
+        # A year with two swaps books one instant, the mean of its swaps.
+        assert times[[1, 3]] == pytest.approx([1.25, 3.5])
+        assert (projection["Cost_Replacement"] == 0.0).all()
 
     def test_non_replacement_years_keep_the_year_end_convention(self):
         projection = self._projection(0.25)

@@ -93,10 +93,10 @@ MODEL_CONFIGS = {
     },
 }
 
-# The baseline and REPORT.md put the sun at the step labels, and the
-# validation weather files carry no metadata sidecar, so every model without
-# its own solar_position pins "interval-start" rather than following the
-# solar_position default.
+# The baseline and REPORT.md put the sun at the step labels, so every model
+# without its own solar_position pins "interval-start" rather than following
+# the solar_position default, which reads each weather file's metadata
+# sidecar and places the sun at the recorded irradiance instant.
 MODEL_CONFIGS = {name: {"solar_position": "interval-start", **overrides} for name, overrides in MODEL_CONFIGS.items()}
 
 

@@ -48,6 +48,7 @@ from breos.weather import (
     fill_leap_day,
     parse_weather_filename,
     read_weather_csv,
+    relabel_right_labeled_interval_means,
     warn_if_naive_weather_timestamps,
 )
 
@@ -241,6 +242,46 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
     )
 
 
+def _format_utc_offset(seconds: int) -> str:
+    """A UTC offset in seconds as ``UTC+5:30``."""
+    hours, minutes = divmod(abs(seconds) // 60, 60)
+    return f"UTC{'-' if seconds < 0 else '+'}{hours}:{minutes:02d}"
+
+
+def require_hourly_weather_on_local_hours(weather: pd.DataFrame, freq: str, timezone: str) -> None:
+    """Raise when hourly weather cannot share an instant with the location's local hours.
+
+    An hourly run steps on the weather's stamps, and the load profile steps on
+    whole local hours of ``timezone``. In a timezone with a fractional-hour
+    UTC offset, such as ``Asia/Kolkata`` (UTC+5:30), weather stamped on whole
+    UTC hours falls half-way between the local hours, so no load value
+    lines up with any weather step. Hourly weather already stamped on the
+    local hours is accepted, and timezones with whole-hour offsets are not
+    checked. A 15-minute run resamples the weather onto a grid that holds both.
+    """
+    if get_hours_per_step(freq) != 1.0:
+        return
+    index = cast(pd.DatetimeIndex, weather.index)
+    utc = index.tz_convert("UTC").tz_localize(None)
+    offsets = np.asarray((index.tz_convert(timezone).tz_localize(None) - utc) // pd.Timedelta(seconds=1), np.int64)
+    utc_seconds = np.asarray((utc - pd.Timestamp(0)) // pd.Timedelta(seconds=1), np.int64)
+    off_local_hour = (utc_seconds + offsets) % 3600 != 0
+    if not (offsets % 3600 != 0).any() or not off_local_hour.any():
+        return
+    zone_offsets = ", ".join(_format_utc_offset(int(seconds)) for seconds in np.unique(offsets[off_local_hour]))
+    utc_minutes = np.unique(utc[off_local_hour].minute)
+    stamps = (
+        "on whole UTC hours"
+        if utc_minutes.tolist() == [0]
+        else "at minute " + ", ".join(str(minute) for minute in utc_minutes) + " of each UTC hour"
+    )
+    raise ValueError(
+        f"Hourly weather from {_weather_source_label(weather)} is stamped {stamps}, which cannot be aligned "
+        f"with the whole local hours of the load profile in {timezone} ({zone_offsets}). "
+        'Set resolution = "15min", or supply hourly weather stamped on the local hours of the timezone.'
+    )
+
+
 def require_period_weather(weather: pd.DataFrame, period: SimulationPeriod, freq: str) -> None:
     """Raise unless the weather has a row at every step of the ``period`` window.
 
@@ -409,7 +450,12 @@ def load_weather_for_simulation(
     if weather_index.tz is None:
         warn_if_naive_weather_timestamps(weather_index, weather.attrs.get(WEATHER_METADATA_KEY) or {}, "Local weather")
         weather.index = weather_index.tz_localize("UTC")
+    # Right-labelled interval means move to the start of their interval before
+    # the year is remapped and its coverage checked, at every resolution: a
+    # complete year labelled 01:00 to the next midnight covers the year.
+    weather = relabel_right_labeled_interval_means(weather)
     weather = remap_tmy_year(weather, start_year)
+    require_hourly_weather_on_local_hours(weather, freq, resolved.timezone)
     # The resampler carries the weather metadata over and adds its own
     # resolution and method fields to it.
     weather = resample_hourly_weather(

@@ -330,7 +330,8 @@ def _calculate_dc_ac_power_arrays(
     order mirrors the scalar helper so the simulation can retain bit parity.
 
     With a non-default ``conversion`` or an ``ac_derate`` (each step's AC
-    rating as a fraction of ``inverter_ac_power``), each step runs the
+    output limit as a fraction of ``inverter_ac_power``, which still sets
+    the part-load ratio and the efficiency), each step runs the
     dispatch kernels' scalar conversion, so the PV-only and battery paths
     agree exactly. ``curve_rows`` reads the efficiency curve at each step's
     row position instead of the conversion's own. ``hours_per_step`` converts
@@ -351,7 +352,7 @@ def _calculate_dc_ac_power_arrays(
         for i in range(pv_dc_power.shape[0]):
             ac_power[i], conversion_loss[i], clipping_loss_dc[i] = _dc_ac(
                 float(pv_dc_power[i]),
-                inverter_ac_power * float(derate[i]),
+                inverter_ac_power,
                 inverter_efficiency,
                 ac_output_scale,
                 2.0,
@@ -359,6 +360,7 @@ def _calculate_dc_ac_power_arrays(
                 curve_eff,
                 float(rows[i]),
                 cable_k,
+                inverter_ac_power * float(derate[i]),
             )
         return ac_power, conversion_loss, clipping_loss_dc
 
@@ -396,7 +398,7 @@ class InverterUnits:
     conversion is given) and conversion: its efficiency curve, its own AC
     cable and its night draw. ``shares`` holds each step's share of
     the system DC per inverter, one column per inverter; ``ac_derate`` each
-    inverter's AC rating as a fraction of its nameplate, 1 without
+    inverter's AC output limit as a fraction of its nameplate, 1 without
     temperature derating; and ``curve_rows`` each inverter's efficiency-curve
     row position. ``feeder_cable_k_per_w`` is the shared AC cable's loss over
     the square of the inverters' summed AC output, in 1/W.
@@ -475,8 +477,8 @@ def convert_units(
     """Convert the system DC ``pv_dc`` (energy per step) through each inverter of ``units`` on its own.
 
     ``units`` must be aligned to ``pv_dc``'s steps. Each inverter takes its
-    share of the DC, clips at its own derated nameplate and converts along
-    its own curve, past its own AC cable; it draws its night consumption on
+    share of the DC, clips at its own derated AC limit and converts along
+    its own curve, read against its nameplate, past its own AC cable; it draws its night consumption on
     the steps it receives no DC. The shared cable then takes its loss from
     the summed AC, and ``ac_output_scale`` applies last, as in the single
     inverter's conversion. ``inverter_efficiency`` is the single efficiency

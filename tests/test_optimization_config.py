@@ -218,3 +218,122 @@ def test_whole_numbers_may_be_written_as_floats():
 def test_the_resolver_refuses_what_the_search_would(changes, error):
     with pytest.raises(ValueError, match=error):
         resolve_optimization_config({**MINIMAL, **changes})
+
+
+@pytest.mark.parametrize(("low", "high"), [(11.0, 14.0), (12.0, 12.0)])
+def test_tilt_bounds_without_a_grid_point_are_refused(low, high):
+    # Repair snaps tilt to 5° steps; 11–14° holds none, and clipping the
+    # empty range used to return 10°, outside the recorded bounds.
+    with pytest.raises(ValueError, match=r"holds no multiple of 5°"):
+        resolve_optimization_config({**MINIMAL, "constraints": {"min_tilt_deg": low, "max_tilt_deg": high}})
+    assert resolve_optimization_config({**MINIMAL, "constraints": {"min_tilt_deg": 11.0, "max_tilt_deg": 15.0}})
+
+
+def test_snapping_refuses_bounds_without_a_grid_point():
+    with pytest.raises(ValueError, match="hold no multiple of 5"):
+        optimization._snap_to_grid_within_bounds(np.array([12.0]), 5.0, 11.0, 14.0)
+
+
+def test_a_fixed_design_with_a_battery_needs_its_battery_prices_in_the_run_currency():
+    # The search bound says no battery, but the evaluated design installs one:
+    # its battery prices would otherwise be the EUR defaults, labelled USD.
+    from breos.economics import default_amount_cost_keys
+    from tests.conftest import _build_synthetic_weather
+
+    weather = _build_synthetic_weather(2023)
+    load = pd.DataFrame({"Load": np.full(len(weather), 500.0)}, index=weather.index)
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC", "altitude": 0},
+        "simulation": {"years_projection": 1},
+        "currency": "USD",
+        "constraints": {"budget": 10000, "max_battery_kwh": 0},
+        "costs": dict.fromkeys(default_amount_cost_keys(tariff=False, battery=False), 0.0),
+    }
+    with pytest.raises(ValueError, match=r"The run is in USD, but storage_cost_per_kwh"):
+        optimization.evaluate_projected_design(
+            weather, load, config, n_modules=2, battery_kwh=5, tilt=30, azimuth=180, execution_backend="python"
+        )
+    result = optimization.evaluate_projected_design(
+        weather, load, config, n_modules=2, battery_kwh=0, tilt=30, azimuth=180, execution_backend="python"
+    )
+    assert result.provenance["currency"] == "USD"
+
+
+def _fixed_design_inputs():
+    from tests.conftest import _build_synthetic_weather
+
+    weather = _build_synthetic_weather(2023)
+    load = pd.DataFrame({"Load": np.full(len(weather), 500.0)}, index=weather.index)
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC", "altitude": 0},
+        "simulation": {"years_projection": 1},
+    }
+    return weather, load, config
+
+
+@pytest.mark.parametrize("constraints", [{}, {"max_battery_kwh": 0}, {"budget": 10000}])
+def test_a_fixed_design_without_a_battery_needs_no_battery_prices_and_no_budget(constraints):
+    # A fixed design reads no [constraints]: neither the search's battery bound
+    # nor its budget decides which prices it must have in the run currency.
+    from breos.economics import default_amount_cost_keys
+
+    weather, load, config = _fixed_design_inputs()
+    config = {
+        **config,
+        "currency": "USD",
+        "constraints": constraints,
+        "costs": dict.fromkeys(default_amount_cost_keys(tariff=False, battery=False), 0.0),
+    }
+    result = optimization.evaluate_projected_design(
+        weather, load, config, n_modules=2, battery_kwh=0, tilt=30, azimuth=180, execution_backend="python"
+    )
+    assert result.provenance["currency"] == "USD"
+
+
+def test_an_ac_fixed_design_with_a_battery_needs_its_inverter_rating():
+    # The search bound excludes a battery, but the design installs one.
+    weather, load, config = _fixed_design_inputs()
+    config = {**config, "battery": {"coupling": "ac"}, "constraints": {"max_battery_kwh": 0}}
+    with pytest.raises(ValueError, match=r"needs its inverter's rating: set battery.inverter_ac_rating_kw"):
+        optimization.evaluate_projected_design(
+            weather, load, config, n_modules=2, battery_kwh=5, tilt=30, azimuth=180, execution_backend="python"
+        )
+
+
+def test_tilt_bounds_without_a_grid_point_are_kept_where_no_tilt_gene_reads_them():
+    tilt_bounds = {"min_tilt_deg": 11.0, "max_tilt_deg": 14.0}
+    # An East-West search fixes its tilt at mode.east_west_tilt_deg.
+    resolved = resolve_optimization_config({**MINIMAL, "mode": {"layouts": ["east_west"]}, "constraints": tilt_bounds})
+    assert resolved["constraints"]["min_tilt_deg"] == 11.0
+    with pytest.raises(ValueError, match=r"holds no multiple of 5°"):
+        resolve_optimization_config({**MINIMAL, "mode": {"layouts": ["single"]}, "constraints": tilt_bounds})
+    # A fixed design brings its own tilt.
+    weather, load, config = _fixed_design_inputs()
+    result = optimization.evaluate_projected_design(
+        weather,
+        load,
+        {**config, "constraints": tilt_bounds},
+        n_modules=2,
+        battery_kwh=0,
+        tilt=12,
+        azimuth=180,
+        execution_backend="python",
+    )
+    assert result.metrics["Tilt"] == 12.0
+
+
+def test_a_search_without_a_feasible_design_names_the_broken_constraint_and_keeps_the_scored_designs():
+    pytest.importorskip("pymoo")
+    weather, load, config = _fixed_design_inputs()
+    config = {**config, "constraints": {"budget": 10, "max_modules": 4, "max_battery_kwh": 2}}
+    with pytest.raises(optimization.NoFeasibleDesignError) as raised:
+        optimization.optimize_system_multi_objective(
+            weather, load, config, pop_size=4, n_gen=1, seed=1, execution_backend="python"
+        )
+    evaluated = raised.value.evaluated
+    assert len(evaluated) > 0
+    assert not evaluated["Feasible"].any()
+    assert evaluated.attrs["currency"] == "EUR"
+    total = len(evaluated)
+    assert f"constraints.budget by every design ({total} of {total})" in str(raised.value)
+    assert "constraints.max_area_m2" not in str(raised.value)

@@ -130,6 +130,7 @@ def _dc_ac(
     curve_eff: np.ndarray,
     curve_row: float,
     cable_k: float,
+    ac_limit: float = math.inf,
 ) -> tuple[float, float, float]:
     """Scalar core of :func:`calculate_dc_ac_power`: ``(ac, conversion_loss, clipping_dc)``.
 
@@ -145,6 +146,12 @@ def _dc_ac(
     includes it. With no curve and no cable the arithmetic is the PVWatts
     path's, operation for operation.
 
+    ``ac_limit`` caps the inverter's AC output below its nameplate, as
+    temperature derating does. The efficiency curve and the part-load ratio
+    stay on the nameplate ``inverter_ac_power``: a derated inverter converts
+    a given DC input as it would without derating, and only the DC above what
+    the cap needs is clipped. At or above the nameplate it changes nothing.
+
     ``pow_two`` carries the literal 2.0 in from a Python caller. CPython
     evaluates ``zeta ** 2`` as a libm ``pow`` call, and for some inputs
     glibc's ``pow`` differs by one ULP from the correctly rounded square.
@@ -157,8 +164,9 @@ def _dc_ac(
     inverter_ac_power = max(0.0, inverter_ac_power)
     inverter_efficiency = min(1.0, max(0.0, inverter_efficiency))
     ac_output_scale = min(1.0, max(0.0, ac_output_scale))
+    ac_limit = min(inverter_ac_power, max(0.0, ac_limit))
 
-    if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0:
+    if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0 or ac_limit <= 0.0:
         return 0.0, 0.0, pv_dc_power
     if pv_dc_power <= 0.0:
         return 0.0, 0.0, 0.0
@@ -172,10 +180,10 @@ def _dc_ac(
         return ac_power, pv_dc_power - ac_power, 0.0
 
     if curve_ac.shape[0] > 0:
-        pdc0 = _curve_dc(inverter_ac_power, inverter_ac_power, curve_ac, curve_eff, curve_row)
+        pdc0 = _curve_dc(ac_limit, inverter_ac_power, curve_ac, curve_eff, curve_row)
         dc_used = min(pv_dc_power, pdc0)
         ac_power = max(
-            0.0, min(dc_used, inverter_ac_power, _curve_ac(dc_used, inverter_ac_power, curve_ac, curve_eff, curve_row))
+            0.0, min(dc_used, ac_limit, _curve_ac(dc_used, inverter_ac_power, curve_ac, curve_eff, curve_row))
         )
         if cable_k > 0.0:
             ac_power = max(0.0, ac_power - cable_k * ac_power * ac_power)
@@ -187,13 +195,18 @@ def _dc_ac(
     # so derive the matching pdc0 here. This is the single conversion path
     # used by both the public solar helper and the App dispatch engine.
     pdc0 = inverter_ac_power / inverter_efficiency
-    dc_used = min(pv_dc_power, pdc0)
+    dc_limit = pdc0
+    if ac_limit < inverter_ac_power:
+        dc_limit = _dc_for_ac(
+            ac_limit, inverter_ac_power, inverter_efficiency, 1.0, curve_ac, curve_eff, curve_row, 0.0
+        )
+    dc_used = min(pv_dc_power, dc_limit)
     zeta = dc_used / pdc0
     ac_power = max(
         0.0,
         min(
             dc_used,
-            inverter_ac_power,
+            ac_limit,
             (inverter_efficiency / PVWATTS_REFERENCE_EFFICIENCY)
             * pdc0
             * (
@@ -218,10 +231,11 @@ def _dc_for_ac(
     curve_eff: np.ndarray,
     curve_row: float,
     cable_k: float,
+    ac_limit: float = math.inf,
 ) -> float:
     """Scalar core of :func:`dc_power_for_ac_output`, compiled as-is by the Numba backend.
 
-    Takes the curve and cable of :func:`_dc_ac` and stays its inverse.
+    Takes the curve, cable and ``ac_limit`` of :func:`_dc_ac` and stays its inverse.
     """
     ac_output_scale = min(1.0, max(0.0, ac_output_scale))
     if ac_output_scale <= 0.0:
@@ -229,8 +243,9 @@ def _dc_for_ac(
     ac_power_w = ac_power_w / ac_output_scale
     if cable_k > 0.0:
         ac_power_w = _cable_gross(max(0.0, ac_power_w), cable_k)
-    ac_target = max(0.0, min(ac_power_w, max(0.0, inverter_ac_power)))
     inverter_ac_power = max(0.0, inverter_ac_power)
+    ac_limit = min(inverter_ac_power, max(0.0, ac_limit))
+    ac_target = max(0.0, min(ac_power_w, ac_limit))
     inverter_efficiency = min(1.0, max(0.0, inverter_efficiency))
     if ac_target <= 0.0 or inverter_ac_power <= 0.0 or inverter_efficiency <= 0.0:
         return 0.0
@@ -238,8 +253,8 @@ def _dc_for_ac(
         return ac_target / inverter_efficiency
 
     if curve_ac.shape[0] > 0:
-        upper = _curve_dc(inverter_ac_power, inverter_ac_power, curve_ac, curve_eff, curve_row)
-        if ac_target >= inverter_ac_power:
+        upper = _curve_dc(ac_limit, inverter_ac_power, curve_ac, curve_eff, curve_row)
+        if ac_target >= ac_limit:
             return upper
         return min(upper, max(ac_target, _curve_dc(ac_target, inverter_ac_power, curve_ac, curve_eff, curve_row)))
 
@@ -734,15 +749,27 @@ def _combined_conversion(
     curve_eff: np.ndarray,
     curve_row: float,
     cable_k: float,
+    inv_rating_ac_wh: float,
 ) -> Tuple[float, float, float]:
     """Convert PV and battery DC at one shared inverter operating point.
 
     Returns ``(pv_ac, battery_ac, conversion_loss)``, splitting the AC output
-    in proportion to each source's share of the DC input.
+    in proportion to each source's share of the DC input. The conversion
+    reads the curve at the nameplate ``inv_rating_ac_wh`` and caps the AC
+    output at ``inv_cap_ac_wh`` (:func:`_dc_ac`'s ``ac_limit``).
     """
     total_dc = pv_dc + battery_dc
     ac_power, conversion_loss, _clipping_dc = _dc_ac(
-        total_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two, curve_ac, curve_eff, curve_row, cable_k
+        total_dc,
+        inv_rating_ac_wh,
+        inv_eff,
+        ac_output_scale,
+        pow_two,
+        curve_ac,
+        curve_eff,
+        curve_row,
+        cable_k,
+        inv_cap_ac_wh,
     )
     if total_dc <= 0.0:
         return 0.0, 0.0, 0.0
@@ -775,6 +802,7 @@ def _dispatch_dc_step(
     curve_eff: np.ndarray,
     curve_row: float,
     cable_k: float,
+    inv_rating_ac_wh: float,
 ) -> Tuple[
     float, float, float, float, float, float, float, float, float, float, float, float, float, float, float, float
 ]:
@@ -782,6 +810,9 @@ def _dispatch_dc_step(
 
     PV serves AC load first. Surplus DC then charges the battery before any
     export. PV and battery discharge share the inverter AC nameplate.
+    ``inv_cap_ac_wh`` is the step's AC output limit, below the nameplate
+    ``inv_rating_ac_wh`` while temperature derating holds it down; the
+    conversion reads its efficiency against the nameplate.
     ``cap_stored_wh`` limits the stored energy gained or released, on top of
     the DC charge-input and AC discharge limits.
 
@@ -813,18 +844,29 @@ def _dispatch_dc_step(
     hold_target = discharge_allowed and not math.isnan(grid_target_energy) and discharge_floor >= grid_target_energy
 
     pv_ac_max, pv_conversion_loss, pv_clipping_dc = _dc_ac(
-        pv_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two, curve_ac, curve_eff, curve_row, cable_k
+        pv_dc,
+        inv_rating_ac_wh,
+        inv_eff,
+        ac_output_scale,
+        pow_two,
+        curve_ac,
+        curve_eff,
+        curve_row,
+        cable_k,
+        inv_cap_ac_wh,
     )
 
     if pv_ac_max >= load:
         pv_ac_to_load = load
-        dc_to_load = _dc_for_ac(load, inv_cap_ac_wh, inv_eff, ac_output_scale, curve_ac, curve_eff, curve_row, cable_k)
+        dc_to_load = _dc_for_ac(
+            load, inv_rating_ac_wh, inv_eff, ac_output_scale, curve_ac, curve_eff, curve_row, cable_k, inv_cap_ac_wh
+        )
         surplus_dc = max(0.0, pv_dc - dc_to_load)
         battery_energy, drawn = _charge(surplus_dc, battery_energy, emax, eff_charge, cap_charge_in_wh, cap_stored_wh)
         remaining_dc = surplus_dc - drawn
         direct_ac, direct_conversion_loss, direct_clipping_dc = _dc_ac(
             dc_to_load + remaining_dc,
-            inv_cap_ac_wh,
+            inv_rating_ac_wh,
             inv_eff,
             ac_output_scale,
             pow_two,
@@ -832,6 +874,7 @@ def _dispatch_dc_step(
             curve_eff,
             curve_row,
             cable_k,
+            inv_cap_ac_wh,
         )
         pv_ac_export = max(0.0, direct_ac - load)
         dc_export = max(0.0, dc_to_load + remaining_dc - direct_clipping_dc - dc_to_load)
@@ -865,7 +908,15 @@ def _dispatch_dc_step(
             target_total_ac = min(load, ceiling_ac * ac_output_scale)
             if discharge_allowed and available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
                 total_dc_target = _dc_for_ac(
-                    target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale, curve_ac, curve_eff, curve_row, cable_k
+                    target_total_ac,
+                    inv_rating_ac_wh,
+                    inv_eff,
+                    ac_output_scale,
+                    curve_ac,
+                    curve_eff,
+                    curve_row,
+                    cable_k,
+                    inv_cap_ac_wh,
                 )
                 battery_dc = min(
                     available * eff_discharge,
@@ -889,6 +940,7 @@ def _dispatch_dc_step(
                         curve_eff,
                         curve_row,
                         cable_k,
+                        inv_rating_ac_wh,
                     )[1]
                     if unconstrained_battery_ac > cap_discharge_ac_wh:
                         lower = 0.0
@@ -906,6 +958,7 @@ def _dispatch_dc_step(
                                 curve_eff,
                                 curve_row,
                                 cable_k,
+                                inv_rating_ac_wh,
                             )[1]
                             if midpoint_battery_ac < cap_discharge_ac_wh:
                                 lower = midpoint
@@ -924,6 +977,7 @@ def _dispatch_dc_step(
                     curve_eff,
                     curve_row,
                     cable_k,
+                    inv_rating_ac_wh,
                 )
                 draw = battery_dc / eff_discharge
                 if hold_target:
@@ -1226,6 +1280,7 @@ def _dispatch_vehicle_step(
     s_max: float,
     charge_period: bool,
     discharge_period: bool,
+    charge_ahead: bool,
     pow_two: float,
     flat_ac: np.ndarray,
     flat_eff: np.ndarray,
@@ -1235,6 +1290,8 @@ def _dispatch_vehicle_step(
     Modes are 0 uncontrolled, 1 V1G, 2 V2H. A zero departure countdown
     means no scheduled departure: PV/period charging may still run, but
     neither mandatory charging nor the discharge deadline binds.
+    Without a charge-period step before the departure (``charge_ahead``
+    false), V2H does not discharge below the departure target.
 
     Returns ending energy, PV AC in, grid AC in, DC charge input, battery
     charge loss, stored-energy discharge draw, battery discharge loss,
@@ -1279,7 +1336,7 @@ def _dispatch_vehicle_step(
         pv_stored = stored * pv_ac / ac_in
         energy = end
     elif mode == 2 and discharge_period:
-        guard = target - future if steps_to_departure > 0 else floor
+        guard = (target - future if charge_ahead else target) if steps_to_departure > 0 else floor
         bound = max(floor, guard)
         available = max(0.0, energy - bound)
         ac_target = min(deficit, rating_wh)
@@ -1287,14 +1344,36 @@ def _dispatch_vehicle_step(
         dc_out = min(available * eff_d, dc_needed)
         draw = dc_out / eff_d
         ac_out = min(ac_target, _dc_ac(dc_out, rating_wh, charger_eff, 1.0, pow_two, flat_ac, flat_eff, 0.0, 0.0)[0])
-        end = energy - draw
-        if available > 0.0 and dc_out >= available * eff_d:
-            end = bound
-            draw = energy - end
-        energy = end
-        discharge_loss = draw - dc_out
-        charger_loss = dc_out - ac_out
+        if ac_out > 0.0:
+            end = energy - draw
+            if available > 0.0 and dc_out >= available * eff_d:
+                end = bound
+                draw = energy - end
+            energy = end
+            discharge_loss = draw - dc_out
+            charger_loss = dc_out - ac_out
+        else:
+            # A draw too small for the charger to deliver AC is not taken.
+            draw = 0.0
     return energy, pv_ac, grid_ac, dc_in, dc_in - stored, draw, discharge_loss, charger_loss, ac_out, pv_stored
+
+
+def _vehicle_charge_ahead(steps_to_departure: np.ndarray, charge_period: np.ndarray | None) -> np.ndarray:
+    """Whether a charge-period step remains before each step's departure.
+
+    The steps after this one and before the departure are checked. None
+    means no configured charge periods; an array restricts charging even
+    when no step matches. A departure past the arrays counts as reachable.
+    """
+    if charge_period is None:
+        return np.ones(len(steps_to_departure), dtype=np.bool_)
+    n = len(charge_period)
+    positions = np.arange(n, dtype=np.int64)
+    # Earliest charge-period step at or after each position; n when none.
+    following = np.minimum.accumulate(np.where(charge_period, positions, n)[::-1])[::-1]
+    after = np.append(following[1:], n)
+    last = positions + steps_to_departure - 1
+    return (after <= last) | (last >= n)
 
 
 def _vehicle_drive(
@@ -1425,6 +1504,7 @@ def _dispatch_day(
     vehicle_countdown: np.ndarray,
     vehicle_charge_period: np.ndarray,
     vehicle_discharge_period: np.ndarray,
+    vehicle_charge_ahead: np.ndarray,
     vehicle_was_plugged: bool,
     vehicle_minimum: float,
     vehicle_drive_first: np.ndarray,
@@ -1451,7 +1531,7 @@ def _dispatch_day(
 
     ``curve_ac``, ``curve_eff`` and ``cable_k`` are the inverter's conversion
     (:func:`_dc_ac`), with ``curve_rows`` each step's operating voltage as a
-    position among the curve's rows. ``ac_derate`` is each step's AC rating
+    position among the curve's rows. ``ac_derate`` is each step's AC output limit
     as a fraction of ``inv_cap_ac_wh``; both are indexed like the inputs.
     ``night_wh`` is what the inverter draws from the grid in a step in which
     it converts nothing: no PV DC and no battery charge or discharge.
@@ -1636,6 +1716,7 @@ def _dispatch_day(
                     curve_eff,
                     curve_rows[i],
                     cable_k,
+                    inv_cap_ac_wh,
                 )
                 pv_ac_to_battery = 0.0
                 pv_charge_conversion_loss = 0.0
@@ -1800,6 +1881,7 @@ def _dispatch_day(
                     vehicle_s_max,
                     vehicle_charge_period[i],
                     vehicle_discharge_period[i],
+                    vehicle_charge_ahead[i],
                     pow_two,
                     flat_ac,
                     flat_eff,
@@ -1933,6 +2015,7 @@ def _dispatch_day_candidates(
     vehicle_countdown: np.ndarray,
     vehicle_charge_period: np.ndarray,
     vehicle_discharge_period: np.ndarray,
+    vehicle_charge_ahead: np.ndarray,
     vehicle_was_plugged: bool,
     vehicle_minimum: float,
     vehicle_drive_first: np.ndarray,
@@ -2031,6 +2114,7 @@ def _dispatch_day_candidates(
             vehicle_countdown,
             vehicle_charge_period,
             vehicle_discharge_period,
+            vehicle_charge_ahead,
             vehicle_was_plugged,
             vehicle_minimum,
             vehicle_drive_first,
@@ -2081,6 +2165,7 @@ def _day_arguments(
     vehicle_grid_origin_wh: float = 0.0,
     vehicle_charge_period: Optional[np.ndarray] = None,
     vehicle_discharge_period: Optional[np.ndarray] = None,
+    vehicle_charge_ahead: Optional[np.ndarray] = None,
     grid_import_limit_w: float = math.inf,
     vehicle_was_plugged: bool = True,
     vehicle_soh_fraction: float = 1.0,
@@ -2098,7 +2183,7 @@ def _day_arguments(
     that packs many days passes one no-op set rather than building one per
     day.
 
-    ``ac_derate`` is the inverter's AC rating per step as a fraction of
+    ``ac_derate`` is the inverter's AC output limit per step as a fraction of
     ``cap_wh``, over the whole run like ``instructions``; None is the full
     rating. ``curve_rows`` is each step's position among the efficiency
     curve's voltage rows, likewise; None holds the conversion's own row.
@@ -2216,6 +2301,7 @@ def _day_arguments(
         _EMPTY_VEHICLE_COUNTDOWN if vehicle_schedule is None else vehicle_schedule.steps_to_departure,
         _EMPTY_VEHICLE_MASK if vehicle_charge_period is None else vehicle_charge_period,
         _EMPTY_VEHICLE_MASK if vehicle_discharge_period is None else vehicle_discharge_period,
+        _EMPTY_VEHICLE_MASK if vehicle_charge_ahead is None else vehicle_charge_ahead,
         bool(vehicle_was_plugged),
         0.0 if vehicle_config is None else float(vehicle_config.min_soc * vehicle_capacity_wh),
         _EMPTY_VEHICLE_FLOAT if vehicle_schedule is None else vehicle_schedule.drive_first_wh,

@@ -1720,6 +1720,27 @@ questions on 2026-10-22 and confirmed the existing BLAST rule; the
   defaults nor the new optional electrical effects change their inputs.
   This is a calculation of the proposal, not a test of implemented V2H.
 
+## Amendment of 2026-11-13
+
+- **A17. No discharge below the target without a charge period ahead.**
+  V5's guard let V2H discharge to `T − (k − 1) × s_max` on any discharge
+  step. With `charge_periods` set and none of them left before the
+  departure, the mandatory charge then bought that energy back outside the
+  charge periods, for example in the peak hours just before a weekend
+  departure: a round trip that pays two conversions at the higher price.
+  On a step with no charge-period step after it and before the next
+  departure, the discharge bound is now `max(F, T)`: energy above `T` may
+  still be discharged, energy below it may not. With a charge-period step
+  ahead, `d_max` is unchanged. The flag is computed once per run from the
+  schedule's departure countdown and the period mask
+  (`_vehicle_charge_ahead` in `breos/_dispatch.py`), so the rule stays
+  causal and the same in both backends. Without `charge_periods`, every
+  plugged step may charge from the grid, so every step counts and V7's
+  greedy V2H is unchanged. A departure beyond the end of the run's arrays
+  counts as having a charge period ahead. PV surplus does not count as a
+  way to recharge. A discharge too small for the charger to deliver any AC
+  is no longer taken, since it only adds losses. No key is added.
+
 Current edit locations for the first three PRs, at `4a3cc04`:
 
 | PR | Existing boundary to extend | File:line range |

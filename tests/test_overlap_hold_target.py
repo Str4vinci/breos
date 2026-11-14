@@ -112,6 +112,7 @@ def _step(
         0.95,
         1e9,
         *NO_CONVERSION.kernel_arguments(1.0),
+        inverter_cap,
     )
 
 
@@ -286,11 +287,13 @@ def test_overlap_controller_carries_exact_instructions_across_the_year_seam(freq
 # Captured before adding overlap support: every numeric ledger column, in
 # order, at both resolutions. BLAST aging's float bits differ between
 # environments, so its default path is pinned by the App goldens instead.
+# Re-pinned once when calendar resistance growth started running from each
+# period's start (#436); the scenario enables resistance fade.
 @pytest.mark.parametrize(
     ("name", "freq", "digest"),
     [
-        ("fixed_target", "h", "40da4a37357944f0f5d4bcb304ab8680ee59f3773d0efa9a149278174e9b412a"),
-        ("fixed_target", "15min", "5ebb36809c4cd411e9493c080c3aa607146f9f4e68a30f928519cf01a2725261"),
+        ("fixed_target", "h", "9f6dd243ba81c330bce9b452b8321026199783941480319ca7620c219600ab74"),
+        ("fixed_target", "15min", "e68060e3c6099bf5fcabaddbf7c0d66a791d498263c9c614ef60a8c8d21ffce5"),
     ],
 )
 def test_default_reject_preserves_the_existing_ledger_bits(name, freq, digest):

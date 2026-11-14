@@ -197,3 +197,30 @@ def test_binary_current_lookup_keeps_both_sides_of_a_repeated_voltage():
     current = np.tile([-1.0, 0.0, 3.0, 4.0, 5.0, 6.0], (6, 1))
     query = np.array([9.0, np.nextafter(9.0, 0.0), 5.0, 0.0, 11.0, -2.0])
     np.testing.assert_allclose(_table_current(voltage, current, query), [0.0, 3.0, 4.0, 5.0, 0.0, 6.0], atol=1e-15)
+
+
+def _two_alike_half_sections(breakdown: float = -3.0) -> ShadedStringCurve:
+    # Two substrings each have one cell at half beam in one half and the other
+    # half clear: merging solves them as one section of weight 2 and leaves the
+    # second section with no step of its own.
+    from tests.test_module_shading import _table
+
+    shaded_half = {"beam_shaded_fraction": _table(0.5 / 24), "limiting_shaded_fraction": _table(0.5)}
+    alike = {"halves": [LIT, shaded_half]}
+    parts = replace(_parts(), pv_params=replace(_parts().pv_params, breakdown_voltage_v=breakdown))
+    return ShadedStringCurve(_shading([{"substrings": [alike, alike, LIT]}]), parts, np.ones(3), 1)
+
+
+def test_signed_current_above_open_circuit_with_merged_half_sections():
+    curve = _two_alike_half_sections()
+    for offset in (0.01, 1.0, 5.0):
+        current = curve.current(curve.v_oc[:, None] + offset, np.ones(3, dtype=bool), signed=True)
+        assert np.isfinite(current).all() and (current < 0.0).all()
+
+
+def test_a_parallel_partner_drives_merged_half_sections_in_reverse():
+    from breos.electrical import _curves_power, _CurveSource
+
+    clear = ShadedStringCurve(_shading([LIT]), _parts(), np.ones(3), 1)
+    power = _curves_power([_CurveSource(_two_alike_half_sections()), _CurveSource(clear)], 0, np.inf, np.inf, np.inf)
+    assert np.isfinite(np.asarray(power, dtype=float)).all()

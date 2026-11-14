@@ -1528,6 +1528,197 @@ class _CurveSource:
 _CURVE_GRID_POINTS = 256
 # Local maxima of the summed curve refined by golden section.
 _CURVE_PEAKS = 6
+# Points of the voltage grid, and samples of each tabled string's exact
+# curve, at each level of the refinement on the exact curves; the levels it
+# takes at most, and the bracket width, relative to its voltage, that ends it.
+_EXACT_POINTS = 17
+_EXACT_SAMPLES = 33
+_EXACT_LEVELS = 20
+_EXACT_WIDTH = 1e-10
+
+
+def _sample_bounds(
+    sample_i: np.ndarray, sample_v: np.ndarray, low_v: np.ndarray, high_v: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """The sampled currents that bound the curve's at ``high_v`` from below and at ``low_v`` from above.
+
+    Each row holds one curve's samples, the voltage falling along it.
+    """
+    row = np.arange(len(sample_i))
+    below = (sample_v > high_v[:, None]).sum(axis=1) - 1
+    above = (sample_v > low_v[:, None]).sum(axis=1)
+    return sample_i[row, np.maximum(below, 0)], sample_i[row, np.minimum(above, sample_i.shape[1] - 1)]
+
+
+def _exact_peaks(
+    sources: list[Any],
+    steps: np.ndarray,
+    slot: np.ndarray,
+    a: np.ndarray,
+    b: np.ndarray,
+    current_limit: float,
+    string_limit: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The best power within the limits in each voltage bracket ``[a, b]`` at ``steps``, and its voltage.
+
+    The tabled strings' forward currents are found on their exact curves.
+    Each level samples a tabled string's curve at currents evenly spaced
+    between bounds set by the previous samples, reads the currents at
+    voltages evenly spaced over the bracket off the chords between the
+    samples, and narrows the bracket to the four intervals around the best
+    voltage the limits allow. Since the currents fall with voltage, the
+    samples either side bound the power: a bracket whose bound is below the
+    power another bracket at its step surely reaches is dropped. On the
+    first level, whose chords are coarse, the intervals outside the narrowed
+    bracket whose bound still reaches that power are searched as brackets
+    of their own. Above a string's open-circuit voltage its reverse current
+    is read as before. Brackets sharing a ``slot`` have distinct steps,
+    rising. Returns -inf where no voltage is allowed.
+    """
+    count = len(sources[0].mpp)
+    elements = steps.size
+    points, drawn = _EXACT_POINTS, _EXACT_SAMPLES
+    unit, spread = np.linspace(0.0, 1.0, points), np.linspace(0.0, 1.0, drawn)
+    tables: list[dict[str, np.ndarray] | None] = []
+    for source in sources:
+        if not isinstance(source, _CurveSource):
+            tables.append(None)
+            continue
+        curve = source.curve
+        tabled = np.isin(steps, curve.mismatched)
+        positions = np.zeros(elements, dtype=int)
+        positions[tabled] = np.searchsorted(curve.mismatched, steps[tabled])
+        v_oc = curve.v_oc[steps]
+        low, high = np.zeros(elements), np.zeros(elements)
+        low[tabled], high[tabled] = curve.table_bounds(a[tabled], np.minimum(b, v_oc)[tabled], positions[tabled])
+        tables.append({"tabled": tabled, "positions": positions, "v_oc": v_oc, "low": low, "high": high})
+    power, voltage = np.full(elements, -np.inf), a.copy()
+    floor = np.full(elements, -np.inf)
+    live = np.arange(elements)
+    origin = np.arange(elements)
+    for level in range(_EXACT_LEVELS):
+        if not live.size:
+            break
+        grid = a[live, None] + (b - a)[live, None] * unit
+        total, largest = np.zeros_like(grid), np.full_like(grid, -np.inf)
+        most, least, most_largest = np.zeros_like(grid), np.zeros_like(grid), np.full_like(grid, -np.inf)
+        samples: list[tuple[np.ndarray, np.ndarray, np.ndarray] | None] = []
+        for source, table in zip(sources, tables, strict=True):
+            here = np.zeros_like(grid)
+            high, low = np.zeros_like(grid), np.zeros_like(grid)
+            direct = np.ones(live.size, dtype=bool)
+            sampled = None
+            if table is not None:
+                forward = table["tabled"][live] & (a[live] < table["v_oc"][live])
+                # A tabled string is read directly only above its open circuit.
+                direct = ~table["tabled"][live] | np.any(grid > table["v_oc"][live, None], axis=1)
+                if forward.any():
+                    which = live[forward]
+                    i_low, i_high = table["low"][which], table["high"][which]
+                    sample_i = i_low[:, None] + (i_high - i_low)[:, None] * spread
+                    sample_v = source.curve.terminal_voltage(sample_i, table["positions"][which])
+                    sampled = (which, sample_i, sample_v)
+                    # The voltage falls along the samples: each grid voltage
+                    # lies between the samples just above and just below it.
+                    above = (sample_v[:, None, :] > grid[forward][:, :, None]).sum(axis=2)
+                    upper = np.clip(above, 1, drawn - 1)
+                    row = np.arange(which.size)[:, None]
+                    i0, i1 = sample_i[row, upper - 1], sample_i[row, upper]
+                    v0, v1 = sample_v[row, upper - 1], sample_v[row, upper]
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        weight = np.clip(np.where(v0 != v1, (v0 - grid[forward]) / (v0 - v1), 0.0), 0.0, 1.0)
+                    scale = source.curve.scale[steps[which]][:, None]
+                    chord = i0 + weight * (i1 - i0)
+                    here[forward] = scale * chord
+                    low[forward] = scale * np.where(above > 0, i0, chord)
+                    high[forward] = scale * np.where(above > 0, i1, chord)
+            samples.append(sampled)
+            for number in np.unique(slot[live[direct]]):
+                chosen = direct & (slot[live] == number)
+                rows = np.zeros(count, dtype=bool)
+                rows[steps[live[chosen]]] = True
+                read = source.current(grid[chosen], rows, signed=True)
+                if table is not None:
+                    keep = table["tabled"][live[chosen], None] & (grid[chosen] <= table["v_oc"][live[chosen], None])
+                    read = np.where(keep, here[chosen], read)
+                    high[chosen] = np.where(keep, high[chosen], read)
+                    low[chosen] = np.where(keep, low[chosen], read)
+                else:
+                    high[chosen] = low[chosen] = read
+                here[chosen] = read
+            total += source.count * here
+            most += source.count * high
+            least += source.count * low
+            largest = np.maximum(largest, here)
+            most_largest = np.maximum(most_largest, high)
+        allowed = (total <= current_limit + _TOLERANCE) & (largest <= string_limit + _TOLERANCE)
+        values = np.where(allowed, grid * np.clip(total, 0.0, None), -np.inf)
+        best = values.argmax(axis=1)
+        row = np.arange(live.size)
+        power[live], voltage[live] = values[row, best], grid[row, best]
+        # Bounds on the power from the samples either side of each voltage.
+        certain = (most <= current_limit + _TOLERANCE) & (most_largest <= string_limit + _TOLERANCE)
+        floor[live] = np.max(np.where(certain, grid * np.clip(least, 0.0, None), -np.inf), axis=1)
+        ceiling = np.max(grid[:, 1:] * np.clip(most[:, :-1], 0.0, None), axis=1, initial=-np.inf)
+        ceiling = np.maximum(ceiling, grid[:, 0] * np.clip(most[:, 0], 0.0, None))
+        reached = np.full(count, -np.inf)
+        np.maximum.at(reached, steps, floor)
+        keep = np.isfinite(power[live]) & (ceiling >= reached[steps[live]] * (1.0 - 1e-12))
+        # Read off the first, coarse chords, the best voltage can be far from
+        # the curve's own: there, the intervals outside the narrowed bracket
+        # whose bound still reaches that power become brackets too.
+        parents, child_a, child_b, child_slot = [], [], [], []
+        if level == 0:
+            cells = grid[:, 1:] * np.clip(most[:, :-1], 0.0, None) >= reached[steps[live]][:, None] * (1 - 1e-12)
+            cell = np.arange(points - 1)[None, :]
+            for side, outside in enumerate((cell < best[:, None] - 2, cell > best[:, None] + 1)):
+                spot = cells & outside & keep[:, None]
+                has = np.flatnonzero(spot.any(axis=1))
+                if has.size:
+                    first = spot[has].argmax(axis=1)
+                    last = points - 2 - spot[has, ::-1].argmax(axis=1)
+                    parents.append(live[has])
+                    child_a.append(grid[has, first])
+                    child_b.append(grid[has, last + 1])
+                    child_slot.append(slot.max() + 1 + 2 * slot[live[has]] + side)
+        a[live] = grid[row, np.maximum(best - 2, 0)]
+        b[live] = grid[row, np.minimum(best + 2, points - 1)]
+        born = np.concatenate(parents) if parents else np.zeros(0, dtype=int)
+        new_a = np.concatenate(child_a) if parents else np.zeros(0)
+        new_b = np.concatenate(child_b) if parents else np.zeros(0)
+        for table, sampled in zip(tables, samples, strict=True):
+            if table is None:
+                continue
+            low, high = table["low"][born], table["high"][born]
+            if sampled is not None:
+                which, sample_i, sample_v = sampled
+                table["low"][which], table["high"][which] = _sample_bounds(
+                    sample_i, sample_v, a[which], np.minimum(b[which], table["v_oc"][which])
+                )
+                inherit = np.isin(born, which)
+                if inherit.any():
+                    owner = np.searchsorted(which, born[inherit])
+                    low[inherit], high[inherit] = _sample_bounds(
+                        sample_i[owner],
+                        sample_v[owner],
+                        new_a[inherit],
+                        np.minimum(new_b[inherit], table["v_oc"][born[inherit]]),
+                    )
+            for key in ("tabled", "positions", "v_oc"):
+                table[key] = np.concatenate((table[key], table[key][born]))
+            table["low"], table["high"] = np.concatenate((table["low"], low)), np.concatenate((table["high"], high))
+        keep &= b[live] - a[live] > _EXACT_WIDTH * np.maximum(np.abs(b[live]), 1.0)
+        live = np.concatenate((live[keep], steps.size + np.arange(born.size)))
+        if born.size:
+            steps, slot = np.concatenate((steps, steps[born])), np.concatenate((slot, *child_slot))
+            a, b = np.concatenate((a, new_a)), np.concatenate((b, new_b))
+            power, voltage = np.concatenate((power, np.full(born.size, -np.inf))), np.concatenate((voltage, new_a))
+            floor = np.concatenate((floor, np.full(born.size, -np.inf)))
+            origin = np.concatenate((origin, origin[born]))
+    # Each bracket's best, over the brackets it gave rise to.
+    order = np.lexsort((-power, origin))
+    first = order[np.r_[True, origin[order][1:] != origin[order][:-1]]]
+    return power[first], voltage[first]
 
 
 def _curves_power(
@@ -1539,9 +1730,12 @@ def _curves_power(
     maximum of their summed curve within the voltage range and the current
     limits. A lone shaded string whose own maximum power point is inside
     every limit delivers that point exactly; otherwise it is solved on its
-    exact curve. Strings in parallel are solved on their tabled curves, each
-    of the best local maxima refined. The third array is the operating
-    voltage, 0 where the input delivers nothing.
+    exact curve. Strings in parallel are searched on their tabled curves;
+    where a string's curve is tabled, the brackets of the best local maxima
+    are then searched on the exact curves, whose currents between the
+    table's points lie above its chords. A maximum at an artificial bracket
+    edge retries the step over its full voltage range. The third array is
+    the operating voltage, 0 where the input delivers nothing.
     """
     unconstrained = np.asarray(sum(source.mpp for source in sources), dtype=float)
     result = unconstrained.copy()
@@ -1575,8 +1769,8 @@ def _curves_power(
         rows = mask(subset)
         return [source.current(voltage, rows, signed=True) for source in sources]
 
-    def input_current(voltage: np.ndarray) -> np.ndarray:
-        return sum(source.count * i for source, i in zip(sources, currents(voltage), strict=True))
+    def input_current(voltage: np.ndarray, subset: np.ndarray = everywhere) -> np.ndarray:
+        return sum(source.count * i for source, i in zip(sources, currents(voltage, subset), strict=True))
 
     def allowed(voltage: np.ndarray, subset: np.ndarray = everywhere) -> np.ndarray:
         each = currents(voltage, subset)
@@ -1604,8 +1798,8 @@ def _curves_power(
     feasible = window & (lower <= upper) & allowed(np.minimum(lower, upper))
     lower = np.where(feasible, lower, upper)
 
-    def power(voltage: np.ndarray) -> np.ndarray:
-        return voltage * np.clip(input_current(voltage), 0.0, None)
+    def power(voltage: np.ndarray, subset: np.ndarray = everywhere) -> np.ndarray:
+        return voltage * np.clip(input_current(voltage, subset), 0.0, None)
 
     span = (upper - lower).clip(min=0.0)
     grid = lower[:, None] + span[:, None] * np.linspace(0.0, 1.0, _CURVE_GRID_POINTS)
@@ -1618,20 +1812,86 @@ def _curves_power(
     peak[:, 0], peak[:, -1] = values[:, 0] >= values[:, 1], values[:, -1] >= values[:, -2]
     ranked = np.argsort(np.where(peak, values, -np.inf), axis=1)[:, ::-1][:, :_CURVE_PEAKS]
     ratio = (math.sqrt(5.0) - 1.0) / 2.0
+    # The steps where a string's curve is tabled are refined on the exact curves.
+    tabled = np.zeros(index.size, dtype=bool)
+    for source in sources:
+        if isinstance(source, _CurveSource):
+            tabled |= np.isin(index, source.curve.mismatched)
+    plain, keep = ~tabled, np.flatnonzero(~tabled)
     for j in range(ranked.shape[1]):
-        best = ranked[:, j]
-        if not np.isfinite(np.where(peak[rows, best], values[rows, best], -np.inf)).any():
+        best = ranked[keep, j]
+        if not np.isfinite(np.where(peak[keep, best], values[keep, best], -np.inf)).any():
             continue
-        a = grid[rows, np.maximum(best - 1, 0)]
-        b = grid[rows, np.minimum(best + 1, _CURVE_GRID_POINTS - 1)]
+        a = grid[keep, np.maximum(best - 1, 0)]
+        b = grid[keep, np.minimum(best + 1, _CURVE_GRID_POINTS - 1)]
         for _ in range(_GOLDEN_STEPS):
             c, d = b - ratio * (b - a), a + ratio * (b - a)
-            left = power(c) >= power(d)
+            left = power(c, plain) >= power(d, plain)
             a, b = np.where(left, a, c), np.where(left, d, b)
         refined = 0.5 * (a + b)
-        refined_power = power(refined)
-        best_v = np.where(refined_power > best_power, refined, best_v)
-        best_power = np.maximum(best_power, refined_power)
+        refined_power = power(refined, plain)
+        best_v[keep] = np.where(refined_power > best_power[keep], refined, best_v[keep])
+        best_power[keep] = np.maximum(best_power[keep], refined_power)
+    exact = np.flatnonzero(tabled & feasible)
+    if exact.size:
+        at = exact[:, None]
+        rows_exact = np.zeros(len(unconstrained), dtype=bool)
+        rows_exact[index[exact]] = True
+        slots = ranked[exact]
+        real = peak[at, slots]
+        start = grid[at, slots]
+        a = np.where(real, grid[at, np.maximum(slots - 1, 0)], start)
+        b = np.where(real, grid[at, np.minimum(slots + 1, _CURVE_GRID_POINTS - 1)], start)
+        for source in sources:
+            if isinstance(source, _CurveSource):
+                # These are initial brackets, not bounds on the exact peak:
+                # close table knots can leave a knee outside them.
+                below, above = source.curve.table_bracket(start, rows_exact)
+                a, b = np.minimum(a, below), np.maximum(b, above)
+        if math.isfinite(current_limit) or math.isfinite(string_limit):
+            # A peak at the tabled lower bound: the exact currents can meet
+            # their limits below it.
+            a = np.where(slots == 0, float(v_min), a)
+        a = np.where(real, np.clip(a, np.minimum(float(v_min), upper[at]), upper[at]), start)
+        b = np.where(real, np.clip(b, a, upper[at]), start)
+        column, line = np.nonzero(real.T)
+        bracket_low, bracket_high = a.T[real.T], b.T[real.T]
+        found, found_v = _exact_peaks(
+            sources, index[exact][line], column, bracket_low.copy(), bracket_high.copy(), current_limit, string_limit
+        )
+        table = np.full(real.shape, -np.inf)
+        table_v = np.zeros(real.shape)
+        table[line, column], table_v[line, column] = found, found_v
+        pick = table.argmax(axis=1)
+        chosen = table[np.arange(exact.size), pick]
+        chosen_v = table_v[np.arange(exact.size), pick]
+        # The table's chord error can move the exact peak outside an initial
+        # bracket. If the best refined candidate is at such an edge, it has
+        # not been bracketed: retry the whole input window once for that step.
+        # Choose after refinement, since a lower-ranked candidate may win.
+        # Physical voltage limits are valid optima and need no retry.
+        tolerance = _EXACT_WIDTH * np.maximum(np.abs(found_v), 1.0)
+        edge = ((found_v <= bracket_low + tolerance) & (bracket_low > float(v_min))) | (
+            (found_v >= bracket_high - tolerance) & (bracket_high < upper[exact[line]])
+        )
+        retry = np.unique(line[np.isfinite(found) & edge & (column == pick[line])])
+        if retry.size:
+            wider, wider_v = _exact_peaks(
+                sources,
+                index[exact[retry]],
+                np.zeros(retry.size, dtype=int),
+                np.full(retry.size, float(v_min)),
+                upper[exact[retry]].copy(),
+                current_limit,
+                string_limit,
+            )
+            # Keep the original bits when only rounding at the search's
+            # stopping precision differs between the two brackets.
+            better = wider > chosen[retry] + _EXACT_WIDTH * np.maximum(np.abs(chosen[retry]), 1.0)
+            chosen[retry] = np.where(better, wider, chosen[retry])
+            chosen_v[retry] = np.where(better, wider_v, chosen_v[retry])
+        best_power[exact] = np.where(np.isfinite(chosen), chosen, 0.0)
+        best_v[exact] = chosen_v
     result[index] = np.minimum(np.where(feasible, best_power, 0.0), unconstrained[index])
     operating_v[index] = np.where(result[index] > 0, best_v, 0.0)
     return unconstrained, result, operating_v

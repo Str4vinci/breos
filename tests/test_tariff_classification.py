@@ -10,7 +10,6 @@ A classification is kept, so App.revalue at new prices does not classify again.
 
 from datetime import date
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -24,7 +23,6 @@ from breos.tariffs import (
     _as_definition,
     _classify,
     _day_type,
-    _holiday_dates,
     available_tariff_schedules,
     get_schedule_definition,
     schedule_resolution_minutes,
@@ -38,10 +36,9 @@ def _reference_classify(index, schedule, *, timezone):
     definition = _as_definition(schedule)
     local_index = index.tz_convert(timezone)
     holidays = definition.holidays
-    years, counts = np.unique(local_index.year, return_counts=True)
-    step_hours = (local_index[1] - local_index[0]).total_seconds() / 3600 if len(local_index) > 1 else 24.0
-    covered = {int(year) for year, count in zip(years, counts, strict=True) if count * step_hours >= 24}
-    holiday_dates = _holiday_dates(definition.schedule.identifier, holidays, covered)
+    # Every known holiday applies; which years need a calendar is the
+    # classifier's check, not part of the labels.
+    holiday_dates = holidays.dates if holidays is not None else frozenset()
     holiday_day_type = holidays.day_type if holidays is not None else "sunday"
     labels: list[str] = []
     seasons: list[str] = []
@@ -290,3 +287,20 @@ def test_revalue_at_new_prices_does_not_classify_again(classified):
     assert revalued["provenance"]["revaluation"]["method"] == "repriced"
     assert revalued["provenance"]["tariff"]["import_prices"] == {"peak": 0.33, "off_peak": 0.09}
     assert classified == [schedule]
+
+
+@pytest.mark.parametrize(
+    ("timezone", "january", "july"),
+    [
+        # Irish time has a negative DST offset in winter in the time-zone
+        # database; summer is still the larger offset.
+        ("Europe/Dublin", "standard", "dst"),
+        ("Europe/Berlin", "standard", "dst"),
+        ("Australia/Sydney", "dst", "standard"),
+        ("Asia/Tokyo", "standard", "standard"),
+    ],
+)
+def test_the_summer_season_is_the_larger_utc_offset(timezone, january, july):
+    definition = _dst_schedule(timezone, (), 60)
+    assert definition.season_of(pd.Timestamp("2026-01-15 12:00", tz=timezone)) == january
+    assert definition.season_of(pd.Timestamp("2026-07-15 12:00", tz=timezone)) == july

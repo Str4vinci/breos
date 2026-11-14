@@ -80,3 +80,24 @@ def test_ac_production_forwards_loss_overrides(synthetic_weather, pv_params):
 
     np.testing.assert_array_equal(ac.to_numpy(), dc_to_ac(dc, 4 * pv_params.Mpp, 1.25, 0.96).to_numpy())
     assert ac.sum() > default_ac.sum()
+
+
+@pytest.mark.parametrize(
+    ("top_level", "array_choice", "alone"),
+    [
+        ({"albedo": 0.2}, {"surface_type": "snow"}, {"surface_type": "snow"}),
+        ({"surface_type": "grass"}, {"albedo": 0.65}, {"albedo": 0.65}),
+    ],
+)
+@pytest.mark.parametrize("tracking", [{}, {"tracking": "single_axis"}])
+def test_an_arrays_ground_choice_replaces_the_inherited_one(
+    synthetic_weather, top_level, array_choice, alone, tracking
+):
+    # albedo and surface_type are alternatives: an array that sets one must not
+    # also inherit the other from the top level, which raised at simulation.
+    arrays = [{"modules": 2, "tilt": 30, "azimuth": 180, **tracking, **array_choice}]
+    inherited = calculate_multi_array_production(synthetic_weather, _LOCATION, arrays, **top_level)
+    own = calculate_multi_array_production(
+        synthetic_weather, _LOCATION, [{"modules": 2, "tilt": 30, "azimuth": 180, **tracking}], **alone
+    )
+    pd.testing.assert_series_equal(inherited, own)
