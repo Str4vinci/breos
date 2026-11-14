@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import functools
 import hashlib
 import itertools
 import json
@@ -15,6 +16,7 @@ import warnings
 from pathlib import Path
 from typing import Any, Sequence
 
+from breos._run_summary import format_run_summary
 from breos.app import App
 from breos.app_config import (
     ALLOWED_CONFIG_KEYS,
@@ -110,7 +112,15 @@ def _run(args: argparse.Namespace) -> int:
     app = App(config)
     app.simulate()
     # An undefined metric (an LCOE with no production) is reported as null.
-    return _write_payload(nonfinite_to_none(app.result()), args, "the run result")
+    result = nonfinite_to_none(app.result())
+    # On a terminal, show the summary; pipes, redirects and --json get the JSON.
+    show_summary = not args.json and sys.stdout.isatty()
+    if args.output or not show_summary:
+        _write_payload(result, args, "the run result")
+    if show_summary:
+        name = args.config.name if args.config else None
+        print(format_run_summary(result, config_name=name, output=args.output))
+    return 0
 
 
 def _write_payload(data: dict[str, Any], args: argparse.Namespace, what: str) -> int:
@@ -770,6 +780,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output", type=Path, help="Write JSON results to this file instead of stdout.")
     run.add_argument("--indent", type=int, default=2, help="JSON indentation. Use 0 for compact output.")
     run.add_argument("--dry-run", action="store_true", help="Validate and print resolved config without simulation.")
+    run.add_argument(
+        "--json", action="store_true", help="Print the JSON results on a terminal too, instead of the summary."
+    )
     run.set_defaults(func=_run)
 
     list_parser = subparsers.add_parser("list", help="List packaged option keys.")
@@ -855,9 +868,37 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _format_breos_warning(
+    default: Any, message: Warning | str, category: type[Warning], filename: str, lineno: int, line: str | None = None
+) -> str:
+    """Print BREOS's own warnings as one plain line, like its errors.
+
+    A warning raised inside the breos package is meant for the user, so the
+    source path and code line add nothing. Other libraries keep the default
+    format, which names where the warning came from.
+    """
+    if Path(filename).resolve().is_relative_to(_PACKAGE_DIR):
+        return f"breos: warning: {message}\n"
+    return str(default(message, category, filename, lineno, line))
+
+
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Only the format changes: filters and recorders such as pytest.warns still
+    # apply. catch_warnings does not restore formatwarning, so restore it here.
+    default_format = warnings.formatwarning
+    warnings.formatwarning = functools.partial(_format_breos_warning, default_format)
+    try:
+        return _dispatch(args)
+    finally:
+        warnings.formatwarning = default_format
+
+
+def _dispatch(args: argparse.Namespace) -> int:
     try:
         return args.func(args)
     # ImportError covers a missing optional extra, such as numba for
