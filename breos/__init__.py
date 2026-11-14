@@ -40,6 +40,7 @@ from breos.battery import (
     BatteryConfig,
     simulate_energy_balance,
 )
+from breos.community import Community
 
 # Battery degradation model discovery
 from breos.degradation import (
@@ -137,6 +138,7 @@ from breos.weather import (
 __all__ = [
     # Public facade
     "App",
+    "Community",
     # Version
     "__version__",
     # Configuration and result objects

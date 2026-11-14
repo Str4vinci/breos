@@ -110,6 +110,17 @@ def test_complete_years_on_any_accepted_clock_pass(weather, timezone):
     require_full_year_weather(weather, 2025, "h", timezone)
 
 
+@pytest.mark.parametrize("year", [1989, 1990])
+def test_year_coverage_with_missing_midnight_at_either_boundary(year):
+    # Lima skipped 1990-01-01 00:00: the year begins at 01:00 (-04:00), 05:00 UTC.
+    index = pd.date_range(f"{year}-01-01 05:00", f"{year + 1}-01-01 05:00", freq="h", tz="UTC", inclusive="left")
+    weather = pd.DataFrame({"ghi": 0.0}, index=index.tz_convert("America/Lima"))
+
+    require_full_year_weather(weather, year, "h", "America/Lima")
+    with pytest.raises(ValueError, match="leading 1 days"):
+        require_full_year_weather(weather.iloc[24:], year, "h", "America/Lima")
+
+
 def test_15min_run_on_resampled_hourly_weather_passes(monkeypatch, synthetic_weather):
     """The resampler fills the last hour's quarter-hours from the last hourly row."""
     _patch_fetch(monkeypatch, synthetic_weather)

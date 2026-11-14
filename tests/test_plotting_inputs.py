@@ -38,6 +38,16 @@ def _sweep(values, n_modules=(4, 8), battery_kwh=(0.0, 5.0), **extra):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("day", "expected"),
+    [("2026-03-29", "2026-03-29T01:00Z"), ("2026-10-25", "2026-10-25T00:00Z")],
+)
+def test_plot_date_filter_handles_missing_and_repeated_midnight(day, expected):
+    index = pd.date_range("2026-01-01", periods=1, tz="Atlantic/Azores")
+
+    assert plotting._on_index_clock(day, index) == pd.Timestamp(expected)
+
+
 def test_sweep_heatmap_puts_the_first_swept_key_on_x(tmp_path, drawn):
     plotting.plot_sweep_heatmap(_sweep([40.0, 60.0, 45.0, 70.0]), "grid_independence_pct", str(tmp_path))
 

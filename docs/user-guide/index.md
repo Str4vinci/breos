@@ -14,6 +14,14 @@ tasks.
 Understand every `App` config area, its defaults, and its validation rules.
 :::
 
+:::{grid-item-card} Collective self-consumption
+:link: ../getting-started/community
+:link-type: doc
+
+Share PV between separately metered households, settle quarter-hourly energy
+and compare participant accounts with the same households alone.
+:::
+
 :::{grid-item-card} Optimization
 :link: ../getting-started/optimization
 :link-type: doc
@@ -57,6 +65,7 @@ bundled locations, modules, cost presets and load profiles are on the
 :hidden:
 
 /getting-started/configuration
+/getting-started/community
 /getting-started/optimization
 /getting-started/monte-carlo
 /getting-started/interpreting-results

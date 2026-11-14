@@ -275,6 +275,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   cache of a 20-year Monte Carlo study about 29 s instead of 6 s, mostly for
   the one-minute solar positions. The default stays `"auto"`, so results
   are unchanged and the result format stays `"1"`.
+- Collective self-consumption (#421): `breos.Community` shares PV between
+  separately metered households at 15-minute steps, with fixed or
+  proportional allocation, home batteries behind each meter, and PV-only
+  assets. Participant and asset accounts report ownership, supplier bills,
+  shared payments, surplus income, NPVs against the no-system baseline and
+  benefit against each household alone. A settlement ledger, provenance,
+  Porto example and community guide explain the balances and assumptions.
 
 ### Changed
 
@@ -539,6 +546,13 @@ removed in 0.9.0.
   keeps the datasheet Isc (previously 0.03 % typical and 2.4 % worst), and
   5.7 times faster. **Fitted parameters change for every module**, by about
   0.03 % in power for most of them.
+- Tariffs no longer crash in timezones whose DST change skips or repeats
+  local midnight, such as `Atlantic/Azores` and `America/Santiago`. Civil
+  day boundaries follow each step's local date, without constructing a
+  timezone-aware midnight. This also fixes App runs with a flat
+  `[tariff]` or `[reference_tariff]`. Weather year boundaries, the PVGIS
+  New Year offset lookup and battery plot date filters now handle missing
+  or repeated midnights too. Results in unaffected timezones are unchanged.
 
 ### Documentation
 

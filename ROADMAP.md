@@ -76,7 +76,9 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete list.
   - Vehicle-to-home (V2H), on top of the AC-coupled model (#420), implemented
     for App and paired Monte Carlo. ADR 0005 was accepted on 2026-10-24.
   - Collective self-consumption (ACC): several households sharing generation,
-    with a community entry point beside App (#421). An ADR comes first.
+    implemented for 0.8.0 as `breos.Community` beside App (#421): fixed and
+    proportional PV sharing, settlement and participant/asset accounts.
+    ADR 0006 accepted 2026-10-24.
   - An optimizer cache of scored designs that returns every evaluated
     candidate (#416), and refetched PVWatts references so the PVWatts band
     test runs again (#422).
@@ -200,7 +202,7 @@ for and against, not designs.
 - **Profile-complementarity metric.** Correlation-style diagnostics over two
   or more normalized load profiles, to say whether building-to-building
   transfer could pay before any transfer is modeled. Needs no simulation and
-  no dispatch change. Collective self-consumption (#421) is now planned for
+  no dispatch change. Collective self-consumption (#421) is implemented for
   0.8, and this metric would help say for which buildings it is worth running.
 
 - **Export-limited and islanded operation.** Every dispatch path assumes an
