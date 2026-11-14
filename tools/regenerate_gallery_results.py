@@ -357,6 +357,9 @@ class Context:
     def inside(self) -> Iterator[None]:
         with contextlib.chdir(self.work), warnings.catch_warnings():
             warnings.simplefilter("ignore")
+            # Every staged weather file has a timing sidecar; show the solar_position = "auto"
+            # fallback warning so a file without one is noticed.
+            warnings.filterwarnings("default", message="solar_position = 'auto': the weather does not state")
             yield
 
     def simulate(self, config: Mapping[str, Any]) -> Any:

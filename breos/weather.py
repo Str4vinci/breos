@@ -1112,8 +1112,9 @@ def _clear_sky_ratio_interpolation(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Interpolate one component's clear-sky ratio between its source points.
 
-    Returns the reconstruction, before night is zeroed or overshoot clipped,
-    and the mask of target points the dawn/dusk linear fallback supplied.
+    Returns the reconstruction, before night is zeroed, negative overshoot
+    clipped or DNI capped at the extraterrestrial normal irradiance, and the
+    mask of target points the dawn/dusk linear fallback supplied.
     """
     k_hourly = np.clip(y_original / (source_clear_sky + epsilon), 0, None)
     reconstructed = _interpolate(x_original, k_hourly, x_target, method) * (target_clear_sky + epsilon)
@@ -1141,12 +1142,14 @@ def _quadrature_irradiance(
     cs_hourly: pd.DataFrame,
     representative_times: pd.DatetimeIndex,
     step_zenith: np.ndarray,
+    step_dni_extra: np.ndarray,
     *,
     interval_mean: bool,
     method: str,
     epsilon: float,
     fallback_counts: dict[str, int],
     zero_support_counts: dict[str, int],
+    capped_counts: dict[str, int],
 ) -> tuple[dict[Hashable, np.ndarray], dict[str, Any]]:
     """Reconstruct DNI and DHI on a one-minute grid and derive GHI from them.
 
@@ -1159,8 +1162,10 @@ def _quadrature_irradiance(
     that component's clear-sky irradiance, which conserves the hour's DNI and
     DHI means; a positive hour without clear-sky support is spread evenly and
     counted. Instant samples interpolate the clear-sky ratio as ``"clear_sky"``
-    does, at each one-minute sample, and conserve nothing. Updates the
-    fallback and zero-support counts in place.
+    does, at each one-minute sample, and conserve nothing. DNI samples are
+    capped at their step's extraterrestrial normal irradiance before GHI is
+    derived, so the cap removes energy from the hours it touches. Updates the
+    fallback, zero-support and capped counts in place.
 
     Returns:
         Tuple of (quarter-hour values by column, ``irradiance_quadrature``
@@ -1217,9 +1222,17 @@ def _quadrature_irradiance(
             values[sample_clear_sky <= 0.0] = 0.0
             sampled[col] = values
         sampled[col] = np.clip(sampled[col], 0.0, None)
+        if component == "dni":
+            sample_dni_extra = np.repeat(step_dni_extra, samples)
+            capped = sampled[col] > sample_dni_extra
+            capped_counts[component] += int(np.sum(capped.reshape(n_steps, samples).any(axis=1)))
+            sampled[col] = np.minimum(sampled[col], sample_dni_extra)
 
     columns = {col: step_means(values) for col, values in sampled.items()}
-    dni = sampled[find_irradiance_column(sampled, "dni")]
+    dni_column = find_irradiance_column(sampled, "dni")
+    # The mean of capped samples can round one unit in the last place above the cap.
+    columns[dni_column] = np.minimum(columns[dni_column], step_dni_extra)
+    dni = sampled[dni_column]
     dhi = sampled[find_irradiance_column(sampled, "dhi")]
     ghi = step_means(dni * cos_zenith + dhi)
     ghi_columns = [col for col, component in irrad_col_map.items() if component == "ghi"]
@@ -1293,7 +1306,11 @@ def resample_to_15min(
             "quadrature" derives GHI from DNI and DHI in one-minute samples
             and averages the samples into quarter-hours; it conserves
             interval-mean DNI and DHI and needs coordinates and three finite
-            irradiance components.
+            irradiance components. Under every policy the 15-minute DNI is
+            capped at the extraterrestrial normal irradiance of its step;
+            capped hours lose the excess, so their DNI mean is not conserved.
+            The metadata key ``irradiance_resampling_capped_counts`` records
+            the number of capped quarter-hours.
         altitude: Site elevation in metres for the clear-sky model (optional;
             pvlib looks it up from the coordinates when omitted)
 
@@ -1356,6 +1373,9 @@ def resample_to_15min(
     epsilon = 5.0  # Regularise ratios; low clear-sky support uses direct linear interpolation.
     fallback_counts = dict.fromkeys(irrad_col_map.values(), 0)
     zero_support_counts = dict.fromkeys(irrad_col_map.values(), 0)
+    capped_counts = dict.fromkeys((component for component in irrad_col_map.values() if component == "dni"), 0)
+    # No beam exceeds the extraterrestrial normal irradiance of its day.
+    dni_extra = pvlib.irradiance.get_extra_radiation(target_index + target_offset).to_numpy(dtype=float)
 
     if use_clearsky:
         site = Location(latitude, longitude, altitude=altitude)
@@ -1394,11 +1414,13 @@ def resample_to_15min(
             cs_hourly,
             target_index + target_offset,
             solar_position_15min["zenith"].to_numpy(dtype=float),
+            dni_extra,
             interval_mean=time_basis == "interval_mean",
             method=method,
             epsilon=epsilon,
             fallback_counts=fallback_counts,
             zero_support_counts=zero_support_counts,
+            capped_counts=capped_counts,
         )
 
     # Get numeric columns only
@@ -1474,6 +1496,19 @@ def resample_to_15min(
             blocks[~nonzero] = hourly_values[~nonzero, None]
             df_15min[col] = np.clip(blocks.reshape(-1), 0.0, None)
 
+    # A clear-sky ratio near sunrise or sunset divides two small numbers, and
+    # the conservation rescale can raise a quarter-hour further, so cap DNI
+    # last. The removed energy is not put back: capped hours lose DNI.
+    # Quadrature capped its one-minute samples before deriving GHI.
+    for col, component in irrad_col_map.items():
+        if component != "dni" or col not in df_15min.columns or col in quadrature_columns:
+            continue
+        values = df_15min[col].to_numpy(dtype=float)
+        capped = values > dni_extra
+        if capped.any():
+            capped_counts[component] += int(capped.sum())
+            df_15min[col] = np.where(capped, dni_extra, values)
+
     weather_metadata.update(
         {
             "input_resolution": "h",
@@ -1486,6 +1521,7 @@ def resample_to_15min(
             ),
             "irradiance_resampling_fallback_counts": fallback_counts,
             "irradiance_resampling_zero_support_counts": zero_support_counts,
+            "irradiance_resampling_capped_counts": capped_counts,
         }
     )
     if closure_before is not None:

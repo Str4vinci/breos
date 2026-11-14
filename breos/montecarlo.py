@@ -42,6 +42,7 @@ from breos.app_inputs import (
     build_pv_production_breakdown,
     config_cache_key,
     load_consumption_profile,
+    require_hourly_weather_on_local_hours,
     resample_hourly_weather,
     weather_input_frequency,
 )
@@ -306,6 +307,7 @@ def _load_weather_years(
     indexed_by_year: dict[int, pd.DataFrame] = {}
     for year, df in weather_by_year.items():
         weather = _index_weather(df)
+        require_hourly_weather_on_local_hours(weather, freq, resolved.timezone)
         input_frequency = weather_input_frequency(weather)
         weather = resample_hourly_weather(
             weather,

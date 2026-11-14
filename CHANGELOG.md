@@ -643,6 +643,41 @@ removed in 0.9.0.
   replacement cost; it is now set in every year with a swap. The money
   columns stay 0 for a free swap, and runs with a priced replacement are
   bit-identical.
+- An hourly App or Monte Carlo run in a timezone with a fractional-hour UTC
+  offset, such as `Asia/Kolkata` (UTC+5:30), on weather stamped on whole UTC
+  hours now fails when the weather is loaded, with an error that names the
+  timezone and its offset and suggests `resolution = "15min"`. Before, the
+  weather and the load profile shared no instant, and the run failed late,
+  saying the house load had no finite value. Hourly weather already stamped
+  on the local hours is still accepted. Results do not change.
+- Hourly weather resampled to 15 minutes no longer gives direct normal
+  irradiance (DNI) above the extraterrestrial normal irradiance of its day
+  (1321 to 1413 W/m²). Near sunrise and sunset the clear-sky ratio divides
+  two small numbers, and the reconstructed DNI reached 2448 W/m² on the
+  committed Porto TMY file and 7264 W/m² on the New Delhi one. Every
+  `irradiance_resampling` policy now caps 15-minute DNI at that bound;
+  `"quadrature"` caps each one-minute sample before it derives GHI. The
+  removed energy is not redistributed, so a capped hour no longer keeps its
+  DNI mean under `"clear_sky_energy_conserving"` or `"quadrature"`. Weather
+  metadata and provenance record the number of capped quarter-hours in
+  `irradiance_resampling_capped_counts`. 15-minute results change: on the
+  Porto TMY file 13 quarter-hours are capped, annual 15-minute DNI falls
+  from 2009.40 to 2008.59 kWh/m², and the DC yield of a 10-module system
+  from 8674.75 to 8674.24 kWh (−0.006 %); on the New Delhi file it falls by
+  0.68 %. Weather that needs no cap, and every hourly run, are
+  bit-identical.
+- The committed PVGIS TMY files for Berlin, Golden (Colorado), Melbourne,
+  Nairobi, New Delhi and São Paulo now have a metadata sidecar, as Porto
+  already had. Each records the irradiance time offset PVGIS reports for the
+  site: 0.1838 h (Berlin), 0.0975 h (Nairobi) and 0.0577 h (São Paulo) for
+  SARAH3, and 0.5 h for the three ERA5 files. With the default
+  `solar_position = "auto"` these files no longer warn and fall back to the
+  step labels; the sun is placed at the recorded instant. The DC yield of a
+  10-module system changes by −0.04 % (Berlin), −0.2 % (Nairobi) and
+  +0.1 % (São Paulo), and by +1.5 % to +3.0 % on the ERA5 files (Golden
+  hourly 9937.05 to 10233.99 kWh). Runs with an explicit `solar_position`,
+  Porto, and the validation suite, which pins its sun position, do not
+  change. The example-gallery tool no longer hides this fallback warning.
 
 ### Documentation
 
