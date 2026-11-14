@@ -801,6 +801,20 @@ def test_identical_shaded_strings_in_parallel_deliver_twice_one_string():
     np.testing.assert_allclose(voltage, curve.v_mp, rtol=1e-6)
 
 
+@pytest.mark.parametrize("v_min,v_max", [(0.0, np.inf), (463.0, np.inf), (0.0, 462.5)])
+def test_parallel_peak_outside_the_tabled_peak_bracket_is_not_lost(v_min, v_max):
+    fractions = [0.06, 0.46, 0.72, 0.49, 0.28, 0.57, 0.64, 0.69, 0.41, 0.01, 0.16, 0.98]
+    curve = _curve([_shade(fraction) for fraction in fractions])
+    source = _CurveSource(curve)
+    _, single, single_v = _curves_power([source], v_min, v_max, np.inf, np.inf)
+    _, limited, voltage = _curves_power([source, source], v_min, v_max, np.inf, np.inf)
+    # The exact peak is at 462.755797 V, below the tabled candidate's
+    # initial bracket at 463.363116 V: the old search stopped at that edge.
+    # Physical limits may instead make either edge the correct optimum.
+    np.testing.assert_allclose(limited, 2 * single, rtol=1e-9)
+    np.testing.assert_allclose(voltage, single_v, rtol=1e-6)
+
+
 def test_differently_shaded_strings_in_parallel_reach_their_exact_maximum():
     first, second = _first(), _second()
     assert first.mismatched.size == second.mismatched.size == VARIED

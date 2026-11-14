@@ -1733,8 +1733,9 @@ def _curves_power(
     exact curve. Strings in parallel are searched on their tabled curves;
     where a string's curve is tabled, the brackets of the best local maxima
     are then searched on the exact curves, whose currents between the
-    table's points lie above its chords. The third array is the operating
-    voltage, 0 where the input delivers nothing.
+    table's points lie above its chords. A maximum at an artificial bracket
+    edge retries the step over its full voltage range. The third array is
+    the operating voltage, 0 where the input delivers nothing.
     """
     unconstrained = np.asarray(sum(source.mpp for source in sources), dtype=float)
     result = unconstrained.copy()
@@ -1843,8 +1844,8 @@ def _curves_power(
         b = np.where(real, grid[at, np.minimum(slots + 1, _CURVE_GRID_POINTS - 1)], start)
         for source in sources:
             if isinstance(source, _CurveSource):
-                # Read off the chords, a maximum can be up to an interval of
-                # the table away from the curve's own.
+                # These are initial brackets, not bounds on the exact peak:
+                # close table knots can leave a knee outside them.
                 below, above = source.curve.table_bracket(start, rows_exact)
                 a, b = np.minimum(a, below), np.maximum(b, above)
         if math.isfinite(current_limit) or math.isfinite(string_limit):
@@ -1854,16 +1855,43 @@ def _curves_power(
         a = np.where(real, np.clip(a, np.minimum(float(v_min), upper[at]), upper[at]), start)
         b = np.where(real, np.clip(b, a, upper[at]), start)
         column, line = np.nonzero(real.T)
+        bracket_low, bracket_high = a.T[real.T], b.T[real.T]
         found, found_v = _exact_peaks(
-            sources, index[exact][line], column, a.T[real.T], b.T[real.T], current_limit, string_limit
+            sources, index[exact][line], column, bracket_low.copy(), bracket_high.copy(), current_limit, string_limit
         )
         table = np.full(real.shape, -np.inf)
         table_v = np.zeros(real.shape)
         table[line, column], table_v[line, column] = found, found_v
         pick = table.argmax(axis=1)
         chosen = table[np.arange(exact.size), pick]
+        chosen_v = table_v[np.arange(exact.size), pick]
+        # The table's chord error can move the exact peak outside an initial
+        # bracket. If the best refined candidate is at such an edge, it has
+        # not been bracketed: retry the whole input window once for that step.
+        # Choose after refinement, since a lower-ranked candidate may win.
+        # Physical voltage limits are valid optima and need no retry.
+        tolerance = _EXACT_WIDTH * np.maximum(np.abs(found_v), 1.0)
+        edge = ((found_v <= bracket_low + tolerance) & (bracket_low > float(v_min))) | (
+            (found_v >= bracket_high - tolerance) & (bracket_high < upper[exact[line]])
+        )
+        retry = np.unique(line[np.isfinite(found) & edge & (column == pick[line])])
+        if retry.size:
+            wider, wider_v = _exact_peaks(
+                sources,
+                index[exact[retry]],
+                np.zeros(retry.size, dtype=int),
+                np.full(retry.size, float(v_min)),
+                upper[exact[retry]].copy(),
+                current_limit,
+                string_limit,
+            )
+            # Keep the original bits when only rounding at the search's
+            # stopping precision differs between the two brackets.
+            better = wider > chosen[retry] + _EXACT_WIDTH * np.maximum(np.abs(chosen[retry]), 1.0)
+            chosen[retry] = np.where(better, wider, chosen[retry])
+            chosen_v[retry] = np.where(better, wider_v, chosen_v[retry])
         best_power[exact] = np.where(np.isfinite(chosen), chosen, 0.0)
-        best_v[exact] = table_v[np.arange(exact.size), pick]
+        best_v[exact] = chosen_v
     result[index] = np.minimum(np.where(feasible, best_power, 0.0), unconstrained[index])
     operating_v[index] = np.where(result[index] > 0, best_v, 0.0)
     return unconstrained, result, operating_v

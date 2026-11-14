@@ -824,9 +824,10 @@ class ShadedStringCurve:
     def table_bracket(self, voltage: np.ndarray, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """The table's voltages two intervals below and above each ``voltage`` on the steps ``rows``.
 
-        Read off the chords, a maximum of power can be up to an interval away
-        from the curve's own. Repeated voltages count once; ``voltage`` itself
-        on the steps without a table.
+        These are initial search brackets, not bounds on the exact peak's
+        displacement from a chord's peak. The caller must check optima at
+        their edges. Repeated voltages count once; ``voltage`` itself on the
+        steps without a table.
         """
         below, above = voltage.astype(float), voltage.astype(float)
         selected = np.flatnonzero(rows)
