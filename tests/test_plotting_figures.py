@@ -377,14 +377,14 @@ def test_waterfall_itemises_the_static_losses_and_follows_the_energy_to_ac():
     # A zero component and the collapsed static stage get no row.
     assert "Snow" not in labels and "Static losses" not in labels
     # Tiny curtailment keeps its row, with one decimal.
-    assert {"Curtailment", "−0.4 kWh", "Inverter conversion, direct PV", "Battery path"} <= labels
+    assert {"Curtailment", "−0.4 kWh", "Inverter conversion, direct PV", "Battery losses and stored energy"} <= labels
     assert {"−20 kWh", "Direct to load", "Via battery to load", "Grid export"} <= labels
 
 
 def test_waterfall_without_a_battery_has_no_battery_path():
     labels = _stage_labels(plotting.plot_pv_loss_waterfall(_full_waterfall(battery=False)))
 
-    assert "Battery path" not in labels and "Via battery to load" not in labels
+    assert "Battery losses and stored energy" not in labels and "Via battery to load" not in labels
     assert {"Direct to load", "Grid export", "Usable AC energy   970 kWh"} <= labels
 
 
@@ -444,7 +444,9 @@ def test_waterfall_counts_vehicle_charging_as_a_use_and_closes_the_balance():
     end_uses = {label: value for label, _, value in plotting._flow_end_uses(waterfall["energy_balance"]["ac_delivery"])}
 
     # Only real losses leave the band: the battery path stays at 20 kWh.
-    assert losses == pytest.approx({"Curtailment": 0.4, "Inverter conversion, direct PV": 30.0, "Battery path": 20.0})
+    assert losses == pytest.approx(
+        {"Curtailment": 0.4, "Inverter conversion, direct PV": 30.0, "Battery losses and stored energy": 20.0}
+    )
     assert end_uses["Vehicle charging, net of energy returned"] == pytest.approx(112.0)
     assert end_uses["Via vehicle to load"] == pytest.approx(8.0)
     assert after_dc[-1][1:] == ("Usable AC energy and vehicle charging", pytest.approx(sum(end_uses.values())))
