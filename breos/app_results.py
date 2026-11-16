@@ -23,17 +23,48 @@ from breos.utils import get_hours_per_step, local_datetime_index, package_versio
 from breos.vehicle.results import vehicle_year_record
 
 
+def irradiance_fields(
+    usable_ac_kwh: float, ghi_kwh_m2: float | None, poa_stc_dc_kwh: float | None, system_kwp: float | None
+) -> dict[str, Any]:
+    """The irradiance keys of a monthly row or the year-1 summary.
+
+    ``poa_stc_dc_kwh`` is the arrays' STC energy at their unshaded
+    plane-of-array irradiance: divided by the STC power it is the incident
+    irradiance weighted by array power, and the performance ratio is the
+    usable AC production over it (IEC 61724-1, with PVsyst's GlobInc).
+    """
+    if ghi_kwh_m2 is None or poa_stc_dc_kwh is None or not system_kwp:
+        return {}
+    return {
+        "global_horizontal_kwh_m2": round(ghi_kwh_m2, 2),
+        "global_incident_kwh_m2": round(poa_stc_dc_kwh / system_kwp, 2),
+        "performance_ratio_pct": round(usable_ac_kwh / poa_stc_dc_kwh * 100, 2) if poa_stc_dc_kwh > 0 else None,
+    }
+
+
 def monthly_to_dicts(
-    results_df: pd.DataFrame, freq: str, timezone: str | None = None, *, vehicle: bool = False
+    results_df: pd.DataFrame,
+    freq: str,
+    timezone: str | None = None,
+    *,
+    vehicle: bool = False,
+    irradiance: pd.DataFrame | None = None,
+    system_kwp: float | None = None,
 ) -> list[dict[str, Any]]:
     """Convert first-year timestep results into monthly energy rows.
 
     Months follow the wall clock of the results, unless ``timezone`` names
     the zone to group them in instead (a [period] run groups its window by
     the location's civil months, on which the window is defined).
+    ``irradiance`` (columns ``GHI`` and ``POA_STC_DC`` on the results'
+    steps) and ``system_kwp`` add the irradiance keys of
+    :func:`irradiance_fields`.
     """
     hours_per_step = get_hours_per_step(freq)
     df = results_df.copy()
+    if irradiance is not None:
+        df["GHI"] = irradiance["GHI"].to_numpy(dtype=float)
+        df["POA_STC_DC"] = irradiance["POA_STC_DC"].to_numpy(dtype=float)
     if not isinstance(df.index, pd.DatetimeIndex):
         if "Datetime" in df.columns:
             df.index = local_datetime_index(df.pop("Datetime"))
@@ -53,6 +84,8 @@ def monthly_to_dicts(
     ]
     if vehicle:
         columns.append("PV_Origin_Vehicle_AC_To_Load")
+    if irradiance is not None:
+        columns += ["GHI", "POA_STC_DC"]
     monthly = df[columns].resample("ME").sum()
     monthly = monthly * hours_per_step / 1000
 
@@ -84,6 +117,12 @@ def monthly_to_dicts(
                 "grid_import_kwh": round(imported, 2),
                 "grid_export_kwh": round(export, 2),
                 "grid_independence_pct": round((1 - imported / consumption) * 100, 2) if consumption > 0 else 0.0,
+                **irradiance_fields(
+                    usable_pv,
+                    float(row["GHI"]) if irradiance is not None else None,
+                    float(row["POA_STC_DC"]) if irradiance is not None else None,
+                    system_kwp,
+                ),
             }
         )
     return rows
@@ -407,6 +446,18 @@ def smart_charging_to_dict(artifacts: SimulationArtifacts) -> dict[str, Any]:
     }
 
 
+def _year_irradiance_fields(
+    usable_ac_kwh: float, irradiance: pd.DataFrame | None, freq: str, system_kwp: float
+) -> dict[str, Any]:
+    """The year-1 (or window) irradiance keys of :func:`irradiance_fields`, or none without irradiance."""
+    if irradiance is None:
+        return {}
+    hours_per_step = get_hours_per_step(freq)
+    ghi = float(irradiance["GHI"].sum()) * hours_per_step / 1000
+    poa = float(irradiance["POA_STC_DC"].sum()) * hours_per_step / 1000
+    return irradiance_fields(usable_ac_kwh, ghi, poa, system_kwp)
+
+
 def build_result(
     resolved: ResolvedAppConfig,
     artifacts: SimulationArtifacts,
@@ -452,6 +503,7 @@ def build_result(
         "grid_export_kwh": round(float(yr1_export), 2),
         "grid_independence_pct": round(float(grid_indep_y1), 2),
         "self_consumption_pct": round(float(self_consumption_pct), 2),
+        **_year_irradiance_fields(float(yr1_pv), artifacts.irradiance, cfg["resolution"], resolved.system_kwp),
         "total_investment": round(float(total_initial), 2),
         "payback_year": int(artifacts.payback_year) if artifacts.payback_year is not None else None,
         "npv_savings": npv_savings,
@@ -467,6 +519,8 @@ def build_result(
             cfg["resolution"],
             timezone=resolved.timezone if artifacts.period is not None else None,
             vehicle=resolved.vehicle is not None,
+            irradiance=artifacts.irradiance,
+            system_kwp=resolved.system_kwp,
         ),
         "financial": financial_to_dicts(cost_projection, total_initial) if cost_projection is not None else None,
         # Copied, so editing a result cannot reach the stored run that

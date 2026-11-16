@@ -116,6 +116,22 @@ class SimulationArtifacts:
     vehicle_households: VehicleHouseholds | None = None
     vehicle: dict[str, Any] | None = None
     solver_diagnostics: dict[str, Any] | None = None
+    # Year 1's (or the window's) irradiance on the results' steps: "GHI" in
+    # W/m2 and "POA_STC_DC", the arrays' STC power at their unshaded
+    # plane-of-array irradiance, in W. None when the PV model gave neither.
+    irradiance: pd.DataFrame | None = None
+
+
+def first_year_irradiance(pv_breakdown: PVProductionBreakdown, results_df: pd.DataFrame) -> pd.DataFrame | None:
+    """The breakdown's irradiance on the steps of ``results_df``, in its row order, or None without it."""
+    if pv_breakdown.ghi is None or pv_breakdown.poa_global_stc_dc is None:
+        return None
+    frame = pd.DataFrame({"GHI": pv_breakdown.ghi, "POA_STC_DC": pv_breakdown.poa_global_stc_dc})
+    times = pd.DatetimeIndex(results_df["Datetime"])
+    aligned = frame.reindex(times)
+    if aligned.isna().to_numpy().any():
+        raise ValueError("the PV breakdown does not cover every step of the first-year results")
+    return aligned.set_axis(results_df.index)
 
 
 # The avoided-CO2 columns a result reports for its first year, or its window.
@@ -899,6 +915,7 @@ def run_app_simulation(
         total_replacements=total_replacements,
         end_of_life_events=projection.end_of_life_events,
         solver_diagnostics=inputs.pv_breakdown.solver_diagnostics,
+        irradiance=first_year_irradiance(inputs.pv_breakdown, first_year_results_df),
         pv_loss_waterfall=_build_pv_loss_waterfall(
             inputs.pv_breakdown, first_year_results_df, resolved, inputs.inverter_ac_derate, inputs.inverter_units
         ),
