@@ -258,6 +258,12 @@ class PVProductionBreakdown:
     # its ``(inverter, mppt)`` indices.
     parallel_mismatch_loss: Optional[pd.Series] = None
     input_parallel_mismatch: Optional[Dict[Tuple[int, int], pd.Series]] = None
+    # Global horizontal irradiance (W/m2), and the arrays' STC power at their
+    # unshaded plane-of-array irradiance (W): POA / 1000 W/m2 x STC power,
+    # summed over arrays. Divided by the system's STC power, it gives the
+    # incident irradiance weighted by array power (PVsyst's GlobInc).
+    ghi: Optional[pd.Series] = None
+    poa_global_stc_dc: Optional[pd.Series] = None
     # The inverter inputs' operating DC voltage with string-level energy,
     # weighted by the power each input delivers, in V; 0 where none does.
     # None otherwise.
@@ -936,6 +942,13 @@ def _array_breakdown(
         module_operating=module_operating,
         poa_shaded_dc=poa_shaded_dc,
         irradiance_parts=detail.parts,
+        ghi=pd.Series(np.nan_to_num(np.asarray(detail.ghi, dtype=float), nan=0.0), index=times, name="ghi_W_m2"),
+        poa_global_stc_dc=pd.Series(
+            (detail.poa_global if detail.poa_global_unshaded is None else detail.poa_global_unshaded)
+            * (n_modules * pv_params.Mpp / 1000.0),
+            index=times,
+            name="poa_global_stc_dc_W",
+        ),
     )
 
 
@@ -1484,6 +1497,10 @@ def _sum_pv_breakdowns(breakdowns: list[PVProductionBreakdown]) -> PVProductionB
         age_degradation_pct=breakdowns[0].age_degradation_pct,
         age_degradation_loss=_sum_attr("age_degradation_loss"),
         poa_shaded_dc=(_sum_attr("poa_shaded_dc") if all(b.poa_shaded_dc is not None for b in breakdowns) else None),
+        ghi=breakdowns[0].ghi,
+        poa_global_stc_dc=(
+            _sum_attr("poa_global_stc_dc") if all(b.poa_global_stc_dc is not None for b in breakdowns) else None
+        ),
     )
 
 
