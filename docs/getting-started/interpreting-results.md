@@ -24,6 +24,9 @@ flag. For the step-by-step flows of the first year, use
 | `grid_export_kwh` | Year 1 energy sold to the grid |
 | `grid_independence_pct` | Year 1 grid independence ratio |
 | `self_consumption_pct` | Year 1 self-consumption ratio |
+| `global_horizontal_kwh_m2` | Year 1 global horizontal irradiation (PVsyst's GlobHor) |
+| `global_incident_kwh_m2` | Year 1 global irradiation in the plane of the arrays, before near shading and incidence-angle losses, weighted by array STC power (PVsyst's GlobInc) |
+| `performance_ratio_pct` | Year 1 performance ratio: `usable_ac_system_production_kwh` over `global_incident_kwh_m2` / 1 kWh/m² × `pv_kwp` (IEC 61724-1) |
 | `total_investment` | Total CAPEX |
 | `payback_year` | Sustained discounted payback within the simulated period, as a whole year: the year from which cumulative NPV savings are zero or above and stay so to the horizon (`None` if not reached) |
 | `npv_savings` | Cumulative NPV savings over the projection horizon |
@@ -589,14 +592,24 @@ civil month of its window). From the quickstart run:
     "grid_import_kwh": 146.36,
     "grid_export_kwh": 281.8,
     "grid_independence_pct": 64.07,
+    # and the month's irradiance keys, described below
 }
 ```
+
+Each row also carries the month's `global_horizontal_kwh_m2`,
+`global_incident_kwh_m2` and `performance_ratio_pct`, defined as the year-1
+keys of the same names. With the existing `pv_dc_generation_kwh` (PVsyst's
+E_Array) and `usable_ac_system_production_kwh` they make PVsyst's monthly
+balance table. The performance ratio counts PV that reaches the house through
+a battery at its delivered AC, so a battery's round-trip losses lower it, and
+it counts curtailed PV as lost. `performance_ratio_pct` is `None` in a month
+without irradiance in the plane.
 
 ### `yearly`
 
 A list of one dict per simulation year (length `projection_years`). Each
-row contains the same fields as `monthly` aggregated to a year, plus
-`soh_pct` when a battery is present.
+row contains the same energy fields as `monthly` aggregated to a year, plus
+`soh_pct` when a battery is present. The irradiance keys are year 1's only.
 
 ### `financial`
 

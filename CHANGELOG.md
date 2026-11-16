@@ -13,6 +13,12 @@ comparing with an earlier release.
 
 ### Added
 
+- Results report irradiance and the performance ratio: year-1 and `monthly`
+  `global_horizontal_kwh_m2`, `global_incident_kwh_m2` (the plane-of-array
+  irradiation weighted by array STC power) and `performance_ratio_pct`
+  (usable AC production over the incident irradiation times the STC power,
+  IEC 61724-1). With the existing DC and AC energies they give PVsyst's
+  monthly table. New keys only: no existing result value changes.
 - Vehicle-to-home (#420): `[vehicle]` adds uncontrolled, V1G and V2H modes,
   weekday/weekend schedules or trip files, away charging, pack ageing and
   replacement policy. App and paired Monte Carlo compare three households
