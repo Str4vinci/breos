@@ -406,7 +406,6 @@ def load_profile(
 
     df = _localize_wall_clock_index(df, timezone, native_freq)
 
-    # Resample if needed (hourly to 15-min)
     if freq == "15min" and native_freq == "h":
         df = _resample_load_to_15min(df)
     elif freq == "h" and native_freq == "15min":
@@ -854,9 +853,7 @@ def scale_to_annual_consumption(
         annual_consumption_kwh: Target annual consumption in kWh
         column: Name of the consumption column
     """
-    # Determine hours per step
     if isinstance(load_df.index, pd.DatetimeIndex):
-        # Infer from index frequency
         if len(load_df) > 1:
             diff = (load_df.index[1] - load_df.index[0]).total_seconds() / 3600
             hours_per_step = diff
@@ -868,7 +865,6 @@ def scale_to_annual_consumption(
     # Current annual in Wh (power * hours_per_step)
     current_annual_wh = load_df[column].sum() * hours_per_step
 
-    # Target in Wh
     target_annual_wh = annual_consumption_kwh * 1000
 
     if current_annual_wh <= 0:

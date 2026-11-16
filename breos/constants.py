@@ -4,7 +4,6 @@ Physical and model constants for battery degradation models.
 
 import math
 
-# Physical constant
 R_GAS = 8.31446261815324  # J/(mol*K)
 
 # Reference temperature for calendar aging (25°C)

@@ -128,9 +128,6 @@ GALLERY_BACKEND = "python"
 VOLATILE_KEYS = frozenset({"breos_version", "python", "numpy", "pandas", "pvlib", "scipy", "numba", "pymoo"})
 
 
-# --------------------------------------------------------------------------- helpers
-
-
 def numpy_cpu_problem() -> str | None:
     """Why numpy's kernels here would not reproduce the stored results, or None."""
     if not X86_64:
@@ -313,9 +310,6 @@ def json_ready(value: Any) -> Any:
     return value
 
 
-# --------------------------------------------------------------------------- context
-
-
 @dataclass
 class Output:
     """What a case stores: file name -> JSON-ready object or DataFrame, plus manifest fields."""
@@ -410,8 +404,6 @@ def case(name: str, title: str, *, cheap: bool = False) -> Callable[[Callable[[C
 
     return register
 
-
-# --------------------------------------------------------------------------- cases
 
 QUICKSTART = "configs/examples/quickstart.toml"
 
@@ -1375,9 +1367,6 @@ def nsga2_front(ctx: Context) -> Output:
     )
 
 
-# --------------------------------------------------------------------------- storage
-
-
 def write_case(entry: Case, output: Output, target: Path, ctx: Context, runtime_s: float) -> None:
     import breos
 
@@ -1431,9 +1420,6 @@ def run_case(entry: Case, target: Path, options: argparse.Namespace) -> float:
         runtime_s = time.perf_counter() - started
         write_case(entry, output, target, ctx, runtime_s)
     return runtime_s
-
-
-# --------------------------------------------------------------------------- check
 
 
 # Counts and years: exact under --cross-machine too, also where a CSV column stores them as floats.

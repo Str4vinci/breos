@@ -265,10 +265,8 @@ def calculate_costs(
         inverter_power_kw = total_power_kw
     has_battery = battery_capacity_wh > 1
 
-    # PV module costs
     pv_cost = cost_params.module_cost_per_w * module_power_w * n_modules
 
-    # Installation costs
     installation_cost = cost_params.installation_cost_per_module * n_modules
     if has_battery:
         installation_cost += cost_params.battery_installation_cost
@@ -306,17 +304,14 @@ def calculate_costs(
             "battery_inverter_ac_capacity_w prices an AC-coupled battery's inverter; this one is DC-coupled"
         )
 
-    # Other costs
     other_costs = (cost_params.other_cost_per_module * n_modules) + cost_params.other_cost_fixed
 
-    # Maintenance
     annual_operation_cost = (
         cost_params.maintenance_cost_per_panel * n_modules
         + cost_params.maintenance_cost_fixed
         + cost_params.operation_cost
     )
 
-    # Total CAPEX
     total_initial_cost = (
         pv_cost + inverter_cost + battery_cost + installation_cost + cost_params.land_cost + other_costs
     )

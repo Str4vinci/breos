@@ -244,10 +244,6 @@ class PVModuleParams:
         return self.N_Cells // self.cell_strings_in_parallel
 
 
-# =============================================================================
-# MODULE CATALOG
-# =============================================================================
-
 MODULES: Dict[str, PVModuleParams] = {
     "Suntech_STP550S_STC": PVModuleParams(
         Mpp=550,  # W - Maximum Power Point
@@ -340,11 +336,6 @@ MODULES: Dict[str, PVModuleParams] = {
 }
 
 
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
-
-
 def get_module(name: str) -> PVModuleParams:
     """
     Get a PV module by name from the catalog.
@@ -363,7 +354,6 @@ def get_module(name: str) -> PVModuleParams:
         >>> pv_params.Mpp
         550
     """
-    # Case-insensitive lookup
     name_lower = name.lower()
     for key, value in MODULES.items():
         if key.lower() == name_lower:

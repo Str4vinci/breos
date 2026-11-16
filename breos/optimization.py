@@ -145,10 +145,6 @@ def _resolve_max_tilt_deg(constraints: Dict[str, Any], latitude: float) -> float
     return float(value)
 
 
-# ==========================================
-# 2. HELPER FUNCTIONS
-# ==========================================
-
 # Constants for defaults (can be overridden by config)
 DEFAULT_MODULE_AREA = 1.134 * 2.278
 
@@ -1120,11 +1116,6 @@ def evaluate_projected_design(
     return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=study.provenance())
 
 
-# ==========================================
-# 3. PYMOO OPTIMIZATION CLASSES
-# ==========================================
-
-
 def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, upper: float) -> np.ndarray:
     """Round to the nearest multiple of ``step`` that lies inside the bounds.
 
@@ -1225,7 +1216,6 @@ try:
             self.layouts = tuple(config["mode"]["layouts"])
             self.east_west_tilt_deg = float(config["mode"]["east_west_tilt_deg"])
 
-            # --- Dynamic Variable Setup ---
             # x[0]: n_modules (1-max_modules)
             # x[1]: battery_kwh (0-max_battery_kwh)
             lower = [1, 0.0]

@@ -296,7 +296,6 @@ def relabel_right_labeled_interval_means(weather: pd.DataFrame) -> pd.DataFrame:
     return relabeled
 
 
-# Optional imports for API calls
 try:
     import openmeteo_requests
     import requests_cache
@@ -676,7 +675,6 @@ def fetch_tmy_weather_data(
         if is_leap_year(sample_year):
             coerce_year = sample_year - 1
 
-        # Auto-detect timezone if not provided
         if timezone is None:
             from timezonefinder import TimezoneFinder
 
@@ -1334,13 +1332,11 @@ def resample_to_15min(
             f"input radiation_time_basis={time_basis!r}"
         )
 
-    # Ensure DatetimeIndex
     if not isinstance(df_hourly.index, pd.DatetimeIndex):
         raise ValueError("DataFrame must have a DatetimeIndex")
 
     df_hourly = df_hourly.sort_index()
 
-    # Create target 15-min index
     target_index = pd.date_range(
         start=df_hourly.index[0],
         end=df_hourly.index[-1] + pd.Timedelta(minutes=45),
@@ -1423,7 +1419,6 @@ def resample_to_15min(
             capped_counts=capped_counts,
         )
 
-    # Get numeric columns only
     numeric_df = df_hourly.select_dtypes(include=[np.number])
 
     for col in numeric_df.columns:
@@ -1684,7 +1679,6 @@ def read_epw_file(
     # pvlib already maps the EPW fields to these names; keep only them.
     df = df[[column for column in ("ghi", "dni", "dhi", "temp_air", "wind_speed") if column in df.columns]]
 
-    # Use EPW metadata for coordinates if not provided
     if latitude is None:
         latitude = meta.get("latitude")
     if longitude is None:
@@ -1703,7 +1697,6 @@ def read_epw_file(
     }
     df = _coerce_epw_year(df)
 
-    # Resample to 15-min if requested
     if freq == "15min":
         df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
 

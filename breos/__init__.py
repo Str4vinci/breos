@@ -32,25 +32,18 @@ from breos.utils import package_version as _package_version
 
 __version__ = _package_version()
 
-# Public facade
 from breos.app import App
-
-# Battery
 from breos.battery import (
     BatteryConfig,
     simulate_energy_balance,
 )
 from breos.community import Community
-
-# Battery degradation model discovery
 from breos.degradation import (
     BATTERY_MODEL_REGISTRY,
     BatteryModelProfile,
     get_battery_model_profile,
     list_battery_models,
 )
-
-# Economics
 from breos.economics import (
     CostParams,
     calculate_costs,
@@ -59,21 +52,15 @@ from breos.economics import (
     cost_params_from_config,
     find_payback_year,
 )
-
-# Emissions
 from breos.emissions import (
     EmissionsParams,
     calculate_co2_projection,
 )
-
-# Inverter
 from breos.inverter import (
     InverterConversionResult,
     calculate_dc_ac_power,
     dc_power_for_ac_output,
 )
-
-# I/O (export/import functions)
 from breos.io import (
     InputRepairReport,
     export_results,
@@ -81,14 +68,10 @@ from breos.io import (
     load_results,
     repair_series,
 )
-
-# Load Profiles
 from breos.load_profiles import (
     load_profile,
     scale_to_annual_consumption,
 )
-
-# Monte Carlo (weather + demand uncertainty)
 from breos.montecarlo import (
     MonteCarloResult,
     MonteCarloSettings,
@@ -96,23 +79,17 @@ from breos.montecarlo import (
     build_year_cache,
     run_montecarlo,
 )
-
-# Optimization
 from breos.optimization import (
     OptimizationResult,
     ProjectedDesignResult,
     evaluate_projected_design,
     optimize_system_multi_objective,
 )
-
-# PV Module Database
 from breos.pv_modules import (
     get_module,
     get_module_info,
     list_modules,
 )
-
-# Solar
 from breos.solar import (
     PVModuleParams,
     calculate_multi_array_production,
@@ -123,8 +100,6 @@ from breos.solar import (
     default_azimuth,
     estimate_optimal_tilt,
 )
-
-# Weather
 from breos.weather import (
     apply_indoor_temperature_model,
     fetch_forecast_archive,
