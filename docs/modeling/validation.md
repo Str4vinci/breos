@@ -1,6 +1,6 @@
 # External validation
 
-BREOS 0.6.0 was checked against five public measured datasets. Each check
+BREOS 0.8.0 was checked against five public measured datasets. Each check
 isolates one part of the model. None of the datasets supports one unqualified
 weather-to-AC accuracy score, so each result is reported at the measurement
 boundary that its source data can support.
@@ -13,12 +13,13 @@ boundary that its source data can support.
 | UCY PHAETHON PV test-bed | Faiman module-temperature calculation | At plane-of-array irradiance of at least `200 W/m2`, the default model had a bias of `+2.694 C`, RMSE of `3.821 C`, and `r = 0.972` over `12,708` records. |
 | Reunion Island microgrid | Faiman temperature and the lumped battery-temperature helper | Diagnostic only. Both defaults disagree with the measured sensors by several degrees, which points to boundary and parameter differences. |
 
-The checks were run from clean BREOS commit
-`f62f4f5bf3c14140ab189d35ea2885e6fcc60c6b`. Raw third-party data and generated
-results are not committed to this repository. The drivers, input manifests,
-and run records are preserved in the
-[BREOS 0.6.2 archive](https://doi.org/10.5281/zenodo.22938914) under
-`validation/external/` and `tools/validation/recovery/`.
+The checks were rerun on the 0.8.0 release candidate at commit
+`419254a5effe51d9d037472bc785d135bdeda5b0`. The displayed headlines are
+unchanged to their shown precision from the preceding 0.8 development replay.
+Raw third-party data and generated measured-data results are not committed to
+this repository. The original drivers, input manifests, and run records are
+preserved in the [BREOS 0.6.2 archive](https://doi.org/10.5281/zenodo.22938914)
+under `validation/external/` and `tools/validation/recovery/`.
 
 ## NIST Gaithersburg Ground Array
 
@@ -70,6 +71,15 @@ Hay-Davies and Reindl were within `0.30%`, and isotropic was within `1.29%`.
 The year-to-year variation of the measured ratio was `0.86` percentage points,
 so the result bounds the transposition error but does not establish one model
 as universally best.
+
+In the 2009–2014 input, three source samples have missing global horizontal
+irradiance and positive diffuse irradiance. The historical replay fills the
+missing global values with zero; the compatibility replay preserves that
+policy. Klucher's full-chain result is unavailable because its diffuse model
+would divide by zero. Excluding the two affected days from both modelled and
+measured energy after the original screening changes the west-to-north ratio
+error by at most 0.0012 percentage points for the isotropic, Hay-Davies and
+default Perez cases. The 2016 irradiance-only comparison has no such samples.
 
 The dual-axis array is excluded from this evidence. Its tracking geometry is
 not equivalent to the fixed-plane comparison and exposed a separate limitation
