@@ -309,9 +309,11 @@ comparing with an earlier release.
   the funnel and its text box. A band whose width is the remaining energy runs
   from the horizontal irradiance reference through each static PVWatts loss
   to the PV DC output, then through curtailment, the inverter's loss on
-  direct PV and the battery path to the usable AC energy, all on one kWh
+  direct PV and a remainder labelled "Battery losses and stored energy"
+  when there is battery flow, to the usable AC energy, all on one kWh
   scale. A bar splits the usable AC energy into direct use, use through the
-  battery and grid export. The new optional `yearly` and `replacement_years`
+  battery and grid export; with a vehicle it adds vehicle charging, as a use
+  rather than a loss. The new optional `yearly` and `replacement_years`
   arguments add a strip with both totals over the project years. `title` and
   `figsize` now default to None: the title names the year-1 or `[period]`
   basis, and the figure is sized to the diagram. Results are unchanged.
