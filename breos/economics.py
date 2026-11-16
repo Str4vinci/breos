@@ -163,7 +163,7 @@ def cost_params_from_config(
         param_key: costs_config.get(config_key, getattr(defaults, param_key))
         for config_key, param_key in COST_CONFIG_KEY_TO_PARAM.items()
     }
-    # Historical lower-level callers can supply the two energy prices through
+    # Lower-level callers can also supply the two energy prices through
     # ``financials_config``; an explicit costs value still takes precedence.
     for key in ("electricity_cost", "electricity_sold_cost"):
         if key not in costs_config:
@@ -580,7 +580,7 @@ def projection_rates_record(cfg: Dict[str, Any]) -> Dict[str, float]:
 def _replacement_outlay(base: np.ndarray, exponents: np.ndarray, inflation_rate: float, learning: float) -> np.ndarray:
     """``C0 × (1 + inflation)^t × (1 − learning)^t`` at each swap instant ``t`` (ADR 0003 E2)."""
     outlay = base * (1 + inflation_rate) ** exponents
-    # Without learning the result is the pre-E2 expression, the same floats.
+    # Without learning, skipping the factor keeps the floats of plain inflation.
     return outlay if learning == 0.0 else outlay * (1 - learning) ** exponents
 
 

@@ -2714,7 +2714,7 @@ def _simulate_core(
     # for the whole window and advanced here, between windows, so every
     # scientifically sensitive transition stays on this path regardless of
     # which backend ran the arithmetic inside the window.
-    # Slicing the DatetimeIndex once per day was a measurable share of a
+    # Slicing the DatetimeIndex once per day costs a measurable share of a
     # compiled year, so the aging model gets views of one tick array instead.
     time_ticks, ticks_per_second = _datetime_index_ticks(rng)
     # The horizon's steps after this span, and the fewest steps a new pack
@@ -3159,7 +3159,6 @@ def __getattr__(name: str) -> Any:
             stacklevel=2,
         )
         return lfp_capacity_factor
-    # Moved to breos.weather in 0.8.0, its only caller; the old name goes in 0.9.0.
     if name == "apply_indoor_temperature_model":
         from breos.weather import apply_indoor_temperature_model
 

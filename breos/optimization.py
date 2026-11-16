@@ -896,8 +896,8 @@ class _DesignStudy:
             emissions_params=EmissionsParams(**config["emissions"]) if config["emissions"] else None,
             # A weather sequence keeps the representative year's temperatures,
             # so they are restamped onto the sequence's calendar year rather
-            # than reindexed across years, which found no match and used to
-            # fall back to 25 C.
+            # than reindexed across years, which finds no match and falls back
+            # to 25 C.
             temperature_series=build_battery_temperature_series(
                 battery["temperature"],
                 grid,

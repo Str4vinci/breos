@@ -220,8 +220,8 @@ class AppConfigField:
     """Declarative metadata for one public App configuration key.
 
     Scientific constraints intentionally remain in the focused validators
-    below. This registry owns the mechanical contract that had previously
-    drifted across defaults, the allowed-key list, CLI arguments, and CLI
+    below. This registry owns the mechanical contract that would otherwise
+    drift across defaults, the allowed-key list, CLI arguments, and CLI
     override propagation.
 
     ``doc`` describes the key in the generated configuration key reference
