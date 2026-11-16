@@ -2,7 +2,7 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.8.0] - 2026-11-14
+## [0.8.0] - 2026-11-16
 
 BREOS 0.8.0 adds vehicle charging and vehicle-to-home simulation, AC-coupled
 batteries and collective self-consumption. It brings string-level electrical
