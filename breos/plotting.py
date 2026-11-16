@@ -215,9 +215,10 @@ _FLOW_BAND, _FLOW_TOTAL, _FLOW_GAIN, _FLOW_LOSS = "#cde2fb", "#184f95", "#2a78d6
 _FLOW_END_USES = (
     ("direct_pv_to_load_kwh", "Direct to load", "#1baf7a"),
     ("pv_origin_battery_to_load_kwh", "Via battery to load", "#eda100"),
-    ("pv_origin_vehicle_to_load_kwh", "Via vehicle to load", "#d55d9b"),
+    ("pv_origin_vehicle_to_load_kwh", "Via vehicle to load", "#e9a3c6"),
     ("export_kwh", "Grid export", "#6250d6"),
 )
+_FLOW_VEHICLE_CHARGING = ("Vehicle charging, net of energy returned", "#c2387f")
 _FLOW_STAGE_LABELS = {
     "horizontal_reference_dc": "Horizontal irradiance reference",
     "transposition": "Tilt and orientation (transposition)",
@@ -266,9 +267,10 @@ def _flow_rows(waterfall: Mapping[str, Any], stages: Sequence[Mapping[str, Any]]
     if not ac:
         return rows
     usable = float(ac.get("usable_system_production_kwh", sum(float(ac.get(key, 0.0)) for key, _, _ in _FLOW_END_USES)))
+    vehicle = _flow_vehicle_charging(ac)
     curtailed = float(((waterfall.get("energy_balance") or {}).get("pv_dc") or {}).get("curtailed_kwh", 0.0))
     direct_loss = (waterfall.get("inverter") or {}).get("direct_pv_conversion_loss_kwh")
-    remainder = pv_dc - curtailed - usable
+    remainder = pv_dc - curtailed - usable - (vehicle or 0.0)
     if abs(curtailed) >= _FLOW_MIN_KWH:
         rows.append(("step", "Curtailment", -curtailed))
     if direct_loss is None:
@@ -276,12 +278,39 @@ def _flow_rows(waterfall: Mapping[str, Any], stages: Sequence[Mapping[str, Any]]
     else:
         remainder -= float(direct_loss)
         if abs(float(direct_loss)) >= _FLOW_MIN_KWH:
-            rows.append(("step", "Inverter conversion, direct PV", -float(direct_loss)))
-        remainder_label = "Battery and vehicle path" if "pv_origin_vehicle_to_load_kwh" in ac else "Battery path"
+            # An AC-coupled battery charges from the PV inverter's AC, so all PV passes through it.
+            ac_coupled = "battery_inverter" in waterfall or "pv_to_battery_kwh" in ac
+            label = "PV inverter conversion" if ac_coupled else "Inverter conversion, direct PV"
+            rows.append(("step", label, -float(direct_loss)))
+        remainder_label = "Battery path"
     if abs(remainder) >= _FLOW_MIN_KWH:
         rows.append(("step", remainder_label, -remainder))
-    rows.append(("total", "Usable AC energy", usable))
+    if vehicle is None:
+        rows.append(("total", "Usable AC energy", usable))
+    else:
+        rows.append(("total", "Usable AC energy and vehicle charging", usable + vehicle))
     return rows
+
+
+def _flow_vehicle_charging(ac: Mapping[str, Any]) -> Optional[float]:
+    """PV AC into the vehicle less the PV-origin energy it gave back to the load, or None without a vehicle.
+
+    ``pv_to_vehicle_kwh`` is the PV inverter's AC sent to the charger, before its loss.
+    ``pv_origin_vehicle_to_load_kwh`` came back out of the vehicle and is already part
+    of the usable AC energy, so it is taken off here to count it once.
+    """
+    if "pv_to_vehicle_kwh" not in ac:
+        return None
+    return float(ac["pv_to_vehicle_kwh"]) - float(ac.get("pv_origin_vehicle_to_load_kwh", 0.0))
+
+
+def _flow_end_uses(ac: Mapping[str, Any]) -> List[Tuple[str, str, float]]:
+    """The segments of the end-use bar as ``(label, colour, kWh)``, without the ones that round to zero."""
+    end_uses = [(label, color, float(ac.get(key, 0.0))) for key, label, color in _FLOW_END_USES]
+    vehicle = _flow_vehicle_charging(ac)
+    if vehicle is not None:
+        end_uses.insert(3, (*_FLOW_VEHICLE_CHARGING, vehicle))
+    return [item for item in end_uses if abs(item[2]) >= _FLOW_MIN_KWH]
 
 
 def plot_pv_loss_waterfall(
@@ -303,11 +332,23 @@ def plot_pv_loss_waterfall(
     The static PVWatts losses get one row each from ``pvwatts.components_kwh``.
     After the PV DC output come curtailment, the inverter's conversion loss on
     direct PV and the battery path: the rest of the PV DC output that does not
-    arrive as usable AC energy. A bar under the last band splits the usable
-    AC energy into direct use, use through the battery (and vehicle) and
-    grid export. Steps that round to 0.0 kWh are left out, and a waterfall
-    without the ``pvwatts``, ``inverter`` or ``energy_balance`` block draws
-    the stages it has.
+    arrive as usable AC energy. With an AC-coupled battery (a
+    ``battery_inverter`` block) all PV passes through the PV inverter, so its
+    row reads "PV inverter conversion", and the battery path includes the
+    battery inverter. A bar under the last band splits the usable AC energy
+    into direct use, use through the battery or vehicle and grid export.
+    Steps that round to 0.0 kWh are left out, and a waterfall without the
+    ``pvwatts``, ``inverter`` or ``energy_balance`` block draws the stages it
+    has.
+
+    With a vehicle (``ac_delivery.pv_to_vehicle_kwh``), charging it from PV is
+    a use, not a loss. The bar gains a "Vehicle charging" segment:
+    ``pv_to_vehicle_kwh`` less ``pv_origin_vehicle_to_load_kwh``, the PV
+    energy the vehicle gave back to the home, which is already in the usable
+    AC energy. The waterfall does not split the vehicle's own losses by
+    origin, so the segment holds the charger and vehicle losses on the
+    returned energy, and the energy driven or still on board. The last band is
+    then the usable AC energy and vehicle charging together.
 
     A monofacial system has no ``Bifacial rear gain`` row: the stage is left
     out when ``waterfall["bifacial"]["enabled"]`` is false, or, for a
@@ -344,8 +385,8 @@ def plot_pv_loss_waterfall(
         raise ValueError("waterfall must contain at least two stages")
     rows = _flow_rows(waterfall, stages)
     ac = (waterfall.get("energy_balance") or {}).get("ac_delivery") or {}
-    end_uses = [(label, color, float(ac.get(key, 0.0))) for key, label, color in _FLOW_END_USES]
-    end_uses = [item for item in end_uses if abs(item[2]) >= _FLOW_MIN_KWH]
+    end_uses = _flow_end_uses(ac)
+    has_vehicle = _flow_vehicle_charging(ac) is not None
     years = list(yearly or [])
     lifetime = len(years) > 1
     period = waterfall.get("basis") == "period"
@@ -491,9 +532,9 @@ def plot_pv_loss_waterfall(
         c = 0.0
         for i, (label, color, value) in enumerate(end_uses):
             width = max(value, 0.0) * ipk
-            ax.add_patch(
-                Rectangle((x0 + c + 0.01, top), max(width - 0.02, 0.0), end_h, facecolor=color, edgecolor="none")
-            )
+            # Each segment keeps a 0.01 in margin on both sides; one too thin for it is listed, not drawn.
+            if width > 0.02:
+                ax.add_patch(Rectangle((x0 + c + 0.01, top), width - 0.02, end_h, facecolor=color, edgecolor="none"))
             c += width
             y = top + end_h / 2 + (i - (len(end_uses) - 1) / 2) * 0.24
             ax.add_patch(Rectangle((label_x, y - 0.07), 0.14, 0.14, facecolor=color, edgecolor="none"))
@@ -502,7 +543,7 @@ def plot_pv_loss_waterfall(
         ax.text(
             x0,
             top + end_h + 0.2,
-            "Where the usable AC energy goes",
+            "Where the PV energy goes" if has_vehicle else "Where the usable AC energy goes",
             ha="left",
             va="center",
             fontsize=8.5 * scale,
@@ -510,7 +551,9 @@ def plot_pv_loss_waterfall(
         )
 
     if lifetime:
-        _draw_lifetime_strip(fig, ax, years, replacement_years, x0, strip_top, c_end, label_x, pct_x, scale)
+        _draw_lifetime_strip(
+            fig, ax, years, replacement_years, x0, strip_top, c_end, label_x, pct_x, scale, has_vehicle
+        )
 
     if output_path:
         output_dir = os.path.dirname(os.path.abspath(output_path))
@@ -533,6 +576,7 @@ def _draw_lifetime_strip(
     label_x: float,
     pct_x: float,
     scale: float,
+    has_vehicle: bool = False,
 ) -> None:
     """Draw the yearly PV DC and usable AC lines with their table under the flow diagram; positions in inches."""
     years = [int(row["year"]) for row in yearly]
@@ -568,7 +612,8 @@ def _draw_lifetime_strip(
     low, high = min(usable + dc), max(usable + dc)
     pad = 0.08 * (high - low or high or 1.0)
     chart.set_ylim(low - pad, high + pad)
-    chart.set_xlim(years[0] - 0.4, years[-1] + 0.4)
+    pad_years = max(0.15, 0.03 * (years[-1] - years[0]))
+    chart.set_xlim(years[0] - pad_years, years[-1] + pad_years)
     ticks = sorted({years[0], years[-1], *range(5, years[-1], 5)}) if n > 10 else years
     chart.set_xticks([year for year in ticks if years[0] <= year <= years[-1]])
     chart.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: _flow_number(value)))
@@ -584,7 +629,16 @@ def _draw_lifetime_strip(
             (middle + gap / 2, middle - gap / 2) if dc[-1] >= usable[-1] else (middle - gap / 2, middle + gap / 2)
         )
     for y, label in ((y_dc, "PV DC output"), (y_ac, "Usable AC energy")):
-        chart.text(years[-1] + 0.6, y, label, fontsize=8.5 * scale, color=_FLOW_INK2, va="center", clip_on=False)
+        chart.annotate(
+            label,
+            (years[-1], y),
+            xytext=(6 * scale, 0),
+            textcoords="offset points",
+            fontsize=8.5 * scale,
+            color=_FLOW_INK2,
+            va="center",
+            annotation_clip=False,
+        )
     for year in replacement_years:
         if years[0] <= year <= years[-1]:
             chart.axvline(year, color=_FLOW_BASE, linewidth=0.8, linestyle=(0, (3, 3)))
@@ -619,7 +673,8 @@ def _draw_lifetime_strip(
     ax.text(
         label_x,
         y + 0.55,
-        f"Lifetime mean usable AC energy: {_flow_number(mean)} kWh per year,\n{change} against year 1.",
+        f"Lifetime mean usable AC energy: {_flow_number(mean)} kWh per year,\n{change} against year 1."
+        + ("\nUsable AC energy here leaves out vehicle charging." if has_vehicle else ""),
         ha="left",
         va="top",
         fontsize=8.5 * scale,

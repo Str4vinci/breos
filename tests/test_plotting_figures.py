@@ -425,6 +425,47 @@ def test_waterfall_lifetime_strip_draws_with_yearly_rows():
     assert len(plotting.plot_pv_loss_waterfall(_full_waterfall(), yearly=yearly[:1]).axes) == 1
 
 
+def _vehicle_waterfall() -> dict:
+    """``_full_waterfall`` with 120 kWh of PV AC into the vehicle, 8 kWh of it back to the load."""
+    waterfall = _full_waterfall()
+    ac = waterfall["energy_balance"]["ac_delivery"]
+    ac["export_kwh"] -= 120.0
+    ac["pv_origin_vehicle_to_load_kwh"] = 8.0
+    ac["usable_system_production_kwh"] -= 120.0 - 8.0
+    ac["pv_to_vehicle_kwh"] = 120.0
+    return waterfall
+
+
+def test_waterfall_counts_vehicle_charging_as_a_use_and_closes_the_balance():
+    waterfall = _vehicle_waterfall()
+    rows = plotting._flow_rows(waterfall, waterfall["stages"])
+    after_dc = rows[[label for _, label, _ in rows].index("PV DC output") :]
+    losses = {label: -value for kind, label, value in after_dc if kind == "step"}
+    end_uses = {label: value for label, _, value in plotting._flow_end_uses(waterfall["energy_balance"]["ac_delivery"])}
+
+    # Only real losses leave the band: the battery path stays at 20 kWh.
+    assert losses == pytest.approx({"Curtailment": 0.4, "Inverter conversion, direct PV": 30.0, "Battery path": 20.0})
+    assert end_uses["Vehicle charging, net of energy returned"] == pytest.approx(112.0)
+    assert end_uses["Via vehicle to load"] == pytest.approx(8.0)
+    assert after_dc[-1][1:] == ("Usable AC energy and vehicle charging", pytest.approx(sum(end_uses.values())))
+    assert sum(losses.values()) + sum(end_uses.values()) == pytest.approx(1000.0)
+
+    fig = plotting.plot_pv_loss_waterfall(waterfall)
+    labels = _stage_labels(fig)
+    assert "Where the PV energy goes" in labels
+    assert not any(label.startswith("Battery and vehicle") for label in labels)
+
+
+def test_waterfall_names_the_pv_inverter_loss_of_an_ac_coupled_battery():
+    waterfall = _full_waterfall()
+    waterfall["battery_inverter"] = {"conversion_loss_kwh": 10.0}
+    waterfall["energy_balance"]["ac_delivery"]["pv_to_battery_kwh"] = 110.0
+
+    labels = _stage_labels(plotting.plot_pv_loss_waterfall(waterfall))
+    assert "PV inverter conversion" in labels and "Inverter conversion, direct PV" not in labels
+    assert "Inverter conversion, direct PV" in _stage_labels(plotting.plot_pv_loss_waterfall(_full_waterfall()))
+
+
 @pytest.mark.parametrize(
     ("value", "decimals", "text"),
     [(5000.0, 0, "5000"), (12345.0, 0, "12 345"), (-150.4, 0, "−150"), (-0.04, 1, "0.0"), (1.75, 1, "1.8")],

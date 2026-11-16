@@ -549,7 +549,11 @@ PVWatts losses get a row each. After the PV DC output come curtailment,
 `inverter.direct_pv_conversion_loss_kwh` and the battery path, which is the
 rest of the PV DC output that does not arrive as usable AC energy. A bar under
 the diagram splits the usable AC energy into direct use, use through the
-battery and grid export. Pass `yearly=result["yearly"]` to add the PV DC
+battery and grid export. With an AC-coupled battery the inverter row is the
+PV inverter's whole conversion loss. With a vehicle, PV charging it is a use,
+not a loss: the bar adds `pv_to_vehicle_kwh` less
+`pv_origin_vehicle_to_load_kwh`, the PV energy the vehicle returned to the
+home, and the last band is the usable AC energy and vehicle charging. Pass `yearly=result["yearly"]` to add the PV DC
 output and usable AC energy over the project years, and `replacement_years`
 to mark battery replacements on it. The diagram itself always shows year 1,
 or the simulated window of a `[period]` run.
