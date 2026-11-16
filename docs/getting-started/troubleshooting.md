@@ -57,13 +57,22 @@ pip install "breos[fast]"           # Numba dispatch accelerator
 ```
 
 The `fast` extra installs Numba for the optional compiled dispatch backend.
-Set the App configuration key `execution_backend = "numba"`, set
-`[montecarlo].execution_backend = "numba"`, or pass the corresponding backend
-argument to an optimization entry point. The Python backend remains the
-default and numerical reference, so installing `fast` alone changes nothing.
-The backend chooses a battery dispatch loop and nothing else, so a PV-only
-study takes the same vectorized balance either way; selecting `numba` for one
-changes only the toolchain recorded in its provenance.
+The default `execution_backend = "auto"` uses it as soon as it is installed,
+and uses the Python backend otherwise, without a warning. Results are the same
+either way: the Python backend is the numerical reference, and the compiled
+one reproduces it bit for bit. The `execution` block of a result's provenance
+records the backend that ran (`execution_backend`) and the one asked for
+(`requested_execution_backend`).
+
+To choose a backend by name, set the App configuration key
+`execution_backend = "python"` or `"numba"`, set
+`[montecarlo].execution_backend`, or pass the backend argument of an
+optimization entry point. `"numba"` without the extra stops the run before it
+starts. The first run in a new environment compiles the kernels, which takes
+some seconds; the compiled code is cached on disk for later runs.
+The backend chooses a battery dispatch loop and a native rainflow scan and
+nothing else, so a PV-only study takes the same vectorized balance either way;
+`numba` for one changes only the toolchain recorded in its provenance.
 
 Core imports, help, option discovery, and configuration validation do not load
 Matplotlib. If an actual plotting command reports that its configuration

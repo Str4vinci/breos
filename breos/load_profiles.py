@@ -7,6 +7,7 @@ and resampling between hourly and 15-minute intervals.
 """
 
 import hashlib
+import math
 import os
 import re
 from contextlib import nullcontext
@@ -94,6 +95,7 @@ PROFILES: dict[str, ProfileSpec] = {
     )
 }
 PROFILE_KEYS: tuple[str, ...] = tuple(PROFILES)
+EXTERNAL_PROFILE_HELP = "How to get it: https://breos.readthedocs.io/en/latest/how-to/external-load-profile.html"
 
 # Keys removed in 0.7.0. They are not accepted; they only make the error say
 # which key replaces them.
@@ -217,7 +219,21 @@ def resolve_profile_file(
         if matches:
             return ProfileSource(key, matches[0], packaged=False, native_freq=resolution)
     patterns = " or ".join(repr(spec.files[resolution]) for resolution in resolutions)
-    raise FileNotFoundError(f"Load profile {key!r}: no file in {root} matches {patterns}.")
+    if root.is_dir():
+        state = ""
+    elif root.exists():
+        state = ", which is not a directory"
+    else:
+        state = f", which does not exist yet ({os.path.abspath(root)})"
+    if spec.bundled:
+        raise FileNotFoundError(
+            f"Load profile {key!r}: no file matching {patterns} in rlp_directory {str(root)!r}{state}. "
+            "Remove rlp_directory to use the copy BREOS ships."
+        )
+    raise FileNotFoundError(
+        f"Load profile {key!r} needs a file BREOS does not ship: put one matching {patterns} in "
+        f"rlp_directory {str(root)!r}{state}. {EXTERNAL_PROFILE_HELP}"
+    )
 
 
 def validate_profile_options(profile_type: Any, column: Any = None, unit: Any = None) -> None:
@@ -243,6 +259,11 @@ def validate_profile_options(profile_type: Any, column: Any = None, unit: Any = 
         raise ValueError(f"Unknown load_profile_unit {unit!r}. Valid units: {', '.join(PROFILE_UNITS)}.")
     if column is not None and (not isinstance(column, str) or not column):
         raise ValueError("load_profile_column must be a non-empty column name.")
+
+
+def _new_year_midnight(timestamp: pd.Timestamp) -> bool:
+    """Whether ``timestamp`` is 1 January at 00:00, where a profile's first row must fall."""
+    return (timestamp.month, timestamp.day) == (1, 1) and timestamp == timestamp.normalize()
 
 
 def load_profile(
@@ -313,7 +334,7 @@ def load_profile(
     """
     freq = normalise_frequency(freq)
     start_ts = pd.Timestamp(start_date)
-    if (start_ts.month, start_ts.day) != (1, 1) or start_ts != start_ts.normalize():
+    if not _new_year_midnight(start_ts):
         raise ValueError(
             f"start_date must be 1 January at midnight, got {start_date!r}. The profile's first row is "
             "1 January, so a later start would move every season; use "
@@ -348,11 +369,7 @@ def load_profile(
     new_index = pd.date_range(start=start_ts, end=end_ts, freq=native_freq, inclusive="left")
 
     if source.key == "demandlib_h0":
-        if (
-            source_start is None
-            or (source_start.month, source_start.day) != (1, 1)
-            or source_start != source_start.normalize()
-        ):
+        if source_start is None or not _new_year_midnight(source_start):
             raise ValueError(
                 f"The demandlib H0 file {source.label} needs a dated first row at 1 January 00:00 "
                 "to align its day types"
@@ -360,7 +377,7 @@ def load_profile(
     elif day_type is not None and source_start is not None:
         # A dated E-REDES file's year comes from its timestamps, never its
         # filename. Its rows must start at the first interval of the year.
-        if (source_start.month, source_start.day) != (1, 1) or source_start != source_start.normalize():
+        if not _new_year_midnight(source_start):
             raise ValueError(
                 f"The {spec.name} file {source.label} starts at {source_start.strftime('%Y-%m-%d %H:%M')}; "
                 "a dated E-REDES file needs its first row at 1 January 00:00, the start of the first "
@@ -422,11 +439,40 @@ def _localize_wall_clock_index(df: pd.DataFrame, timezone: Optional[str], freq: 
     twice (the rows cover the standard-time occurrence; the DST instants
     are forward-filled), keeping the result evenly spaced in absolute time.
     """
-    localized = df.copy()
     if timezone is None or timezone == "UTC":
+        localized = df.copy()
         localized.index = localized.index.tz_localize("UTC")
         return localized
 
+    # A clock change that is not a whole number of steps (Lord Howe moves its
+    # clock by 30 minutes) would put the wall-clock rows of one season between
+    # the absolute steps of the other. The rows are then split into the
+    # largest sub-step that divides both, pinned at that resolution, and
+    # averaged back onto absolute steps from the first instant.
+    step = pd.Timedelta(pd.tseries.frequencies.to_offset(freq))
+    instants = df.index.tz_localize(timezone, nonexistent="shift_forward", ambiguous=False)
+    offsets = (instants.tz_localize(None) - instants.tz_convert("UTC").tz_localize(None)).unique()
+    sub_seconds = math.gcd(
+        int(step.total_seconds()), *(int((offset - offsets[0]).total_seconds()) for offset in offsets)
+    )
+    if sub_seconds == int(step.total_seconds()):
+        return _localize_rows(df, timezone, freq)
+    parts = int(step.total_seconds()) // sub_seconds
+    sub_freq = pd.Timedelta(seconds=sub_seconds)
+    split = pd.DataFrame(
+        np.repeat(df.to_numpy(dtype=float), parts, axis=0),
+        columns=df.columns,
+        index=pd.date_range(df.index[0], periods=len(df) * parts, freq=sub_freq),
+    )
+    localized = _localize_rows(split, timezone, sub_freq)
+    localized = localized.resample(step, origin=localized.index[0]).mean()
+    localized.index.name = "DateTime"
+    return localized
+
+
+def _localize_rows(df: pd.DataFrame, timezone: str, freq: Any) -> pd.DataFrame:
+    """Pin evenly spaced wall-clock rows to ``timezone`` at their own step."""
+    localized = df.copy()
     target_totals = localized.sum()
     idx = localized.index.tz_localize(timezone, nonexistent="shift_forward", ambiguous=False)
     localized.index = idx
@@ -636,8 +682,8 @@ def _load_profile_csv(
     """Read a profile CSV, convert its load column to W, and validate it.
 
     ``columns`` lists the accepted ``(column, unit)`` pairs in order; when it
-    is empty the file must have exactly one value column after its timestamp
-    column, read in ``default_unit``. A ``native_freq`` of None is taken from
+    is empty the file must have exactly one value column besides a leading
+    timestamp or row-label column, read in ``default_unit``. A ``native_freq`` of None is taken from
     the row count. Fully blank rows (such as the trailing ``,,,`` row of
     E-REDES exports) are dropped. The remaining rows must be finite and
     non-negative, and a leading timestamp column, when present, must step at
@@ -653,8 +699,9 @@ def _load_profile_csv(
     except Exception as e:
         raise ValueError(f"Error loading profile from {csv_file}: {e}") from e
     # A file with a single column holds only values; otherwise the first
-    # column is the timestamp (or a row label).
-    timestamps = raw.iloc[:, 0] if raw.shape[1] > 1 else None
+    # column is the timestamp or a row label when it looks like one, and a
+    # value column like the others when it does not.
+    timestamps = raw.iloc[:, 0] if raw.shape[1] > 1 and _is_row_label(raw.iloc[:, 0]) else None
     if columns:
         found = next(((column, unit) for column, unit in columns if column in raw.columns), None)
         if found is None:
@@ -687,6 +734,19 @@ def _load_profile_csv(
     return df, native_freq, column, unit, source_start
 
 
+def _is_row_label(column: pd.Series) -> bool:
+    """Whether a CSV's first column is a timestamp or row label rather than load values.
+
+    A non-numeric column is a timestamp or label. A numeric one is a row label
+    only when it counts the rows, rising by one each row (0, 1, 2, ... or
+    1, 2, 3, ...), as an exported index does; any other numbers are load.
+    """
+    if not pd.api.types.is_numeric_dtype(column):
+        return True
+    values = column.to_numpy(dtype=float)
+    return len(values) > 1 and bool(np.all(np.diff(values) == 1.0)) and float(values[0]).is_integer()
+
+
 def _validate_profile_rows(
     df: pd.DataFrame,
     timestamps: Optional[pd.Series],
@@ -696,7 +756,7 @@ def _validate_profile_rows(
     naive_timestamps: bool = False,
 ) -> pd.Timestamp | None:
     """Refuse non-numeric, non-finite, negative, or irregularly stamped rows."""
-    values = pd.to_numeric(df["Electrical Consumption [W]"], errors="coerce").to_numpy(dtype=float)
+    values = pd.to_numeric(df[LOAD_COLUMN], errors="coerce").to_numpy(dtype=float)
     bad = ~np.isfinite(values)
     if bad.any():
         raise ValueError(
@@ -811,10 +871,14 @@ def scale_to_annual_consumption(
     # Target in Wh
     target_annual_wh = annual_consumption_kwh * 1000
 
-    # Scale
-    if current_annual_wh > 0:
-        scaling_factor = target_annual_wh / current_annual_wh
-        load_df[column] *= scaling_factor
+    if current_annual_wh <= 0:
+        if target_annual_wh > 0:
+            raise ValueError(
+                f"The load profile has no energy, so it cannot be scaled to {annual_consumption_kwh:g} kWh a year. "
+                "Check the file's values, column and unit."
+            )
+        return
+    load_df[column] *= target_annual_wh / current_annual_wh
 
 
 def _resample_load_to_15min(df: pd.DataFrame) -> pd.DataFrame:

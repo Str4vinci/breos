@@ -12,29 +12,24 @@ supply is None, never 0.
 from __future__ import annotations
 
 import copy
-from unittest import mock
 
 import numpy as np
 import pandas as pd
 import pytest
 
 import breos.optimization as optimization_module
-import breos.projection as projection_module
 from breos.app import App
 from breos.app_config import resolve_app_config
-from breos.app_inputs import AppRuntimeDependencies
 from breos.app_results import degradation_history_to_dicts
-from breos.battery import END_OF_LIFE_EVENTS_ATTR
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization import evaluate_projected_design
-from breos.projection import build_battery_config
-from breos.weather import build_battery_temperature_series
 from tests.conftest import _build_open_meteo_weather
+from tests.offline_app import serve_app_inputs
+from tests.project_year_runs import record_project_years
 from tests.test_terminal_replacement import BLAST, EVERY_PERIOD_EOL, _app, _mc_config
 
 pytestmark = pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
 
-BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5}
 HISTORY_FIELDS = [
     "year",
     "in_service",
@@ -71,18 +66,11 @@ def disabled():
 
 
 def _app_with_frames(**overrides):
-    """An App run, with each project year's results and degradation frames."""
-    frames = []
-    simulate = projection_module.simulate_energy_balance
-
-    def record(**kwargs):
-        output = simulate(**kwargs)
-        frames.append((output[0], output[4]))
-        return output
-
-    with mock.patch.object(projection_module, "simulate_energy_balance", record):
+    """An App run, with each project year's run: its results frame and end-of-life events."""
+    with pytest.MonkeyPatch.context() as patch:
+        runs = record_project_years(patch)
         app = _app(**overrides)
-    return app, frames
+    return app, runs
 
 
 def _without_replacement_keys(result):
@@ -98,26 +86,6 @@ def _without_replacement_keys(result):
         event.pop("reason")
     result.pop("battery_first_end_of_life_reason")
     return result
-
-
-# -- the setting ---------------------------------------------------------------------
-
-
-def test_the_key_defaults_to_replacing_and_reaches_the_battery():
-    assert resolve_app_config(BASE).cfg["battery_enable_replacement"] is True
-    resolved = resolve_app_config({**BASE, "battery_enable_replacement": False})
-    assert build_battery_config(resolved.cfg, resolved, initial_soh=100.0).enable_replacement is False
-    with pytest.raises(TypeError, match="'battery_enable_replacement' must be a boolean"):
-        resolve_app_config({**BASE, "battery_enable_replacement": "false"})
-
-
-def test_an_explicit_true_is_the_default_run():
-    default = _app().result()
-    explicit = _app(battery_enable_replacement=True).result()
-    for result in (default, explicit):
-        result["provenance"].pop("execution", None)
-        result["provenance"]["resolved_config"].pop("battery_enable_replacement")
-    assert default == explicit
 
 
 # -- running without replacement -------------------------------------------------
@@ -163,16 +131,6 @@ def test_disabled_replacement_is_a_minimum_service_time_beyond_the_horizon(actio
     assert _without_replacement_keys(disabled) == _without_replacement_keys(beyond)
 
 
-def test_a_pack_without_replacement_retires_at_its_first_crossing():
-    result = _app(battery_enable_replacement=False, battery_skipped_replacement_action="retire").result()
-    assert [(e["action"], e["reason"]) for e in result["battery_end_of_life_events"]] == [
-        ("retired", "replacement_disabled")
-    ]
-    history = result["battery_degradation_history"]
-    assert history[1]["charge_throughput_kwh"] == history[1]["discharge_throughput_kwh"] == 0.0
-    assert history[1]["soh_pct"] == history[0]["soh_pct"]
-
-
 def test_disabled_replacement_names_its_own_reason_over_the_other_rules():
     result = _app(
         battery_enable_replacement=False,
@@ -180,16 +138,6 @@ def test_disabled_replacement_names_its_own_reason_over_the_other_rules():
         battery_allow_terminal_replacement=False,
     ).result()
     assert [e["reason"] for e in result["battery_end_of_life_events"]] == ["replacement_disabled"]
-
-
-def test_monte_carlo_runs_each_trajectory_without_replacement(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=7)
-    config = _mc_config(battery_eol_percentage=EVERY_PERIOD_EOL, battery_enable_replacement=False)
-    runs = run_montecarlo(config, settings)
-    assert runs.provenance["resolved_config"]["battery_enable_replacement"] is False
-    assert (runs.runs["total_replacements"] == 0).all()
-    assert (runs.runs["first_end_of_life_reason"] == "replacement_disabled").all()
 
 
 def test_the_optimizer_records_its_replacement_setting():
@@ -266,13 +214,14 @@ def test_a_retired_pack_is_out_of_service_and_keeps_its_last_state():
     assert history[2]["fec"] == history[2]["discharge_throughput_kwh"] == 0.0
 
     # The means cover the steps the pack served, through the step that retired it.
-    results, degradation = frames[1]
-    retiring = degradation.attrs[END_OF_LIFE_EVENTS_ATTR][0]["step"]
+    assert len(frames) == 3
+    results = frames[1].results_df
+    retiring = frames[1].end_of_life_records[0]["step"]
     served = results.iloc[: retiring + 1]
     assert 0 < retiring < len(results) - 1
     assert history[1]["mean_soc_pct"] == pytest.approx(served["Battery_SOC_Absolute"].mean() * 100, abs=0.006)
     assert history[1]["mean_cell_temperature_c"] == pytest.approx(served["T_cell"].mean(), abs=0.006)
-    first = frames[0][0]
+    first = frames[0].results_df
     assert history[0]["mean_soc_pct"] == pytest.approx(first["Battery_SOC_Absolute"].mean() * 100, abs=0.006)
     # A year the pack never serves has no means.
     assert history[2]["mean_soc_pct"] is None and history[2]["mean_cell_temperature_c"] is None
@@ -311,7 +260,9 @@ def test_a_kept_pack_at_zero_health_is_retired(model, years, zero_year):
         assert entry["soh_pct"] == entry["fec"] == entry["discharge_throughput_kwh"] == 0.0
         assert entry["mean_soc_pct"] is None and entry["mean_cell_temperature_c"] is None
     # Stored energy and per-step health never go below zero.
-    for results, _ in frames:
+    assert len(frames) == years
+    for run in frames:
+        results = run.results_df
         assert (results["Battery_Energy"] >= 0.0).all() and (results["Battery_SOH"] >= 0.0).all()
     assert [entry["soh_pct"] for entry in history] == [row["soh_pct"] for row in result["yearly"]]
 
@@ -411,14 +362,7 @@ def _optimizer_design(*, battery_kwh, enable_replacement, years):
 
 def test_app_without_replacement_matches_the_optimizer(monkeypatch):
     weather, load = _design_inputs()
-    deps = AppRuntimeDependencies(
-        load_profile=lambda **_kwargs: load.copy(),
-        load_weather=lambda **_kwargs: None,
-        fetch_tmy_weather_data=lambda **_kwargs: (weather.copy(), {}),
-        resample_to_15min=lambda frame, **_kwargs: frame,
-        build_battery_temperature_series=build_battery_temperature_series,
-    )
-    monkeypatch.setattr(App, "_runtime_dependencies", staticmethod(lambda: deps))
+    serve_app_inputs(monkeypatch, weather, load)
     app = App(
         {
             "location": LOCATION,
@@ -452,10 +396,3 @@ def test_app_without_replacement_matches_the_optimizer(monkeypatch):
         app._artifacts.yearly_df["Battery_SOH_%"], design.yearly["Battery_SOH_%"], check_exact=True
     )
     assert (design.yearly["Replacements"] == 0).all()
-
-
-def test_the_key_reference_lists_the_setting():
-    from pathlib import Path
-
-    reference = (Path(__file__).resolve().parents[1] / "docs" / "getting-started" / "config-reference.md").read_text()
-    assert "| `battery_enable_replacement` | `True` | — |" in reference

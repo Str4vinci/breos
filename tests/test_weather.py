@@ -19,6 +19,7 @@ from breos.weather import (
     parse_weather_filename,
     preload_weather_by_year,
     read_epw_file,
+    read_weather_csv,
     relabel_right_labeled_interval_means,
     resample_to_15min,
     save_weather_csv,
@@ -370,6 +371,27 @@ def test_historical_weather_without_requested_year_coverage_is_not_selected(tmp_
     assert loaded is None
 
 
+def test_historical_year_selection_follows_the_interval_start_of_right_labels(tmp_path):
+    # Open-Meteo interval means are labelled at the end of their hour: the row
+    # stamped 2023-01-01 00:00 is the last hour of 2022.
+    labels = pd.date_range("2022-01-01 01:00", "2025-01-01 00:00", freq="h", tz="UTC")
+    weather = pd.DataFrame({"ghi": 0.0}, index=labels)
+    weather.loc[pd.Timestamp("2023-01-01 00:00", tz="UTC"), "ghi"] = 10.0
+    weather.loc[pd.Timestamp("2024-01-01 00:00", tz="UTC"), "ghi"] = 100.0
+    weather.attrs["breos_weather_metadata"] = {
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "right",
+    }
+    save_weather_csv(weather, tmp_path / "porto_historical_2022_2024_openmeteo.csv")
+
+    loaded = load_weather("porto", data_type="historical", start_year=2023, end_year=2023, weather_dir=str(tmp_path))
+
+    assert len(loaded) == 8760
+    assert loaded.index[0] == pd.Timestamp("2023-01-01 01:00", tz="UTC")
+    assert loaded.index[-1] == pd.Timestamp("2024-01-01 00:00", tz="UTC")
+    assert loaded["ghi"].sum() == 100.0
+
+
 def test_ambiguous_weather_files_are_rejected(tmp_path):
     for filename in (
         "porto_historical_2018_2024_openmeteo.csv",
@@ -391,52 +413,25 @@ def test_ambiguous_weather_files_are_rejected(tmp_path):
     assert excinfo.value.sources == ["openmeteo"]
 
 
-def test_resample_to_15min_keeps_all_slots_in_last_hour():
-    idx = pd.date_range("2025-01-01 00:00", periods=3, freq="h")
-    weather = pd.DataFrame({"temp_air": [0.0, 4.0, 8.0]}, index=idx)
+@pytest.mark.parametrize(
+    ("kwargs", "temperatures"),
+    [
+        pytest.param({"method": "linear"}, [0.0, 4.0, 8.0], id="linear"),
+        pytest.param({}, [0.0, 4.0, 8.0, 12.0], id="makima-default"),
+    ],
+)
+def test_resample_to_15min_keeps_all_slots_in_last_hour(kwargs, temperatures):
+    idx = pd.date_range("2025-01-01 00:00", periods=len(temperatures), freq="h")
+    weather = pd.DataFrame({"temp_air": temperatures}, index=idx)
 
-    resampled = resample_to_15min(weather, method="linear")
+    resampled = resample_to_15min(weather, **kwargs)
 
-    assert len(resampled) == 12
-    assert resampled.index[-1] == pd.Timestamp("2025-01-01 02:45")
-
-
-def test_resample_to_15min_makima_holds_last_observation_through_last_hour():
-    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h")
-    weather = pd.DataFrame({"temp_air": [0.0, 4.0, 8.0, 12.0]}, index=idx)
-
-    resampled = resample_to_15min(weather)
-
-    assert len(resampled) == 16
-    assert resampled.index[-1] == pd.Timestamp("2025-01-01 03:45")
-    assert resampled["temp_air"].notna().all()
-    assert resampled.loc["2025-01-01 03:00":, "temp_air"].tolist() == pytest.approx([12.0] * 4)
-
-
-def test_resample_to_15min_can_preserve_each_hours_irradiance_energy():
-    idx = pd.date_range("2025-06-21 10:00", periods=4, freq="h", tz="UTC")
-    weather = pd.DataFrame(
-        {
-            "ghi": [500.0, 700.0, 600.0, 300.0],
-            "dni": [400.0, 600.0, 500.0, 200.0],
-            "dhi": [250.0, 300.0, 350.0, 200.0],
-            "temp_air": [20.0, 21.0, 22.0, 21.0],
-        },
-        index=idx,
-    )
-
-    weather.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
-    resampled = resample_to_15min(
-        weather,
-        method="linear",
-        latitude=41.1579,
-        longitude=-8.6291,
-        irradiance_resampling="clear_sky_energy_conserving",
-    )
-
-    for column in ("ghi", "dni", "dhi"):
-        hourly_means = resampled[column].to_numpy().reshape(len(weather), 4).mean(axis=1)
-        assert hourly_means == pytest.approx(weather[column].to_numpy())
+    assert len(resampled) == 4 * len(temperatures)
+    assert resampled.index[-1] == idx[-1] + pd.Timedelta(minutes=45)
+    if not kwargs:
+        # Makima holds the last observation through the last hour.
+        assert resampled["temp_air"].notna().all()
+        assert resampled.loc["2025-01-01 03:00":, "temp_air"].tolist() == pytest.approx([12.0] * 4)
 
 
 def test_clear_sky_resampling_does_not_attenuate_values_at_source_timestamps():
@@ -560,46 +555,40 @@ def test_resample_interpolates_clearness_index_at_interval_midpoints():
     np.testing.assert_allclose(resampled["ghi"].to_numpy()[inner], expected[inner], atol=1e-9)
 
 
-def test_fetch_tmy_weather_uses_horizon_by_default(monkeypatch):
-    tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2020-01-01 00:00", periods=1, freq="h"))
+def _install_fake_pvgis_tmy(monkeypatch, tmy, api_metadata=None):
+    """Serve ``tmy`` from PVGIS and return the keyword arguments of each request."""
     captured = {}
 
     def fake_get_pvgis_tmy(*args, **kwargs):
         captured.update(kwargs)
-        return tmy.copy(), {}
+        return tmy.copy(), {} if api_metadata is None else api_metadata
 
     monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
+    return captured
 
-    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None)
+
+@pytest.mark.parametrize(
+    ("kwargs", "usehorizon", "horizon"),
+    [
+        pytest.param({}, True, {"status": "applied", "provider": "pvgis", "profile": "provider_default"}, id="default"),
+        pytest.param(
+            {"use_horizon": False},
+            False,
+            {"status": "not_applied", "provider": "pvgis", "profile": None},
+            id="unshaded",
+        ),
+    ],
+)
+def test_fetch_tmy_requests_the_pvgis_horizon_unless_disabled(monkeypatch, kwargs, usehorizon, horizon):
+    tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2020-01-01 00:00", periods=1, freq="h"))
+    captured = _install_fake_pvgis_tmy(monkeypatch, tmy)
+
+    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None, **kwargs)
 
     assert len(weather) == 1
-    assert captured["usehorizon"] is True
+    assert captured["usehorizon"] is usehorizon
     assert weather.attrs["breos_weather_metadata"]["source"] == "PVGIS_TMY"
-    assert weather.attrs["breos_weather_metadata"]["horizon"] == {
-        "status": "applied",
-        "provider": "pvgis",
-        "profile": "provider_default",
-    }
-
-
-def test_fetch_tmy_can_request_unshaded_pvgis_weather(monkeypatch):
-    tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2020-01-01 00:00", periods=1, freq="h"))
-    captured = {}
-
-    def fake_get_pvgis_tmy(*args, **kwargs):
-        captured.update(kwargs)
-        return tmy.copy(), {}
-
-    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
-
-    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None, use_horizon=False)
-
-    assert captured["usehorizon"] is False
-    assert weather.attrs["breos_weather_metadata"]["horizon"] == {
-        "status": "not_applied",
-        "provider": "pvgis",
-        "profile": None,
-    }
+    assert weather.attrs["breos_weather_metadata"]["horizon"] == horizon
 
 
 def test_local_weather_records_path_and_hash(tmp_path):
@@ -618,27 +607,29 @@ def test_local_weather_records_path_and_hash(tmp_path):
     assert metadata["horizon"] == {"status": "unknown", "provider": None, "profile": None}
 
 
-def test_saved_pvgis_weather_round_trips_horizon_metadata(monkeypatch, tmp_path):
+_PVGIS_API_METADATA = {
+    "inputs": {
+        "location": {"latitude": 41.0, "longitude": -8.0},
+        "meteo_data": {"radiation_db": "SARAH3", "year_min": 2005, "year_max": 2023},
+    }
+}
+
+
+def _save_pvgis_tmy(monkeypatch, tmp_path, **kwargs):
+    """Fetch a two-hour PVGIS TMY into ``tmp_path/weather`` and return the CSV path."""
     tmy = pd.DataFrame(
         {"ghi": [0.0, 1.0]},
         index=pd.date_range("2020-01-01 00:00", periods=2, freq="h", tz="UTC"),
     )
-    api_metadata = {
-        "inputs": {
-            "location": {"latitude": 41.0, "longitude": -8.0},
-            "meteo_data": {"radiation_db": "SARAH3", "year_min": 2005, "year_max": 2023},
-        }
-    }
-
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        "breos.weather.pvlib.iotools.get_pvgis_tmy",
-        lambda *args, **kwargs: (tmy.copy(), api_metadata),
-    )
+    _install_fake_pvgis_tmy(monkeypatch, tmy, _PVGIS_API_METADATA)
+    fetch_tmy_weather_data(41.0, -8.0, sample_year=None, save_to_file=True, **kwargs)
+    return tmp_path / "weather" / "lat41_lon-8_tmy_2005_2023_pvgis-sarah3.csv"
 
-    fetch_tmy_weather_data(41.0, -8.0, sample_year=None, save_to_file=True, use_horizon=False)
 
-    csv_path = tmp_path / "weather" / "lat41_lon-8_tmy_2005_2023_pvgis-sarah3.csv"
+def test_saved_pvgis_weather_round_trips_horizon_metadata(monkeypatch, tmp_path):
+    csv_path = _save_pvgis_tmy(monkeypatch, tmp_path, use_horizon=False)
+
     sidecar_path = csv_path.with_name(f"{csv_path.name}.metadata.json")
     payload = json.loads(sidecar_path.read_text())
     assert payload["schema_version"] == 1
@@ -648,29 +639,13 @@ def test_saved_pvgis_weather_round_trips_horizon_metadata(monkeypatch, tmp_path)
     metadata = loaded.attrs["breos_weather_metadata"]
     assert metadata["source"] == "local_file"
     assert metadata["upstream_source"] == "PVGIS_TMY"
-    assert metadata["api_metadata"] == api_metadata
+    assert metadata["api_metadata"] == _PVGIS_API_METADATA
     assert metadata["horizon"] == {"status": "not_applied", "provider": "pvgis", "profile": None}
     assert metadata["metadata_sidecar"] == str(sidecar_path)
 
 
 def test_stale_weather_sidecar_is_ignored(monkeypatch, tmp_path, caplog):
-    tmy = pd.DataFrame(
-        {"ghi": [0.0, 1.0]},
-        index=pd.date_range("2020-01-01 00:00", periods=2, freq="h", tz="UTC"),
-    )
-    api_metadata = {
-        "inputs": {
-            "location": {"latitude": 41.0, "longitude": -8.0},
-            "meteo_data": {"radiation_db": "SARAH3", "year_min": 2005, "year_max": 2023},
-        }
-    }
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        "breos.weather.pvlib.iotools.get_pvgis_tmy",
-        lambda *args, **kwargs: (tmy.copy(), api_metadata),
-    )
-    fetch_tmy_weather_data(41.0, -8.0, sample_year=None, save_to_file=True)
-    csv_path = tmp_path / "weather" / "lat41_lon-8_tmy_2005_2023_pvgis-sarah3.csv"
+    csv_path = _save_pvgis_tmy(monkeypatch, tmp_path)
     csv_path.write_text(csv_path.read_text() + "\n")
 
     loaded = load_weather("lat41_lon-8", data_type="tmy", weather_dir=str(csv_path.parent))
@@ -744,19 +719,29 @@ def test_fetch_tmy_keeps_utc_instants_for_non_utc_location(monkeypatch):
 
 def test_fetch_tmy_without_sample_year_keeps_original_index(monkeypatch):
     tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2009-01-01 00:00", periods=1, freq="h", tz="UTC"))
-    captured = {}
-
-    def fake_get_pvgis_tmy(*args, **kwargs):
-        captured.update(kwargs)
-        return tmy.copy(), {}
-
-    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
+    captured = _install_fake_pvgis_tmy(monkeypatch, tmy)
 
     weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None)
 
     assert captured["roll_utc_offset"] is None
     assert captured["coerce_year"] is None
     assert weather.index[0] == tmy.index[0]
+
+
+def test_fetch_tmy_with_missing_new_year_midnight(monkeypatch):
+    captured = {}
+
+    def fake_get_pvgis_tmy(*args, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame({"ghi": [0.0]}, index=pd.DatetimeIndex(["1990-01-01T05:00Z"])), {}
+
+    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
+
+    weather, _metadata = fetch_tmy_weather_data(-12.05, -77.04, sample_year=1990, timezone="America/Lima")
+
+    assert captured["roll_utc_offset"] == -4
+    assert captured["coerce_year"] == 1990
+    assert weather.index[0] == pd.Timestamp("1990-01-01T05:00Z")
 
 
 def test_fetch_tmy_rejects_fractional_hour_timezone_before_request(monkeypatch):
@@ -774,39 +759,91 @@ def test_fetch_tmy_rejects_fractional_hour_timezone_before_request(monkeypatch):
     assert requested is False
 
 
-def test_read_epw_resamples_when_15min_is_requested(monkeypatch):
-    epw = pd.DataFrame(
+_VALIDATION_WEATHER = Path(__file__).resolve().parents[1] / "validation" / "data" / "weather"
+_NEW_DELHI_TMY = _VALIDATION_WEATHER / "new_delhi_tmy_2005_2023_pvgis-era5.csv.gz"
+
+
+def _app_on_weather_file(weather_file, timezone, resolution, latitude=28.61, longitude=77.21):
+    from breos.app import App
+
+    app = App(
         {
-            "ghi": [0.0, 10.0],
-            "dni": [0.0, 5.0],
-            "dhi": [0.0, 5.0],
-            "temp_air": [12.0, 13.0],
-            "wind_speed": [1.0, 1.5],
-        },
-        index=pd.date_range("2025-01-01 00:00", periods=2, freq="h"),
+            "location": {"latitude": latitude, "longitude": longitude, "timezone": timezone},
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "projection_years": 1,
+            "solar_position": "interval-start",
+            "weather_file": str(weather_file),
+            "resolution": resolution,
+        }
     )
-    calls = {}
+    app.simulate()
+    return app.result()
 
-    def fake_read_epw(_filepath):
-        return epw.copy(), {"latitude": 41.0, "longitude": -8.0}
 
-    def fake_resample(df, method="makima", latitude=None, longitude=None, **_kwargs):
-        calls["method"] = method
-        calls["latitude"] = latitude
-        calls["longitude"] = longitude
-        return df
+def test_hourly_weather_on_utc_hours_is_rejected_in_a_fractional_hour_timezone():
+    # The PVGIS TMY is stamped on whole UTC hours; the hourly load steps on
+    # local hours at UTC+5:30, so the two share no instant. This used to fail
+    # late, blaming an empty house load.
+    with pytest.raises(ValueError, match=r"whole UTC hours.*Asia/Kolkata \(UTC\+5:30\).*resolution = \"15min\""):
+        _app_on_weather_file(_NEW_DELHI_TMY, "Asia/Kolkata", "h")
 
-    monkeypatch.setattr("breos.weather.pvlib.iotools.read_epw", fake_read_epw)
-    monkeypatch.setattr("breos.weather.resample_to_15min", fake_resample)
 
-    weather = read_epw_file("dummy.epw", freq="15min")
+def test_fractional_hour_timezone_runs_at_15_minutes():
+    result = _app_on_weather_file(_NEW_DELHI_TMY, "Asia/Kolkata", "15min")
 
-    assert calls == {"method": "makima", "latitude": 41.0, "longitude": -8.0}
-    assert weather.attrs["breos_weather_metadata"]["horizon"] == {
-        "status": "unknown",
-        "provider": "epw",
-        "profile": None,
+    assert result["usable_ac_system_production_kwh"] > 0
+
+
+def test_hourly_weather_on_local_hours_runs_in_a_fractional_hour_timezone(tmp_path):
+    weather = read_weather_csv(_NEW_DELHI_TMY)
+    weather.index = (weather.index + pd.Timedelta(minutes=30)).tz_convert("+05:30")
+    weather.index.name = "time"
+    path = tmp_path / "new_delhi_local_hours.csv"
+    weather.to_csv(path)
+
+    result = _app_on_weather_file(path, "Asia/Kolkata", "h")
+
+    assert result["usable_ac_system_production_kwh"] > 0
+
+
+def test_hourly_weather_file_runs_in_a_whole_hour_timezone():
+    result = _app_on_weather_file(
+        _VALIDATION_WEATHER / "berlin_tmy_2005_2023_pvgis-sarah3.csv.gz",
+        "Europe/Berlin",
+        "h",
+        latitude=52.52,
+        longitude=13.40,
+    )
+
+    assert result["usable_ac_system_production_kwh"] > 0
+
+
+def test_hourly_monte_carlo_weather_on_utc_hours_is_rejected_in_a_fractional_hour_timezone(tmp_path):
+    from breos.montecarlo import MonteCarloSettings, run_montecarlo
+
+    tmy = read_weather_csv(_NEW_DELHI_TMY).tz_convert("UTC")
+    tmy = tmy[tmy.index.year == 2025]
+    hours = pd.date_range("2025-01-01", periods=8760, freq="h", tz="UTC")
+    year = tmy.reindex(hours).ffill().bfill()
+    years = []
+    for target in (2021, 2022):
+        frame = year.copy()
+        frame.index = hours.map(lambda stamp, target=target: stamp.replace(year=target))
+        years.append(frame)
+    path = tmp_path / "new_delhi_historical.csv"
+    pd.concat(years).rename_axis("date").to_csv(path)
+    config = {
+        "location": {"latitude": 28.61, "longitude": 77.21, "timezone": "Asia/Kolkata"},
+        "n_modules": 6,
+        "annual_consumption_kwh": 3000,
+        "projection_years": 1,
+        "solar_position": "interval-start",
+        "resolution": "h",
     }
+
+    with pytest.raises(ValueError, match=r"whole UTC hours.*Asia/Kolkata \(UTC\+5:30\).*resolution = \"15min\""):
+        run_montecarlo(config, MonteCarloSettings(weather_file=str(path), n_runs=2, years_per_run=1, seed=1))
 
 
 @pytest.mark.parametrize("freq", ["30min", "15T", "H"])
@@ -948,3 +985,98 @@ def test_preload_weather_by_year_names_a_missing_date_column(tmp_path):
 
     with pytest.raises(ValueError, match="has no 'date' column"):
         preload_weather_by_year(str(path), target_year=2025)
+
+
+def _hourly_year_csv(path, stamps, *, leading_row_numbers=False):
+    frame = pd.DataFrame({"date": stamps, "ghi": np.arange(len(stamps)) % 900.0, "temperature_2m": 10.0})
+    frame.to_csv(path, index=leading_row_numbers)
+    return path
+
+
+@pytest.mark.parametrize("stamp_format", ["%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S"])
+def test_read_weather_csv_reads_day_first_timestamps(tmp_path, stamp_format):
+    index = pd.date_range("2023-01-01", "2023-12-31 23:00", freq="h")
+    path = _hourly_year_csv(tmp_path / "dayfirst.csv", index.strftime(stamp_format))
+
+    read = read_weather_csv(path).index
+    pd.testing.assert_index_equal(read, index.as_unit(read.unit), check_names=False)
+
+
+def test_read_weather_csv_finds_the_date_column_after_row_numbers(tmp_path):
+    index = pd.date_range("2023-01-01", "2023-12-31 23:00", freq="h")
+    path = _hourly_year_csv(tmp_path / "numbered.csv", index.strftime("%Y-%m-%d %H:%M"), leading_row_numbers=True)
+
+    weather = read_weather_csv(path)
+
+    pd.testing.assert_index_equal(weather.index, index.as_unit(weather.index.unit), check_names=False)
+    assert weather.index.name == "date"
+    # The row numbers are not weather.
+    assert list(weather.columns) == ["ghi", "temperature_2m"]
+
+
+def test_read_weather_csv_refuses_a_file_without_timestamps(tmp_path):
+    path = tmp_path / "values.csv"
+    pd.DataFrame({"ghi": [0.0, 1.0], "temperature_2m": [10.0, 11.0]}).to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="has no timestamps"):
+        read_weather_csv(path)
+
+
+def test_read_weather_csv_reads_local_times_across_dst_as_instants(tmp_path):
+    local = pd.date_range("2023-01-01", "2023-12-31 23:00", freq="h", tz="Europe/Berlin")
+    path = _hourly_year_csv(tmp_path / "berlin.csv", [str(stamp) for stamp in local])
+
+    assert read_weather_csv(path).index.equals(local.tz_convert("UTC"))
+
+
+@pytest.mark.parametrize(("zone", "new_year"), [("Europe/Berlin", "+01:00"), ("Australia/Sydney", "+11:00")])
+def test_preload_weather_by_year_splits_local_times_across_dst_into_civil_years(tmp_path, zone, new_year):
+    # The years are split on the fixed clock of the file's New Year offset,
+    # so every civil year keeps its 8760 rows in both hemispheres; the reader
+    # of a single file, read_weather_csv, takes the same file.
+    local = pd.date_range("2022-01-01", "2023-12-31 23:00", freq="h", tz=zone)
+    path = _hourly_year_csv(tmp_path / "local.csv", [stamp.isoformat() for stamp in local])
+
+    years = preload_weather_by_year(str(path), target_year=2025)
+
+    assert sorted(years) == [2022, 2023]
+    for frame in years.values():
+        assert len(frame) == 8760
+        assert frame["date"].iloc[0] == pd.Timestamp(f"2025-01-01T00:00{new_year}")
+        assert frame["date"].iloc[-1] == pd.Timestamp(f"2025-12-31T23:00{new_year}")
+    assert read_weather_csv(path).index.equals(local.tz_convert("UTC"))
+
+
+def test_a_battery_temperature_file_on_local_time_across_dst_is_read_as_instants(tmp_path):
+    from breos.weather import _read_temperature_file
+
+    local = pd.date_range("2025-01-01", "2025-12-31 23:00", freq="h", tz="Europe/Berlin")
+    path = tmp_path / "temperature.csv"
+    pd.DataFrame({"date": [stamp.isoformat() for stamp in local], "temp": 10.0}).to_csv(path, index=False)
+
+    assert _read_temperature_file(str(path)).index.equals(local.tz_convert("UTC"))
+
+
+@pytest.mark.parametrize(
+    ("source_zone", "target_zone"),
+    [("Europe/Berlin", "Europe/Berlin"), ("UTC", "Europe/Berlin"), ("UTC", "UTC"), ("Australia/Sydney", "UTC")],
+)
+def test_representative_temperatures_are_restamped_on_their_own_clock(source_zone, target_zone):
+    # A representative 2023 is restamped onto a 2025 calendar: in a named zone
+    # without landing on the hour the spring change skips, and from UTC onto a
+    # civil year whose first hour lies in the UTC year before.
+    from breos.weather import _align_temperature_to_index
+
+    source_index = pd.date_range("2023-01-01", "2024-01-01", freq="h", tz=source_zone, inclusive="left")
+    source = pd.Series(source_index.hour.to_numpy(dtype=float), index=source_index, name="temp_air")
+    target = pd.date_range("2025-01-01", "2026-01-01", freq="h", tz=target_zone, inclusive="left")
+
+    aligned = _align_temperature_to_index(source, target, label="weather temperature", align_calendar_year=True)
+
+    assert aligned.index.equals(target)
+    assert np.isfinite(aligned.to_numpy()).all()
+    # Instants move by whole years, as the App's weather restamp moves them,
+    # so in a named zone the hours between the two years' clock changes keep
+    # their sun, not their wall clock. In UTC every hour keeps its reading.
+    if source_zone == target_zone == "UTC":
+        np.testing.assert_array_equal(aligned.to_numpy(), target.hour.to_numpy(dtype=float))

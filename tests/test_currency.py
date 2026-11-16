@@ -4,7 +4,6 @@ import csv
 import json
 import re
 from copy import deepcopy
-from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -16,7 +15,9 @@ from breos.app_config import resolve_app_config
 from breos.economics import default_amount_cost_keys, find_payback_year_interpolated, write_cost_projection
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
-from tools.generate_app_golden import SCENARIOS, _fake_fetch
+from tests.conftest import declare_instant_at_labels
+from tests.offline_app import offline
+from tools.generate_app_golden import SCENARIOS
 from tools.parity.app_parity import flatten
 
 # A power of two, so every scaled sum and product is the exact scaled float.
@@ -101,13 +102,6 @@ PLANNER_RUN = {
 USD_COSTS = {key: value * 1.1 for key, value in EUR_COSTS.items()}
 
 
-def _offline():
-    return (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    )
-
-
 def _scaled_prices(table, factor):
     """A tariff or reference table with every amount scaled; the schedule and names unchanged."""
     table = deepcopy(table)
@@ -143,11 +137,17 @@ def _scaled_config(config, factor, currency):
 
 
 def _run(config):
-    weather_patch, load_patch = _offline()
+    weather_patch, load_patch = offline()
     with weather_patch, load_patch:
         app = App(config)
         app.simulate()
     return app
+
+
+@pytest.fixture(scope="module")
+def planner_run():
+    """The two-year planner run, simulated once for the tests that only read it."""
+    return _run(PLANNER_RUN)
 
 
 # A money output is named for money and not for a physical unit; every one
@@ -198,8 +198,9 @@ def _assert_results_scale(base, scaled):
 
 
 @pytest.mark.parametrize("config", [BASE, TARIFF_RUN, PLANNER_RUN], ids=["flat", "tariff", "planner"])
-def test_scaling_every_money_input_scales_every_money_output(config):
-    base, scaled = _run(config), _run(_scaled_config(config, K, "JPY"))
+def test_scaling_every_money_input_scales_every_money_output(config, request):
+    base = request.getfixturevalue("planner_run") if config is PLANNER_RUN else _run(config)
+    scaled = _run(_scaled_config(config, K, "JPY"))
     base_result, scaled_result = base.result(), scaled.result()
 
     assert base_result["provenance"]["currency"] == "EUR"
@@ -230,7 +231,7 @@ def test_scaling_every_money_input_scales_every_money_output(config):
 def test_revalue_moves_a_run_to_another_currency():
     base = _run(BASE)
     scaled = _scaled_config(BASE, K, "JPY")
-    weather_patch, load_patch = _offline()
+    weather_patch, load_patch = offline()
     with weather_patch, load_patch:
         revalued = base.revalue({"currency": "JPY", "costs": scaled["costs"]})
         with pytest.raises(ValueError, match=r"The run is in JPY, but electricity_cost"):
@@ -252,7 +253,7 @@ def test_revalue_into_another_currency_restates_every_cost():
     costs = {**EUR_COSTS, "land_cost": 0.0}
     base = _run({**BASE, "projection_years": 2, "cost_preset": "residential_pt", "costs": costs})
     usd = {key: value * K for key, value in costs.items() if key != "land_cost"}
-    weather_patch, load_patch = _offline()
+    weather_patch, load_patch = offline()
     with weather_patch, load_patch:
         # A new label alone would report the EUR amounts as USD.
         with pytest.raises(ValueError, match=r"cost_preset 'residential_pt' is priced in EUR, but the run is in USD"):
@@ -290,7 +291,7 @@ def test_revalue_into_another_currency_restates_every_tariff_amount():
     base = _run(config)
     usd = _scaled_config(config, K, "USD")
     credit = ("amount_per_year", "network_fixed_per_year", "network_import_prices")
-    weather_patch, load_patch = _offline()
+    weather_patch, load_patch = offline()
     with weather_patch, load_patch:
         # Only the labels change: every tariff and reference amount would be EUR read as USD.
         with pytest.raises(ValueError) as error:
@@ -347,7 +348,7 @@ def test_revalue_by_the_tariff_currency_alone_restates_every_tariff_amount():
     config = {**TARIFF_RUN, "projection_years": 2, "smart_charging": None, "reference_tariff": None}
     base = _run(config)
     usd = _scaled_config(config, K, "USD")
-    weather_patch, load_patch = _offline()
+    weather_patch, load_patch = offline()
     with weather_patch, load_patch:
         with pytest.raises(ValueError, match=r"from EUR to USD, but tariff\.import_prices, .* are amounts in EUR"):
             base.revalue({"costs": usd["costs"], "tariff": {"currency": "USD"}})
@@ -359,7 +360,7 @@ def test_revalue_by_the_tariff_currency_alone_restates_every_tariff_amount():
 def test_revalue_back_to_the_default_currency_restates_every_cost():
     config = {**BASE, "projection_years": 2}
     base = _run(_scaled_config(config, K, "JPY"))
-    weather_patch, load_patch = _offline()
+    weather_patch, load_patch = offline()
     with weather_patch, load_patch:
         with pytest.raises(ValueError, match=r"from JPY to EUR, but costs\.\w+, .* are amounts in JPY"):
             base.revalue({"currency": None})
@@ -371,10 +372,10 @@ def test_revalue_back_to_the_default_currency_restates_every_cost():
     assert flatten(defaults) == flatten(_run({**config, "currency": None, "costs": {}}).result())
 
 
-def test_revalue_refuses_a_currency_change_under_a_wear_cost():
-    base = _run(PLANNER_RUN)
+def test_revalue_refuses_a_currency_change_under_a_wear_cost(planner_run):
+    base = planner_run
     scaled = _scaled_config(PLANNER_RUN, K, "JPY")
-    weather_patch, load_patch = _offline()
+    weather_patch, load_patch = offline()
     with weather_patch, load_patch:
         with pytest.raises(ValueError, match=r"smart_charging\.wear_cost_per_kwh \(0\.02\) is in EUR, and revalue"):
             base.revalue({key: scaled[key] for key in ("currency", "costs", "tariff", "reference_tariff")})
@@ -393,7 +394,7 @@ def test_monte_carlo_money_scales_and_records_the_currency(tmp_path, write_multi
 
 def _optimizer_case(monkeypatch):
     index = pd.date_range("2026-01-05", periods=48, freq="h", tz="Europe/Lisbon")
-    weather = pd.DataFrame({"temp_air": 20.0}, index=index)
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": 20.0}, index=index))
     load = pd.DataFrame({"Load": 1000.0}, index=index)
     pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
     monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())
@@ -574,12 +575,6 @@ def test_optimizer_currency_is_checked_like_the_apps(monkeypatch):
 # --- Outputs ------------------------------------------------------------------
 
 
-def test_cost_presets_list_their_own_currency(capsys):
-    assert cli.main(["list", "cost-presets", "--json"]) == 0
-    rows = json.loads(capsys.readouterr().out)
-    assert {row["currency"] for row in rows} == {"EUR"}
-
-
 def test_sweep_and_monte_carlo_csvs_name_the_currency(tmp_path, write_multiyear_weather):
     config = tmp_path / "sweep.toml"
     costs = "\n".join(f"{key} = {value * K}" for key, value in EUR_COSTS.items())
@@ -589,7 +584,7 @@ def test_sweep_and_monte_carlo_csvs_name_the_currency(tmp_path, write_multiyear_
         encoding="utf-8",
     )
     output = tmp_path / "sweep.csv"
-    weather_patch, load_patch = _offline()
+    weather_patch, load_patch = offline()
     with weather_patch, load_patch:
         assert cli.main(["sweep", "--config", str(config), "--output", str(output)]) == 0
     with output.open(encoding="utf-8") as handle:

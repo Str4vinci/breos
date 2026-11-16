@@ -141,8 +141,8 @@ def prepare_replay(config: dict[str, Any], *, deps: AppRuntimeDependencies | Non
     if not config_has_battery(cfg):
         raise ValueError("A replay needs a battery: a PV-only run ignores dispatch instructions")
     deps = deps or App._runtime_dependencies()
-    # The runner's own preparation, so a reuse_prepared_inputs block shares it.
-    inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=app_runner.prepare_simulation_inputs)
+    # The runner's cached preparation, so a reuse_prepared_inputs block shares it.
+    inputs = prepare_simulation_inputs_cached(cfg, resolved, deps)
     tariff = resolved.tariff.resolve(pd.DatetimeIndex(inputs.dc_system_base.index), resolved.timezone)
     return ReplayCase(resolved=resolved, deps=deps, inputs=inputs, tariff=tariff)
 

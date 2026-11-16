@@ -65,17 +65,20 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete list.
 
 - **0.8** — the 0.8.0 milestone on GitHub.
   - 15-minute irradiance from hourly data by quadrature reconstruction, with
-    GHI derived from DNI and DHI (#417).
+    GHI derived from DNI and DHI, as an option (#417).
   - The `solar_position` default changes from `"interval-start"` to
-    `"weather"`, which reads the representative time of each step from the
-    weather metadata (#418). This and the quadrature change both change
-    results and ship with one upgrade note, before the AC-coupled reference
-    cases are computed.
+    `"auto"`, which reads the representative time of each step from the
+    weather metadata when it states one, and otherwise keeps
+    `"interval-start"` with a warning (#418). This changes results for
+    weather files that state their time basis, and ships with an upgrade
+    note.
   - AC-coupled batteries as accepted in ADR 0004 (#419).
-  - Vehicle-to-home (V2H), on top of the AC-coupled model (#420). An ADR
-    comes first.
+  - Vehicle-to-home (V2H), on top of the AC-coupled model (#420), implemented
+    for App and paired Monte Carlo. ADR 0005 was accepted on 2026-10-24.
   - Collective self-consumption (ACC): several households sharing generation,
-    with a community entry point beside App (#421). An ADR comes first.
+    implemented for 0.8.0 as `breos.Community` beside App (#421): fixed and
+    proportional PV sharing, settlement and participant/asset accounts.
+    ADR 0006 accepted 2026-10-24.
   - An optimizer cache of scored designs that returns every evaluated
     candidate (#416), and refetched PVWatts references so the PVWatts band
     test runs again (#422).
@@ -97,8 +100,8 @@ Not yet scheduled: switching the system's tariff from a given project year
   diffuse IAM, mount-appropriate thermal coefficients) to become the default
   at 1.0.
 - More pvlib physics behind the self-contained PV stage: extended
-  cell-temperature and IAM options, and optional DC-side loss models (ohmic,
-  soiling, snow).
+  cell-temperature and IAM options, and optional DC-side loss models
+  (soiling, snow). DC cable losses are modelled from the string topology.
 - String-aware inverter validation and modeling. See
   [design/architecture/string-inverter-sizing.md](design/architecture/string-inverter-sizing.md).
 
@@ -199,7 +202,7 @@ for and against, not designs.
 - **Profile-complementarity metric.** Correlation-style diagnostics over two
   or more normalized load profiles, to say whether building-to-building
   transfer could pay before any transfer is modeled. Needs no simulation and
-  no dispatch change. Collective self-consumption (#421) is now planned for
+  no dispatch change. Collective self-consumption (#421) is implemented for
   0.8, and this metric would help say for which buildings it is worth running.
 
 - **Export-limited and islanded operation.** Every dispatch path assumes an

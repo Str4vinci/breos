@@ -67,6 +67,7 @@ from breos._controller import (
     SlotKey,
 )
 from breos._daily_targets import (
+    DailyTargetPlan,
     DailyTargetProblem,
     charge_window_day_starts,
     charge_window_starts,
@@ -157,16 +158,6 @@ def persistence_forecast(
     return pv, load, temperature
 
 
-def _slice(instructions: DispatchInstructions, count: int) -> DispatchInstructions:
-    return DispatchInstructions(
-        discharge_allowed=instructions.discharge_allowed[:count],
-        reserve_fraction=instructions.reserve_fraction[:count],
-        grid_target_fraction=instructions.grid_target_fraction[:count],
-        grid_charge_efficiency=instructions.grid_charge_efficiency,
-        grid_import_limit_w=instructions.grid_import_limit_w,
-    )
-
-
 @dataclass(frozen=True)
 class DailyPersistenceController:
     """The ``daily_persistence`` policy as a private daily controller (ADR 0002 A11, A12).
@@ -255,38 +246,12 @@ class DailyPersistenceController:
         if observed is None:
             # Warm start: no complete day to repeat yet, so no grid target,
             # and no held floor on a period that both charges and discharges.
-            today = daily_target_instructions(_slice(layout, count), (0, count), [np.nan])
+            today = daily_target_instructions(layout.take(slice(count)), (0, count), [np.nan])
             return ControllerDayDecision(today, policy_state)
 
-        pv, load, temperature = self._forecast(day, observed, horizon.slot_keys)
-        battery = BatteryConfig(**cast("dict[str, Any]", dict(day.battery_config)))
-        state = day.battery_state
-        problem = DailyTargetProblem(
-            pv_dc_w=pv,
-            load_w=load,
-            temperature_c=temperature,
-            import_price_per_kwh=np.asarray(horizon.import_price_per_kwh, dtype=np.float64),
-            export_price_per_kwh=np.asarray(horizon.export_price_per_kwh, dtype=np.float64),
-            day_starts=horizon.civil_day_offsets,
-            instructions=layout,
-            battery_config=battery,
-            hours_per_step=self.hours_per_step,
-            soh_fraction=state.soh_fraction,
-            eff_charge=state.charge_efficiency,
-            eff_discharge=state.discharge_efficiency,
-        )
-        plan = solve_daily_targets(
-            problem,
-            initial_energy_wh=state.energy_wh,
-            target_levels=self._setting("target_levels"),
-            soc_states=self._setting("soc_states"),
-            terminal_energy_wh=preserve_start_energy(battery, state.energy_wh, state.soh_fraction, temperature),
-            free_terminal=False,
-            execution_backend=self.execution_backend,
-            wear_cost_per_kwh=self._wear_cost(),
-        )
+        plan = self._solve(day, observed, layout, len(horizon.slot_keys), horizon.civil_day_offsets)
         # Only today's target is executed; tomorrow is planned again.
-        today = daily_target_instructions(_slice(layout, count), (0, count), plan.targets[:1])
+        today = daily_target_instructions(layout.take(slice(count)), (0, count), plan.targets[:1])
         return ControllerDayDecision(today, policy_state)
 
     def _decide_window(self, day: ControllerDayInput, policy_state: object | None) -> ControllerDayDecision:
@@ -301,43 +266,54 @@ class DailyPersistenceController:
         layout = period_layout(self.spec, horizon.period_labels, _CHARGE_STEP)
         held = math.nan if policy_state is None else float(cast(float, policy_state))
         if not day.decision_start:
-            today = daily_target_instructions(_slice(layout, count), (0, count), [held])
+            today = daily_target_instructions(layout.take(slice(count)), (0, count), [held])
             return ControllerDayDecision(today, policy_state)
         observed = observed_day_before(day.last_complete_observed_day, day.observed_today)
         if observed is None:
             target = math.nan
         else:
             end, day_starts = window_plan_span(horizon, layout, self.tariff_horizon_days - 2)
-            pv, load, temperature = self._forecast(day, observed, horizon.slot_keys[:end])
-            battery = BatteryConfig(**cast("dict[str, Any]", dict(day.battery_config)))
-            state = day.battery_state
-            problem = DailyTargetProblem(
-                pv_dc_w=pv,
-                load_w=load,
-                temperature_c=temperature,
-                import_price_per_kwh=np.asarray(horizon.import_price_per_kwh[:end], dtype=np.float64),
-                export_price_per_kwh=np.asarray(horizon.export_price_per_kwh[:end], dtype=np.float64),
-                day_starts=day_starts,
-                instructions=_slice(layout, end),
-                battery_config=battery,
-                hours_per_step=self.hours_per_step,
-                soh_fraction=state.soh_fraction,
-                eff_charge=state.charge_efficiency,
-                eff_discharge=state.discharge_efficiency,
-            )
-            plan = solve_daily_targets(
-                problem,
-                initial_energy_wh=state.energy_wh,
-                target_levels=self._setting("target_levels"),
-                soc_states=self._setting("soc_states"),
-                terminal_energy_wh=preserve_start_energy(battery, state.energy_wh, state.soh_fraction, temperature),
-                free_terminal=False,
-                execution_backend=self.execution_backend,
-                wear_cost_per_kwh=self._wear_cost(),
-            )
-            target = float(plan.targets[0])
-        today = daily_target_instructions(_slice(layout, count), (0, count), [target])
+            target = float(self._solve(day, observed, layout, end, day_starts).targets[0])
+        today = daily_target_instructions(layout.take(slice(count)), (0, count), [target])
         return ControllerDayDecision(today, None if math.isnan(target) else target)
+
+    def _solve(
+        self,
+        day: ControllerDayInput,
+        observed: ObservedCivilDay,
+        layout: DispatchInstructions,
+        end: int,
+        day_starts: tuple[int, ...],
+    ) -> DailyTargetPlan:
+        """Plan the horizon's first ``end`` steps from the battery's state, ending as much charged as it starts."""
+        horizon = day.tariff
+        pv, load, temperature = self._forecast(day, observed, horizon.slot_keys[:end])
+        battery = BatteryConfig(**cast("dict[str, Any]", dict(day.battery_config)))
+        state = day.battery_state
+        problem = DailyTargetProblem(
+            pv_dc_w=pv,
+            load_w=load,
+            temperature_c=temperature,
+            import_price_per_kwh=np.asarray(horizon.import_price_per_kwh[:end], dtype=np.float64),
+            export_price_per_kwh=np.asarray(horizon.export_price_per_kwh[:end], dtype=np.float64),
+            day_starts=day_starts,
+            instructions=layout.take(slice(end)),
+            battery_config=battery,
+            hours_per_step=self.hours_per_step,
+            soh_fraction=state.soh_fraction,
+            eff_charge=state.charge_efficiency,
+            eff_discharge=state.discharge_efficiency,
+        )
+        return solve_daily_targets(
+            problem,
+            initial_energy_wh=state.energy_wh,
+            target_levels=self._setting("target_levels"),
+            soc_states=self._setting("soc_states"),
+            terminal_energy_wh=preserve_start_energy(battery, state.energy_wh, state.soh_fraction, temperature),
+            free_terminal=False,
+            execution_backend=self.execution_backend,
+            wear_cost_per_kwh=self._wear_cost(),
+        )
 
     def _setting(self, name: str) -> int:
         value = getattr(self.spec, name)

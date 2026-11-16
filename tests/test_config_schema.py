@@ -5,7 +5,19 @@ import math
 import pytest
 
 from breos.app import App
-from breos.config_schema import TableSpec, anything, boolean, choice, list_of, mapping_of, number, table, text
+from breos.config_schema import (
+    TableSpec,
+    anything,
+    boolean,
+    choice,
+    got,
+    list_of,
+    mapping_of,
+    number,
+    table,
+    text,
+    unknown_keys_message,
+)
 
 BASE = {"location": "porto", "n_modules": 6, "annual_consumption_kwh": 3000}
 
@@ -53,7 +65,8 @@ def test_a_valid_table_is_returned_normalised_and_the_input_is_unchanged():
     ("value", "error", "message"),
     [
         (0.5, TypeError, r"'demo' must be a table/dict"),
-        ({"mode": "flat", "rte": 1}, ValueError, r"Unknown key 'demo\.rte'\. Available: demo\.enabled, "),
+        ({"mode": "flat", "rte": 1}, ValueError, r"Unknown key 'demo\.rte' \(did you mean 'demo\.rate'\?\)\.$"),
+        ({"mode": "flat", "xyz": 1}, ValueError, r"Unknown key 'demo\.xyz'\. Available: demo\.enabled, "),
         ({"mode": "flat", "a": 1, "b": 2}, ValueError, r"Unknown keys 'demo\.a', 'demo\.b'"),
         ({}, ValueError, r"'demo' needs demo\.mode"),
         ({"mode": "flat", "rate": 1.5}, ValueError, r"'demo\.rate' must be between 0 and 1"),
@@ -96,3 +109,32 @@ def test_where_renames_a_table_inside_a_list():
 def test_app_nested_tables_use_the_schema(config, error, message):
     with pytest.raises(error, match=message):
         App({**BASE, **config})
+
+
+def test_unknown_keys_message_mixes_matched_and_unmatched_keys():
+    message = unknown_keys_message({"rte": 1, "xyz": 2}, ["enabled", "mode", "rate"], where="demo")
+    assert message == (
+        "Unknown keys 'demo.rte' (did you mean 'demo.rate'?), 'demo.xyz'. Available: demo.enabled, demo.mode, demo.rate"
+    )
+
+
+def test_unknown_keys_message_lists_up_to_30_keys_then_points_to_the_reference():
+    allowed = [f"key_{i:02d}" for i in range(30)]
+    assert "Available: key_00," in unknown_keys_message({"zzz": 1}, allowed)
+    listed_none = unknown_keys_message({"zzz": 1}, [*allowed, "key_30"])
+    assert "Available" not in listed_none and "Every key is listed at https://" in listed_none
+
+
+def test_unknown_keys_message_accepts_non_string_keys():
+    assert unknown_keys_message({1: "a"}, ["mode"]) == "Unknown key '1'. Available: mode"
+
+
+def test_got_never_replaces_the_error_it_explains():
+    class Broken:
+        def __repr__(self):
+            raise RuntimeError("no repr")
+
+    assert got(Broken()) == "; got a Broken"
+    assert got("x" * 100) == "; got '" + "x" * 56 + "..."
+    with pytest.raises(TypeError, match="must be a finite number; got "):
+        number()([10**5000], "tilt")

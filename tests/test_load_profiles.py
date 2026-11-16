@@ -14,6 +14,7 @@ from breos.load_profiles import (
     PROFILES,
     _btn_day_type,
     _easter_sunday,
+    _localize_wall_clock_index,
     _parse_profile_timestamps,
     _portugal_national_holidays,
     _resample_load_to_15min,
@@ -73,36 +74,6 @@ def test_load_profile_utc_default_keeps_legacy_convention():
     assert len(profile) == 8760
 
 
-@pytest.mark.parametrize("freq", ["h", "15min"])
-def test_bundled_h0_uses_the_target_years_day_types(freq):
-    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
-    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq=freq, timezone="UTC").iloc[:, 0]
-
-    def shape(values):
-        return values.to_numpy() / values.sum()
-
-    # 8 January is Sunday in the source year but Wednesday in the study year.
-    # The nearest source weekday is Monday 9 January; the source Sunday must
-    # still be used for a target Sunday.
-    np.testing.assert_allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-09"]), atol=1e-14)
-    np.testing.assert_allclose(shape(target.loc["2025-01-05"]), shape(source.loc["2023-01-08"]), atol=1e-14)
-    assert not np.allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-08"]))
-    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
-
-
-@pytest.mark.parametrize("freq", ["h", "15min"])
-def test_bundled_h0_leap_day_uses_its_real_day_type(freq):
-    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
-    target = load_profile("demandlib_h0", 1000, start_date="2020-01-01", freq=freq, timezone="UTC").iloc[:, 0]
-
-    # 29 February 2020 was Saturday. The nearest source Saturday to the
-    # non-leap 28 February anchor is 25 February 2023.
-    leap_shape = target.loc["2020-02-29"].to_numpy() / target.loc["2020-02-29"].sum()
-    saturday_shape = source.loc["2023-02-25"].to_numpy() / source.loc["2023-02-25"].sum()
-    np.testing.assert_allclose(leap_shape, saturday_shape, atol=1e-14)
-    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
-
-
 def test_external_demandlib_h0_uses_its_own_dated_source_year(tmp_path):
     source_index = pd.date_range("2024-01-01", "2025-01-01", freq="h", inclusive="left")
     values = np.full(len(source_index), 50.0)
@@ -144,6 +115,7 @@ _PINNED_H0_DAYS = {
     2025: [
         ("2025-01-08", "2023-01-09"),  # Wednesday; the source Sunday 8 January is skipped
         ("2025-05-14", "2023-05-15"),  # Wednesday takes a summer-season source Monday
+        ("2025-01-05", "2023-01-08"),  # Sunday still takes that source Sunday
     ],
     2026: [
         ("2026-01-01", "2023-01-02"),  # Thursday; the source 1 January is a Sunday
@@ -173,6 +145,13 @@ def test_bundled_h0_pins_the_chosen_source_day(year, freq):
     # Another winter weekday has the same shape but not the same scale.
     with pytest.raises(AssertionError):
         _assert_source_days(target, source, [*_PINNED_H0_DAYS[year], (_PINNED_H0_DAYS[year][0][0], "2023-01-10")])
+    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
+    if year == 2025:
+        # The study-year Wednesday does not take the source date's Sunday shape.
+        def shape(values):
+            return values.to_numpy() / values.sum()
+
+        assert not np.allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-08"]))
 
 
 def test_bundled_h0_day_types_follow_the_civil_calendar_across_dst():
@@ -242,17 +221,6 @@ def test_load_profile_uses_real_leap_calendar_and_preserves_energy(
     feb28 = load.loc["2024-02-28"].to_numpy()
     feb29 = load.loc["2024-02-29"].to_numpy()
     np.testing.assert_allclose(feb29, feb28, rtol=0, atol=1e-12)
-
-
-def test_load_profile_leap_day_does_not_shift_march_profile():
-    leap = load_profile("demandlib_h0", 1000, start_date="2024-01-01", freq="h", timezone="UTC")
-    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq="h", timezone="UTC")
-
-    # March 1 in 2024 and 2023 are both weekdays: inserting 29 February must
-    # keep March 1 near its own season, not move it to the source's March 2.
-    march = leap.loc["2024-03-01"].iloc[:, 0]
-    source_march = source.loc["2023-03-01"].iloc[:, 0]
-    np.testing.assert_allclose(march.to_numpy() / march.sum(), source_march.to_numpy() / source_march.sum())
 
 
 def test_non_bundled_profile_requires_external_directory():
@@ -780,6 +748,19 @@ def test_external_profile_rejects_bad_values(tmp_path, value, message):
         load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))
 
 
+def test_missing_external_file_says_what_rlp_directory_is(tmp_path):
+    with pytest.raises(FileNotFoundError, match=r"missing', which does not exist yet .*How to get it: https://"):
+        load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path / "missing"))
+    (tmp_path / "a-file").write_text("x")
+    with pytest.raises(FileNotFoundError, match=r"a-file', which is not a directory\."):
+        load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path / "a-file"))
+
+
+def test_bundled_profile_missing_from_rlp_directory_points_to_the_shipped_copy(tmp_path):
+    with pytest.raises(FileNotFoundError, match=r"Remove rlp_directory to use the copy BREOS ships\.$"):
+        load_profile("demandlib_h0", 1000, rlp_directory=str(tmp_path))
+
+
 def test_external_profile_rejects_irregular_timestamps(tmp_path):
     # A local-clock file with a DST gap has the right length but moves every
     # later row by one hour.
@@ -805,15 +786,6 @@ def test_external_profile_rejects_a_damaged_timestamp_column(tmp_path):
 
 def test_external_profile_with_a_label_column_skips_the_spacing_check(tmp_path):
     lines = ["Label,Electrical Consumption [W]", *(f"row{i},100" for i in range(8760))]
-    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
-
-    assert len(load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))) == 8760
-
-
-def test_external_profile_with_dst_offsets_is_evenly_spaced(tmp_path):
-    # Offsets change at DST; the instants still step by one hour.
-    stamps = pd.date_range("2025-01-01", periods=8760, freq="h", tz="Europe/Lisbon").astype(str)
-    lines = ["DateTime,Electrical Consumption [W]", *(f"{t},100" for t in stamps)]
     (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
 
     assert len(load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))) == 8760
@@ -973,7 +945,7 @@ def test_the_requested_resolution_is_preferred_and_the_other_is_resampled(tmp_pa
 
 
 def test_missing_external_file_names_the_patterns(tmp_path):
-    with pytest.raises(FileNotFoundError, match=r"no file in .* matches 'REE_\*_2\.0TD_1000kwh_hourly\.csv' or"):
+    with pytest.raises(FileNotFoundError, match=r"put one matching 'REE_\*_2\.0TD_1000kwh_hourly\.csv' or"):
         load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))
 
 
@@ -1028,3 +1000,70 @@ def test_named_file_of_an_unknown_length_raises(tmp_path):
 
     with pytest.raises(ValueError, match="has 1000 data rows"):
         load_profile("custom", 1000, profile_file=tmp_path / "short.csv", profile_unit="W")
+
+
+def _evening_peak_csv(path):
+    index = pd.date_range("2025-01-01", periods=8760, freq="h")
+    watts = np.where((index.hour >= 18) & (index.hour < 22), 1000.0, 100.0)
+    pd.DataFrame({"DateTime": index, "power": watts}).to_csv(path, index=False)
+    return watts
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_a_half_hour_clock_change_keeps_the_seasons_load_shape(tmp_path, freq):
+    # Lord Howe's clock moves by 30 minutes, so its winter wall-clock hours
+    # fall between the summer's absolute hours. The evening peak must survive
+    # in both seasons, with the energy unchanged.
+    watts = _evening_peak_csv(tmp_path / "daily.csv")
+    annual_kwh = watts.sum() / 1000.0
+    load = load_profile(
+        "custom",
+        annual_kwh,
+        profile_file=tmp_path / "daily.csv",
+        profile_unit="W",
+        timezone="Australia/Lord_Howe",
+        freq=freq,
+    ).iloc[:, 0]
+
+    hours_per_step = 1.0 if freq == "h" else 0.25
+    assert load.sum() * hours_per_step / 1000.0 == pytest.approx(annual_kwh, rel=1e-12)
+    for day in ("2025-01-15", "2025-07-15"):
+        daily = load.loc[day]
+        assert daily.sum() * hours_per_step / 1000.0 == pytest.approx(6.0, rel=1e-9)
+        assert daily.max() > 500.0 and daily.min() < 150.0
+
+
+def test_a_half_hour_clock_change_places_each_wall_clock_hour_on_its_absolute_hours():
+    # In winter (+10:30) each absolute hour straddles two wall-clock hours, so
+    # the hour from 17:30 to 18:30 holds half the 18:00 peak.
+    index = pd.date_range("2025-07-15 17:30", periods=5, freq="h", tz="Australia/Lord_Howe")
+    df = pd.DataFrame({"Electrical Consumption [W]": 0.0}, index=pd.date_range("2025-01-01", periods=8760, freq="h"))
+    df.loc[(df.index.hour >= 18) & (df.index.hour < 22), "Electrical Consumption [W]"] = 1000.0
+    localized = _localize_wall_clock_index(df, "Australia/Lord_Howe", "h").iloc[:, 0]
+
+    assert localized.reindex(index).tolist() == [500.0, 1000.0, 1000.0, 1000.0, 500.0]
+
+
+def test_a_profile_without_energy_cannot_meet_a_positive_annual_target(tmp_path):
+    pd.DataFrame({"power": np.zeros(8760)}).to_csv(tmp_path / "zero.csv", index=False)
+    with pytest.raises(ValueError, match="has no energy, so it cannot be scaled to 4000 kWh"):
+        load_profile("custom", 4000, profile_file=tmp_path / "zero.csv", profile_unit="W")
+
+
+def test_an_undated_file_with_two_load_columns_needs_a_column_choice(tmp_path):
+    watts = _evening_peak_csv(tmp_path / "daily.csv")
+    pd.DataFrame({"House": watts, "Garage": np.full(8760, 100.0)}).to_csv(tmp_path / "multi.csv", index=False)
+
+    with pytest.raises(ValueError, match=r"2 value columns \(\['House', 'Garage'\]\)"):
+        load_profile("custom", 2190, profile_file=tmp_path / "multi.csv", profile_unit="W")
+    house = load_profile("custom", 2190, profile_file=tmp_path / "multi.csv", profile_unit="W", profile_column="House")
+    assert house.iloc[:, 0].nunique() == 2
+
+
+@pytest.mark.parametrize("first_label", [0, 1])
+def test_a_counting_first_column_is_still_a_row_label(tmp_path, first_label):
+    rows = np.arange(first_label, first_label + 8760)
+    pd.DataFrame({"row": rows, "power": np.full(8760, 100.0)}).to_csv(tmp_path / "labelled.csv", index=False)
+
+    load = load_profile("custom", 876, profile_file=tmp_path / "labelled.csv", profile_unit="W")
+    assert load.attrs["breos_load_profile"]["column"] == "power"

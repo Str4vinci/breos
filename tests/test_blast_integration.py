@@ -20,39 +20,8 @@ from breos.app_inputs import PreparedSimulationInputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.runners import app as app_runner
 from breos.solar import PVProductionBreakdown
-
-# Energy-ledger closure identities (Wh; hourly => W and Wh are numerically equal).
-# Both hold on every timestep row, including battery-replacement rows.
-
-
-def _assert_energy_ledger_closes(results: pd.DataFrame, atol: float = 1e-6) -> None:
-    delta = (
-        results["Battery_Charge_Stored"]
-        - results["Battery_Discharge_DC"]
-        - results["Standby_Loss"]
-        - results["Capacity_Window_Loss"]
-        - results["Battery_Replacement_Energy_Removed"]
-        + results["Battery_Replacement_Energy_Added"]
-    )
-    np.testing.assert_allclose(results["Battery_Energy_Delta"], delta, atol=atol)
-
-    lhs = results["PV_DC"] + results["Battery_Replacement_Energy_Added"]
-    rhs = (
-        results["PV_AC_To_Load"]
-        + results["PV_AC_Export"]
-        + results["Battery_AC_To_Load"]
-        + results["PV_DC_Curtailed"]
-        + results["Battery_Charge_Loss"]
-        + results["Battery_Discharge_Loss"]
-        + results["PV_Direct_Inverter_Loss"]
-        + results["Battery_Inverter_Loss"]
-        + results["Standby_Loss"]
-        + results["Capacity_Window_Loss"]
-        + results["Battery_Replacement_Energy_Removed"]
-        + results["Battery_Energy_Delta"]
-    )
-    np.testing.assert_allclose(lhs, rhs, atol=atol)
-
+from tests.energy_conservation import assert_energy_conservation
+from tests.project_year_runs import keep_every_frame, record_project_years
 
 # ---------------------------------------------------------------------------
 # Test 2: BLAST at 15-minute resolution
@@ -110,7 +79,7 @@ def test_blast_15min_resolution_two_days():
         for values in snapshot[group_name].values():
             assert np.isfinite(values[-1])
 
-    _assert_energy_ledger_closes(results_df)
+    assert_energy_conservation(results_df, config)
 
 
 # ---------------------------------------------------------------------------
@@ -162,19 +131,8 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
         "total_initial_cost": 12000.0,
         "replacement_cost_each": 5.0 * 500.0,
     }
-    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
     monkeypatch.setattr(projection_module, "build_costs_dict", lambda cfg, resolved: costs)
-
-    # Wrap (do not mock) the real degradation call to retain each year's frames.
-    captured_years: list[tuple] = []
-    real_simulate = projection_module.simulate_energy_balance
-
-    def _capturing_simulate(*args, **kwargs):
-        result = real_simulate(*args, **kwargs)
-        captured_years.append(result)
-        return result
-
-    monkeypatch.setattr(projection_module, "simulate_energy_balance", _capturing_simulate)
 
     inflation_rate = 0.03
     max_soc = 0.9
@@ -198,12 +156,24 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     )
     cfg = resolved.cfg
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        artifacts = app_runner.run_app_simulation(resolved, deps=SimpleNamespace())
+    def run(*, every_frame: bool):
+        # Wrap (do not mock) the real year runs to retain each year's run.
+        with warnings.catch_warnings(), monkeypatch.context() as patch:
+            warnings.simplefilter("ignore")
+            if every_frame:
+                keep_every_frame(patch)
+            years = record_project_years(patch)
+            return app_runner.run_app_simulation(resolved, deps=SimpleNamespace()), years
 
-    assert len(captured_years) == cfg["projection_years"]
-    per_year_counts = [year_result[3] for year_result in captured_years]
+    artifacts, captured_years = run(every_frame=False)
+    # Only the first year keeps its degradation-tracking rows; the daily SOH
+    # checks below read every year's from a run that keeps them all, which
+    # must otherwise be this run.
+    framed_artifacts, framed_years = run(every_frame=True)
+    pd.testing.assert_frame_equal(framed_artifacts.yearly_df, artifacts.yearly_df, check_exact=True)
+    assert len(captured_years) == len(framed_years) == cfg["projection_years"]
+    assert all(year_run.degradation_df is not None for year_run in framed_years)
+    per_year_counts = [year_run.n_replacements for year_run in captured_years]
     # The economics prices each replacement at the pack's t = 0 price (ADR 0003 E4).
     per_year_costs = artifacts.yearly_df["Replacement_Cost"].tolist()
     assert per_year_costs == [count * battery_kwh * 500.0 for count in per_year_counts]
@@ -240,14 +210,17 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     np.testing.assert_allclose(cost_projection["Cost_Replacement"].to_numpy(), expected_replacement_cost, atol=1e-9)
 
     replacement_reset_energy = battery_kwh * 1000.0 * max_soc
+    battery = projection_module.build_battery_config(cfg, resolved, initial_soh=100.0)
     replacement_years_seen = 0
-    for year_idx, year_result in enumerate(captured_years):
-        results_df = year_result[0]
-        degradation_df = year_result[4]
-        year_replacements = year_result[3]
+    for year_run, framed_run in zip(captured_years, framed_years, strict=True):
+        results_df = year_run.results_df
+        pd.testing.assert_frame_equal(framed_run.results_df, results_df, check_exact=True)
+        degradation_df = framed_run.degradation_df
+        year_replacements = year_run.n_replacements
+        assert framed_run.n_replacements == year_replacements
 
         # Ledger closes on every row of every year, including replacement rows.
-        _assert_energy_ledger_closes(results_df)
+        assert_energy_conservation(results_df, battery)
 
         if not year_replacements:
             continue
@@ -359,6 +332,18 @@ def test_blast_split_matches_continuous_at_mid_swing_boundary(blast_model):
     assert 0.15 < boundary_soc < 0.85, boundary_soc
     assert abs(soc[boundary] - soc[boundary - 1]) > 0.05
     assert abs(soc[boundary + 1] - soc[boundary]) > 0.05
+    # The carried day-start anchor is the true mid-swing SoC, away from both rails.
+    anchor = year_one_state["day_start_soc_absolute"]
+    assert anchor == pytest.approx(soc[boundary - 1], abs=1e-12)
+    assert abs(anchor - config.max_soc) > 0.05
+    assert abs(anchor - config.min_soc) > 0.05
+
+    # The first span's EFC does not depend on how long the run continues afterwards.
+    year_one_efc = year_one_state["blast_engine"]["stressors"]["efc"][-1]
+    assert year_one_efc > 0.0
+    assert year_one_efc == pytest.approx(
+        continuous_degradation["Cumulative_FEC"].iloc[len(year_one_degradation) - 1], abs=1e-12
+    )
 
     # Final SOH matches to a tight tolerance.
     assert year_two_degradation["SOH"].iloc[-1] == pytest.approx(continuous_degradation["SOH"].iloc[-1], abs=1e-9)
@@ -386,3 +371,48 @@ def test_blast_split_matches_continuous_at_mid_swing_boundary(blast_model):
     assert year_two_results["Battery_PV_Origin_Energy_End"].iloc[-1] == pytest.approx(
         continuous_results["Battery_PV_Origin_Energy_End"].iloc[-1], abs=1e-6
     )
+
+
+def test_blast_continued_from_its_state_counts_on_from_the_carried_counters():
+    # Continuing from the returned state alone, without repeating the scalar
+    # counter arguments, must carry the calendar clock and the FEC total, so
+    # each span reports its own FEC and the spans add up to the continuous run.
+    index = pd.date_range("2025-01-01", periods=48, freq="h", tz="UTC")
+    pv = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=index)
+    load = pd.DataFrame({"Load": ([400.0] * 8 + [0.0] * 8 + [400.0] * 8) * 2}, index=index)
+    temperature = pd.Series(25.0, index=index)
+    common = dict(
+        battery_config=BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False),
+        freq="h",
+        degradation_engine="blast",
+        blast_model="lfp_gr_250ah_prismatic",
+        return_degradation_state=True,
+    )
+
+    def run(start, stop, **kwargs):
+        return simulate_energy_balance(
+            pv_dc=pv.iloc[start:stop],
+            houseload=load.iloc[start:stop],
+            temperature_series=temperature.iloc[start:stop],
+            **common,
+            **kwargs,
+        )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        *_, continuous = run(0, 48)
+        first_results, *_, first_degradation, first = run(0, 24)
+        *_, second_degradation, second = run(
+            24,
+            48,
+            initial_degradation_state=first,
+            initial_energy_wh=float(first_results["Battery_Energy_End"].iloc[-1]),
+            initial_pv_origin_energy_wh=float(first_results["Battery_PV_Origin_Energy_End"].iloc[-1]),
+        )
+
+    assert second["cumulative_calendar_seconds"] == continuous["cumulative_calendar_seconds"] == 172800.0
+    assert second["fec_cum"] == pytest.approx(continuous["fec_cum"], rel=1e-12)
+    first_span = first_degradation["Cumulative_FEC_All_Packs"].iloc[-1]
+    second_span = second_degradation["Cumulative_FEC_All_Packs"].iloc[-1]
+    assert second_span == pytest.approx(continuous["fec_cum"] - first["fec_cum"], rel=1e-12)
+    assert first_span + second_span == pytest.approx(continuous["fec_cum"], rel=1e-12)

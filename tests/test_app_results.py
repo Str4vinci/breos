@@ -70,3 +70,26 @@ def test_monthly_rows_from_a_mixed_offset_csv_keep_civil_months():
     assert hours["Jan"] == 744.0
     assert hours["Mar"] == 743.0
     assert hours["Oct"] == 745.0
+
+
+def _constant_irradiance(year: pd.DataFrame) -> pd.DataFrame:
+    """500 W/m2 GHI and 2000 W of STC power at the plane-of-array irradiance, every step."""
+    return pd.DataFrame({"GHI": 500.0, "POA_STC_DC": 2000.0}, index=year.index)
+
+
+def test_monthly_rows_carry_irradiance_and_performance_ratio():
+    year = _constant_year("UTC")
+    rows = monthly_to_dicts(year, "h", irradiance=_constant_irradiance(year), system_kwp=4.0)
+
+    january = rows[0]
+    assert january["global_horizontal_kwh_m2"] == pytest.approx(744 * 0.5)
+    # 2000 W of STC power on a 4 kWp system is 500 W/m2 in the plane.
+    assert january["global_incident_kwh_m2"] == pytest.approx(744 * 0.5)
+    # 1000 W of usable AC (direct + battery + export) over 2000 W of STC power.
+    assert january["performance_ratio_pct"] == pytest.approx(50.0)
+
+
+def test_monthly_rows_without_irradiance_have_no_irradiance_keys():
+    rows = monthly_to_dicts(_constant_year("UTC"), "h")
+
+    assert not {"global_horizontal_kwh_m2", "global_incident_kwh_m2", "performance_ratio_pct"} & set(rows[0])

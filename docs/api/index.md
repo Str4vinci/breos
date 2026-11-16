@@ -25,6 +25,14 @@ custom pipeline. Import those lower-level names from their modules, for example
 revalue it at other prices.
 :::
 
+:::{grid-item-card} Community facade
+:link: community
+:link-type: doc
+
+`breos.Community`: simulate shared PV, read participant and asset accounts,
+and inspect the settlement ledger.
+:::
+
 :::{grid-item-card} Weather
 :link: weather
 :link-type: doc
@@ -126,6 +134,8 @@ keys can name.
 :hidden:
 
 app
+community
+community-settlement
 weather
 pv
 load-profiles

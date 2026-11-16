@@ -1,23 +1,20 @@
-"""Smoke tests for every public function in ``breos.plotting``.
+"""The plots read the frames the real producers write.
 
-Each test builds the smallest realistic input the function documents, calls it
-with the Agg backend and checks that it wrote its figure. Inputs come from one
-offline App run, one small offline Monte Carlo study and two small offline
-``breos sweep`` runs where the function consumes those result shapes; the rest
-follow the docstrings.
-``plot_pv_loss_waterfall`` and ``plot_montecarlo_simulation`` have their own
-tests in ``test_plotting.py`` and ``test_montecarlo_plotting.py``.
+Inputs come from one offline App run, one small offline Monte Carlo study and
+two small offline ``breos sweep`` runs, so a renamed or reshaped producer
+column fails here. That every plot writes, closes and returns its figure is
+owned by ``test_plotting_figures.py`` on small synthetic frames.
 """
 
-import inspect
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 
-matplotlib = pytest.importorskip("matplotlib")
+pytest.importorskip("matplotlib")
 
 import matplotlib.pyplot as plt  # noqa: E402
 
@@ -26,9 +23,7 @@ import breos.projection as projection_module  # noqa: E402
 import breos.runners.app as app_runner  # noqa: E402
 from breos import App, plotting  # noqa: E402
 from breos.montecarlo import MonteCarloSettings, run_montecarlo  # noqa: E402
-from tests.conftest import _build_synthetic_weather  # noqa: E402
-
-TESTED_ELSEWHERE = {"plot_pv_loss_waterfall", "plot_montecarlo_simulation"}
+from tests.conftest import _build_synthetic_weather, write_instant_at_labels_sidecar  # noqa: E402
 
 # Cheap enough that both the App run and every Monte Carlo trajectory pay back
 # inside the short projection, so the break-even plots have points to draw.
@@ -44,14 +39,18 @@ _BASE_CONFIG = {
 }
 
 
-def _fake_tmy(weather):
-    def _fetch(*args, **kwargs):
-        return weather.copy(), {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
+@contextmanager
+def _offline():
+    """Serve App the synthetic TMY instead of fetching weather."""
+    weather = _build_synthetic_weather()
+    site = {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(app_module, "fetch_tmy_weather_data", lambda *args, **kwargs: (weather.copy(), site))
+        mp.setattr(app_module, "load_weather", lambda **kw: None)
+        yield mp
 
-    return _fetch
 
-
-def _run_app(config, weather):
+def _run_app(config):
     """Run App offline and keep the frames it builds its result from."""
     captured = {"degradation": []}
     run_simulation = app_runner.run_app_simulation
@@ -66,9 +65,7 @@ def _run_app(config, weather):
         captured["degradation"].append(output[4])
         return output
 
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(app_module, "fetch_tmy_weather_data", _fake_tmy(weather))
-        mp.setattr(app_module, "load_weather", lambda **kw: None)
+    with _offline() as mp:
         mp.setattr(app_module, "run_app_simulation", _capture_run)
         mp.setattr(projection_module, "simulate_energy_balance", _capture_year)
         App(config).simulate()
@@ -77,22 +74,18 @@ def _run_app(config, weather):
     return SimpleNamespace(
         results=artifacts.first_year_results_df,
         cost_projection=artifacts.cost_projection,
-        costs=artifacts.costs,
-        yearly=artifacts.yearly_df,
-        payback_year=artifacts.payback_year,
         degradation=captured["degradation"][0],
     )
 
 
 @pytest.fixture(scope="module")
 def battery_run():
-    config = {**_BASE_CONFIG, "battery_kwh": 5.0, "enable_resistance_fade": True}
-    return _run_app(config, _build_synthetic_weather())
+    return _run_app({**_BASE_CONFIG, "battery_kwh": 5.0, "enable_resistance_fade": True})
 
 
 @pytest.fixture(scope="module")
 def pv_only_run():
-    return _run_app({**_BASE_CONFIG, "battery_kwh": 0.0}, _build_synthetic_weather())
+    return _run_app({**_BASE_CONFIG, "battery_kwh": 0.0})
 
 
 @pytest.fixture(scope="module")
@@ -105,224 +98,19 @@ def historical_weather():
 
 
 @pytest.fixture(scope="module")
-def mc_runs(tmp_path_factory, historical_weather):
-    """One-row-per-run table from a small offline Monte Carlo study."""
-    weather_file = tmp_path_factory.mktemp("mc") / "weather.csv"
-    historical_weather.rename_axis("date").reset_index().to_csv(weather_file, index=False)
-    settings = MonteCarloSettings(weather_file=str(weather_file), n_runs=5, seed=1, load_uncertainty=0.2)
-    return run_montecarlo({**_BASE_CONFIG, "battery_kwh": 5.0}, settings).runs
-
-
-@pytest.fixture(autouse=True)
-def _close_figures():
-    yield
-    plt.close("all")
-
-
-def _assert_written(directory, *names):
-    for name in names:
-        path = directory / name
-        assert path.is_file(), name
-        assert path.stat().st_size > 0, name
-
-
-def test_every_public_plotting_function_has_a_smoke_test():
-    public = {
-        name
-        for name, obj in inspect.getmembers(plotting, inspect.isfunction)
-        if obj.__module__ == plotting.__name__ and not name.startswith("_")
-    }
-    missing = sorted(name for name in public - TESTED_ELSEWHERE if f"test_{name}" not in globals())
-    assert not missing
-
-
-# ---------------------------------------------------------------------------
-# Global style
-# ---------------------------------------------------------------------------
-
-
-def test_set_presentation_mode():
-    with matplotlib.rc_context():
-        backend = matplotlib.get_backend()
-        plotting.set_presentation_mode(True, scale=2.0)
-        assert plt.rcParams["font.size"] == 28
-        plotting.set_presentation_mode(False)
-        assert plt.rcParams["font.size"] == matplotlib.rcParamsDefault["font.size"]
-        assert matplotlib.get_backend() == backend
-
-
-# ---------------------------------------------------------------------------
-# App energy balance (first-year results frame)
-# ---------------------------------------------------------------------------
-
-
-def test_yearly_graphs(battery_run, tmp_path):
-    plotting.yearly_graphs(battery_run.results, str(tmp_path))
-    _assert_written(tmp_path, "yearly_energy.png")
-
-
-def test_weekly_graphs(battery_run, tmp_path):
-    plotting.weekly_graphs(battery_run.results, 10, str(tmp_path))
-    _assert_written(tmp_path, "week_10_profile.png")
-
-
-def test_plot_monthly_comparison(battery_run, tmp_path):
-    plotting.plot_monthly_comparison(battery_run.results, str(tmp_path), scenario_name="battery")
-    _assert_written(tmp_path, "monthly_comparison_battery.png")
-
-
-def test_plot_monthly_balance(battery_run, tmp_path):
-    plotting.plot_monthly_balance(battery_run.results, str(tmp_path))
-    _assert_written(tmp_path, "monthly_balance.png")
-
-
-def test_plot_timeseries(battery_run, tmp_path):
-    frame = battery_run.results.set_index("Datetime")
-    plotting.plot_timeseries(frame, ["PV_Production", "Houseload"], str(tmp_path))
-    _assert_written(tmp_path, "timeseries.png")
-
-
-def test_plot_cell_temperature(battery_run, tmp_path):
-    plotting.plot_cell_temperature(battery_run.results, str(tmp_path))
-    _assert_written(tmp_path, "battery_cell_temperature.png")
-
-
-def test_plot_battery_soh_timeseries(battery_run, tmp_path):
-    plotting.plot_battery_soh_timeseries(battery_run.results, str(tmp_path), scenario_name="battery")
-    _assert_written(tmp_path, "battery_soh_timeseries_battery.png")
-
-
-def test_plot_battery_soh_timeseries_date_window(battery_run, tmp_path):
-    plotting.plot_battery_soh_timeseries(
-        battery_run.results, str(tmp_path), start_date="2023-03-01", end_date="2023-06-30"
-    )
-
-
-# ---------------------------------------------------------------------------
-# App degradation (daily degradation frame)
-# ---------------------------------------------------------------------------
-
-
-def test_degradation_plots(battery_run, tmp_path):
-    plotting.degradation_plots(battery_run.degradation, str(tmp_path))
-    _assert_written(
-        tmp_path,
-        "battery_degradation_soh.png",
-        "battery_degradation_components_per_battery.png",
-        "battery_degradation_fec.png",
-        "battery_resistance_growth.png",
-        "battery_effective_rte.png",
-    )
-
-
-def test_plot_resistance_and_efficiency(battery_run, tmp_path):
-    plotting.plot_resistance_and_efficiency(battery_run.degradation, str(tmp_path))
-    _assert_written(tmp_path, "battery_resistance_growth.png", "battery_effective_rte.png")
-
-
-# ---------------------------------------------------------------------------
-# App economics and emissions (cost projection)
-# ---------------------------------------------------------------------------
-
-
-def test_plot_breakeven(battery_run, tmp_path):
-    plotting.plot_breakeven(battery_run.cost_projection, str(tmp_path), scenario_name="battery")
-    _assert_written(tmp_path, "breakeven_cumulative_battery.png", "breakeven_annual_battery.png")
-
-
-def test_plot_breakeven_comparison(battery_run, pv_only_run, tmp_path):
-    plotting.plot_breakeven_comparison(
-        [battery_run.cost_projection, pv_only_run.cost_projection], ["PV + battery", "PV only"], str(tmp_path)
-    )
-    _assert_written(tmp_path, "breakeven_comparison.png")
-
-
-def test_plot_breakeven_comparison_of_app_results(tmp_path):
-    results = []
-    for battery_kwh in (0.0, 5.0):
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(app_module, "fetch_tmy_weather_data", _fake_tmy(_build_synthetic_weather()))
-            mp.setattr(app_module, "load_weather", lambda **kw: None)
-            app = App({**_BASE_CONFIG, "battery_kwh": battery_kwh})
-            app.simulate()
-        results.append(app.result())
-    plotting.plot_breakeven_comparison(results, ["PV only", "PV + battery"], str(tmp_path), filename="app.png")
-    _assert_written(tmp_path, "app.png")
-
-
-def test_plot_co2_savings(battery_run, tmp_path):
-    plotting.plot_co2_savings(battery_run.cost_projection, str(tmp_path), scenario_name="battery")
-    _assert_written(tmp_path, "co2_avoided_yearly_battery.png", "co2_avoided_cumulative_battery.png")
-
-
-# ---------------------------------------------------------------------------
-# Monte Carlo (one-row-per-run table)
-# ---------------------------------------------------------------------------
-
-
-def test_plot_montecarlo_npv_distribution(mc_runs, tmp_path):
-    plotting.plot_montecarlo_npv_distribution(mc_runs, str(tmp_path))
-    _assert_written(tmp_path, "montecarlo_npv_distribution.png")
-
-
-def test_plot_montecarlo_grid_independence_distribution(mc_runs, tmp_path):
-    plotting.plot_montecarlo_grid_independence_distribution(mc_runs, str(tmp_path))
-    _assert_written(tmp_path, "montecarlo_grid_independence_distribution.png")
-
-
-def test_plot_montecarlo_final_soh_distribution(mc_runs, tmp_path):
-    plotting.plot_montecarlo_final_soh_distribution(mc_runs, str(tmp_path))
-    _assert_written(tmp_path, "montecarlo_final_soh_distribution.png")
-
-
-def test_plot_breakeven_distribution(mc_runs, tmp_path):
-    payback = mc_runs["payback_year_interpolated"].dropna().tolist()
-    assert payback
-    plotting.plot_breakeven_distribution(payback, len(mc_runs), str(tmp_path))
-    _assert_written(tmp_path, "breakeven_histogram.png")
-
-
-def test_plot_breakeven_cdf(mc_runs, tmp_path):
-    payback = mc_runs["payback_year_interpolated"].dropna().tolist()
-    assert payback
-    plotting.plot_breakeven_cdf(payback, str(tmp_path))
-    _assert_written(tmp_path, "breakeven_cdf.png")
-
-
-def test_plot_breakeven_summary_bar(mc_runs, tmp_path):
-    plotting.plot_breakeven_summary_bar(int(mc_runs["payback_year"].notna().sum()), len(mc_runs), str(tmp_path))
-    _assert_written(tmp_path, "breakeven_summary_bar.png")
-
-
-# ---------------------------------------------------------------------------
-# Weather
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
 def historical_weather_file(tmp_path_factory, historical_weather):
     """The multi-year weather CSV a Monte Carlo study reads."""
     weather_file = tmp_path_factory.mktemp("weather") / "historical.csv"
     historical_weather.rename_axis("date").reset_index().to_csv(weather_file, index=False)
+    write_instant_at_labels_sidecar(weather_file)
     return weather_file
 
 
-def test_plot_weather_monthly_comparison(historical_weather_file, tmp_path):
-    plotting.plot_weather_monthly_comparison(_build_synthetic_weather(), historical_weather_file, str(tmp_path))
-    plotting.plot_weather_monthly_comparison(
-        _build_synthetic_weather(), historical_weather_file, str(tmp_path), variable="temp_air"
-    )
-    _assert_written(tmp_path, "weather_monthly_ghi.png", "weather_monthly_temp_air.png")
-
-
-def test_plot_weather_annual_ghi_distribution(historical_weather_file, tmp_path):
-    plotting.plot_weather_annual_ghi_distribution(_build_synthetic_weather(), historical_weather_file, str(tmp_path))
-    _assert_written(tmp_path, "annual_ghi_distribution.png")
-
-
-# ---------------------------------------------------------------------------
-# Sweeps and the optimizer front
-# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def mc_runs(historical_weather_file):
+    """One-row-per-run table from a small offline Monte Carlo study."""
+    settings = MonteCarloSettings(weather_file=str(historical_weather_file), n_runs=5, seed=1, load_uncertainty=0.2)
+    return run_montecarlo({**_BASE_CONFIG, "battery_kwh": 5.0}, settings).runs
 
 
 def _run_sweep(directory, config):
@@ -332,9 +120,7 @@ def _run_sweep(directory, config):
     config_file = directory / "sweep.json"
     config_file.write_text(json.dumps(config))
     output = directory / "sweep.csv"
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(app_module, "fetch_tmy_weather_data", _fake_tmy(_build_synthetic_weather()))
-        mp.setattr(app_module, "load_weather", lambda **kw: None)
+    with _offline():
         assert main(["sweep", "--config", str(config_file), "--output", str(output)]) == 0
     return output
 
@@ -351,6 +137,127 @@ def orientation_sweep(tmp_path_factory):
     """Tilt x azimuth, PV only."""
     sweep = {"tilt": [10, 35, 60], "azimuth": [90, 180, 270]}
     return _run_sweep(tmp_path_factory.mktemp("orientation"), {**_BASE_CONFIG, "battery_kwh": 0.0, "sweep": sweep})
+
+
+@pytest.fixture(autouse=True)
+def _close_figures():
+    yield
+    plt.close("all")
+
+
+def _assert_written(directory, *names):
+    for name in names:
+        path = directory / name
+        assert path.is_file(), name
+        assert path.stat().st_size > 0, name
+
+
+# Each plot that reads a producer's frame as it is, called with a fixture
+# getter and the output directory, and the files it writes.
+REAL_PLOTS = {
+    "breakeven": (
+        lambda get, d: plotting.plot_breakeven(get("battery_run").cost_projection, d, scenario_name="battery"),
+        ["breakeven_cumulative_battery.png", "breakeven_annual_battery.png"],
+    ),
+    "breakeven_comparison": (
+        lambda get, d: plotting.plot_breakeven_comparison(
+            [get("battery_run").cost_projection, get("pv_only_run").cost_projection], ["PV + battery", "PV only"], d
+        ),
+        ["breakeven_comparison.png"],
+    ),
+    "co2_savings": (
+        lambda get, d: plotting.plot_co2_savings(get("battery_run").cost_projection, d, scenario_name="battery"),
+        ["co2_avoided_yearly_battery.png", "co2_avoided_cumulative_battery.png"],
+    ),
+    "weather_annual_ghi_distribution": (
+        lambda get, d: plotting.plot_weather_annual_ghi_distribution(
+            _build_synthetic_weather(), get("historical_weather_file"), d
+        ),
+        ["annual_ghi_distribution.png"],
+    ),
+    "pareto_front": (
+        lambda get, d: plotting.plot_pareto_front(
+            get("sizing_sweep"), d, x="grid_independence_pct", y="npv_savings", color_by="battery_kwh"
+        ),
+        ["pareto_front.png"],
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(REAL_PLOTS))
+def test_a_plot_reads_the_frame_its_producer_writes(name, request, tmp_path):
+    draw, expected = REAL_PLOTS[name]
+    draw(request.getfixturevalue, str(tmp_path))
+    _assert_written(tmp_path, *expected)
+
+
+# ---------------------------------------------------------------------------
+# App energy balance and economics
+# ---------------------------------------------------------------------------
+
+
+def test_plot_battery_soh_timeseries_date_window(battery_run, tmp_path):
+    fig = plotting.plot_battery_soh_timeseries(
+        battery_run.results, str(tmp_path), start_date="2023-03-01", end_date="2023-06-30"
+    )
+
+    drawn = pd.DatetimeIndex(fig.axes[0].lines[0].get_xdata())
+    assert (drawn.min().date().isoformat(), drawn.max().date().isoformat()) == ("2023-03-01", "2023-06-30")
+
+
+def test_plot_breakeven_comparison_of_app_results(tmp_path):
+    results = []
+    for battery_kwh in (0.0, 5.0):
+        with _offline():
+            app = App({**_BASE_CONFIG, "battery_kwh": battery_kwh})
+            app.simulate()
+        results.append(app.result())
+    plotting.plot_breakeven_comparison(results, ["PV only", "PV + battery"], str(tmp_path), filename="app.png")
+    _assert_written(tmp_path, "app.png")
+
+
+# ---------------------------------------------------------------------------
+# Monte Carlo (one-row-per-run table)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("older_table", [False, True], ids=["real", "without-interpolated-payback"])
+def test_plot_montecarlo_simulation_draws_a_real_study(mc_runs, tmp_path, older_table):
+    # Older run tables carry only the integer payback year; the payback
+    # plots fall back to it.
+    runs = mc_runs.drop(columns="payback_year_interpolated") if older_table else mc_runs
+    assert runs["payback_year"].notna().any()
+
+    plotting.plot_montecarlo_simulation(runs, str(tmp_path), verbose=False)
+
+    _assert_written(
+        tmp_path / "plots",
+        "breakeven_histogram.png",
+        "breakeven_cdf.png",
+        "breakeven_summary_bar.png",
+        "montecarlo_npv_distribution.png",
+        "montecarlo_grid_independence_distribution.png",
+        "montecarlo_final_soh_distribution.png",
+        "montecarlo_lcoe_distribution.png",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Weather
+# ---------------------------------------------------------------------------
+
+
+def test_plot_weather_monthly_comparison(historical_weather_file, tmp_path):
+    plotting.plot_weather_monthly_comparison(_build_synthetic_weather(), historical_weather_file, str(tmp_path))
+    plotting.plot_weather_monthly_comparison(
+        _build_synthetic_weather(), historical_weather_file, str(tmp_path), variable="temp_air"
+    )
+    _assert_written(tmp_path, "weather_monthly_ghi.png", "weather_monthly_temp_air.png")
+
+
+# ---------------------------------------------------------------------------
+# Sweeps
+# ---------------------------------------------------------------------------
 
 
 def test_plot_sweep_heatmap(sizing_sweep, tmp_path):
@@ -380,13 +287,6 @@ def test_plot_orientation_landscape(orientation_sweep, tmp_path):
         filename="tilt.png",
     )
     _assert_written(tmp_path, "orientation_landscape.png", "tilt.png")
-
-
-def test_plot_pareto_front(sizing_sweep, tmp_path):
-    plotting.plot_pareto_front(
-        sizing_sweep, str(tmp_path), x="grid_independence_pct", y="npv_savings", color_by="battery_kwh"
-    )
-    _assert_written(tmp_path, "pareto_front.png")
 
 
 def test_plot_cell_temperature_leaves_months_without_data_empty(tmp_path, monkeypatch):

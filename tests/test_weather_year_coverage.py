@@ -11,6 +11,7 @@ import pytest
 
 from breos import App
 from breos.app_inputs import remap_tmy_year, require_full_year_weather
+from tests.conftest import INSTANT_AT_LABELS
 
 _PORTO = {
     "location": "porto",
@@ -34,6 +35,7 @@ def _patch_fetch(monkeypatch, weather: pd.DataFrame) -> None:
         frame = weather.copy()
         frame.attrs["breos_weather_metadata"] = {
             "source": "PVGIS_TMY",
+            **INSTANT_AT_LABELS,
             "horizon": {"status": "not_applied", "provider": "pvgis", "profile": None},
         }
         return frame, {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
@@ -108,6 +110,17 @@ def test_complete_years_on_any_accepted_clock_pass(weather, timezone):
     require_full_year_weather(weather, 2025, "h", timezone)
 
 
+@pytest.mark.parametrize("year", [1989, 1990])
+def test_year_coverage_with_missing_midnight_at_either_boundary(year):
+    # Lima skipped 1990-01-01 00:00: the year begins at 01:00 (-04:00), 05:00 UTC.
+    index = pd.date_range(f"{year}-01-01 05:00", f"{year + 1}-01-01 05:00", freq="h", tz="UTC", inclusive="left")
+    weather = pd.DataFrame({"ghi": 0.0}, index=index.tz_convert("America/Lima"))
+
+    require_full_year_weather(weather, year, "h", "America/Lima")
+    with pytest.raises(ValueError, match="leading 1 days"):
+        require_full_year_weather(weather.iloc[24:], year, "h", "America/Lima")
+
+
 def test_15min_run_on_resampled_hourly_weather_passes(monkeypatch, synthetic_weather):
     """The resampler fills the last hour's quarter-hours from the last hourly row."""
     _patch_fetch(monkeypatch, synthetic_weather)
@@ -136,3 +149,29 @@ def test_a_leap_year_without_its_last_day_raises():
     """8,760 rows from 1 January are one day short of a leap year."""
     with pytest.raises(ValueError, match=r"trailing 1 days 00:00:00 \(24 steps"):
         require_full_year_weather(_year("2028-01-01"), 2028, "h", "UTC")
+
+
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+def test_a_complete_right_labelled_year_covers_the_year_at_every_resolution(
+    tmp_path, monkeypatch, synthetic_weather, resolution
+):
+    # Interval means labelled at the end of their hour run from 01:00 to the
+    # next midnight. They move to the start of their hour before the coverage
+    # check, as the 15-minute resampler already moved them, so hourly runs
+    # are no longer refused for a missing first hour.
+    from breos.weather import save_weather_csv
+
+    weather = synthetic_weather.copy()
+    weather.index = pd.date_range("2025-01-01 01:00", periods=len(weather), freq="h", tz="UTC")
+    weather.attrs["breos_weather_metadata"] = {
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "right",
+    }
+    path = tmp_path / "right.csv"
+    save_weather_csv(weather.rename_axis("date"), path)
+    monkeypatch.chdir(tmp_path)
+
+    app = App({**_PORTO, "weather_file": str(path), "resolution": resolution})
+    app.simulate()
+
+    assert len(app.timeseries()) == (8760 if resolution == "h" else 35040)

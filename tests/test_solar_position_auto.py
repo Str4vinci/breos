@@ -1,0 +1,561 @@
+"""``solar_position = "auto"``, the default since 0.8.0 (#418).
+
+``auto`` is ``weather`` when the weather metadata states its
+``radiation_time_basis`` and ``interval-start`` when it does not, and then
+warns once per run. Explicit ``weather`` stays strict, and the explicit
+methods are unchanged.
+"""
+
+import json
+import multiprocessing
+import warnings
+from contextlib import contextmanager
+from pathlib import Path
+from unittest import mock
+
+import numpy as np
+import pandas as pd
+import pytest
+from pvlib.location import Location
+
+from breos import App, cli
+from breos.app_inputs import reuse_prepared_inputs
+from breos.montecarlo import MonteCarloSettings, build_year_cache, run_montecarlo
+from breos.pv.model_options import (
+    DEFAULT_SOLAR_POSITION,
+    SOLAR_POSITION_METHODS,
+    resolve_solar_position_for_weather,
+    solar_position_record,
+    solar_position_warning_scope,
+    warn_solar_position_fallback,
+)
+from breos.pv_modules import get_module
+from breos.solar import calculate_multi_array_production, calculate_pv_production_dc
+from breos.weather import WEATHER_METADATA_KEY, save_weather_csv
+from tests.conftest import _build_synthetic_weather
+
+AUTO_WARNING = "solar_position = 'auto'"
+PORTO = Location(41.15, -8.61, tz="UTC")
+
+# Weather metadata that states a time basis, one case per supported convention.
+STATED = {
+    "instant_with_offset": {"radiation_time_basis": "instant", "irradiance_time_offset_hours": 0.1714},
+    "interval_mean_left": {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"},
+    "interval_mean_right": {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"},
+}
+UNSTATED = {"source": "user_csv", "horizon": {"status": "not_applied", "provider": None, "profile": None}}
+
+
+def _weather(metadata, year=2023):
+    """The synthetic year, with ``metadata`` as its only weather metadata."""
+    weather = _build_synthetic_weather(year)
+    weather.attrs = {WEATHER_METADATA_KEY: dict(metadata)}
+    return weather
+
+
+@contextmanager
+def _auto_warnings():
+    """Record every warning; the yielded list holds the auto fallback ones."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        matching: list = []
+        yield matching
+    matching.extend(w for w in caught if AUTO_WARNING in str(w.message))
+
+
+def _dc(weather, **kwargs):
+    return calculate_pv_production_dc(
+        weather_data=weather,
+        location=PORTO,
+        tilt=35,
+        surface_azimuth=180,
+        n_modules=4,
+        pv_params=get_module("Suntech_STP550S_STC"),
+        freq="h",
+        **kwargs,
+    )
+
+
+def test_auto_is_the_default_and_a_choice():
+    assert DEFAULT_SOLAR_POSITION == "auto"
+    assert set(SOLAR_POSITION_METHODS) == {"auto", "interval-start", "mid-interval", "weather"}
+
+
+@pytest.mark.parametrize(
+    ("metadata", "resolved"),
+    [*((stated, "weather") for stated in STATED.values()), (UNSTATED, "interval-start"), ({}, "interval-start")],
+)
+def test_auto_resolves_on_the_stated_time_basis(metadata, resolved):
+    assert resolve_solar_position_for_weather(" AUTO ", _weather(metadata)) == resolved
+    for explicit in ("interval-start", "mid-interval", "weather"):
+        assert resolve_solar_position_for_weather(explicit, _weather(metadata)) == explicit
+
+
+@pytest.mark.parametrize("case", sorted(STATED))
+def test_auto_with_a_stated_time_basis_equals_weather_bit_for_bit(case):
+    weather = _weather(STATED[case])
+
+    with _auto_warnings() as caught:
+        auto = _dc(weather)
+    weather_method = _dc(weather, solar_position="weather")
+
+    np.testing.assert_array_equal(auto.to_numpy(), weather_method.to_numpy())
+    assert not caught
+    # The metadata moves the sun, so the case would catch an auto that ignored it.
+    assert not np.array_equal(auto.to_numpy(), _dc(weather, solar_position="interval-start").to_numpy())
+
+
+def test_auto_without_a_time_basis_equals_interval_start_and_warns_once():
+    weather = _weather(UNSTATED)
+
+    with _auto_warnings() as caught:
+        auto = _dc(weather)
+    interval_start = _dc(weather, solar_position="interval-start")
+
+    np.testing.assert_array_equal(auto.to_numpy(), interval_start.to_numpy())
+    assert len(caught) == 1
+    message = str(caught[0].message)
+    assert "does not state its time basis" in message
+    assert "step labels" in message
+    assert "set solar_position explicitly" in message
+    assert "metadata sidecar" in message
+    assert issubclass(caught[0].category, UserWarning)
+
+
+@pytest.mark.parametrize("method", ["interval-start", "mid-interval"])
+def test_explicit_label_methods_never_warn(method):
+    with _auto_warnings() as caught:
+        _dc(_weather(UNSTATED), solar_position=method)
+    assert not caught
+
+
+def test_malformed_metadata_raises_under_auto_as_under_weather():
+    weather = _weather({"radiation_time_basis": "interval_mean"})
+    for method in ("auto", "weather"):
+        with pytest.raises(ValueError, match="timestamp_label_basis='left' or 'right'"):
+            _dc(weather, solar_position=method)
+
+
+def test_explicit_weather_without_metadata_still_raises():
+    with pytest.raises(ValueError, match="radiation_time_basis"):
+        _dc(_weather(UNSTATED), solar_position="weather")
+
+
+def test_a_warning_scope_warns_once_and_a_scope_inside_it_is_part_of_it():
+    weather = _weather(UNSTATED)
+    with _auto_warnings() as caught:
+        with solar_position_warning_scope():
+            _dc(weather)
+            with solar_position_warning_scope():
+                _dc(weather)
+            _dc(weather)
+    assert len(caught) == 1
+
+    # Outside a scope every computation warns.
+    with _auto_warnings() as caught:
+        _dc(weather)
+        _dc(weather)
+    assert len(caught) == 2
+
+
+def test_solar_position_record_names_the_requested_and_resolved_method():
+    assert solar_position_record("Auto", _weather(UNSTATED), "h") == {
+        "requested": "auto",
+        "resolved": "interval-start",
+        "offset_minutes": 0.0,
+    }
+    assert solar_position_record("auto", _weather(STATED["instant_with_offset"]), "h") == {
+        "requested": "auto",
+        "resolved": "weather",
+        "offset_minutes": pytest.approx(0.1714 * 60),
+    }
+    assert solar_position_record("auto", _weather(STATED["interval_mean_left"]), "15min")["offset_minutes"] == 7.5
+    assert solar_position_record("mid-interval", _weather(UNSTATED), "h") == {
+        "requested": "mid-interval",
+        "resolved": "mid-interval",
+        "offset_minutes": 30.0,
+    }
+
+
+def test_a_multi_array_call_warns_once_for_all_its_arrays():
+    weather = _weather(UNSTATED)
+    module = "Suntech_STP550S_STC"
+    arrays = [
+        {"modules": 2, "module": module, "tilt": 30, "azimuth": 90},
+        {"modules": 2, "module": module, "tilt": 30, "azimuth": 270},
+    ]
+    with _auto_warnings() as caught:
+        auto = calculate_multi_array_production(weather, PORTO, arrays, freq="h")
+    explicit = calculate_multi_array_production(weather, PORTO, arrays, freq="h", solar_position="interval-start")
+    pd.testing.assert_series_equal(auto, explicit, check_exact=True)
+    assert len(caught) == 1
+
+
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+
+APP_BASE = {
+    "location": "porto",
+    "annual_consumption_kwh": 3000,
+    "projection_years": 1,
+    "start_date": "2023-01-01",
+    "battery_kwh": 0.0,
+    "pv_arrays": [{"modules": 3, "tilt": 30, "azimuth": 120}, {"modules": 3, "tilt": 30, "azimuth": 240}],
+    # Terrain shading computes the sun as well, so one run computes it three times.
+    "horizon_profile": [[0, 5], [180, 5]],
+}
+
+
+def _app(config, metadata):
+    weather = _weather(metadata)
+
+    def fetch(*_args, **_kwargs):
+        return weather.copy(), {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
+
+    with (
+        mock.patch("breos.app.fetch_tmy_weather_data", fetch),
+        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
+    ):
+        app = App(config)
+        app.simulate()
+    return app
+
+
+def _series(app):
+    return app._artifacts.first_year_results_df["PV_DC"].to_numpy()
+
+
+def test_app_default_without_a_time_basis_warns_once_and_keeps_the_label_results():
+    with _auto_warnings() as caught:
+        auto = _app(APP_BASE, UNSTATED)
+    assert len(caught) == 1
+
+    explicit = _app({**APP_BASE, "solar_position": "interval-start"}, UNSTATED)
+    np.testing.assert_array_equal(_series(auto), _series(explicit))
+    assert auto.result()["npv_savings"] == explicit.result()["npv_savings"]
+
+    provenance = auto.result()["provenance"]
+    assert provenance["resolved_config"]["solar_position"] == "auto"
+    assert provenance["pv_model"]["solar_position"] == {
+        "requested": "auto",
+        "resolved": "interval-start",
+        "offset_minutes": 0.0,
+    }
+    assert provenance["weather"]["horizon"]["profile"]["solar_position"] == "interval-start"
+    assert explicit.result()["provenance"]["pv_model"]["solar_position"] == {
+        "requested": "interval-start",
+        "resolved": "interval-start",
+        "offset_minutes": 0.0,
+    }
+
+
+def test_app_default_with_a_time_basis_equals_weather_without_a_warning():
+    metadata = {**UNSTATED, **STATED["instant_with_offset"]}
+    with _auto_warnings() as caught:
+        auto = _app(APP_BASE, metadata)
+    assert not caught
+
+    explicit = _app({**APP_BASE, "solar_position": "weather"}, metadata)
+    np.testing.assert_array_equal(_series(auto), _series(explicit))
+    assert auto.result()["pv_dc_generation_kwh"] == explicit.result()["pv_dc_generation_kwh"]
+    assert auto.result()["provenance"]["pv_model"]["solar_position"] == {
+        "requested": "auto",
+        "resolved": "weather",
+        "offset_minutes": pytest.approx(0.1714 * 60),
+    }
+    assert explicit.result()["provenance"]["pv_model"]["solar_position"]["requested"] == "weather"
+
+
+def test_app_warns_once_per_run():
+    with _auto_warnings() as caught:
+        _app(APP_BASE, UNSTATED)
+        _app(APP_BASE, UNSTATED)
+    assert len(caught) == 2
+
+
+# ---------------------------------------------------------------------------
+# Monte Carlo
+# ---------------------------------------------------------------------------
+
+MC_BASE = {
+    "location": "porto",
+    "n_modules": 4,
+    "annual_consumption_kwh": 3000,
+    "battery_kwh": 0.0,
+    "projection_years": 1,
+    "start_date": "2023-01-01",
+    "execution_backend": "python",
+}
+
+
+def _mc_weather(tmp_path, write_multiyear_weather, *, sidecar):
+    path = write_multiyear_weather(tmp_path / "multi.csv", years=(2021, 2022, 2023))
+    if not sidecar:
+        (tmp_path / "multi.csv.metadata.json").unlink()
+    return MonteCarloSettings(weather_file=str(path), n_runs=2, years_per_run=1, seed=1)
+
+
+def test_montecarlo_warns_once_across_its_weather_years(tmp_path, write_multiyear_weather):
+    settings = _mc_weather(tmp_path, write_multiyear_weather, sidecar=False)
+    with _auto_warnings() as caught:
+        auto = run_montecarlo(MC_BASE, settings)
+    assert len(caught) == 1
+
+    explicit = run_montecarlo({**MC_BASE, "solar_position": "interval-start"}, settings)
+    pd.testing.assert_frame_equal(auto.runs, explicit.runs, check_exact=True)
+    runtime = auto.provenance["runtime_weather"]
+    assert runtime["solar_position_requested"] == "auto"
+    assert runtime["solar_position_method"] == "interval-start"
+    assert runtime["solar_position_offset_minutes"] == 0.0
+
+
+def test_montecarlo_with_a_sidecar_resolves_auto_to_weather(tmp_path, write_multiyear_weather):
+    settings = _mc_weather(tmp_path, write_multiyear_weather, sidecar=True)
+    with _auto_warnings() as caught:
+        result = run_montecarlo(MC_BASE, settings)
+    assert not caught
+    runtime = result.provenance["runtime_weather"]
+    assert (runtime["solar_position_requested"], runtime["solar_position_method"]) == ("auto", "weather")
+
+
+# ---------------------------------------------------------------------------
+# Optimization
+# ---------------------------------------------------------------------------
+
+OPT_CONFIG = {
+    "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+    "simulation": {"resolution": "h", "years_projection": 2},
+    "constraints": {"budget": 100000, "max_area_m2": 100.0, "max_modules": 5},
+    "mode": {"fixed_azimuth": 180},
+    "pv": {"module": "Suntech_STP550S_STC"},
+    "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
+}
+
+
+def _load(index):
+    return pd.DataFrame({"Load": 400.0 + 300.0 * (index.hour >= 17)}, index=index)
+
+
+def test_the_optimizer_resolves_auto_once_on_its_weather():
+    pytest.importorskip("pymoo")
+    from breos.optimization import SolarDesignProblem
+
+    weather = _weather(UNSTATED)
+    with _auto_warnings() as caught:
+        problem = SolarDesignProblem(weather, _load(weather.index), OPT_CONFIG)
+        out: dict = {}
+        problem._evaluate(np.array([3.0, 0.0, 30.0], dtype=float), out)
+        problem._evaluate(np.array([4.0, 0.0, 35.0], dtype=float), out)
+    assert len(caught) == 1
+    # Candidates, in this process or a worker, get the resolved method.
+    assert problem.model_options["solar_position"] == "interval-start"
+    assert problem.solar_position == {"requested": "auto", "resolved": "interval-start", "offset_minutes": 0.0}
+
+    stated = _weather(STATED["interval_mean_left"])
+    with _auto_warnings() as caught:
+        problem = SolarDesignProblem(stated, _load(stated.index), OPT_CONFIG)
+    assert not caught
+    assert problem.model_options["solar_position"] == "weather"
+    assert problem.solar_position["offset_minutes"] == 30.0
+
+    with pytest.raises(ValueError, match="radiation_time_basis"):
+        SolarDesignProblem(weather, _load(weather.index), {**OPT_CONFIG, "solar_position": "weather"})
+
+
+def test_a_fixed_design_warns_once_across_its_weather_years():
+    from breos.optimization import evaluate_projected_design
+
+    tmy = _weather(UNSTATED)
+    frames = [_weather(UNSTATED, 2021), _weather(UNSTATED, 2022)]
+    kwargs = {"n_modules": 4, "battery_kwh": 0.0, "tilt": 30.0, "azimuth": 180.0, "weather_by_year": frames}
+    load = _load(frames[0].index)
+    with _auto_warnings() as caught:
+        auto = evaluate_projected_design(tmy, load, OPT_CONFIG, **kwargs)
+    assert len(caught) == 1
+    explicit = evaluate_projected_design(tmy, load, {**OPT_CONFIG, "solar_position": "interval-start"}, **kwargs)
+    pd.testing.assert_frame_equal(auto.yearly, explicit.yearly, check_exact=True)
+    assert auto.provenance["solar_position"] == {
+        "requested": "auto",
+        "resolved": "interval-start",
+        "offset_minutes": 0.0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def test_the_cli_offers_auto():
+    parser = cli.build_parser()
+    assert cli._build_config(parser.parse_args(["run", "--solar-position", "auto"]))["solar_position"] == "auto"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run", "--solar-position", "noon"])
+
+
+# ---------------------------------------------------------------------------
+# Reused inputs and forked processes
+# ---------------------------------------------------------------------------
+
+
+def _weather_file_config(tmp_path, metadata):
+    """An App config reading a weather CSV whose sidecar holds ``metadata``."""
+    weather = _weather(metadata)
+    path = tmp_path / "site_weather.csv"
+    save_weather_csv(weather, path)
+    config = {key: value for key, value in APP_BASE.items() if key not in ("pv_arrays", "horizon_profile")}
+    return {**config, "n_modules": 4, "weather_file": str(path)}, path
+
+
+def _set_sidecar_metadata(path, **metadata):
+    sidecar = Path(f"{path}.metadata.json")
+    payload = json.loads(sidecar.read_text())
+    payload[WEATHER_METADATA_KEY].update(metadata)
+    sidecar.write_text(json.dumps(payload))
+
+
+def _simulated(config):
+    app = App(config)
+    app.simulate()
+    return app
+
+
+def test_reused_inputs_are_prepared_again_when_the_weather_sidecar_changes(tmp_path):
+    config, path = _weather_file_config(tmp_path, {"source": "user_csv"})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with reuse_prepared_inputs():
+            before = _simulated(config)
+            _set_sidecar_metadata(path, radiation_time_basis="interval_mean", timestamp_label_basis="left")
+            cached = _simulated(config)
+    fresh = _simulated(config)
+
+    assert before.result()["provenance"]["pv_model"]["solar_position"]["resolved"] == "interval-start"
+    assert cached.result()["provenance"]["pv_model"]["solar_position"]["resolved"] == "weather"
+    np.testing.assert_array_equal(_series(cached), _series(fresh))
+    assert not np.array_equal(_series(cached), _series(before))
+
+
+def test_reused_inputs_are_prepared_again_when_the_weather_csv_changes(tmp_path):
+    config, path = _weather_file_config(tmp_path, {"source": "user_csv", **STATED["interval_mean_left"]})
+    with reuse_prepared_inputs():
+        before = _simulated(config)
+        dimmer = _weather({"source": "user_csv", **STATED["interval_mean_left"]})
+        dimmer[["ghi", "dni", "dhi"]] *= 0.5
+        save_weather_csv(dimmer, path)
+        cached = _simulated(config)
+    assert cached.result()["pv_dc_generation_kwh"] < before.result()["pv_dc_generation_kwh"]
+    assert cached.result()["pv_dc_generation_kwh"] == _simulated(config).result()["pv_dc_generation_kwh"]
+
+
+def test_reused_inputs_keep_their_own_copy_of_a_fetched_weather_frame(tmp_path, monkeypatch):
+    # A provider that hands out one frame and later changes its metadata must
+    # not change the cached inputs' metadata without their PV.
+    monkeypatch.chdir(tmp_path)
+    shared = _weather({"source": "pvgis", "radiation_time_basis": "instant", "irradiance_time_offset_hours": 0.0})
+    config = {"location": "porto", "n_modules": 4, "annual_consumption_kwh": 3000, "start_date": "2023-01-01",
+              "projection_years": 1}  # fmt: skip
+    with mock.patch("breos.app.fetch_tmy_weather_data", return_value=(shared, {})):
+        with reuse_prepared_inputs():
+            first = _simulated(config)
+            shared.attrs[WEATHER_METADATA_KEY]["irradiance_time_offset_hours"] = 0.5
+            cached = _simulated(config)
+    np.testing.assert_array_equal(_series(cached), _series(first))
+    assert cached.result()["provenance"]["pv_model"]["solar_position"]["offset_minutes"] == 0.0
+
+
+def test_every_app_run_warns_even_on_reused_inputs(tmp_path):
+    config, _path = _weather_file_config(tmp_path, {"source": "user_csv"})
+    with _auto_warnings() as caught:
+        with reuse_prepared_inputs():
+            _simulated(config)
+            _simulated(config)
+            _simulated({**config, "battery_kwh": 5.0})
+    assert len(caught) == 3
+
+
+def test_every_montecarlo_study_warns_even_on_a_reused_year_cache(tmp_path, write_multiyear_weather):
+    settings = _mc_weather(tmp_path, write_multiyear_weather, sidecar=False)
+    with _auto_warnings() as caught:
+        cache = build_year_cache(MC_BASE, settings)
+    assert len(caught) == 1
+    with _auto_warnings() as caught:
+        run_montecarlo(MC_BASE, settings, year_cache=cache)
+        run_montecarlo({**MC_BASE, "battery_kwh": 5.0}, settings, year_cache=cache)
+    assert len(caught) == 2
+
+
+def _two_scoped_fallbacks(_=None):
+    """Warnings from two scopes this process opens, each with one fallback."""
+    with _auto_warnings() as caught:
+        for _ in range(2):
+            with solar_position_warning_scope():
+                warn_solar_position_fallback("auto", "interval-start")
+                warn_solar_position_fallback("auto", "interval-start")
+    return len(caught)
+
+
+@pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="needs the fork start method")
+def test_a_process_forked_inside_a_scope_warns_in_its_own_scopes():
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with solar_position_warning_scope():
+            warn_solar_position_fallback("auto", "interval-start")
+            with multiprocessing.get_context("fork").Pool(1) as pool:
+                forked = pool.apply(_two_scoped_fallbacks)
+    assert forked == _two_scoped_fallbacks() == 2
+
+
+@pytest.mark.parametrize("path", ["string", "near_shading", "module_shading", "multi_inverter", "ac_battery"])
+@pytest.mark.parametrize("stated", [False, True], ids=["fallback", "weather_offset"])
+def test_electrical_paths_resolve_auto_warn_once_and_record_provenance(trina, path, stated):
+    from tests.test_app_ac_coupling import AC
+    from tests.test_module_shading import CHIMNEY, _module_shaded_config
+    from tests.test_multi_inverter import TWO_INVERTERS
+    from tests.test_near_shading import EAST_WALL
+    from tests.test_string_energy import EAST_WEST
+
+    configs = {
+        "string": {**EAST_WEST, "electrical_fidelity": "string"},
+        "near_shading": {"pv_arrays": [{**array, "shading": EAST_WALL} for array in APP_BASE["pv_arrays"]]},
+        "module_shading": _module_shaded_config(trina, CHIMNEY),
+        "multi_inverter": TWO_INVERTERS,
+        "ac_battery": {**AC, "battery_kwh": 5.0},
+    }
+    config = {
+        **APP_BASE,
+        **configs[path],
+        "period": {"start": "2023-06-21", "end": "2023-06-23"},
+        "execution_backend": "python",
+    }
+    config.pop("projection_years", None)
+    metadata = {**UNSTATED, **STATED["instant_with_offset"]} if stated else UNSTATED
+    method = "weather" if stated else "interval-start"
+    with _auto_warnings() as caught:
+        auto = _app(config, metadata)
+    assert len(caught) == (0 if stated else 1)
+    explicit = _app({**config, "solar_position": method}, metadata)
+    pd.testing.assert_frame_equal(
+        auto._artifacts.first_year_results_df, explicit._artifacts.first_year_results_df, check_exact=True
+    )
+    result = auto.result()
+    assert result["provenance"]["pv_model"]["solar_position"] == {
+        "requested": "auto",
+        "resolved": method,
+        "offset_minutes": pytest.approx(0.1714 * 60 if stated else 0.0),
+    }
+    stages = {stage["key"] for stage in result["pv_loss_waterfall"]["stages"]}
+    if path == "string":
+        assert "mppt_limits" in stages
+    elif path == "near_shading":
+        assert "near_shading" in stages
+    elif path == "module_shading":
+        assert {"near_shading", "shading_mismatch", "mppt_limits"} <= stages
+    elif path == "multi_inverter":
+        assert len(result["pv_loss_waterfall"]["inverter"]["inverters"]) == 2
+    else:
+        assert auto._artifacts.first_year_results_df["PV_AC_To_Battery"].sum() > 0
+    if stated:
+        labels = _app({**config, "solar_position": "interval-start"}, metadata)
+        assert not np.array_equal(_series(auto), _series(labels))

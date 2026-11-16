@@ -66,7 +66,7 @@ def test_prepare_inputs_threads_explicit_battery_temperature(monkeypatch):
     monkeypatch.setattr(
         app_inputs,
         "build_pv_production_breakdown",
-        lambda *args, **kwargs: SimpleNamespace(dc_after_losses=dc),
+        lambda *args, **kwargs: SimpleNamespace(dc_after_losses=dc, dc_voltage=None),
     )
     monkeypatch.setattr(app_inputs, "load_consumption_profile", lambda *args, **kwargs: pd.Series(index=index))
 

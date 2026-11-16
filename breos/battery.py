@@ -10,70 +10,46 @@ This module handles battery energy storage simulation including:
 
 import dataclasses
 import math
+import warnings
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
-import rainflow
 
 from breos._controller import ControllerBatteryState, ControllerCarry, DailyDispatchController, _ControllerSession
 from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its names stay importable here
-    _LEDGER_COLUMNS,
     _N_ROWS,
     _ROW,
     _ROW_COLUMNS,
     LEDGER_SCHEMA_VERSION,
+    _day_arguments,
     _dispatch_day_python,
+    _restate_day,
+    _run_packed_python,
+    _vehicle_charge_ahead,
     compute_cell_temperature,
-    lfp_capacity_factor,
 )
 from breos.constants import (
-    A_Q,
-    A_R,
-    B_Q,
-    B_R,
-    C_DOC_Q,
-    C_DOC_R,
-    D_DOC_Q,
-    D_DOC_R,
+    BATTERY_COUPLINGS,
     DEFAULT_CHARGE_EFFICIENCY,
     DEFAULT_DISCHARGE_EFFICIENCY,
     DEFAULT_EOL_PERCENTAGE,
-    DEFAULT_INDOOR_CEILING_C,
-    DEFAULT_INDOOR_COUPLING_ALPHA,
-    DEFAULT_INDOOR_FLOOR_C,
-    DEFAULT_INDOOR_SETPOINT_C,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
     DEFAULT_STANDBY_LOSS_WH,
     DEFAULT_THERMAL_RESISTANCE_K_PER_W,
-    LAM_EA_J_MOL,
-    LAM_EXPONENT_B,
-    LAM_K0_FRAC,
-    LAM_SOC_EXPONENT_N,
-    NAUMANN_EA_J_MOL,
-    NAUMANN_EA_R_J_MOL,
-    NAUMANN_EXPONENT_B,
-    NAUMANN_EXPONENT_B_R,
-    NAUMANN_K0_PERCENT,
-    NAUMANN_K0_R_PERCENT,
-    NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL,
-    NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B,
-    NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC,
-    NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N,
-    NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL,
-    NAUMANN_LAM_FIELD_CALIBRATED_V2_EXPONENT_B,
-    NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC,
-    NAUMANN_LAM_FIELD_CALIBRATED_V2_SOC_EXPONENT_N,
-    NAUMANN_SOC_EXPONENT_N,
-    NAUMANN_SOC_EXPONENT_N_R,
-    R_GAS,
     SKIPPED_REPLACEMENT_ACTIONS,
-    T_REF_K,
-    Z_Q,
-    Z_R,
+)
+from breos.degradation.native import (  # noqa: F401  -- the documented primitives stay importable here
+    _get_degradation_params,
+    _update_battery_soh_from_cycles,
+    resistance_to_efficiency,
+    update_battery_resistance_calendar,
+    update_battery_resistance_cyclewise,
+    update_battery_soh_calendar,
+    update_battery_soh_cyclewise,
 )
 from breos.degradation.protocol import (
     BlastDegradationAdapter,
@@ -81,13 +57,37 @@ from breos.degradation.protocol import (
     DegradationLifecycle,
     NativeDegradationAdapter,
 )
+from breos.degradation.replacement import replacement_skip_reason
 from breos.dispatch_instructions import DispatchInstructions
 from breos.execution import is_pv_only_dispatch, single_thread_blas, validate_execution_backend
-from breos.inverter import _calculate_dc_ac_power_arrays
+from breos.inverter import (
+    InverterConversion,
+    InverterUnits,
+    _calculate_dc_ac_power_arrays,
+    as_inverter_conversion,
+    convert_units,
+)
 from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
+from breos.vehicle import VehicleCarry, VehicleConfig, VehicleSchedule
+
+if TYPE_CHECKING:
+    from breos.vehicle.lifecycle import VehicleLifecycle
 
 if TYPE_CHECKING:
     from breos.tariffs import ResolvedTariff
+
+
+def _finite(name: str, value: Any) -> float:
+    """``value`` as a float, refusing a bool, a non-number and a non-finite number by ``name``."""
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a finite number, not a bool")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be a finite number")
+    return result
 
 
 @dataclass
@@ -95,11 +95,19 @@ class BatteryConfig:
     """
     Configuration parameters for battery simulation.
 
-    Only DC-coupled systems (hybrid inverters) are modelled:
-    - PV → Battery: No inverter loss (stays in DC)
-    - Battery → Load: Inverter loss applies (DC to AC)
-
-    AC-coupled dispatch is not implemented.
+    ``coupling`` selects the topology (ADR 0004). ``"dc"``, the default, is a
+    hybrid inverter: PV and the battery share one DC bus and one inverter, so
+    PV charges the battery as DC and battery discharge crosses the shared
+    inverter. ``"ac"`` gives the battery its own bidirectional inverter on the
+    AC bus beside the PV inverter, described by
+    ``battery_inverter_ac_capacity_w`` and ``battery_inverter_efficiency``;
+    the inverter fields above then describe the PV inverter only. ``"dc"``
+    refuses the battery inverter fields, and ``"ac"`` requires the
+    efficiency. With ``"ac"`` PV converts as in a PV-only run, its surplus
+    AC charges the battery through the battery inverter, and grid charge
+    takes instructions without a ``grid_charge_efficiency``. Instruction
+    planners and daily controllers run with it; with several PV inverters the
+    App refuses the daily-target planner, which plans through one.
 
     Power limits are nameplate powers and therefore scale with the timestep:
     ``max_charge_power_w`` limits DC input to the battery path, while
@@ -114,7 +122,9 @@ class BatteryConfig:
     ``ac_output_scale`` derates AC delivery for shortfall the chain does not
     model and is bounded to ``(0, 1]``. It applies inside dispatch, not to a
     finished result, so battery discharge decisions and the reachable AC
-    ceiling respond to it. It is one constant approximating the combined
+    ceiling respond to it. With ``"ac"`` it scales the PV inverter's
+    conversion alone; the battery inverter's output and ceiling are
+    unchanged. It is one constant approximating the combined
     annual effect of things like availability, curtailment and downstream
     wiring, not a model of any of them individually. While it is active,
     the reported inverter loss is the whole DC-to-AC shortfall rather than
@@ -223,19 +233,20 @@ class BatteryConfig:
     # an under-predicting model on the DC side instead. The default 1.0 is a
     # no-op and reproduces prior behaviour bit-for-bit.
     ac_output_scale: float = 1.0
+    # The inverter's measured efficiency curve and AC cable; None keeps the
+    # PVWatts part-load curve and no cable. A mapping of its fields is accepted.
+    inverter_conversion: Optional[InverterConversion] = None
+    # Battery topology (ADR 0004): "dc" for a hybrid inverter, "ac" for a
+    # battery inverter of its own on the AC bus.
+    coupling: str = "dc"
+    # The AC-coupled battery inverter: its AC rating (W), the AC output when
+    # discharging and the AC input when charging, None for flat unclipped
+    # conversion; and its nominal efficiency, which has no default. Both are
+    # refused with "dc".
+    battery_inverter_ac_capacity_w: Optional[float] = None
+    battery_inverter_efficiency: Optional[float] = None
 
     def __post_init__(self):
-        def finite(name: str, value: float) -> float:
-            if isinstance(value, (bool, np.bool_)):
-                raise ValueError(f"{name} must be a finite number, not a bool")
-            try:
-                result = float(value)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"{name} must be a finite number") from exc
-            if not math.isfinite(result):
-                raise ValueError(f"{name} must be a finite number")
-            return result
-
         # Checked rather than coerced: a string such as "false" is truthy.
         if not isinstance(self.allow_terminal_replacement, (bool, np.bool_)):
             raise ValueError("allow_terminal_replacement must be a bool")
@@ -247,7 +258,7 @@ class BatteryConfig:
         if self.replacement_years_after_span < 0:
             raise ValueError("replacement_years_after_span must be a non-negative integer")
         self.replacement_years_after_span = int(self.replacement_years_after_span)
-        self.replacement_min_remaining_years = finite(
+        self.replacement_min_remaining_years = _finite(
             "replacement_min_remaining_years", self.replacement_min_remaining_years
         )
         if self.replacement_min_remaining_years < 0.0:
@@ -255,17 +266,17 @@ class BatteryConfig:
         if self.skipped_replacement_action not in SKIPPED_REPLACEMENT_ACTIONS:
             raise ValueError(f"skipped_replacement_action must be one of: {', '.join(SKIPPED_REPLACEMENT_ACTIONS)}")
 
-        self.nominal_energy_wh = finite("nominal_energy_wh", self.nominal_energy_wh)
-        self.initial_soh = finite("initial_soh", self.initial_soh)
-        self.eol_percentage = finite("eol_percentage", self.eol_percentage)
-        self.min_soc = finite("min_soc", self.min_soc)
-        self.max_soc = finite("max_soc", self.max_soc)
-        self.charge_efficiency = finite("charge_efficiency", self.charge_efficiency)
-        self.discharge_efficiency = finite("discharge_efficiency", self.discharge_efficiency)
-        self.inverter_efficiency = finite("inverter_efficiency", self.inverter_efficiency)
-        self.standby_loss_wh = finite("standby_loss_wh", self.standby_loss_wh)
-        self.initial_resistance_growth = finite("initial_resistance_growth", self.initial_resistance_growth)
-        self.thermal_resistance_k_per_w = finite("thermal_resistance_k_per_w", self.thermal_resistance_k_per_w)
+        self.nominal_energy_wh = _finite("nominal_energy_wh", self.nominal_energy_wh)
+        self.initial_soh = _finite("initial_soh", self.initial_soh)
+        self.eol_percentage = _finite("eol_percentage", self.eol_percentage)
+        self.min_soc = _finite("min_soc", self.min_soc)
+        self.max_soc = _finite("max_soc", self.max_soc)
+        self.charge_efficiency = _finite("charge_efficiency", self.charge_efficiency)
+        self.discharge_efficiency = _finite("discharge_efficiency", self.discharge_efficiency)
+        self.inverter_efficiency = _finite("inverter_efficiency", self.inverter_efficiency)
+        self.standby_loss_wh = _finite("standby_loss_wh", self.standby_loss_wh)
+        self.initial_resistance_growth = _finite("initial_resistance_growth", self.initial_resistance_growth)
+        self.thermal_resistance_k_per_w = _finite("thermal_resistance_k_per_w", self.thermal_resistance_k_per_w)
 
         if self.nominal_energy_wh < 0.0:
             raise ValueError("nominal_energy_wh must be non-negative")
@@ -283,7 +294,25 @@ class BatteryConfig:
             if getattr(self, name) < 0.0:
                 raise ValueError(f"{name} must be non-negative")
 
-        for name in ("inverter_ac_capacity_w", "max_charge_power_w", "max_discharge_power_w"):
+        if self.coupling not in BATTERY_COUPLINGS:
+            raise ValueError(f"coupling must be one of: {', '.join(BATTERY_COUPLINGS)}; got {self.coupling!r}")
+        if self.coupling == "dc":
+            for name in ("battery_inverter_ac_capacity_w", "battery_inverter_efficiency"):
+                if getattr(self, name) is not None:
+                    raise ValueError(f"{name} describes an AC-coupled battery's own inverter; it needs coupling = 'ac'")
+        else:
+            if self.battery_inverter_efficiency is None:
+                raise ValueError("an AC-coupled battery needs battery_inverter_efficiency; it has no default")
+            self.battery_inverter_efficiency = _finite("battery_inverter_efficiency", self.battery_inverter_efficiency)
+            if not 0.0 < self.battery_inverter_efficiency <= 1.0:
+                raise ValueError("battery_inverter_efficiency must be greater than 0 and at most 1")
+
+        for name in (
+            "inverter_ac_capacity_w",
+            "max_charge_power_w",
+            "max_discharge_power_w",
+            "battery_inverter_ac_capacity_w",
+        ):
             value = getattr(self, name)
             if value is not None:
                 if isinstance(value, (bool, np.bool_)):
@@ -301,11 +330,13 @@ class BatteryConfig:
                     "power_limit_c_rate limits both directions from capacity; do not also set "
                     "max_charge_power_w or max_discharge_power_w"
                 )
-            rate = finite("power_limit_c_rate", self.power_limit_c_rate)
+            rate = _finite("power_limit_c_rate", self.power_limit_c_rate)
             if rate <= 0.0:
                 raise ValueError("power_limit_c_rate must be greater than 0")
             self.power_limit_c_rate = rate
-        self.ac_output_scale = finite("ac_output_scale", self.ac_output_scale)
+        if self.inverter_conversion is not None:
+            self.inverter_conversion = as_inverter_conversion(self.inverter_conversion)
+        self.ac_output_scale = _finite("ac_output_scale", self.ac_output_scale)
         if not 0.0 < self.ac_output_scale <= 1.0:
             raise ValueError(
                 "ac_output_scale must be greater than 0 and at most 1; it is applied after the "
@@ -313,6 +344,11 @@ class BatteryConfig:
                 "nameplate and more AC than the DC entering the inverter. Scale the DC series "
                 "instead to correct an under-predicting model"
             )
+
+    @property
+    def conversion(self) -> InverterConversion:
+        """The inverter conversion the kernels run, the default when none is configured."""
+        return as_inverter_conversion(self.inverter_conversion)
 
     @property
     def stored_power_limit_w(self) -> Optional[float]:
@@ -364,6 +400,37 @@ def _repeat_annual_load_across_year_edges(load_utc: pd.Series, rng_utc: pd.Datet
     return combined[~combined.index.duplicated(keep="first")].sort_index()
 
 
+def _align_ac_derate(inverter_ac_derate: Optional[pd.Series], rng: pd.DatetimeIndex) -> Optional[np.ndarray]:
+    """Reindex the inverter's per-step AC rating fraction onto ``rng``; None when there is none."""
+    if inverter_ac_derate is None:
+        return None
+    values = inverter_ac_derate.reindex(rng)
+    _require_complete_series(values, "inverter_ac_derate")
+    array = values.values.astype(np.float64)
+    if (array < 0.0).any() or (array > 1.0).any():
+        raise ValueError("inverter_ac_derate must be a fraction in [0, 1] at every step")
+    return array
+
+
+def _align_curve_rows(inverter_curve_row: Optional[pd.Series], rng: pd.DatetimeIndex) -> Optional[np.ndarray]:
+    """Reindex the efficiency curve's per-step row position onto ``rng``; None when there is none."""
+    if inverter_curve_row is None:
+        return None
+    values = inverter_curve_row.reindex(rng)
+    _require_complete_series(values, "inverter_curve_row")
+    array = np.ascontiguousarray(values.values, dtype=np.float64)
+    if not np.isfinite(array).all() or (array < 0.0).any():
+        raise ValueError("inverter_curve_row must be a finite row position of at least 0 at every step")
+    return array
+
+
+def _align_pv_dc(pv_dc: pd.Series, rng: pd.DatetimeIndex) -> np.ndarray:
+    """Reindex PV DC power onto ``rng`` as float64, refusing a step without a finite value."""
+    pv_values = pv_dc.reindex(rng)
+    _require_complete_series(pv_values, "pv_dc")
+    return pv_values.values.astype(np.float64)
+
+
 def _align_input_arrays(
     pv_dc: pd.Series,
     houseload: pd.DataFrame,
@@ -379,8 +446,7 @@ def _align_input_arrays(
     than the simulation window, and it repeats across the year edge (see
     :func:`_repeat_annual_load_across_year_edges`).
     """
-    pv_values = pv_dc.reindex(rng)
-    _require_complete_series(pv_values, "pv_dc")
+    pv_values = _align_pv_dc(pv_dc, rng)
 
     if isinstance(houseload.index, pd.DatetimeIndex):
         houseload_series = houseload.iloc[:, 0].copy()
@@ -395,16 +461,20 @@ def _align_input_arrays(
 
         rng_utc = rng.tz_convert("UTC") if rng.tz is not None else rng.tz_localize("UTC")
 
-        # Only remap year if load covers a single year different from simulation.
-        # Use dominant year (most frequent) to handle tz-aware indices that
-        # span two calendar years in UTC (e.g., CET midnight = UTC 23:00 prev day).
-        load_dominant_year = load_utc.year.value_counts().idxmax()
-        sim_dominant_year = rng_utc.year.value_counts().idxmax()
         houseload_series.index = load_utc
-        if load_dominant_year != sim_dominant_year:
-            year_offset = sim_dominant_year - load_dominant_year
-            houseload_series = remap_datetime_index_years(houseload_series, year_offset)
-        houseload_series = _repeat_annual_load_across_year_edges(houseload_series, rng_utc)
+        # A load that already holds every simulated instant is used as it is:
+        # remapping a multi-year record would put another year's readings on
+        # these steps. Otherwise it is an annual profile, shifted onto the
+        # simulated year by dominant year (most frequent), which handles
+        # tz-aware indices that span two calendar years in UTC (e.g., CET
+        # midnight = UTC 23:00 prev day), and repeated across the year edge.
+        if not rng_utc.isin(load_utc).all():
+            load_dominant_year = load_utc.year.value_counts().idxmax()
+            sim_dominant_year = rng_utc.year.value_counts().idxmax()
+            if load_dominant_year != sim_dominant_year:
+                year_offset = sim_dominant_year - load_dominant_year
+                houseload_series = remap_datetime_index_years(houseload_series, year_offset)
+            houseload_series = _repeat_annual_load_across_year_edges(houseload_series, rng_utc)
         load_utc = houseload_series.index
 
         # Convert back to target timezone (UTC→local is always unambiguous)
@@ -415,7 +485,7 @@ def _align_input_arrays(
         houseload_series.index = new_load_idx
     else:
         houseload_series = houseload.iloc[:, 0].copy()
-        houseload_series.index = pv_values.index
+        houseload_series.index = rng
     houseload_series = houseload_series.reindex(rng)
     _require_complete_series(houseload_series, "houseload")
     negative = houseload_series.to_numpy(dtype=float) < 0.0
@@ -433,7 +503,7 @@ def _align_input_arrays(
         _require_complete_series(temperature_series, "temperature_series")
 
     return (
-        pv_values.values.astype(np.float64),
+        pv_values,
         houseload_series.values.astype(np.float64),
         temperature_series.values.astype(np.float64),
     )
@@ -464,6 +534,10 @@ class AlignedSimulationInputs:
         temperature_c: Battery cell temperature (C) per step, 25 C if none was given.
         freq: The calendar's step, which converts power to energy. A run on
             these inputs takes it from here.
+        inverter_ac_derate: The inverter's AC rating per step as a fraction
+            of its nameplate, from temperature derating; None for none.
+        inverter_curve_row: The efficiency curve's row position per step,
+            from the operating DC voltage; None reads the conversion's own row.
     """
 
     index: pd.DatetimeIndex
@@ -472,7 +546,9 @@ class AlignedSimulationInputs:
     temperature_c: np.ndarray
     freq: str
     pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
-    pv_chain_key: Optional[Tuple[int, int, int, float, float, float, float]] = None
+    pv_chain_key: Optional[Tuple[Any, ...]] = None
+    inverter_ac_derate: Optional[np.ndarray] = None
+    inverter_curve_row: Optional[np.ndarray] = None
 
     def resolve_freq(self, freq: Optional[str]) -> str:
         """Return the inputs' own step, refusing a ``freq`` that disagrees with it."""
@@ -496,6 +572,29 @@ class AlignedSimulationInputs:
             freq=self.freq,
             pv_chain=self.pv_chain if pv_factor == 1.0 else None,
             pv_chain_key=self.pv_chain_key if pv_factor == 1.0 else None,
+            inverter_ac_derate=self.inverter_ac_derate,
+            inverter_curve_row=self.inverter_curve_row,
+        )
+
+    def with_pv_dc(self, pv_dc: pd.Series) -> "AlignedSimulationInputs":
+        """Return the same calendar, load and temperature with ``pv_dc`` aligned onto it as the PV.
+
+        ``pv_dc`` must start and end where this calendar does. The PV is then
+        reindexed and checked exactly as :func:`align_simulation_inputs`
+        does, so the result equals what that function builds from ``pv_dc``
+        and this calendar's load and temperature, without aligning the load
+        again. A design sweep on one weather year aligns its load once.
+        """
+        if len(pv_dc.index) == 0 or pv_dc.index[0] != self.index[0] or pv_dc.index[-1] != self.index[-1]:
+            raise ValueError("pv_dc must start and end where the aligned calendar does")
+        return AlignedSimulationInputs(
+            index=self.index,
+            pv_dc_w=_align_pv_dc(pv_dc, self.index),
+            load_w=self.load_w,
+            temperature_c=self.temperature_c,
+            freq=self.freq,
+            inverter_ac_derate=self.inverter_ac_derate,
+            inverter_curve_row=self.inverter_curve_row,
         )
 
     def _pv_chain_cache_key(
@@ -504,7 +603,7 @@ class AlignedSimulationInputs:
         hours_per_step: float,
         *,
         pv_dc_w: Optional[np.ndarray] = None,
-    ) -> Tuple[int, int, int, float, float, float, float]:
+    ) -> Tuple[Any, ...]:
         """Identify the aligned PV values and inverter settings used by the memo."""
         cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
         pv_values = self.pv_dc_w if pv_dc_w is None else pv_dc_w
@@ -516,6 +615,9 @@ class AlignedSimulationInputs:
             float(cap_wh),
             float(battery_config.inverter_efficiency),
             float(battery_config.ac_output_scale),
+            battery_config.conversion.cache_key(),
+            None if self.inverter_ac_derate is None else id(self.inverter_ac_derate),
+            None if self.inverter_curve_row is None else id(self.inverter_curve_row),
         )
 
     def with_pv_only_chain(
@@ -550,6 +652,10 @@ class AlignedSimulationInputs:
             cap_wh,
             battery_config.inverter_efficiency,
             battery_config.ac_output_scale,
+            conversion=battery_config.conversion,
+            ac_derate=self.inverter_ac_derate,
+            curve_rows=self.inverter_curve_row,
+            hours_per_step=hours_per_step,
         )
         for values in chain:
             values.setflags(write=False)
@@ -562,6 +668,8 @@ class AlignedSimulationInputs:
             freq=self.freq,
             pv_chain=chain,
             pv_chain_key=pv_chain_key,
+            inverter_ac_derate=self.inverter_ac_derate,
+            inverter_curve_row=self.inverter_curve_row,
         )
 
 
@@ -573,6 +681,8 @@ def align_simulation_inputs(
     freq: str = "h",
     start_time: Optional[pd.Timestamp] = None,
     end_time: Optional[pd.Timestamp] = None,
+    inverter_ac_derate: Optional[pd.Series] = None,
+    inverter_curve_row: Optional[pd.Series] = None,
 ) -> AlignedSimulationInputs:
     """Align simulation inputs once so many runs can share the result.
 
@@ -594,6 +704,8 @@ def align_simulation_inputs(
         load_w=load_values,
         temperature_c=temperature_values,
         freq=freq,
+        inverter_ac_derate=_align_ac_derate(inverter_ac_derate, rng),
+        inverter_curve_row=_align_curve_rows(inverter_curve_row, rng),
     )
 
 
@@ -636,14 +748,7 @@ def _carried_origin(value: Optional[float], name: str, limit_wh: float, limit_na
     """
     if value is None:
         return 0.0
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"{name} must be a finite number, not a bool")
-    try:
-        origin_wh = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a finite number") from exc
-    if not math.isfinite(origin_wh):
-        raise ValueError(f"{name} must be a finite number")
+    origin_wh = _finite(name, value)
     slack = 4.0 * math.ulp(max(abs(limit_wh), abs(origin_wh)))
     if not 0.0 <= origin_wh <= limit_wh + slack:
         raise ValueError(f"{name} must be between 0 and {limit_name}")
@@ -667,14 +772,7 @@ def _resolve_carried_energy(
     if initial_energy_wh is None:
         energy_wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
     else:
-        if isinstance(initial_energy_wh, (bool, np.bool_)):
-            raise ValueError("initial_energy_wh must be a finite number, not a bool")
-        try:
-            energy_wh = float(initial_energy_wh)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("initial_energy_wh must be a finite number") from exc
-        if not math.isfinite(energy_wh):
-            raise ValueError("initial_energy_wh must be a finite number")
+        energy_wh = _finite("initial_energy_wh", initial_energy_wh)
         if not 0.0 <= energy_wh <= battery_config.nominal_energy_wh:
             raise ValueError(
                 f"initial_energy_wh must be between 0 and nominal_energy_wh ({battery_config.nominal_energy_wh:g} Wh)"
@@ -692,6 +790,60 @@ def _resolve_carried_energy(
     return energy_wh, pv_origin_wh, grid_origin_wh
 
 
+@dataclass(frozen=True)
+class _StartState:
+    """The aging state a span starts from."""
+
+    fec: float
+    calendar_seconds: float
+    cumulative_cycle_deg: float
+    cumulative_cal_deg: float
+    soh_fraction: float
+    resistance_growth: float
+
+
+def _resolve_start_state(
+    engine_key: str,
+    battery_config: BatteryConfig,
+    initial_degradation_state: Optional[Dict[str, Any]],
+    *,
+    initial_fec: float,
+    initial_calendar_seconds: float,
+    initial_cumulative_cycle_deg: float,
+    initial_cumulative_cal_deg: float,
+    initial_resistance_growth: Optional[float],
+) -> _StartState:
+    """The span's starting aging state: a native snapshot's values, else the arguments and the battery's own.
+
+    The arguments are the multi-year continuation seam (the App's year loop);
+    a snapshot takes precedence over them. ``initial_resistance_growth``
+    None is the battery's configured starting resistance. BLAST restores its
+    engine from the snapshot (:func:`_build_degradation_lifecycle`), but the
+    FEC and calendar counters both engines snapshot are carried here, so a
+    BLAST span continued from its returned state counts on from them.
+    """
+    native = engine_key == "native" and initial_degradation_state is not None
+    payload: Mapping[str, Any] = initial_degradation_state or {}
+
+    def carried(key: str, default: Any, *, shared: bool = False) -> Any:
+        return float(payload.get(key, default)) if native or shared else default
+
+    if "resistance_growth" in payload:
+        resistance_growth = float(payload["resistance_growth"])
+    elif initial_resistance_growth is None:
+        resistance_growth = battery_config.initial_resistance_growth
+    else:
+        resistance_growth = initial_resistance_growth
+    return _StartState(
+        fec=carried("fec_cum", initial_fec, shared=True),
+        calendar_seconds=carried("cumulative_calendar_seconds", initial_calendar_seconds, shared=True),
+        cumulative_cycle_deg=carried("cumulative_cycle_degradation", initial_cumulative_cycle_deg),
+        cumulative_cal_deg=carried("cumulative_calendar_degradation", initial_cumulative_cal_deg),
+        soh_fraction=carried("soh_fraction", battery_config.initial_soh / 100.0),
+        resistance_growth=resistance_growth,
+    )
+
+
 def _build_degradation_lifecycle(
     engine_key: str,
     battery_config: BatteryConfig,
@@ -704,6 +856,7 @@ def _build_degradation_lifecycle(
     initial_calendar_seconds: float,
     default_day_start_soc: float,
     default_day_start_t_cell: float,
+    rainflow_kernel: Optional[Callable[..., int]] = None,
 ) -> Tuple[DegradationLifecycle, float, float]:
     """Construct the degradation backend and its first day-boundary state.
 
@@ -716,12 +869,13 @@ def _build_degradation_lifecycle(
         lifecycle: DegradationLifecycle = NativeDegradationAdapter(
             model_key=battery_config.calendar_model,
             initial_soh_fraction=battery_soh_decimal,
-            initial_fec=float(state_payload.get("fec_cum", initial_fec)),
-            initial_calendar_seconds=float(state_payload.get("cumulative_calendar_seconds", initial_calendar_seconds)),
+            initial_fec=float(initial_fec),
+            initial_calendar_seconds=float(initial_calendar_seconds),
             **_native_degradation_kwargs(battery_config.calendar_model),
             cycle_step=_update_battery_soh_from_cycles,
             calendar_step=update_battery_soh_calendar,
             initial_rainflow_state=state_payload.get("native_rainflow_state"),
+            rainflow_kernel=rainflow_kernel,
         )
         return (
             lifecycle,
@@ -812,12 +966,13 @@ class _ResultBuffers:
     uninitialised.
     """
 
-    __slots__ = ("matrix", "replaced", "replaced_capacity", "columns")
+    __slots__ = ("matrix", "replaced", "replaced_capacity", "columns", "vehicle_events")
 
     def __init__(self, n_steps: int) -> None:
         # One row per per-step column, so a whole day of every output can be
         # handed to a compiled kernel as a single contiguous array. Each
         # column below is a view on its row, not a copy.
+        self.vehicle_events: List[Dict[str, Any]] = []
         self.matrix: np.ndarray = np.empty((_N_ROWS, n_steps))
         self.replaced: np.ndarray = np.zeros(n_steps, dtype=bool)
         self.replaced_capacity: np.ndarray = np.zeros(n_steps)
@@ -834,7 +989,10 @@ class _ResultBuffers:
 
     def to_frame(self, rng: pd.DatetimeIndex) -> pd.DataFrame:
         """Assemble the public per-timestep results frame."""
-        return pd.DataFrame({"Datetime": rng, **self.columns})
+        frame = pd.DataFrame({"Datetime": rng, **self.columns})
+        if self.vehicle_events:
+            frame.attrs["vehicle_end_of_life_events"] = list(self.vehicle_events)
+        return frame
 
 
 def _column_sums(columns: Dict[str, np.ndarray]) -> Dict[str, float]:
@@ -876,6 +1034,7 @@ _PV_ONLY_ROWS: Tuple[str, ...] = (
     "PV_AC_To_Load",
     "PV_AC_Export",
     "PV_Direct_Inverter_Loss",
+    "Inverter_Night_Consumption",
 )
 # Rows a PV-only run fills with values it already wrote under another name.
 _PV_ONLY_ALIASES: Dict[str, str] = {
@@ -1060,13 +1219,15 @@ def _apply_resistance_fade(
     mean_t_cell: float,
     mean_soc_absolute: float,
     dt_days: float,
-) -> float:
-    """Grow internal resistance for one period and return the effective RTE.
+    calendar_seconds_before: float,
+) -> None:
+    """Grow internal resistance for one period and update the efficiencies.
 
     The cycle term is charged against the FEC standing at the *start* of the
     period, so this period's cycles do not count towards their own aging; the
     lifecycle step has already folded them into the cumulative FEC, so they
-    are subtracted back out here.
+    are subtracted back out here. The calendar term likewise runs from the
+    calendar age at the start of the period, ``calendar_seconds_before``.
     """
     day_fec = sum(max(0.0, min(1.0, c["doc"])) * c["count"] for c in cycles)
     fec_before_day = aging.fec_cum - day_fec
@@ -1075,7 +1236,7 @@ def _apply_resistance_fade(
     aging.resistance_growth, _ = update_battery_resistance_calendar(
         aging.resistance_growth,
         T_cell_C=mean_t_cell,
-        cumulative_cal_seconds=aging.cumulative_cal_seconds,
+        cumulative_cal_seconds=calendar_seconds_before,
         dt_days=dt_days,
         mean_soc_absolute=mean_soc_absolute,
     )
@@ -1086,7 +1247,6 @@ def _apply_resistance_fade(
         battery_config.charge_efficiency,
         battery_config.discharge_efficiency,
     )
-    return aging.eff_charge * aging.eff_discharge
 
 
 def _apply_battery_replacement(
@@ -1194,6 +1354,59 @@ def _apply_battery_retirement(
     return 0.0, 0.0, 0.0, 0.0
 
 
+def _pv_inverter_conversion(
+    pv_dc_wh: np.ndarray,
+    *,
+    battery_config: BatteryConfig,
+    hours_per_step: float,
+    cap_wh: float,
+    pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
+    ac_derate: Optional[np.ndarray] = None,
+    curve_rows: Optional[np.ndarray] = None,
+    units: Optional[InverterUnits] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """The PV inverters' conversion of ``pv_dc_wh`` on its own: ``(ac, conversion_loss, clipping, night)``.
+
+    Wh per step, as a PV-only run converts it. ``night`` is the inverters'
+    draw on the steps they convert nothing, None when there is none. A
+    PV-only run and an AC-coupled battery's PV inverter (ADR 0004 C3) both
+    take their conversion from here, so they agree bit for bit. ``ac_derate``
+    and ``curve_rows`` are aligned to ``pv_dc_wh``; ``units`` and a memoized
+    ``pv_chain`` cover a whole span.
+    """
+    if units is not None:
+        assert pv_chain is None
+        converted = convert_units(
+            pv_dc_wh,
+            units,
+            inverter_efficiency=battery_config.inverter_efficiency,
+            ac_output_scale=battery_config.ac_output_scale,
+            hours_per_step=hours_per_step,
+        )
+        # With several inverters, each one draws on the steps it receives no DC.
+        night = converted.night if converted.night.any() else None
+        return converted.ac, converted.conversion_loss, converted.clipping, night
+    if pv_chain is None:
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
+            pv_dc_wh,
+            cap_wh,
+            battery_config.inverter_efficiency,
+            battery_config.ac_output_scale,
+            conversion=battery_config.conversion,
+            ac_derate=ac_derate,
+            curve_rows=curve_rows,
+            hours_per_step=hours_per_step,
+        )
+    else:
+        # Memoized by the caller for these exact inputs. Same values, same
+        # expressions downstream; see AlignedSimulationInputs.with_pv_only_chain.
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = pv_chain
+    # The inverter's draw while it converts nothing, from the grid.
+    night_wh = battery_config.conversion.night_consumption_w * hours_per_step
+    night = np.where(pv_dc_wh <= 0.0, night_wh, 0.0) if night_wh > 0.0 else None
+    return ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night
+
+
 def _dispatch_no_battery_vectorized(
     out: Union["_ResultBuffers", "_PvOnlySummaryBuffers"],
     pv_dc_values: np.ndarray,
@@ -1205,13 +1418,22 @@ def _dispatch_no_battery_vectorized(
     cap_wh: float,
     pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
     steps: slice = slice(None),
+    ac_derate: Optional[np.ndarray] = None,
+    curve_rows: Optional[np.ndarray] = None,
+    units: Optional[InverterUnits] = None,
+    span_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None,
 ) -> None:
     """Fill a PV-only result buffer without entering the timestep loop.
 
     ``steps`` fills only those steps of a full buffer, which is how a retired
     battery's steps are dispatched: element by element the same expressions,
     so each step equals the PV-only system's. A memoized ``pv_chain`` covers
-    the whole span only.
+    the whole span only. ``units``, aligned to the span, converts each
+    inverter's share of the DC on its own instead of ``battery_config``'s
+    single conversion (:func:`~breos.inverter.convert_units`).
+    ``span_chain`` is an AC-coupled battery's PV inverter conversion over the
+    whole span, ``(ac, conversion_loss, clipping, night)`` in Wh, which its
+    retired steps read instead of converting again (ADR 0004 C12).
     """
     if steps == slice(None):
         out.zero_fill()
@@ -1219,22 +1441,35 @@ def _dispatch_no_battery_vectorized(
         assert isinstance(out, _ResultBuffers) and pv_chain is None
         out.matrix[:, steps] = 0.0
 
+    assert units is None or steps == slice(None)
     pv_dc_wh = np.maximum(0.0, pv_dc_values[steps] * hours_per_step)
     load_wh = load_values[steps] * hours_per_step
-    if pv_chain is None:
-        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
-            pv_dc_wh,
-            cap_wh,
-            battery_config.inverter_efficiency,
-            battery_config.ac_output_scale,
-        )
+    night_consumption_wh: Optional[np.ndarray]
+    if span_chain is not None:
+        assert pv_chain is None and units is None
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night_consumption_wh = (part[steps] for part in span_chain)
+        if not night_consumption_wh.any():
+            night_consumption_wh = None
     else:
-        # Memoized by the caller for these exact inputs. Same values, same
-        # expressions downstream; see AlignedSimulationInputs.with_pv_only_chain.
-        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = pv_chain
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh, night_consumption_wh = _pv_inverter_conversion(
+            pv_dc_wh,
+            battery_config=battery_config,
+            hours_per_step=hours_per_step,
+            cap_wh=cap_wh,
+            pv_chain=pv_chain,
+            ac_derate=None if ac_derate is None else ac_derate[steps],
+            curve_rows=None if curve_rows is None else curve_rows[steps],
+            units=units,
+        )
     pv_ac_to_load_wh = np.minimum(ac_wh, load_wh)
     grid_export_wh = ac_wh - pv_ac_to_load_wh
     grid_import_wh = np.maximum(0.0, load_wh - pv_ac_to_load_wh)
+    if night_consumption_wh is not None:
+        # Idle units share the bus: their draw precedes export. The battery
+        # never supplies it (ADR 0004 M9).
+        pv_to_night_wh = np.minimum(grid_export_wh, night_consumption_wh)
+        grid_export_wh = grid_export_wh - pv_to_night_wh
+        grid_import_wh = grid_import_wh + (night_consumption_wh - pv_to_night_wh)
     # Keep the scalar reference's subtraction order. Returning ``ac_wh``
     # here is algebraically equivalent but differs by one ULP at low load.
     pv_production_wh = pv_dc_wh - clipping_loss_dc_wh - conversion_loss_wh
@@ -1260,7 +1495,22 @@ def _dispatch_no_battery_vectorized(
     out.columns["PV_AC_To_Load"][steps] = pv_ac_to_load_wh / hours_per_step
     out.columns["PV_AC_Export"][steps] = grid_export_w
     out.columns["PV_Direct_Inverter_Loss"][steps] = conversion_w
+    out.columns["Inverter_Night_Consumption"][steps] = (
+        0.0 if night_consumption_wh is None else night_consumption_wh / hours_per_step
+    )
     out.columns["Inverter_Loss"][steps] = conversion_w
+
+
+def _mean(values: np.ndarray) -> float:
+    """``float(np.mean(values))``, without np.mean's wrapper for float64.
+
+    For float64, np.mean is add.reduce divided by the count, so this returns
+    the same bits; any other dtype goes to np.mean, which may accumulate in
+    another precision.
+    """
+    if values.dtype == np.float64 and values.size:
+        return float(np.add.reduce(values)) / values.size
+    return float(np.mean(values))
 
 
 def _apply_daily_degradation(
@@ -1271,7 +1521,7 @@ def _apply_daily_degradation(
     degradation_tracking: List[Dict[str, Any]],
     *,
     step_index: int,
-    step_time: pd.Timestamp,
+    step_times: pd.DatetimeIndex,
     time_ticks: np.ndarray,
     ticks_per_second: float,
     soc_absolute_day: np.ndarray,
@@ -1283,12 +1533,14 @@ def _apply_daily_degradation(
     grid_origin_energy_wh: float,
     battery_energy_beginning: float,
     replacement_skipped_by: Optional[str] = None,
+    keep_record: bool = True,
 ) -> Tuple[float, float, float]:
     """Close out one degradation period, returning ``(energy, pv_origin, grid_origin)``.
 
     Runs the lifecycle step, optional resistance fade and the end-of-life
     replacement check in that order, mutating *aging* in place and appending
-    one row to *degradation_tracking*. The stored-energy values are
+    one row to *degradation_tracking*, unless ``keep_record`` is false (a
+    summary run, which builds no degradation frame). The stored-energy values are
     returned rather than carried on *aging* because the per-step loop owns
     them and only a replacement changes them here.
 
@@ -1314,9 +1566,10 @@ def _apply_daily_degradation(
     day_end_soc_absolute = float(soc_absolute_day[-1])
     day_end_t_cell = float(t_cell_day[-1])
 
-    mean_soc_abs = float(np.mean(soc_absolute_day))
-    mean_t_cell = float(np.mean(t_cell_day))
-    effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
+    # np.mean is add.reduce over the size; doing it directly skips ~4 us of
+    # wrapper per call and returns the same bits.
+    mean_soc_abs = _mean(soc_absolute_day)
+    mean_t_cell = _mean(t_cell_day)
 
     degradation_step = lifecycle.step(
         DegradationDay(
@@ -1328,6 +1581,8 @@ def _apply_daily_degradation(
             start_soc=aging.day_start_soc,
             start_temperature_c=aging.day_start_t_cell,
             finalize_cycles=finalize_cycles,
+            soc_mean=mean_soc_abs,
+            temperature_mean_c=mean_t_cell,
         )
     )
     aging.soh_fraction = degradation_step.soh_fraction
@@ -1338,18 +1593,20 @@ def _apply_daily_degradation(
     # what keeps a retired pack's final part-period in the lifetime figure.
     aging.fec_lifetime += degradation_step.fec - aging.fec_cum
     aging.fec_cum = degradation_step.fec
+    calendar_seconds_before = aging.cumulative_cal_seconds
     aging.cumulative_cal_seconds = degradation_step.calendar_seconds
     aging.cumulative_cycle_deg += degradation_step.cycle_degradation
     aging.cumulative_cal_deg += degradation_step.calendar_degradation
 
     if battery_config.enable_resistance_fade:
-        effective_rte = _apply_resistance_fade(
+        _apply_resistance_fade(
             aging,
             battery_config,
             degradation_step.cycle_records,
             mean_t_cell=mean_t_cell,
             mean_soc_absolute=mean_soc_abs,
             dt_days=dt_days,
+            calendar_seconds_before=calendar_seconds_before,
         )
 
     reached_end_of_life = aging.soh_fraction <= battery_config.eol_percentage
@@ -1360,7 +1617,7 @@ def _apply_daily_degradation(
         and not aging.retired
     ):
         aging.end_of_life_events.append(
-            EndOfLifeEvent(step_index, step_time, "replaced", "end_of_life", aging.soh_percent)
+            EndOfLifeEvent(step_index, step_times[step_index], "replaced", "end_of_life", aging.soh_percent)
         )
         cycle_degradation_for_row = degradation_step.cycle_degradation + _settle_terminal_cycles(aging, lifecycle)
         battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh, day_end_soc_absolute = (
@@ -1386,7 +1643,9 @@ def _apply_daily_degradation(
             assert reason is not None
             retire = battery_config.skipped_replacement_action == "retire"
             aging.end_of_life_events.append(
-                EndOfLifeEvent(step_index, step_time, "retired" if retire else "kept", reason, aging.soh_percent)
+                EndOfLifeEvent(
+                    step_index, step_times[step_index], "retired" if retire else "kept", reason, aging.soh_percent
+                )
             )
             aging.past_end_of_life = True
         if not retire and not aging.retired and aging.soh_fraction <= 0.0:
@@ -1394,7 +1653,7 @@ def _apply_daily_degradation(
             # is retired as a skipped swap's "retire" retires one.
             retire = True
             aging.end_of_life_events.append(
-                EndOfLifeEvent(step_index, step_time, "retired", "zero_health", aging.soh_percent)
+                EndOfLifeEvent(step_index, step_times[step_index], "retired", "zero_health", aging.soh_percent)
             )
         if retire:
             # The pack's last cycles end here: the energy it holds is
@@ -1413,8 +1672,12 @@ def _apply_daily_degradation(
                 )
             )
 
+    if not keep_record:
+        aging.day_start_soc = day_end_soc_absolute
+        aging.day_start_t_cell = day_end_t_cell
+        return battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh
     degradation_record = {
-        "Datetime": step_time,
+        "Datetime": step_times[step_index],
         "SOH": aging.soh_percent,
         "Cycle_Degradation": cycle_degradation_for_row,
         "Calendar_Degradation": degradation_step.calendar_degradation,
@@ -1429,7 +1692,8 @@ def _apply_daily_degradation(
     degradation_record.update(lifecycle.tracking_fields(degradation_step))
     if battery_config.enable_resistance_fade:
         degradation_record["Resistance_Growth"] = aging.resistance_growth
-        degradation_record["Effective_RTE"] = effective_rte
+        # Read after the replacement decision, so a swap row reports the new pack.
+        degradation_record["Effective_RTE"] = aging.eff_charge * aging.eff_discharge
     degradation_tracking.append(degradation_record)
 
     aging.day_start_soc = day_end_soc_absolute
@@ -1447,11 +1711,12 @@ def _replacement_skipped_by(
     partial; a pack bought there would serve no step. Any positive minimum
     skips that period too, so it is named first.
     """
-    if remaining_steps < min_remaining_steps:
-        return "min_remaining_years"
-    if final_period and not battery_config.allow_terminal_replacement:
-        return "terminal_period"
-    return None
+    return replacement_skip_reason(
+        allow_terminal_replacement=battery_config.allow_terminal_replacement,
+        final_period=final_period,
+        remaining_steps=remaining_steps,
+        min_remaining_steps=min_remaining_steps,
+    )
 
 
 def _build_summary_row(
@@ -1533,6 +1798,29 @@ def _resolve_dispatch_day(execution_backend: str) -> Any:
     return require_numba_dispatch_day()
 
 
+def _resolve_packed_day(dispatch_day: Any) -> Optional[Callable[[List[Any]], None]]:
+    """The callable that runs a span's packing of ``_day_arguments`` on *dispatch_day*'s backend.
+
+    None for any other callable, a test's stand-in for one, which then gets
+    the per-day call it was written for.
+    """
+    if dispatch_day is _dispatch_day_python:
+        return _run_packed_python
+    from breos._numba_dispatch import _dispatch_day_numba, _run_packed_numba
+
+    return _run_packed_numba if dispatch_day is _dispatch_day_numba else None
+
+
+def _resolve_rainflow_kernel(execution_backend: str) -> Optional[Callable[..., int]]:
+    """The compiled native rainflow day scan for the numba backend; None (numpy and Python) otherwise."""
+    validate_execution_backend(execution_backend)
+    if execution_backend == "python":
+        return None
+    from breos._numba_dispatch import require_numba_rainflow_day
+
+    return require_numba_rainflow_day()
+
+
 @dataclass(slots=True)
 class _CoreRun:
     """Everything one simulated span produced, before any result is shaped.
@@ -1549,11 +1837,16 @@ class _CoreRun:
     lifecycle: DegradationLifecycle
     degradation_tracking: List[Dict[str, Any]]
     hours_per_step: float
+    # The degradation periods closed; a summary run keeps no tracking rows.
+    degradation_periods: int = 0
     # The daily controller's carry; None without a controller.
     controller_carry: Optional[ControllerCarry] = None
     # A copy of the instructions a daily controller's decisions dispatched,
     # one per simulated step; None without a controller.
     controller_instructions: Optional[DispatchInstructions] = None
+    vehicle_carry: Optional[VehicleCarry] = None
+    vehicle_end_of_life_events: Tuple[EndOfLifeEvent, ...] = ()
+    vehicle_degradation_tracking: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1561,9 +1854,8 @@ class SimulationSummary:
     """Annual totals and carry state, without a per-timestep frame.
 
     ``column_sums`` holds the plain sum of every column the detailed results
-    frame exposes, under the same names and in the same units, so a caller
-    that used to write ``results_df[col].sum()`` reads ``column_sums[col]``
-    and gets the identical value. Unit scaling stays with the caller, because
+    frame exposes, under the same names and in the same units:
+    ``column_sums[col]`` is the value ``results_df[col].sum()`` gives. Unit scaling stays with the caller, because
     the order of a scaling expression is itself observable in floating point.
 
     The remaining fields are the state a multi-year caller has to carry, plus
@@ -1609,6 +1901,9 @@ class SimulationSummary:
     # The ledger schema the column sums follow; App and Monte Carlo report
     # the same version.
     ledger_schema_version: str = LEDGER_SCHEMA_VERSION
+    vehicle_carry: Optional[VehicleCarry] = None
+    vehicle_end_of_life_events: Tuple[EndOfLifeEvent, ...] = ()
+    vehicle_degradation_tracking: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def frame_replaced_capacity_wh(results_df: pd.DataFrame) -> float:
@@ -1693,7 +1988,7 @@ def _build_simulation_summary(
         carried_energy_wh=float(buffers.columns["Battery_Energy"][-1]),
         carried_pv_origin_energy_wh=float(buffers.columns["Battery_PV_Origin_Energy_End"][-1]),
         carried_grid_origin_energy_wh=float(buffers.columns["Battery_Grid_Origin_Energy_End"][-1]),
-        has_degradation_rows=bool(core.degradation_tracking),
+        has_degradation_rows=core.degradation_periods > 0,
         fec_cum=aging.fec_cum,
         cumulative_calendar_seconds=aging.cumulative_cal_seconds,
         cumulative_cycle_degradation=aging.cumulative_cycle_deg,
@@ -1702,6 +1997,9 @@ def _build_simulation_summary(
         replacement_steps=tuple(int(i) for i in np.flatnonzero(buffers.replaced)),
         fec_all_packs=aging.fec_lifetime,
         final_degradation_state=final_state,
+        vehicle_carry=core.vehicle_carry,
+        vehicle_end_of_life_events=core.vehicle_end_of_life_events,
+        vehicle_degradation_tracking=core.vehicle_degradation_tracking,
         end_of_life_events=tuple(aging.end_of_life_events),
         weighted_sums=weighted_column_sums(columns, weights),
         in_service_t_cell_sum=float(np.sum(columns["T_cell"][: retiring + 1])) if retiring is not None else None,
@@ -1753,19 +2051,40 @@ def _simulate_core(
     replay_seam: bool = False,
     instruction_planner: Optional[Callable[[ControllerBatteryState], DispatchInstructions]] = None,
     battery_retired: bool = False,
+    inverter_ac_derate: Optional[pd.Series] = None,
+    inverter_curve_row: Optional[pd.Series] = None,
+    inverter_units: Optional[InverterUnits] = None,
+    vehicle_config: Optional[VehicleConfig] = None,
+    vehicle_schedule: Optional[VehicleSchedule] = None,
+    vehicle_tariff: Optional["ResolvedTariff"] = None,
+    grid_import_limit_w: float = math.inf,
+    initial_vehicle_energy_wh: Optional[float] = None,
+    initial_vehicle_pv_origin_energy_wh: Optional[float] = None,
+    initial_vehicle_grid_origin_energy_wh: Optional[float] = None,
+    vehicle_carry: Optional[VehicleCarry] = None,
+    vehicle_temperature_series: Optional[pd.Series] = None,
+    vehicle_allow_terminal_replacement: Optional[bool] = None,
+    vehicle_replacement_years_after_span: int = 0,
 ) -> "_CoreRun":
     """
     Simulate energy balance with battery storage and degradation.
 
     This function processes PV DC production and load profiles to calculate
-    grid interaction, battery state, and degradation for DC-coupled hybrid
-    inverter systems. AC-coupled battery dispatch is not implemented.
+    grid interaction, battery state, and degradation, for a DC-coupled
+    battery behind a hybrid inverter or an AC-coupled one behind its own
+    inverter (``battery_config.coupling``, ADR 0004).
 
     Energy flow for DC-coupled (hybrid inverter) systems:
     - PV -> Load: DC -> Inverter -> AC (one inverter loss)
     - PV -> Battery: DC -> Battery (charge efficiency only)
     - Battery -> Load: DC -> Inverter -> AC (discharge efficiency + inverter loss)
     - Grid -> Load: AC (no conversion)
+
+    For AC-coupled systems PV converts in the PV inverter as in a PV-only
+    run, and the battery inverter converts both ways:
+    - PV -> Battery: DC -> PV inverter -> AC -> battery inverter -> DC
+    - Battery -> Load: DC -> battery inverter -> AC
+    - Grid -> Battery: AC -> battery inverter -> DC
 
     Args:
         pv_dc: Series with PV DC power production (W) - before inverter.
@@ -1779,6 +2098,18 @@ def _simulate_core(
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
         temperature_series: Ambient (battery-location) temperature (C),
             defaults to 25C. The dispatch derives ``T_cell`` from it.
+        inverter_ac_derate: Optional inverter AC rating per step as a fraction
+            of ``battery_config.inverter_ac_capacity_w``, from temperature
+            derating. It must cover every step. None is the full rating.
+        inverter_curve_row: Optional position among the inverter efficiency
+            curve's voltage rows per step, from the operating DC voltage. It
+            must cover every step. None reads the conversion's own row.
+        inverter_units: Several inverters, each converting its own share of
+            the DC (:class:`~breos.inverter.InverterUnits`), for a run without
+            a battery or with an AC-coupled one; a DC-coupled battery is
+            refused. They replace ``battery_config``'s single conversion and
+            night draw, and must cover every step. None converts through
+            ``battery_config`` alone.
         degradation_engine: Degradation backend. ``"native"`` preserves the
             Naumann/Lam model; ``"blast"`` uses the BLAST daily endpoint adapter.
         blast_model: BLAST model key when ``degradation_engine="blast"``.
@@ -1832,12 +2163,68 @@ def _simulate_core(
             without this argument; True with a state from a pack that was not
             retired is refused.
 
+        vehicle_config, vehicle_schedule: Lower-level vehicle dispatch and
+            its resolved calendar. App remains gated until PR 4. Replacement
+            follows its own lifecycle, with same-SOC pack replacement.
+        vehicle_tariff: Resolved tariff for vehicle charge/discharge periods.
+        grid_import_limit_w: Site limit from [smart_charging], also usable
+            without stationary instructions. A vehicle uses the smaller of
+            this and an existing instruction limit, without modifying them.
+        initial_vehicle_energy_wh, initial_vehicle_pv_origin_energy_wh,
+            initial_vehicle_grid_origin_energy_wh: On-board starting energy
+            and attributed shares in Wh. Default: departure target, unattributed.
+        vehicle_carry: Previous span's energy, origins and last plug state.
+            Pass instead of initial_vehicle values. Without carry the first
+            step starts where its schedule says, with no synthetic boundary.
+        vehicle_temperature_series: Independently prepared vehicle cell/ambient
+            temperatures, without an indoor model. Otherwise weather.build_battery_temperature_series
+            resolves vehicle.battery_temperature (weather uses the input ambient
+            series, default 25 C if none; fixed and CSV use their own values).
+        vehicle_allow_terminal_replacement, vehicle_replacement_years_after_span:
+            The vehicle's horizon policy, as for BatteryConfig. project_years
+            allows earlier year-end swaps and supplies remaining project years.
+
     Returns:
         A :class:`_CoreRun` holding the filled result buffers, the calendar,
         the aging state and the lifecycle; the public entry points shape
         their results from it. With a ``day_controller`` it also holds the
         controller carry and a copy of the instructions the span dispatched.
     """
+    if (vehicle_config is None) != (vehicle_schedule is None):
+        raise ValueError("pass vehicle_config and its resolved vehicle_schedule together")
+    if vehicle_carry is not None:
+        if vehicle_config is None:
+            raise ValueError("vehicle_carry needs a vehicle_config and resolved vehicle_schedule")
+        if any(
+            value is not None
+            for value in (
+                initial_vehicle_energy_wh,
+                initial_vehicle_pv_origin_energy_wh,
+                initial_vehicle_grid_origin_energy_wh,
+            )
+        ):
+            raise ValueError("pass vehicle_carry or initial_vehicle energy/origin values, not both")
+        if not isinstance(vehicle_carry.plugged, (bool, np.bool_)):
+            raise ValueError("vehicle_carry.plugged must be a bool")
+        initial_vehicle_energy_wh = vehicle_carry.energy_wh
+        initial_vehicle_pv_origin_energy_wh = vehicle_carry.pv_origin_energy_wh
+        initial_vehicle_grid_origin_energy_wh = vehicle_carry.grid_origin_energy_wh
+    if vehicle_allow_terminal_replacement is None:
+        vehicle_allow_terminal_replacement = (
+            True if vehicle_config is None else vehicle_config.allow_terminal_replacement
+        )
+    if not isinstance(vehicle_allow_terminal_replacement, (bool, np.bool_)):
+        raise ValueError("vehicle_allow_terminal_replacement must be a bool")
+    if (
+        isinstance(vehicle_replacement_years_after_span, (bool, np.bool_))
+        or not isinstance(vehicle_replacement_years_after_span, (int, np.integer))
+        or vehicle_replacement_years_after_span < 0
+    ):
+        raise ValueError("vehicle_replacement_years_after_span must be a non-negative integer")
+    if math.isnan(grid_import_limit_w) or grid_import_limit_w <= 0.0:
+        raise ValueError("grid_import_limit_w must be positive, or math.inf")
+    if vehicle_config is not None and (day_controller is not None or instruction_planner is not None):
+        raise ValueError("daily_persistence controllers and planners are not supported with a vehicle")
     if battery_config is None:
         battery_config = BatteryConfig(nominal_energy_wh=0)
 
@@ -1856,12 +2243,24 @@ def _simulate_core(
         # Create time range
         rng = pd.date_range(start=start_time, end=end_time, freq=freq)
         _pv_dc_vals, _load_vals, _temp_vals = _align_input_arrays(pv_dc, houseload, temperature_series, rng)
+        _derate_vals = _align_ac_derate(inverter_ac_derate, rng)
+        _curve_rows = _align_curve_rows(inverter_curve_row, rng)
+        _units = None if inverter_units is None else inverter_units.aligned(rng)
     else:
         # The caller has already built the calendar and reindexed onto it.
+        if inverter_ac_derate is not None or inverter_curve_row is not None:
+            raise ValueError(
+                "pass inverter_ac_derate and inverter_curve_row to align_simulation_inputs with aligned inputs"
+            )
+        if inverter_units is not None:
+            raise ValueError("inverter_units need the per-step series, not aligned inputs")
+        _units = None
         rng = aligned.index
         _pv_dc_vals = aligned.pv_dc_w
         _load_vals = aligned.load_w
         _temp_vals = aligned.temperature_c
+        _derate_vals = aligned.inverter_ac_derate
+        _curve_rows = aligned.inverter_curve_row
 
     degradation_engine_key = _resolve_degradation_engine(
         degradation_engine,
@@ -1871,20 +2270,18 @@ def _simulate_core(
     )
 
     state_payload = initial_degradation_state or {}
-    if degradation_engine_key == "native" and initial_degradation_state is not None:
-        initial_fec = float(state_payload.get("fec_cum", initial_fec))
-        initial_calendar_seconds = float(state_payload.get("cumulative_calendar_seconds", initial_calendar_seconds))
-        initial_cumulative_cycle_deg = float(
-            state_payload.get("cumulative_cycle_degradation", initial_cumulative_cycle_deg)
-        )
-        initial_cumulative_cal_deg = float(
-            state_payload.get("cumulative_calendar_degradation", initial_cumulative_cal_deg)
-        )
-
-    # Initialize state
-    battery_soh_decimal = battery_config.initial_soh / 100.0
-    if degradation_engine_key == "native" and initial_degradation_state is not None:
-        battery_soh_decimal = float(state_payload.get("soh_fraction", battery_soh_decimal))
+    start = _resolve_start_state(
+        degradation_engine_key,
+        battery_config,
+        initial_degradation_state,
+        initial_fec=initial_fec,
+        initial_calendar_seconds=initial_calendar_seconds,
+        initial_cumulative_cycle_deg=initial_cumulative_cycle_deg,
+        initial_cumulative_cal_deg=initial_cumulative_cal_deg,
+        initial_resistance_growth=initial_resistance_growth,
+    )
+    battery_soh_decimal = start.soh_fraction
+    resistance_growth = start.resistance_growth
     Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _resolve_carried_energy(
         initial_energy_wh,
         initial_pv_origin_energy_wh,
@@ -1896,15 +2293,6 @@ def _simulate_core(
     # Degradation windows are positional (fixed steps_per_day), not
     # calendar-based: DST days shift the windows by design, and a trailing
     # partial window is processed at the end. Dispatch shares this convention.
-    # The function argument is the multi-year continuation seam (used by the
-    # App's year loop). A native state snapshot takes precedence; otherwise
-    # None means to use the battery's configured starting resistance.
-    if degradation_engine_key == "native" and "resistance_growth" in state_payload:
-        resistance_growth = float(state_payload["resistance_growth"])
-    else:
-        resistance_growth = (
-            battery_config.initial_resistance_growth if initial_resistance_growth is None else initial_resistance_growth
-        )
     # Charge/discharge efficiencies, derated by resistance growth when the
     # fade model is enabled; updated after each daily degradation step.
     eff_charge = battery_config.charge_efficiency
@@ -1917,6 +2305,7 @@ def _simulate_core(
         )
 
     degradation_tracking: List[Dict[str, Any]] = []
+    degradation_periods = 0
 
     n_steps = len(rng)
 
@@ -1926,6 +2315,11 @@ def _simulate_core(
         battery_config.max_soc,
         battery_config.min_soc,
     )
+    if has_battery and _units is not None and battery_config.coupling != "ac":
+        raise ValueError(
+            "a battery beside several inverters must be AC-coupled (coupling = 'ac'); a DC-coupled battery "
+            "sits behind one hybrid inverter"
+        )
     if not has_battery and aligned is not None and aligned.pv_chain is not None:
         expected_chain_key = aligned._pv_chain_cache_key(battery_config, hours_per_step)
         if aligned.pv_chain_key != expected_chain_key:
@@ -1934,7 +2328,7 @@ def _simulate_core(
     # most columns at zero, so it is the only one whose output can be served
     # from the reduced buffer -- and only when the caller wants a summary,
     # since the detailed frame must own a writable array per column.
-    pv_only_summary = summary_only and not has_battery
+    pv_only_summary = summary_only and not has_battery and vehicle_config is None
 
     # Pre-allocate result arrays (avoids per-timestep dict creation)
     out = _PvOnlySummaryBuffers(n_steps) if pv_only_summary else _ResultBuffers(n_steps)
@@ -1954,10 +2348,11 @@ def _simulate_core(
         has_battery=has_battery,
         blast_model=blast_model,
         initial_degradation_state=initial_degradation_state,
-        initial_fec=initial_fec,
-        initial_calendar_seconds=initial_calendar_seconds,
+        initial_fec=start.fec,
+        initial_calendar_seconds=start.calendar_seconds,
         default_day_start_soc=degradation_day_start_soc,
         default_day_start_t_cell=degradation_day_start_t_cell,
+        rainflow_kernel=_resolve_rainflow_kernel(execution_backend),
     )
 
     battery_soh_decimal = degradation_lifecycle.soh()
@@ -1999,16 +2394,16 @@ def _simulate_core(
     aging = _AgingState(
         soh_fraction=battery_soh_decimal,
         soh_percent=Battery_SOH,
-        fec_cum=initial_fec,
+        fec_cum=start.fec,
         # Lifetime FEC starts this span at zero whatever the installed pack
         # already carries, so the end-of-span value is the FEC the span itself
         # accumulated across every pack it used.
         fec_lifetime=0.0,
-        cumulative_cal_seconds=initial_calendar_seconds,
+        cumulative_cal_seconds=start.calendar_seconds,
         # Coerced so a NumPy scalar argument, such as float32, is summed in
         # float64 like the carried state always was.
-        cumulative_cycle_deg=float(initial_cumulative_cycle_deg),
-        cumulative_cal_deg=float(initial_cumulative_cal_deg),
+        cumulative_cycle_deg=float(start.cumulative_cycle_deg),
+        cumulative_cal_deg=float(start.cumulative_cal_deg),
         resistance_growth=resistance_growth,
         eff_charge=eff_charge,
         eff_discharge=eff_discharge,
@@ -2033,6 +2428,21 @@ def _simulate_core(
     cap_stored_wh = _step_energy_cap(battery_config.stored_power_limit_w, hours_per_step)
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
+    ac_coupled = has_battery and battery_config.coupling == "ac"
+
+    def battery_state() -> ControllerBatteryState:
+        # The state the next step dispatches from, as a planner or a daily
+        # controller decides on it.
+        return ControllerBatteryState(
+            energy_wh=Battery_Energy_Wh,
+            pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
+            grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
+            soh_fraction=battery_soh_decimal,
+            resistance_growth=aging.resistance_growth,
+            charge_efficiency=eff_charge,
+            discharge_efficiency=eff_discharge,
+        )
+
     if instruction_planner is not None:
         if dispatch_instructions is not None or day_controller is not None:
             raise ValueError("pass one of dispatch_instructions, an instruction planner or a daily controller")
@@ -2040,25 +2450,189 @@ def _simulate_core(
             raise ValueError("an instruction planner needs a battery; a PV-only run has nothing to dispatch")
         # Planned from the state the first step dispatches from, the one a
         # daily controller's first decision would see.
-        dispatch_instructions = instruction_planner(
-            ControllerBatteryState(
-                energy_wh=Battery_Energy_Wh,
-                pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
-                grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
-                soh_fraction=battery_soh_decimal,
-                resistance_growth=aging.resistance_growth,
-                charge_efficiency=eff_charge,
-                discharge_efficiency=eff_discharge,
-            )
-        )
+        dispatch_instructions = instruction_planner(battery_state())
         if not isinstance(dispatch_instructions, DispatchInstructions):
             raise TypeError("an instruction planner must return DispatchInstructions")
     if dispatch_instructions is not None and len(dispatch_instructions) != n_steps:
         raise ValueError(
             f"dispatch_instructions cover {len(dispatch_instructions)} steps; the simulation has {n_steps}"
         )
+    if (
+        battery_config.coupling == "dc"
+        and dispatch_instructions is not None
+        and dispatch_instructions.grid_charge_efficiency is None
+    ):
+        # Checked here, before a PV-only or retired run skips the day loop.
+        raise ValueError(
+            "a DC-coupled battery needs a grid_charge_efficiency in its dispatch instructions; "
+            "only an AC-coupled battery converts grid charge in its own inverter"
+        )
+    if (
+        ac_coupled
+        and dispatch_instructions is not None
+        and dispatch_instructions.grid_charge_efficiency is not None
+        and not np.isnan(dispatch_instructions.grid_target_fraction).all()
+    ):
+        raise ValueError(
+            "an AC-coupled battery grid-charges through its own inverter; its dispatch instructions "
+            "take grid_charge_efficiency = None"
+        )
     # No instructions is greedy dispatch; one no-op set serves every day.
     instructions = dispatch_instructions if dispatch_instructions is not None else DispatchInstructions.noop(n_steps)
+    # Vehicle ageing has its own lifecycle and raw temperature input; no
+    # stationary capacity-temperature factor, standby or resistance fade.
+    vehicle_state: Dict[str, Any] = {}
+    vehicle_lifecycle: Optional["VehicleLifecycle"] = None
+    vehicle_temp = np.empty(0)
+    vehicle_ticks = np.empty(0, dtype=np.int64)
+    vehicle_ticks_per_second = 1.0
+    if vehicle_config is not None:
+        assert vehicle_schedule is not None
+        if not vehicle_schedule.index.equals(rng) or vehicle_schedule.hours_per_step != hours_per_step:
+            raise ValueError("vehicle_schedule must match the simulation index and hours_per_step")
+        from breos.vehicle.lifecycle import VehicleLifecycle
+        from breos.weather import build_battery_temperature_series
+
+        vehicle_temp = build_battery_temperature_series(
+            vehicle_config.battery_temperature if vehicle_temperature_series is None else "weather",
+            rng,
+            weather_df=pd.DataFrame({"temp_air": _temp_vals}, index=rng)
+            if vehicle_temperature_series is None
+            else pd.DataFrame({"temp_air": vehicle_temperature_series}),
+            indoor_model={"enabled": False},
+        ).to_numpy(dtype=float)
+        vehicle_ticks, vehicle_ticks_per_second = _datetime_index_ticks(rng)
+        initial_vehicle_soh = 1.0 if vehicle_carry is None else vehicle_carry.soh_fraction
+        if not math.isfinite(initial_vehicle_soh) or not 0.0 <= initial_vehicle_soh <= 1.0:
+            raise ValueError("vehicle carried health must be finite and between 0 and 1")
+        retired_v = False if vehicle_carry is None else vehicle_carry.retired
+        capacity_v = vehicle_config.battery_kwh * 1000.0 * initial_vehicle_soh
+        energy_v = (
+            vehicle_config.departure_soc * capacity_v
+            if initial_vehicle_energy_wh is None
+            else float(initial_vehicle_energy_wh)
+        )
+        if (
+            not math.isfinite(energy_v)
+            or not (0.0 if retired_v else vehicle_config.min_soc * capacity_v)
+            <= energy_v
+            <= vehicle_config.max_soc * capacity_v
+            or (retired_v and energy_v != 0.0)
+        ):
+            raise ValueError("initial_vehicle_energy_wh must be within the vehicle SOC window")
+        pv_v = _carried_origin(
+            initial_vehicle_pv_origin_energy_wh, "initial_vehicle_pv_origin_energy_wh", energy_v, "vehicle energy"
+        )
+        grid_v = _carried_origin(
+            initial_vehicle_grid_origin_energy_wh,
+            "initial_vehicle_grid_origin_energy_wh",
+            energy_v - pv_v,
+            "vehicle energy less its PV origin",
+        )
+        vehicle_lifecycle = VehicleLifecycle(
+            vehicle_config,
+            vehicle_carry,
+            initial_soc=energy_v / capacity_v if capacity_v > 0.0 else 0.0,
+            initial_temperature=float(vehicle_temp[0]),
+            rainflow_kernel=_resolve_rainflow_kernel(execution_backend),
+        )
+        charge_v = np.zeros(n_steps, dtype=np.bool_)
+        discharge_v = np.ones(n_steps, dtype=np.bool_)
+        if vehicle_config.charge_periods or vehicle_config.discharge_periods:
+            if vehicle_tariff is None or not vehicle_tariff.index.equals(rng):
+                raise ValueError("vehicle charge/discharge periods need a vehicle_tariff on the simulation index")
+            unknown = (set(vehicle_config.charge_periods) | set(vehicle_config.discharge_periods)) - set(
+                vehicle_tariff.schedule.periods
+            )
+            if unknown:
+                raise ValueError(f"unknown vehicle tariff periods: {sorted(unknown)}")
+            charge_v = np.isin(vehicle_tariff.period_labels, vehicle_config.charge_periods)
+            if vehicle_config.discharge_periods:
+                discharge_v = np.isin(vehicle_tariff.period_labels, vehicle_config.discharge_periods)
+        ahead_v = _vehicle_charge_ahead(
+            vehicle_schedule.steps_to_departure, charge_v if vehicle_config.charge_periods else None
+        )
+        charge_v.setflags(write=False)
+        discharge_v.setflags(write=False)
+        ahead_v.setflags(write=False)
+        vehicle_state = dict(
+            vehicle_config=vehicle_config,
+            vehicle_schedule=vehicle_schedule,
+            vehicle_energy_wh=energy_v,
+            vehicle_pv_origin_wh=pv_v,
+            vehicle_grid_origin_wh=grid_v,
+            vehicle_soh_fraction=vehicle_lifecycle.soh,
+            vehicle_retired=vehicle_lifecycle.retired,
+            vehicle_was_plugged=bool(vehicle_schedule.plugged[0])
+            if vehicle_carry is None
+            else bool(vehicle_carry.plugged),
+            vehicle_charge_period=charge_v,
+            vehicle_discharge_period=discharge_v,
+            vehicle_charge_ahead=ahead_v,
+            grid_import_limit_w=grid_import_limit_w,
+        )
+
+    def final_vehicle_carry() -> Optional[VehicleCarry]:
+        return None if vehicle_lifecycle is None else vehicle_lifecycle.carry(out.columns, n_steps)
+
+    def close_vehicle_day(lo: int, hi: int) -> None:
+        if vehicle_lifecycle is None:
+            return
+        vehicle_lifecycle.close(
+            out.columns,
+            lo=lo,
+            hi=hi,
+            time_ticks=vehicle_ticks,
+            ticks_per_second=vehicle_ticks_per_second,
+            temperature=vehicle_temp,
+            hours=hours_per_step,
+            step_time=rng[hi - 1],
+            finalize=finalize_degradation and hi == n_steps,
+            allow_terminal_replacement=vehicle_allow_terminal_replacement,
+            years_after_span=vehicle_replacement_years_after_span,
+            n_steps=n_steps,
+        )
+        assert isinstance(out, _ResultBuffers)
+        out.vehicle_events = [event.to_record() for event in vehicle_lifecycle.events]
+        last = hi - 1
+        vehicle_state.update(
+            vehicle_energy_wh=float(out.columns["Vehicle_Energy_Onboard"][last]),
+            vehicle_pv_origin_wh=float(out.columns["Vehicle_PV_Origin_Energy_End"][last]),
+            vehicle_grid_origin_wh=float(out.columns["Vehicle_Grid_Origin_Energy_End"][last]),
+            vehicle_was_plugged=bool(out.columns["Vehicle_Plugged"][last]),
+            vehicle_soh_fraction=vehicle_lifecycle.soh,
+            vehicle_retired=vehicle_lifecycle.retired,
+        )
+
+    def dispatch_vehicle_only(lo: int, hi: int) -> None:
+        # House rows have already been filled by the unchanged vectorised
+        # PV-only path. The shared day loop then dispatches only the vehicle.
+        dispatch_day(
+            out,
+            _pv_dc_vals,
+            _load_vals,
+            _temp_vals,
+            lo,
+            hi,
+            battery_config=battery_config,
+            battery_soh_decimal=battery_soh_decimal,
+            Battery_Energy_Wh=0.0,
+            Battery_PV_Origin_Energy_Wh=0.0,
+            Battery_Grid_Origin_Energy_Wh=0.0,
+            eff_charge=eff_charge,
+            eff_discharge=eff_discharge,
+            hours_per_step=hours_per_step,
+            standby_loss_per_step_wh=0.0,
+            cap_wh=cap_wh,
+            cap_charge_wh=cap_charge_wh,
+            cap_discharge_wh=cap_discharge_wh,
+            instructions=instructions,
+            ac_derate=_ones,
+            curve_rows=_own_curve_rows,
+            stationary_active=False,
+            **vehicle_state,
+        )
+
     session: Optional[_ControllerSession] = None
     if day_controller is not None:
         if dispatch_instructions is not None:
@@ -2080,6 +2654,13 @@ def _simulate_core(
     # The dispatch reads instructions at global positions; a controller's
     # buffer is filled day by day ahead of each segment.
     dispatch_arrays: Any = instructions if session is None else session.instructions
+    # The kernels read a per-step rating fraction and curve row. Without
+    # per-step series, one array of each serves every day: _day_arguments
+    # would otherwise build a whole-run array for every day it packs.
+    _ones = np.ones(n_steps)
+    _full_rating = _ones if _derate_vals is None else _derate_vals
+    _own_curve_rows = np.full(n_steps, battery_config.conversion.curve_row)
+    _dispatch_curve_rows = _own_curve_rows if _curve_rows is None else _curve_rows
 
     # PV-only balance is already vectorized with NumPy and does not need the
     # general per-step dispatcher. This common path is faster than either the
@@ -2094,15 +2675,43 @@ def _simulate_core(
             hours_per_step=hours_per_step,
             cap_wh=cap_wh,
             pv_chain=None if aligned is None else aligned.pv_chain,
+            ac_derate=_derate_vals,
+            curve_rows=_curve_rows,
+            units=_units,
         )
+        if vehicle_config is not None:
+            for lo in range(0, n_steps, steps_per_day):
+                hi = min(lo + steps_per_day, n_steps)
+                dispatch_vehicle_only(lo, hi)
+                close_vehicle_day(lo, hi)
         return _CoreRun(
             buffers=out,
             rng=rng,
             aging=aging,
             lifecycle=degradation_lifecycle,
             degradation_tracking=degradation_tracking,
+            degradation_periods=degradation_periods,
             hours_per_step=hours_per_step,
+            vehicle_carry=final_vehicle_carry(),
+            vehicle_end_of_life_events=() if vehicle_lifecycle is None else tuple(vehicle_lifecycle.events),
+            vehicle_degradation_tracking=[] if vehicle_lifecycle is None else vehicle_lifecycle.tracking,
         )
+
+    # An AC-coupled battery's PV inverter converts as in a PV-only run,
+    # whatever the battery does, so its conversion is computed once for the
+    # span (ADR 0004 C3, M2).
+    ac_pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = None
+    if ac_coupled:
+        chain_ac, chain_loss, chain_clip, chain_night = _pv_inverter_conversion(
+            np.maximum(0.0, _pv_dc_vals * hours_per_step),
+            battery_config=battery_config,
+            hours_per_step=hours_per_step,
+            cap_wh=cap_wh,
+            ac_derate=_derate_vals,
+            curve_rows=_curve_rows,
+            units=_units,
+        )
+        ac_pv_chain = (chain_ac, chain_loss, chain_clip, np.zeros(n_steps) if chain_night is None else chain_night)
 
     # Dispatch advances one degradation day at a time. Health state is fixed
     # for the whole window and advanced here, between windows, so every
@@ -2116,6 +2725,28 @@ def _simulate_core(
     # (see BatteryConfig.replacement_min_remaining_years).
     steps_after_span = battery_config.replacement_years_after_span * n_steps
     min_remaining_steps = battery_config.replacement_min_remaining_years * n_steps
+    # Everything the day loop passes but the day's bounds and starting state
+    # is the span's.
+    span_dispatch: Dict[str, Any] = dict(
+        battery_config=battery_config,
+        hours_per_step=hours_per_step,
+        standby_loss_per_step_wh=standby_loss_per_step_wh,
+        cap_wh=cap_wh,
+        cap_charge_wh=cap_charge_wh,
+        cap_discharge_wh=cap_discharge_wh,
+        cap_stored_wh=cap_stored_wh,
+        instructions=dispatch_arrays,
+        ac_derate=_full_rating,
+        curve_rows=_dispatch_curve_rows,
+        pv_chain=ac_pv_chain,
+    )
+    # Without a vehicle or a daily controller nothing else changes between
+    # days either, so the span packs _day_arguments once, on its first day,
+    # and restates only the day's bounds and state after that. A vehicle's
+    # state reaches derived arguments, and a controller can rebind the
+    # instructions' scalars each day; both pack every day.
+    run_packed = _resolve_packed_day(dispatch_day) if session is None and vehicle_config is None else None
+    packed: Optional[List[Any]] = None
     window_start = 0
     while window_start < n_steps:
         window_end = min(window_start + steps_per_day, n_steps)
@@ -2131,18 +2762,7 @@ def _simulate_core(
                 if session.decides_at(segment_start):
                     # A day starting where the previous window closed sees the
                     # state after that close's aging and any replacement.
-                    session.decide(
-                        segment_start,
-                        ControllerBatteryState(
-                            energy_wh=Battery_Energy_Wh,
-                            pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
-                            grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
-                            soh_fraction=battery_soh_decimal,
-                            resistance_growth=aging.resistance_growth,
-                            charge_efficiency=eff_charge,
-                            discharge_efficiency=eff_discharge,
-                        ),
-                    )
+                    session.decide(segment_start, battery_state())
                 segment_end = session.prepare_segment(segment_start, window_end)
             if aging.retired:
                 # A retired pack neither charges nor discharges, whatever the
@@ -2156,34 +2776,57 @@ def _simulate_core(
                     hours_per_step=hours_per_step,
                     cap_wh=cap_wh,
                     steps=slice(segment_start, segment_end),
+                    ac_derate=_derate_vals,
+                    curve_rows=_curve_rows,
+                    span_chain=ac_pv_chain,
                 )
                 out.columns["Battery_SOH"][segment_start:segment_end] = aging.soh_percent
-            else:
-                dispatch_day(
-                    out,
-                    _pv_dc_vals,
-                    _load_vals,
-                    _temp_vals,
+                if vehicle_config is not None:
+                    dispatch_vehicle_only(segment_start, segment_end)
+            elif packed is not None:
+                assert run_packed is not None
+                _restate_day(
+                    packed,
                     segment_start,
                     segment_end,
-                    battery_config=battery_config,
+                    Battery_Energy_Wh,
+                    Battery_PV_Origin_Energy_Wh,
+                    Battery_Grid_Origin_Energy_Wh,
+                    battery_soh_decimal,
+                    eff_charge,
+                    eff_discharge,
+                )
+                run_packed(packed)
+            else:
+                day_state: Dict[str, Any] = dict(
                     battery_soh_decimal=battery_soh_decimal,
                     Battery_Energy_Wh=Battery_Energy_Wh,
                     Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
                     Battery_Grid_Origin_Energy_Wh=Battery_Grid_Origin_Energy_Wh,
                     eff_charge=eff_charge,
                     eff_discharge=eff_discharge,
-                    hours_per_step=hours_per_step,
-                    standby_loss_per_step_wh=standby_loss_per_step_wh,
-                    cap_wh=cap_wh,
-                    cap_charge_wh=cap_charge_wh,
-                    cap_discharge_wh=cap_discharge_wh,
-                    cap_stored_wh=cap_stored_wh,
-                    instructions=dispatch_arrays,
+                    **span_dispatch,
+                    **vehicle_state,
                 )
+                if run_packed is None:
+                    dispatch_day(out, _pv_dc_vals, _load_vals, _temp_vals, segment_start, segment_end, **day_state)
+                else:
+                    packed = list(
+                        _day_arguments(
+                            out, _pv_dc_vals, _load_vals, _temp_vals, segment_start, segment_end, **day_state
+                        )
+                    )
+                    run_packed(packed)
             if session is not None:
                 session.complete_segment(_pv_dc_vals, _load_vals, _temp_vals)
             segment_last = segment_end - 1
+            if vehicle_config is not None:
+                vehicle_state["vehicle_was_plugged"] = bool(out.columns["Vehicle_Plugged"][segment_last])
+                vehicle_state["vehicle_energy_wh"] = float(out.columns["Vehicle_Energy_Onboard"][segment_last])
+                vehicle_state["vehicle_pv_origin_wh"] = float(out.columns["Vehicle_PV_Origin_Energy_End"][segment_last])
+                vehicle_state["vehicle_grid_origin_wh"] = float(
+                    out.columns["Vehicle_Grid_Origin_Energy_End"][segment_last]
+                )
             Battery_Energy_Wh = float(out.columns["Battery_Energy"][segment_last])
             Battery_PV_Origin_Energy_Wh = float(out.columns["Battery_PV_Origin_Energy_End"][segment_last])
             Battery_Grid_Origin_Energy_Wh = float(out.columns["Battery_Grid_Origin_Energy_End"][segment_last])
@@ -2192,6 +2835,7 @@ def _simulate_core(
         # The window's closing row, written by its final segment, holds the
         # state the day close continues from.
         battery_energy_beginning = float(out.columns["Battery_Energy_Beginning"][last_step])
+        degradation_periods += 1
         Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _apply_daily_degradation(
             aging,
             degradation_lifecycle,
@@ -2199,9 +2843,11 @@ def _simulate_core(
             out,
             degradation_tracking,
             step_index=last_step,
-            # Timestamps are read once per closed day rather than once per
-            # step; nothing inside the window depends on the calendar.
-            step_time=rng[last_step],
+            # The timestamp is read only for a record or an end-of-life
+            # event; nothing inside the window depends on the calendar.
+            step_times=rng,
+            # A summary reads only whether any period closed.
+            keep_record=not summary_only,
             time_ticks=time_ticks[window_start:window_end],
             ticks_per_second=ticks_per_second,
             # Copied before the call so a replacement rewriting the closing
@@ -2221,6 +2867,8 @@ def _simulate_core(
                 min_remaining_steps=min_remaining_steps,
             ),
         )
+        if vehicle_lifecycle is not None:
+            close_vehicle_day(window_start, window_end)
         # Refresh the loop's hot copies of the daily-boundary state.
         battery_soh_decimal = aging.soh_fraction
         eff_charge = aging.eff_charge
@@ -2235,7 +2883,11 @@ def _simulate_core(
         aging=aging,
         lifecycle=degradation_lifecycle,
         degradation_tracking=degradation_tracking,
+        degradation_periods=degradation_periods,
         hours_per_step=hours_per_step,
+        vehicle_carry=final_vehicle_carry(),
+        vehicle_end_of_life_events=() if vehicle_lifecycle is None else tuple(vehicle_lifecycle.events),
+        vehicle_degradation_tracking=[] if vehicle_lifecycle is None else vehicle_lifecycle.tracking,
         controller_carry=None if session is None else session.finish(),
         controller_instructions=None if session is None else session.executed_instructions(),
     )
@@ -2266,6 +2918,9 @@ def simulate_energy_balance(
     execution_backend: str = "python",
     finalize_degradation: Optional[bool] = None,
     battery_retired: bool = False,
+    inverter_ac_derate: Optional[pd.Series] = None,
+    inverter_curve_row: Optional[pd.Series] = None,
+    inverter_units: Optional[InverterUnits] = None,
 ) -> (
     Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame]
     | Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, Dict[str, Any]]
@@ -2316,6 +2971,9 @@ def simulate_energy_balance(
         dispatch_instructions=dispatch_instructions,
         execution_backend=execution_backend,
         battery_retired=battery_retired,
+        inverter_ac_derate=inverter_ac_derate,
+        inverter_curve_row=inverter_curve_row,
+        inverter_units=inverter_units,
     )
     result = _detailed_frames(core)
     if not return_degradation_state:
@@ -2365,6 +3023,9 @@ class _DetailedRun:
     degradation_state: Dict[str, Any]
     controller_carry: Optional[ControllerCarry]
     controller_instructions: Optional[DispatchInstructions]
+    vehicle_carry: Optional[VehicleCarry] = None
+    vehicle_end_of_life_events: Tuple[EndOfLifeEvent, ...] = ()
+    vehicle_degradation_tracking: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def _simulate_detailed_run(
@@ -2390,6 +3051,9 @@ def _simulate_detailed_run(
         degradation_state=_build_final_degradation_state(core.lifecycle, core.aging),
         controller_carry=core.controller_carry,
         controller_instructions=core.controller_instructions,
+        vehicle_carry=core.vehicle_carry,
+        vehicle_end_of_life_events=core.vehicle_end_of_life_events,
+        vehicle_degradation_tracking=core.vehicle_degradation_tracking,
     )
 
 
@@ -2420,6 +3084,9 @@ def simulate_energy_balance_summary(
     finalize_degradation: Optional[bool] = None,
     weights: Optional[Mapping[str, Tuple[str, np.ndarray]]] = None,
     battery_retired: bool = False,
+    inverter_ac_derate: Optional[pd.Series] = None,
+    inverter_curve_row: Optional[pd.Series] = None,
+    inverter_units: Optional[InverterUnits] = None,
 ) -> SimulationSummary:
     """Simulate an energy balance and return annual totals and carry state.
 
@@ -2476,414 +3143,34 @@ def simulate_energy_balance_summary(
         summary_only=True,
         aligned=aligned,
         battery_retired=battery_retired,
+        inverter_ac_derate=inverter_ac_derate,
+        inverter_curve_row=inverter_curve_row,
+        inverter_units=inverter_units,
     )
     return _build_simulation_summary(core, return_degradation_state=return_degradation_state, weights=weights)
 
 
-def apply_indoor_temperature_model(
-    outdoor_temperature: pd.Series,
-    setpoint_c: float = DEFAULT_INDOOR_SETPOINT_C,
-    coupling_alpha: float = DEFAULT_INDOOR_COUPLING_ALPHA,
-    floor_c: float = DEFAULT_INDOOR_FLOOR_C,
-    ceiling_c: float = DEFAULT_INDOOR_CEILING_C,
-) -> pd.Series:
-    """
-    Transform outdoor temperature to indoor temperature for battery simulation.
+def __getattr__(name: str) -> Any:
+    # breos.battery.lfp_capacity_factor is deprecated in 0.8.0 and goes in 0.9.0;
+    # the function itself stays in breos._dispatch, where the dispatch step uses it.
+    if name == "lfp_capacity_factor":
+        from breos._dispatch import lfp_capacity_factor
 
-    Residential batteries are installed indoors where building thermal mass
-    buffers outdoor extremes. This stateless preprocessing applies a weighted
-    blend with clamp before temperatures enter the simulation loop.
-
-    T_indoor = clamp(alpha * T_outdoor + (1 - alpha) * T_setpoint, floor, ceiling)
-
-    Args:
-        outdoor_temperature: Outdoor ambient temperature series (°C)
-        setpoint_c: Indoor comfort midpoint (°C)
-        coupling_alpha: How much outdoor temp influences indoor (0=insulated, 1=outdoor)
-        floor_c: Minimum indoor temperature (°C)
-        ceiling_c: Maximum indoor temperature (°C)
-
-    Returns:
-        Indoor temperature series (°C), same index as input
-    """
-    t_indoor = coupling_alpha * outdoor_temperature + (1.0 - coupling_alpha) * setpoint_c
-    return t_indoor.clip(lower=floor_c, upper=ceiling_c)
-
-
-def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
-    """Get degradation model parameters based on model name.
-
-    All LFP models use Naumann (2020) cycle aging + the specified calendar aging parameters.
-    The 'naumann' model uses Naumann's own calendar params; 'naumann_lam*' variants use
-    Lam et al. (2025) calendar params with different calibrations.
-
-    Models:
-        'naumann'                          — Naumann 2020 calendar + cycle (NMC/LFP lab)
-        'naumann_lam'                      — Naumann cycle + Lam 2025 lab-derived calendar
-        'naumann_lam_field_calibrated'     — v1 field-calibrated fit (default alias)
-        'naumann_lam_field_calibrated_v1'  — v1 field-calibrated fit (explicit)
-        'naumann_lam_field_calibrated_v2'  — v2 field-calibrated fit with
-                                             Lam Ea/n fixed and k0/b fitted
-    """
-    model_lower = model.lower().replace("-", "_")
-
-    # ── Naumann (pure) ────────────────────────────────────────────────────
-    if model_lower == "naumann":
-        k0_frac = NAUMANN_K0_PERCENT / 100.0
-        return k0_frac, NAUMANN_EA_J_MOL, NAUMANN_EXPONENT_B, NAUMANN_SOC_EXPONENT_N
-
-    # ── Naumann-Lam: lab-derived ──────────────────────────────────────────
-    elif model_lower == "naumann_lam":
-        return LAM_K0_FRAC, LAM_EA_J_MOL, LAM_EXPONENT_B, LAM_SOC_EXPONENT_N
-
-    # ── Naumann-Lam: field-calibrated v1 (default) ───────────────────────
-    elif model_lower in ("naumann_lam_field_calibrated", "naumann_lam_field_calibrated_v1"):
-        return (
-            NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC,
-            NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL,
-            NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B,
-            NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N,
+        warnings.warn(
+            "breos.battery.lfp_capacity_factor is deprecated and will be removed in BREOS 0.9.0",
+            DeprecationWarning,
+            stacklevel=2,
         )
+        return lfp_capacity_factor
+    # Moved to breos.weather in 0.8.0, its only caller; the old name goes in 0.9.0.
+    if name == "apply_indoor_temperature_model":
+        from breos.weather import apply_indoor_temperature_model
 
-    elif model_lower == "naumann_lam_field_calibrated_v2":
-        return (
-            NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC,
-            NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL,
-            NAUMANN_LAM_FIELD_CALIBRATED_V2_EXPONENT_B,
-            NAUMANN_LAM_FIELD_CALIBRATED_V2_SOC_EXPONENT_N,
+        warnings.warn(
+            "breos.battery.apply_indoor_temperature_model is deprecated and will be removed in BREOS 0.9.0; "
+            "import it from breos.weather",
+            DeprecationWarning,
+            stacklevel=2,
         )
-
-    else:
-        raise ValueError(
-            f"Unknown calendar model: {model}. Use 'naumann_lam_field_calibrated', "
-            f"'naumann_lam_field_calibrated_v1', "
-            f"'naumann_lam_field_calibrated_v2', "
-            f"'naumann_lam', or 'naumann'."
-        )
-
-
-def _detect_cycles_rainflow_arrays(
-    soc_values: np.ndarray,
-    time_ticks: np.ndarray,
-    ticks_per_second: float,
-    min_doc_fraction: float = 0.01,
-) -> List[Dict]:
-    """Detect rainflow cycles from arrays used by the simulation hot path."""
-    if len(soc_values) < 2:
-        return []
-
-    # rainflow.extract_cycles expects a sequence; multiply by 100 for percent
-    soc_pct = soc_values * 100.0
-
-    cycles = []
-    for rng, mean, count, i_start, i_end in rainflow.extract_cycles(soc_pct):
-        doc = rng / 100.0  # convert back to fraction
-        if doc < min_doc_fraction:
-            continue
-
-        mean_soc = mean / 100.0
-
-        # Estimate C-rate from cycle duration
-        if i_start < len(time_ticks) and i_end < len(time_ticks):
-            duration_seconds = (time_ticks[i_end] - time_ticks[i_start]) / ticks_per_second
-            duration_h = duration_seconds / 3600.0
-        else:
-            duration_h = 0.0
-        mean_c_rate = doc / duration_h if duration_h > 0 else 0.0
-
-        cycles.append(
-            {
-                "doc": doc,
-                "mean_soc": mean_soc,
-                "count": count,  # 1.0 for full, 0.5 for half
-                "mean_c_rate": mean_c_rate,
-                "start_idx": i_start,
-                "end_idx": i_end,
-            }
-        )
-
-    return cycles
-
-
-# =========================================================================
-# Resistance fade functions (Naumann 2020)
-# =========================================================================
-
-
-def update_battery_resistance_cyclewise(
-    resistance_growth: float, cycles: List[Dict], fec_cum: float, min_DoD_fraction: float = 0.01
-) -> Tuple[float, float]:
-    """
-    Calculate cycle-induced resistance growth using Naumann's model.
-
-    Uses the same differential form as capacity fade but with resistance
-    parameters (A_R, B_R, C_DOC_R, D_DOC_R, Z_R).
-
-    Args:
-        resistance_growth: Current cumulative resistance growth (fraction, e.g. 0.05 = 5%)
-        cycles: Rainflow cycle dicts, each with ``doc`` (depth, fraction),
-            ``count`` (1.0 for a full cycle, 0.5 for a half) and
-            ``mean_c_rate``
-        fec_cum: Cumulative FEC at start of this period
-        min_DoD_fraction: Minimum DOC to count
-
-    Returns:
-        Tuple of (new_resistance_growth, delta_resistance_growth)
-    """
-    delta_R = 0.0
-    running_fec = fec_cum
-
-    for cyc in cycles:
-        DOC = max(0.0, min(1.0, cyc["doc"]))
-        if DOC < min_DoD_fraction:
-            continue
-
-        dFEC = DOC * cyc["count"]
-        mean_c_rate = cyc["mean_c_rate"]
-
-        kC = max(0.0, A_R * mean_c_rate + B_R)
-        kDOC = max(0.0, C_DOC_R * ((DOC - 0.6) ** 3) + D_DOC_R)
-
-        fec_new = running_fec + dFEC
-
-        # Differential form: dR% = kC * kDOC * (FEC_new^Z_R - FEC_old^Z_R)
-        dR_percent = kC * kDOC * (fec_new**Z_R - running_fec**Z_R)
-        dR_fraction = dR_percent / 100.0
-
-        delta_R += dR_fraction
-        running_fec = fec_new
-
-    new_growth = resistance_growth + delta_R
-    return new_growth, delta_R
-
-
-def update_battery_resistance_calendar(
-    resistance_growth: float,
-    T_cell_C: float,
-    cumulative_cal_seconds: float,
-    dt_days: float = 1.0,
-    mean_soc_absolute: float = 0.5,
-) -> Tuple[float, float]:
-    """
-    Calculate calendar-induced resistance growth using Naumann's model.
-
-    Same Arrhenius + power-law structure as calendar capacity fade,
-    but with resistance-specific parameters from Naumann Table 6.
-
-    Args:
-        resistance_growth: Current cumulative resistance growth (fraction)
-        T_cell_C: Cell temperature (C)
-        cumulative_cal_seconds: Total elapsed calendar seconds
-        dt_days: Time step in days
-        mean_soc_absolute: Mean absolute SOC during period
-
-    Returns:
-        Tuple of (new_resistance_growth, delta_resistance_growth)
-    """
-    dt_seconds = dt_days * 86400.0
-    if dt_seconds <= 0:
-        return resistance_growth, 0.0
-
-    k0_frac = NAUMANN_K0_R_PERCENT / 100.0
-
-    T_K = T_cell_C + 273.15
-    arr_factor = math.exp(-NAUMANN_EA_R_J_MOL / R_GAS * (1.0 / T_K - 1.0 / T_REF_K))
-
-    t_old = cumulative_cal_seconds
-    t_new = t_old + dt_seconds
-    b = NAUMANN_EXPONENT_B_R
-
-    term_old = math.pow(t_old, b) if t_old > 0 else 0.0
-    term_new = math.pow(t_new, b)
-    delta_time = term_new - term_old
-
-    soc_stress = max(0.0, mean_soc_absolute) ** NAUMANN_SOC_EXPONENT_N_R
-
-    dR_fraction = k0_frac * arr_factor * delta_time * soc_stress
-
-    return resistance_growth + dR_fraction, dR_fraction
-
-
-def resistance_to_efficiency(
-    resistance_growth: float,
-    base_charge_eff: float,
-    base_discharge_eff: float,
-) -> Tuple[float, float]:
-    """
-    Convert resistance growth to effective charge/discharge efficiencies.
-
-    Internal resistance growth increases ohmic losses proportionally. Both
-    baseline efficiencies receive the same ``sqrt(1 + growth)`` derating,
-    preserving their original ratio.
-
-    RTE_new = RTE_base / (1 + resistance_growth)
-
-    Args:
-        resistance_growth: Relative resistance growth (fraction, 0=new cell)
-        base_charge_eff: Baseline charge efficiency
-        base_discharge_eff: Baseline discharge efficiency
-
-    Returns:
-        Tuple of (effective_charge_eff, effective_discharge_eff)
-    """
-    if resistance_growth <= 0:
-        return base_charge_eff, base_discharge_eff
-
-    derate = math.sqrt(1.0 + resistance_growth)
-    return base_charge_eff / derate, base_discharge_eff / derate
-
-
-def _update_battery_soh_from_cycles(
-    soh_start_fraction: float,
-    cycles: List[Dict],
-    *,
-    fec_cum: float = 0.0,
-    min_DoD_fraction: float = 0.01,
-) -> Tuple[float, float, float]:
-    qloss_cycle_fraction = 0.0
-
-    for cyc in cycles:
-        DOC = max(0.0, min(1.0, cyc["doc"]))
-        if DOC < min_DoD_fraction:
-            continue
-
-        mean_c_rate = cyc["mean_c_rate"]
-        # Energy throughput for this cycle in FEC; a rainflow count is 1.0
-        # for a full cycle and 0.5 for a half
-        dFEC = DOC * cyc["count"]
-
-        # Naumann-style k-factors with the LFP cycle aging coefficients
-        kC = max(0.0, A_Q * mean_c_rate + B_Q)
-        kDOC = max(0.0, C_DOC_Q * ((DOC - 0.6) ** 3) + D_DOC_Q)
-
-        fec_new = fec_cum + dFEC
-
-        # Differential form using cumulative FEC (Naumann Eq. 5-6)
-        dq_percent = kC * kDOC * (fec_new**Z_Q - fec_cum**Z_Q)
-        dq_fraction = dq_percent / 100.0
-
-        qloss_cycle_fraction += dq_fraction
-        fec_cum = fec_new
-
-    soh_after = max(0.0, soh_start_fraction - qloss_cycle_fraction)
-    return soh_after, qloss_cycle_fraction, fec_cum
-
-
-def _update_battery_soh_cyclewise_arrays(
-    soh_start_fraction: float,
-    soc_values: np.ndarray,
-    time_ticks: np.ndarray,
-    ticks_per_second: float,
-    *,
-    fec_cum: float = 0.0,
-    min_DoD_fraction: float = 0.01,
-) -> Tuple[float, float, float]:
-    """Run native rainflow degradation without constructing pandas objects."""
-    if len(soc_values) < 2:
-        return soh_start_fraction, 0.0, fec_cum
-    cycles = _detect_cycles_rainflow_arrays(
-        soc_values,
-        time_ticks,
-        ticks_per_second,
-        min_doc_fraction=min_DoD_fraction,
-    )
-    return _update_battery_soh_from_cycles(
-        soh_start_fraction,
-        cycles,
-        fec_cum=fec_cum,
-        min_DoD_fraction=min_DoD_fraction,
-    )
-
-
-def update_battery_soh_cyclewise(
-    soh_start_fraction: float,
-    soc_series_absolute: pd.Series,
-    *,
-    fec_cum: float = 0.0,
-    min_DoD_fraction: float = 0.01,
-) -> Tuple[float, float, float]:
-    """
-    Calculate cycle-induced degradation using Naumann's semi-empirical model.
-
-    Implements Equation 5-6 from Naumann 2020 paper with the LFP cycle aging
-    coefficients. Cycles are counted with rainflow (ASTM E1049) over the
-    whole series, and the series' own ends close them.
-
-    Args:
-        soh_start_fraction: Starting SOH as fraction (0-1)
-        soc_series_absolute: SOC time series
-        fec_cum: Cumulative full equivalent cycles
-        min_DoD_fraction: Minimum DoD to count as cycle
-
-    Returns:
-        Tuple of (soh_after, qloss_cycle_fraction, fec_cum)
-    """
-    if len(soc_series_absolute) < 2:
-        return soh_start_fraction, 0.0, fec_cum
-
-    time_ticks, ticks_per_second = _datetime_index_ticks(soc_series_absolute.index)
-    return _update_battery_soh_cyclewise_arrays(
-        soh_start_fraction,
-        soc_series_absolute.to_numpy(),
-        time_ticks,
-        ticks_per_second,
-        fec_cum=fec_cum,
-        min_DoD_fraction=min_DoD_fraction,
-    )
-
-
-def update_battery_soh_calendar(
-    soh_start_fraction: float,
-    k0_frac: float,
-    Ea: float,
-    n: float,
-    cal_b: float,
-    T_cell_C: float = 25.0,
-    cumulative_cal_seconds: float = 0.0,
-    dt_days: float = 1.0,
-    mean_soc_absolute: float = 0.5,
-) -> Tuple[float, float, float]:
-    """
-    Generalized calendar aging using power law physics (Naumann / Lam 2025).
-
-    dSOH = k0_frac * Arr * ((t+dt)^b - t^b) * SOC_stress
-
-    Args:
-        soh_start_fraction: Starting SOH as fraction
-        k0_frac: Rate constant (fraction per second^b)
-        Ea: Activation energy (J/mol)
-        n: SOC exponent
-        cal_b: Time exponent (0.5 for sqrt-time, 0.75 for Lam)
-        T_cell_C: Cell temperature (°C)
-        cumulative_cal_seconds: Total elapsed seconds
-        dt_days: Time step in days
-        mean_soc_absolute: Mean SOC during period
-
-    Returns:
-        Tuple of (soh_after, dsoh_fraction, new_cumulative_seconds)
-    """
-    dt_seconds = dt_days * 86400.0
-    if dt_seconds <= 0:
-        return soh_start_fraction, 0.0, cumulative_cal_seconds
-
-    # Temperature factor (Arrhenius) relative to 25°C
-    T_K = T_cell_C + 273.15
-    arr_factor = math.exp(-Ea / R_GAS * (1.0 / T_K - 1.0 / T_REF_K))
-
-    # Power law time calculation
-    t_old = cumulative_cal_seconds
-    t_new = cumulative_cal_seconds + dt_seconds
-
-    term_old = math.pow(t_old, cal_b) if t_old > 0 else 0.0
-    term_new = math.pow(t_new, cal_b)
-    delta_time_factor = term_new - term_old
-
-    # SOC stress factor
-    soc_stress = max(0.0, mean_soc_absolute) ** n
-
-    # Calculate degradation fraction
-    d_soh_fraction = k0_frac * arr_factor * delta_time_factor * soc_stress
-
-    soh_after = max(0.0, soh_start_fraction - d_soh_fraction)
-
-    return soh_after, d_soh_fraction, t_new
+        return apply_indoor_temperature_model
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

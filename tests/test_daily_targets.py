@@ -1,6 +1,5 @@
 """The daily charge-target planner behind daily-persistence smart charging (plan step 7)."""
 
-import importlib.util
 import itertools
 import math
 from dataclasses import replace
@@ -22,13 +21,8 @@ from breos.app_config import resolve_tariff_spec
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
 from breos.smart_charging import SmartChargingSpec, period_layout, resolve_instructions
+from tests.backend_parity import BACKENDS
 
-_BACKENDS = [
-    "python",
-    pytest.param(
-        "numba", marks=pytest.mark.skipif(not importlib.util.find_spec("numba"), reason="numba not installed")
-    ),
-]
 OFF_PEAK, PEAK, EXPORT = 0.10, 0.30, 0.05
 
 
@@ -117,7 +111,7 @@ def _priced_run(problem, instructions, **kwargs):
         (68, [0.9, 0.1, 0.0], 2.5598835185905546, 0.3235974145891044, 1425.8245614035086),
     ],
 )
-@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_the_plan_matches_the_legacy_dynamic_program(
     n_steps, targets, objective, terminal_cost, end_energy_wh, backend
 ):
@@ -179,11 +173,11 @@ def test_the_planner_compiles_only_the_production_signature():
     # instruction arrays are read-only). Checked on every signature compiled
     # so far, so the result does not depend on which test compiled it.
     pytest.importorskip("numba")
-    from breos._numba_dispatch import _kernel
+    from breos._numba_dispatch import require_numba_dispatch_candidates
 
     problem = _problem(2)
     solve_daily_targets(problem, target_levels=3, soc_states=3, execution_backend="numba")
-    signatures = _kernel().signatures
+    signatures = require_numba_dispatch_candidates().signatures
     assert signatures
     for signature in signatures:
         # The buffer matrix, then PV, load and temperature.
@@ -369,20 +363,21 @@ def test_a_planner_holds_the_given_health_for_its_window():
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "message"),
+    ("kwargs", "error", "message"),
     [
-        ({"target_levels": 0}, "at least 1"),
-        ({"target_levels": [0.5, 0.2]}, "strictly increasing"),
-        ({"target_levels": [0.5, 1.2]}, "between 0 and 1"),
-        ({"soc_states": 1}, "at least 2"),
-        ({"initial_energy_wh": math.nan}, "must be finite"),
-        ({"wear_cost_per_kwh": -0.01}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
-        ({"wear_cost_per_kwh": math.inf}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
-        ({"wear_cost_per_kwh": math.nan}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"target_levels": 0}, ValueError, "at least 1"),
+        ({"target_levels": [0.5, 0.2]}, ValueError, "strictly increasing"),
+        ({"target_levels": [0.5, 1.2]}, ValueError, "between 0 and 1"),
+        ({"soc_states": 1}, ValueError, "at least 2"),
+        ({"initial_energy_wh": math.nan}, ValueError, "must be finite"),
+        ({"wear_cost_per_kwh": -0.01}, ValueError, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": math.inf}, ValueError, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": math.nan}, ValueError, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": True}, TypeError, "'wear_cost_per_kwh' must be a finite number"),
     ],
 )
-def test_bad_planner_settings_are_rejected(kwargs, message):
-    with pytest.raises(ValueError, match=message):
+def test_bad_planner_settings_are_rejected(kwargs, error, message):
+    with pytest.raises(error, match=message):
         solve_daily_targets(_problem(1), **kwargs)
 
 
@@ -455,11 +450,6 @@ def test_a_higher_wear_cost_never_plans_more_discharge():
     ]
     assert all(later <= earlier + 1e-9 for earlier, later in zip(discharged, discharged[1:]))
     assert discharged[-1] < discharged[0]
-
-
-def test_a_wear_cost_is_a_number():
-    with pytest.raises(TypeError, match="'wear_cost_per_kwh' must be a finite number"):
-        solve_daily_targets(_problem(1), wear_cost_per_kwh=True)
 
 
 # --- held targets (ADR 0002 A18) ----------------------------------------------
@@ -554,3 +544,105 @@ def test_python_and_numba_plan_a_held_target_alike(steps_per_day):
     numba = solve_daily_targets(problem, initial_energy_wh=900.0, execution_backend="numba")
     np.testing.assert_array_equal(python.targets, numba.targets)
     assert (python.objective, python.end_energy_wh) == (numba.objective, numba.end_energy_wh)
+
+
+def test_the_inverters_night_consumption_does_not_move_the_targets():
+    from breos.inverter import InverterConversion
+
+    night = _pack(inverter_conversion=InverterConversion(night_consumption_w=6.0))
+    plain = solve_daily_targets(_problem(), initial_energy_wh=1200.0)
+    drawn = solve_daily_targets(_problem(config=night), initial_energy_wh=1200.0)
+    np.testing.assert_array_equal(drawn.targets, plain.targets)
+    assert drawn.objective == plain.objective
+
+
+# --- batched candidates ------------------------------------------------------
+
+
+def _bits(values):
+    return np.asarray(values, dtype=np.float64).view(np.int64).tolist()
+
+
+def _one_candidate_at_a_time(problem, levels, day, energies, level_index, backend, wear_cost_per_kwh):
+    """A day's candidates as the planner ran them before batching: one dispatch each, priced from the buffer."""
+    from breos._dispatch import L_BATTERY_DISCHARGE_DC, L_PV_AC_EXPORT, R_BATTERY_ENERGY, R_GRID_IMPORT
+    from breos.battery import _resolve_dispatch_day, _ResultBuffers
+
+    evaluator = _DayEvaluator(problem, levels, backend, wear_cost_per_kwh)
+    buffers = _ResultBuffers(len(problem.instructions))
+    lo, hi = problem.day_starts[day], problem.day_starts[day + 1]
+    hours = problem.hours_per_step
+    money, wear, end = [], [], []
+    for energy, level in zip(energies, level_index, strict=True):
+        instructions = daily_target_instructions(
+            problem.instructions, problem.day_starts, np.full(problem.n_days, levels[level])
+        )
+        _resolve_dispatch_day(backend)(
+            buffers,
+            *evaluator.series,
+            lo,
+            hi,
+            Battery_Energy_Wh=float(energy),
+            instructions=instructions,
+            **evaluator.state,
+        )
+        matrix = buffers.matrix
+        money_w = float(
+            matrix[R_GRID_IMPORT, lo:hi] @ problem.import_price_per_kwh[lo:hi]
+            - matrix[L_PV_AC_EXPORT, lo:hi] @ problem.export_price_per_kwh[lo:hi]
+        )
+        money.append(money_w * hours / 1000.0)
+        wear.append(float(matrix[L_BATTERY_DISCHARGE_DC, lo:hi].sum()) * hours / 1000.0 * wear_cost_per_kwh)
+        end.append(float(matrix[R_BATTERY_ENERGY, hi - 1]))
+    return money, wear, end
+
+
+def _varied_problem():
+    temperature = 8.0 + 10.0 * np.sin(np.arange(3 * 96) / 96 * 2 * np.pi)
+    return _problem(3, config=_limited_pack(), steps_per_day=96, temperature_c=temperature, efficiency=0.93)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("build", [_varied_problem, _hold_problem], ids=["varied", "held"])
+def test_a_batch_of_candidates_costs_what_each_one_costs_alone(backend, build):
+    problem = build()
+    levels = target_grid(5)
+    energies = np.repeat(np.linspace(300.0, 4800.0, 4), len(levels))
+    level_index = np.tile(np.arange(len(levels)), 4)
+    evaluator = _DayEvaluator(problem, levels, backend, 0.17)
+    for day in range(problem.n_days):
+        batched = evaluator.run_many(day, energies, level_index)
+        alone = _one_candidate_at_a_time(problem, levels, day, energies, level_index, backend, 0.17)
+        for got, expected in zip(batched, alone, strict=True):
+            assert _bits(got) == _bits(expected)
+
+
+@pytest.mark.parametrize("build", [_problem, _hold_problem], ids=["plain", "held"])
+@pytest.mark.parametrize("levels", [target_grid(4), target_grid([-0.0, 0.5])], ids=["grid", "negative-zero"])
+def test_the_level_rows_are_the_target_instructions_of_each_level(build, levels):
+    problem = build()
+    evaluator = _DayEvaluator(problem, levels, "python")
+    for row, level in enumerate(levels):
+        expected = daily_target_instructions(problem.instructions, problem.day_starts, np.full(problem.n_days, level))
+        assert evaluator.reserve_levels[row].tobytes() == expected.reserve_fraction.astype(np.float64).tobytes()
+        assert evaluator.target_levels[row].tobytes() == expected.grid_target_fraction.astype(np.float64).tobytes()
+
+
+def test_a_day_identical_to_one_already_run_reuses_its_candidates():
+    problem = _problem(2)
+    repeated = replace(problem, pv_dc_w=np.tile(problem.pv_dc_w[:24], 2))
+    levels = target_grid(3)
+    energies, level_index = np.array([500.0, 500.0, 2500.0]), np.array([0, 2, 1])
+    evaluator = _DayEvaluator(repeated, levels, "python")
+    second = evaluator.run_many(1, energies, level_index)
+    first = evaluator.run_many(0, energies, level_index)
+    assert first is second
+    fresh = _DayEvaluator(repeated, levels, "python").run_many(0, energies, level_index)
+    assert [_bits(a) for a in first] == [_bits(a) for a in fresh]
+
+    # One bit of one input apart, the days are run apart.
+    pv = np.tile(problem.pv_dc_w[:24], 2)
+    pv[24 + 12] = np.nextafter(pv[24 + 12], np.inf)
+    evaluator = _DayEvaluator(replace(problem, pv_dc_w=pv), levels, "python")
+    assert evaluator.run_many(1, energies, level_index) is not evaluator.run_many(0, energies, level_index)
+    assert len(evaluator.memo) == 2

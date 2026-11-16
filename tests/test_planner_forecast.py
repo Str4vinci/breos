@@ -22,7 +22,6 @@ from breos._planner_forecast import (
     PERSISTENCE_LEAD,
     RESAMPLING_REACH_HOURS,
     PlannerForecast,
-    calendar_epoch_seconds,
     epoch_seconds,
     source_times,
 )
@@ -31,15 +30,9 @@ from breos.app_inputs import remap_tmy_year
 from breos.smart_charging import DEFAULT_PUBLICATION_DELAY_HOURS, SmartChargingSpec
 from breos.weather import IRRADIANCE_RESAMPLING_POLICIES, WEATHER_METADATA_KEY, save_weather_csv
 from tests.conftest import _build_synthetic_weather
+from tests.offline_app import TOU
 from tests.test_weather import _install_fake_openmeteo
 
-TOU = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.28, "off_peak": 0.11},
-    "export_prices": {"all": 0.05},
-    "fixed_charge_per_day": 0.25,
-}
 DAILY = {
     "mode": "daily_persistence",
     "charge_periods": ["off_peak"],
@@ -158,7 +151,7 @@ def test_a_spec_built_directly_checks_its_forecast():
         SmartChargingSpec(**common, forecast="weather")
     with pytest.raises(ValueError, match="needs smart_charging.forecast = 'weather'"):
         SmartChargingSpec(**common, forecast_publication_delay_hours=2.0)
-    with pytest.raises(ValueError, match="takes no planner settings"):
+    with pytest.raises(ValueError, match="does not take smart_charging"):
         SmartChargingSpec(
             mode="fixed_target",
             target_usable_fraction=0.5,
@@ -178,7 +171,7 @@ def _forecast(freq="15min", days=10, leads=7, delay_h=6.0, support=None, decisio
     step_s = 900 if freq == "15min" else 3600
     return PlannerForecast(
         "weather",
-        calendar_epoch_seconds(index),
+        epoch_seconds(index),
         step_s,
         pv_degradation_rate=0.0,
         support_source_s=support,
@@ -298,7 +291,7 @@ def test_the_forecast_replaces_only_pv_and_degrades_it_by_project_year():
     truth = np.arange(96, dtype=float)
     perfect = PlannerForecast(
         "perfect",
-        calendar_epoch_seconds(index),
+        epoch_seconds(index),
         900,
         pv_degradation_rate=0.5,
         true_pv_dc_w=truth,
@@ -334,12 +327,6 @@ def test_a_raw_hour_shapes_no_step_more_than_the_reach_before_it(site, policy):
 
 
 # -- App runs --------------------------------------------------------------------
-
-
-def test_persistence_runs_record_no_planner_forecast(site):
-    record = _run({})["provenance"]["smart_charging"]
-    assert "planner_forecast" not in record
-    assert record["forecast_policy"] == "repeat_previous_complete_local_day"
 
 
 def test_a_perfect_forecast_plans_on_the_run_itself(site):

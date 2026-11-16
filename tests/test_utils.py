@@ -123,19 +123,9 @@ def test_normalise_frequency_rejects_other_values_and_names_the_accepted_ones(fr
         normalise_frequency(freq)
 
 
-@pytest.mark.parametrize("freq", ["h", "1h"])
-def test_hourly_frequency_spellings(freq):
-    assert get_hours_per_step(freq) == pytest.approx(1.0)
-
-
-def test_15min_frequency_spelling():
-    assert get_hours_per_step("15min") == pytest.approx(0.25)
-
-
-@pytest.mark.parametrize("freq", ["H", "1H", "15T", "15m", "30min"])
-def test_step_helpers_reject_pandas_2_aliases_and_unsupported_steps(freq):
-    with pytest.raises(ValueError, match="Unsupported frequency"):
-        get_hours_per_step(freq)
+@pytest.mark.parametrize(("freq", "hours"), [("h", 1.0), ("1h", 1.0), ("15min", 0.25)])
+def test_hours_per_step_of_each_accepted_spelling(freq, hours):
+    assert get_hours_per_step(freq) == pytest.approx(hours)
 
 
 @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])

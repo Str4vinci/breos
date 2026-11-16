@@ -1,0 +1,56 @@
+# Illustrative Porto ACC study, not a supplier offer or a regulatory tariff.
+# All shared prices and the asset's supply-contract prices are example inputs.
+# Equipment costs use BREOS's illustrative residential_pt preset.
+# Run from Python: Community(tomllib.load(open(path, "rb"))).simulate()
+
+[community]
+location = "porto"
+start_date = "2026-01-01"
+resolution = "15min"
+projection_years = 20
+allocation = "fixed"
+shared_energy_price = 0.10       # EUR/kWh used, paid to injectors
+shared_network_charge = 0.02     # EUR/kWh used, paid outside the community
+surplus_price = 0.04             # EUR/kWh of surplus, example sale contract
+
+[[assets]]
+id = "shared-roof"
+n_modules = 24
+ownership = { apt-1 = 0.5, apt-2 = 0.3, apt-3 = 0.2 }
+cost_preset = "residential_pt"
+[assets.costs]
+electricity_cost = 0.20          # actual asset imports, EUR/kWh
+daily_power_cost = 0.0           # explicit assumption: no fixed supply charge
+
+[[participants]]
+id = "apt-1"
+coefficient = 0.40
+annual_consumption_kwh = 3500
+n_modules = 6
+battery_kwh = 5                  # behind this household's meter
+cost_preset = "residential_pt"
+[participants.tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.28, off_peak = 0.11 }  # illustrative supplier prices
+export_prices = { all = 0.05 }
+fixed_charge_per_day = 0.25
+
+[[participants]]
+id = "apt-2"                    # load-only household: no PV or battery
+coefficient = 0.35
+annual_consumption_kwh = 3000
+[participants.costs]
+electricity_cost = 0.20
+daily_power_cost = 0.25
+
+[[participants]]
+id = "apt-3"
+coefficient = 0.25
+annual_consumption_kwh = 2500
+n_modules = 4
+cost_preset = "residential_pt"
+[participants.costs]
+electricity_cost = 0.22
+electricity_sold_cost = 0.05
+daily_power_cost = 0.25

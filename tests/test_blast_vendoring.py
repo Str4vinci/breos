@@ -116,7 +116,7 @@ def test_vendored_manifest_pins_provenance_and_current_result_hashes():
         manifest,
         flags=re.MULTILINE,
     )
-    assert len(result_entries) == 23
+    assert len(result_entries) == 22
     assert {path for path, _ in result_entries} >= {
         "breos/degradation/blast/LICENSE",
         "breos/degradation/blast/NOTICE",

@@ -69,7 +69,48 @@
     "poa_annual_kwh_m2": 2314.6
   },
   "pvwatts_v8": {
-    "fetched": "2026-07-02",
-    "error": "ConnectionError: HTTPSConnectionPool(host='developer.nrel.gov', port=443): Max retries exceeded with url: /api/pvwatts/v8.json?lat=39.7407&lon=-105.1686&system_capacity=4.0&module_type=0&array_type=0&tilt=35&azimuth=180&losses=14.08&dc_ac_ratio=1.2&inv_eff=96.0&albedo=0.2&radius=0&dataset=nsrdb&api_key=DEMO_KEY (Caused by NameResolutionError(\"HTTPSConnection(host='developer.nrel.gov', port=443): Failed to resolve 'developer.nrel.gov' ([Errno 8] nodename nor servname provided, or not known)\"))"
+    "fetched": "2026-10-22",
+    "params": {
+      "lat": 39.7407,
+      "lon": -105.1686,
+      "system_capacity": 4.0,
+      "module_type": 0,
+      "array_type": 0,
+      "tilt": 35,
+      "azimuth": 180,
+      "losses": 14.08,
+      "dc_ac_ratio": 1.2,
+      "inv_eff": 96.0,
+      "albedo": 0.2,
+      "radius": 0,
+      "dataset": "nsrdb"
+    },
+    "version": "8.5.0",
+    "ssc_version": 280,
+    "dataset": "nsrdb",
+    "station_distance_m": 1541,
+    "station": "145809",
+    "weather_data_source": "NSRDB PSM V3 GOES tmy-2020 3.2.0",
+    "station_latitude": 39.72999954223633,
+    "station_longitude": -105.1800003051758,
+    "station_elevation_m": 1819.599975585938,
+    "monthly_kwh": [
+      463.24,
+      479.28,
+      576.01,
+      549.34,
+      519.84,
+      525.32,
+      535.85,
+      524.29,
+      535.87,
+      522.84,
+      460.12,
+      441.41
+    ],
+    "annual_kwh": 6133.41,
+    "solrad_annual_kwh_m2_day": 5.374,
+    "mismatched_inputs": [],
+    "trusted": true
   }
 }

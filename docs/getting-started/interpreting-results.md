@@ -18,15 +18,21 @@ flag. For the step-by-step flows of the first year, use
 | `direct_pv_ac_load_kwh` | Direct PV AC delivered to load |
 | `pv_origin_battery_ac_load_kwh` | PV-origin AC delivered from storage to load |
 | `curtailment_dc_kwh` | PV DC that could not serve load, charge storage, or export |
-| `consumption_kwh` | Year 1 load |
-| `self_consumption_kwh` | Direct PV AC plus PV-origin battery AC delivered to load |
+| `consumption_kwh` | Year 1 house load, excluding vehicle charging and driving |
+| `self_consumption_kwh` | Direct PV AC plus PV-origin stationary/vehicle AC delivered to the house |
 | `grid_import_kwh` | Year 1 energy bought from the grid |
 | `grid_export_kwh` | Year 1 energy sold to the grid |
 | `grid_independence_pct` | Year 1 grid independence ratio |
 | `self_consumption_pct` | Year 1 self-consumption ratio |
+| `global_horizontal_kwh_m2` | Year 1 global horizontal irradiation (PVsyst's GlobHor) |
+| `global_incident_kwh_m2` | Year 1 global irradiation in the plane of the arrays, before near shading and incidence-angle losses, weighted by array STC power (PVsyst's GlobInc) |
+| `performance_ratio_pct` | Year 1 performance ratio: `usable_ac_system_production_kwh` over `global_incident_kwh_m2` / 1 kWh/m² × `pv_kwp` (IEC 61724-1) |
 | `total_investment` | Total CAPEX |
 | `payback_year` | Sustained discounted payback within the simulated period, as a whole year: the year from which cumulative NPV savings are zero or above and stay so to the horizon (`None` if not reached) |
 | `npv_savings` | Cumulative NPV savings over the projection horizon |
+| `vehicle` | Present with `[vehicle]`: the three households, trips, pack wear and comparisons; see [Vehicle results](#vehicle-results) |
+| `npv_savings_household_adjusted`, `household_adjusted_comparable` | With a vehicle: R2/R0 NPV including vehicle wear and away/unserved cost differences, and its comparison flag |
+| `vehicle_benefit_npv`, `vehicle_benefit_comparable` | With a vehicle and R1: R2/R1 benefit and its comparison flag; null when R1 is omitted |
 | `terminal_health_credit` | Optional nominal credit at the end of year T; null when disabled or on a partial period |
 | `terminal_health_credit_npv` | Present value of that credit |
 | `npv_savings_terminal_adjusted` | Unadjusted NPV plus credit present value, before rounding |
@@ -35,6 +41,7 @@ flag. For the step-by-step flows of the first year, use
 | `financial` | Yearly financial projection rows (year 0 = investment) |
 | `yearly` | Per-year breakdown of production, load, imports, exports |
 | `pv_loss_waterfall` | Year 1 PV loss waterfall from the irradiance reference through the static PVWatts losses, with inverter and dispatch blocks beside it (see [PV loss waterfall](#pv-loss-waterfall)) |
+| `electrical` | How energy was modelled and the result of the string topology check (see [Electrical check](#electrical-check)) |
 | `degradation` | Battery degradation engine, model, initial and final state of health and replacement events |
 | `smart_charging` | Present with [smart charging](configuration.md#smart-charging): grid charging, delivery by origin and stored energy by origin |
 | `pv_arrays` | Present with `pv_arrays` (see [Multi-array systems](#multi-array-systems)) |
@@ -57,7 +64,7 @@ no-system keys use the reference's prices instead.
 | `grid_export_revenue_year1_prices` | Revenue from the year-1 grid export, `grid_export_kwh` |
 | `fixed_charge_year1_prices` | The fixed charge for the simulated duration of year 1: the daily charge times the simulated hours / 24 |
 | `grid_charge_cost_year1_prices` | Present only with smart charging (`smart_charging.mode = "fixed_target"`, `"daily_persistence"` or `"discharge_only"`): the part of `grid_import_cost_year1_prices` bought to charge the battery. Always 0 with `discharge_only`, which never charges from the grid |
-| `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; the fixed charge is `no_system_fixed_charge_year1_prices` |
+| `no_system_import_cost_year1_prices` | Import cost without a system: house demand alone, or R0's actual house and vehicle purchases with `[vehicle]`. The fixed charge is separate |
 | `no_system_fixed_charge_year1_prices` | The fixed charge of the household without a system for year 1: `fixed_charge_year1_prices`, or the reference tariff's fixed charge for the same days when a `[reference_tariff]` is set |
 
 With an [annual network credit](configuration.md#annual-network-credit),
@@ -68,7 +75,7 @@ cap basis, and its credit:
 |---|---|
 | `network_charge_year1_prices` | The system household's eligible network charges for year 1: its grid import at the network prices, plus the network fixed amount |
 | `network_credit_year1_prices` | The system household's credit for year 1: the annual amount, capped at `network_charge_year1_prices` |
-| `no_system_network_charge_year1_prices` | The eligible network charges of the household without a system, on its whole year-1 load |
+| `no_system_network_charge_year1_prices` | Eligible network charges without a system, on house demand or R0's actual purchases with `[vehicle]` |
 | `no_system_network_credit_year1_prices` | The credit of the household without a system, capped at `no_system_network_charge_year1_prices` |
 
 The eligible network charges are part of the import cost and the fixed
@@ -90,6 +97,137 @@ Year 1 is not escalated, so these values match the `cost_import`,
 the two no-system keys match its `no_system_cost_import` and
 `no_system_cost_fixed_charge`; the later rows escalate. `breos sweep` copies every top-level scalar key into its
 CSV, so the sweep CSV carries these columns too.
+
+## Vehicle results
+
+With `[vehicle]`, `vehicle` contains separate results for R0, R1 and R2.
+R0 has no PV or stationary storage and charges the vehicle uncontrolled.
+R1 has the configured system and the reference vehicle mode, usually V1G.
+R2 has the configured system and study vehicle mode. R1 is absent with
+`reference_mode = "none"`. All households serve the same scheduled trips
+but can leave different amounts unserved. See
+[Vehicle-to-home](configuration.md#vehicle-to-home) for the configuration
+and model assumptions.
+
+| Path within `vehicle` | Contents |
+|---|---|
+| `mode`, `reference_mode`, `currency` | Study mode, reference mode and run currency |
+| `households.R0`, `.R1`, `.R2` | Each household's mode, yearly rows, projection totals and pack valuation |
+| `households.R2.yearly` | Home charging and discharge, driving served/unserved, away purchases, departure misses, health and swaps for each project year |
+| `households.R2.totals` | Summed energy, missed-departure and replacement counts, replaced capacity, and avoided emissions when configured |
+| `households.R2.final_soh_fraction`, `.retired` | Final pack health as a fraction and retirement state |
+| `households.R2.replacement_history` | End-of-life events, actions, dates, booking times and individual replacement invoices |
+| `households.R2.replacement_outlays_npv` | Discounted replacement invoices P₂ |
+| `households.R2.terminal_pack_credit_npv` | Discounted remaining pack value H₂ |
+| `households.R2.home_bill_npv`, `.export_revenue_npv` | Home purchases including fixed charges and credits; export income is separate |
+| `households.R2.away_purchases_npv`, `.unserved_driving_cost_npv` | Away purchases and optional outside-charging penalty |
+| `households.R2.operating_cost_npv` | Home bill minus exports, plus away purchases and unserved-driving penalty |
+| `household_adjusted_npv` | R2/R0 comparison, with NPV, wear, cost differences and `comparable` |
+| `vehicle_benefit` | R2/R1 comparison, with NPV, operating savings, charger premium, wear, `study_mode`, `reference_mode` and `comparable`; null without R1 |
+
+The R0 and R1 records use the same fields as R2. Energy reductions are kWh;
+`onboard_energy_end_wh` is Wh. Health is a fraction, not percent. Money uses
+the run's currency. Detailed vehicle amounts retain full precision;
+top-level headline NPVs follow the usual two-decimal convention. Partial
+`[period]` runs report energy and year-1-price costs, without lifetime NPVs
+or terminal pack credits.
+
+Home AC energy is `pv_ac_charge_kwh`, `grid_ac_charge_kwh` and
+`ac_to_load_kwh`. Origin fields distinguish PV and grid energy delivered to
+the house. `drive_served_kwh` is gross withdrawal from the pack, not wheel
+energy. `drive_unserved_kwh` is requested driving the pack could not supply.
+`departure_shortfall_kwh` and `departures_short` report missed home targets.
+An away charge can make a trip possible without curing its departure miss.
+`away_purchased_kwh` is energy bought away, before away-charging losses.
+
+### The two vehicle comparisons
+
+`npv_savings` remains the system NPV. Its no-system home bill includes R0's
+actual vehicle charging, on the reference tariff when supplied. It counts
+the installed charger premium once in system CAPEX. It excludes vehicle pack
+invoices, credits, away purchases and unserved-driving penalties.
+
+Household-adjusted NPV starts from that system NPV, subtracts R2 minus R0
+away and unserved-driving costs, and subtracts their vehicle wear W₂₋₀.
+It answers whether the configured household system helps against R0 after
+vehicle costs are included.
+
+Vehicle benefit compares R2 with R1 on the same PV/storage system. It takes R1
+minus R2 operating costs, subtracts the installed charger premium once,
+and subtracts W₂₋₁. It separates the vehicle control change from the benefit
+of having PV or a stationary battery. For V2H against V1G it measures V2H;
+for V1G against uncontrolled it measures smart charging. `study_mode` and
+`reference_mode` name that comparison. A negative benefit means the study
+mode costs more under the stated inputs. The system's existing terminal-value
+sensitivity remains separate.
+
+Wear is replacement-aware:
+
+```text
+W₂₋₁ = P₂ − P₁ + H₁ − H₂
+```
+
+P is the sum of invoices, escalated and discounted at each actual swap
+instant. H is a terminal pack-only credit. Its health fraction is
+`clip((final health − eol_percentage) / (1 − eol_percentage), 0, 1)`;
+the pack price is escalated and discounted from the project end. Each
+credit is clipped before differences are formed. A threshold of 1 gives
+zero credit. Installation charges in a swap invoice
+do not enter H. Retired packs earn no credit. W can be negative. The
+`replacement_outlays_difference_npv` beside `wear_npv` reports the outlays-only
+difference P₂ − P₁. No extra throughput wear charge is added.
+
+### Comparability and emissions
+
+`comparable = false` means R2 leaves more gross driving unserved on any
+absence than its comparator, by more than 1e-9 kWh, and
+`outside_charging_price` is unset. Totals over the horizon cannot offset a
+worse trip with a better one. Resolved continuous away intervals define the
+absences, including continuations across project years; partial boundary
+absences compare the driving inside the project. The comparison is still
+reported, with a `reason` naming the first failing departure and project year,
+but its savings include reduced transport service.
+A stated outside price, including explicit zero, makes that difference
+priced and the comparison comparable. It restores no driving energy.
+Departure misses alone do not change this flag. Without R1, the vehicle benefit
+and its top-level flag are null.
+
+Away purchases enter household money and grid emissions but never
+`grid_import_kwh` at home. Avoided emissions compare R2 with R0 including
+both households' away purchases. PV-origin energy used for driving is
+reported separately; it is not house self-consumption. PV-origin vehicle
+AC delivered to the house does join house self-consumption. Home imports
+include vehicle charging, so grid independence should be read alongside
+the vehicle energy and driving totals.
+
+`provenance.vehicle` is null without a vehicle. With one it records the
+configuration, resolved schedule hash, rounding policy and household modes.
+`App.revalue` keeps all households for repricing. A tariff-period change that
+alters stationary or vehicle dispatch triggers simulation again.
+
+### Monte Carlo vehicle columns
+
+Each trajectory shares its weather, house-load scale and persistent PV factor
+across R0/R1/R2. Load scaling affects the house only. The `runs` table keeps
+`npv_savings` and adds these columns:
+
+| Column or family | Meaning |
+|---|---|
+| `npv_savings_household_adjusted`, `household_adjusted_comparable` | R2/R0 comparison and flag |
+| `vehicle_benefit_npv`, `vehicle_benefit_comparable` | R2/R1 comparison and flag |
+| `vehicle_wear_r2_r0_npv`, `vehicle_wear_r2_r1_npv` | Replacement-aware wear W |
+| `vehicle_replacement_outlays_difference_r2_r0_npv`, `vehicle_replacement_outlays_difference_r2_r1_npv` | Outlays-only differences |
+| `vehicle_household_adjusted_…` | Away and unserved cost differences |
+| `vehicle_benefit_…` | Operating/home-bill/export/away/unserved savings and charger premium |
+| `vehicle_r0_…`, `vehicle_r1_…`, `vehicle_r2_…` | Household energy totals, misses, swaps, health, retirement, home imports/exports, P/H, operating costs and emissions |
+
+For example, `vehicle_r2_departures_short`, `vehicle_r2_drive_unserved_kwh`,
+`vehicle_r2_away_purchased_kwh` and `vehicle_r2_replacements` describe service
+and purchases for the study vehicle over the whole trajectory. Finite new
+columns get the usual summary statistics and quantiles. Boolean means are
+fractions comparable or retired. Without R1 its family is absent and V2H
+comparison values are NaN/null; all-missing columns have no summary.
+Without a vehicle these new columns are absent.
 
 ## Battery-specific keys
 
@@ -263,12 +401,103 @@ When `pv_arrays` is set, the result also contains a `pv_arrays` list with
 each array's resolved configuration: `modules`, `module`, `tilt`, `azimuth`,
 and `tracking`, plus the resolved tracker geometry for a tracking array.
 
+## Electrical check
+
+`electrical` is in every result:
+
+| Key | Meaning |
+|---|---|
+| `fidelity` | How energy was modelled. `"aggregate"`: the array's DC output feeds one AC rating, whatever the string topology. `"string"`: each MPPT input's voltage range, current and power limits, the inverter's power limit and its start-up voltage applied (see [String-level energy](configuration.md#string-level-energy)) |
+| `status` | `"not_evaluated"` without a [string topology](configuration.md#string-topology-checks); otherwise `"fail"` on any error, `"incomplete"` on missing data, `"warning"` on any warning, else `"pass"` |
+| `findings` | One record per finding, in a stable order |
+| `solver` | Runtime single-diode recovery counts: `recovered_steps`, the number of distinct timesteps recovered anywhere in PV preparation; `by_stage`, those counts within each solve stage. A timestep recovered in several stages counts once overall. With no recoveries: `{"recovered_steps": 0, "by_stage": {}}` |
+| `dc_wiring` | Present with [DC cables](configuration.md#dc-cables): `conductor_temp_c`, the temperature the cable resistances are taken at; `conductor_temp_stated`, false when the 50 °C default was assumed; and one record per string with its `string` position, loop `resistance_ohm` and `stc_loss_pct`, the share of its STC power its cable dissipates at the STC maximum power current |
+
+Both electrical fidelities check single-diode operating points. A lit point
+with finite inputs counts as a solver failure if its result is missing or
+physically invalid. BREOS retries that point with Brent's bracketing method.
+A successful retry is recorded as a recovery. Valid primary values are kept.
+
+If the retry also fails, BREOS raises `ValueError`. Non-finite diode inputs
+raise a separate `ValueError` without a retry. Both errors name the stage,
+step, known equipment indices and diode parameters. Darkness, bypass
+conduction and an inverter with no feasible operating point do not count
+as solver failures.
+Photocurrent below one billionth of the module's reference is treated as exactly dark.
+
+Counts stay with the prepared PV inputs. Cached runs and revaluation retain
+the same diagnostics. Projection years do not multiply the counts.
+
+Stage names identify module, string and cable MPPs (`module_mpp`,
+`string_mpp`, `cable_mpp`), short-circuit currents (`substring_isc`,
+`string_isc`, `input_isc`),
+part and half-chain voltages (`part_voltage`, `half_voltage`,
+`half_reverse_voltage`), string and
+input limit solves (`string_current_limit`, `string_voltage_limit`,
+`input_current_limit`, `input_voltage_limit`), and string, group and parallel
+IV evaluations (`string_voc`, `string_current`, `string_reverse_current`, `group_voc`, `group_current`,
+`parallel_voc`, `parallel_current`, `input_voc`, `input_open_circuit`).
+
+Each finding has `code`, `severity` and `message`; `value` and `limit` in
+`unit`; `limit_field`, the datasheet value the limit came from; and the
+location fields `inverter`, `mppt`, `string` and `array`. `string` is the
+position of the `pv_strings` entry. `field` names the datasheet value a
+`missing` finding needs. A field that does not apply is `null`. Severities:
+
+| Severity | Meaning |
+|---|---|
+| `error` | A hard limit is broken (voltage, short-circuit current, string count, maximum generator power) or the wiring is inconsistent. The design is not buildable as declared |
+| `warning` | An operating or yield limit is exceeded. The equipment is safe, but it loses energy or may not restart on the hottest days |
+| `missing` | A datasheet value the check needs is unknown, so that check did not run |
+
+The codes, their severities and units are fixed, and
+{py:data}`breos.electrical.FINDING_CODES` holds the same table. A later release
+may add codes.
+
+| Code | Severity | Unit | `limit_field` | Located by |
+|---|---|---|---|---|
+| `no_inverters` | error | | | |
+| `no_strings` | error | | | |
+| `unknown_array` | error | | | inverter, mppt, string, array |
+| `unknown_inverter` | error | | | inverter, mppt, string, array |
+| `unknown_mppt` | error | | | inverter, mppt, string, array |
+| `unconnected_modules` | error | count | | array |
+| `array_overcommitted` | error | count | `modules` | array |
+| `cold_voc_above_limit` | error | V | `max_dc_voltage_v` or `Max_System_Voltage`; one finding per ceiling exceeded | inverter, mppt, string, array |
+| `hot_voc_below_startup` | warning | V | `startup_voltage_v` | inverter, mppt, string, array |
+| `hot_vmp_below_mppt_min` | warning | V | `min_mppt_voltage_v` | inverter, mppt, string, array |
+| `vmp_above_mppt_max` | warning | V | `max_mppt_voltage_v` | inverter, mppt, string, array |
+| `parallel_strings_mismatch` | error | | | inverter, mppt |
+| `too_many_strings` | error | count | `max_strings` | inverter, mppt |
+| `isc_above_mppt_limit` | error | A | `max_short_circuit_current_a` | inverter, mppt |
+| `imp_above_mppt_limit` | warning | A | `max_input_current_a` | inverter, mppt |
+| `isc_above_string_limit` | error | A | `max_string_short_circuit_current_a` of the input | inverter, mppt, string, array |
+| `imp_above_string_limit` | warning | A | `max_string_input_current_a` of the input | inverter, mppt, string, array |
+| `mppt_dc_power_above_max` | error | W | `max_dc_power_w` of the input | inverter, mppt |
+| `isc_above_inverter_limit` | error | A | `max_short_circuit_current_a` of the inverter | inverter |
+| `dc_power_above_max` | error | W | `max_dc_power_w` | inverter |
+| `dc_power_above_recommended` | warning | W | `recommended_dc_power_w` | inverter |
+| `dc_ac_ratio_outside_range` | warning | ratio | | inverter |
+| `missing_value` | missing | | | the owner of `field`: inverter, inverter and mppt, or array |
+
+A design with `status = "fail"` is still simulated, so its numbers can explain
+why it loses against a buildable one. They do not describe a system that can be
+built.
+
 ## PV loss waterfall
 
 `pv_loss_waterfall` reports the year 1 PV production chain in kWh. Its
 ordered `stages` cover only the linear PV-model chain: horizontal reference,
 transposition, front-side incidence-angle modifier, optional bifacial rear
-gain, cell temperature, and static PVWatts losses. There is no degradation
+gain, cell temperature, and static PVWatts losses, then `dc_wiring` with
+[DC cables](configuration.md#dc-cables), and `parallel_mismatch` and
+`mppt_limits` with [string-level energy](configuration.md#string-level-energy).
+`parallel_mismatch` appears only when an input holds more than one string
+curve: two or more module-shaded strings, strings from more than one array, or
+strings of one array with different DC cables. Its loss is about 0 where those
+curves happen to match.
+`pv_loss_waterfall.parallel_mismatch` then lists each such input
+with its strings and loss; otherwise it is `null`. There is no degradation
 stage because year 1 has none (see [Module aging](../api/pv.md#module-aging)),
 so the last stage equals `energy_balance.pv_dc.generation_kwh`. Dispatch
 is a branching flow and is therefore reported under `energy_balance`, not
@@ -278,17 +507,64 @@ The `bifacial` block identifies the resolved model and per-array module factor
 and geometry. It reports rear gain in effective-DC-equivalent kWh and as a
 percentage of front effective irradiance. The same block is retained under
 `provenance.pv_model.bifacial` so serialized results carry the assumptions that
-produced the gain.
+produced the gain. `provenance.pv_model.solar_position` records the
+`solar_position` method asked for (`requested`), the method it resolved to on
+the run's weather (`resolved`; `"auto"` resolves to `"weather"` or
+`"interval-start"`) and the offset after each label at which the sun was
+evaluated (`offset_minutes`); see
+[Solar position](configuration.md#solar-position).
 
 The `pvwatts` block contains fixed-loss percentages and attributed kWh. The
 `inverter` block reports AC rating plus separate direct-PV and
-battery-discharge conversion losses. `energy_balance.pv_dc` reconciles PV
+battery-discharge conversion losses. With an
+[efficiency curve](configuration.md#inverter-efficiency-curve) it adds
+`efficiency_curve`: the `row_position` the curve was read at, its `voltage_v`
+and the `voltage_basis`. That is `"fixed"`, or `"operating"` when
+string-level energy reads each step's operating voltage; then
+`operating_voltage_v` is that voltage's mean, weighted by the DC, and
+`row_position` and `voltage_v` are the row of the steps without PV. With a
+stated `night_consumption_w` it adds `night_consumption`: its `power_w`, the
+year's `energy_kwh` and the `hours` it drew. With an [AC cable](configuration.md#ac-cable) it adds `ac_cable`:
+`conductor_resistance_ohm`, `conductor_temp_c`, `conductor_temp_stated`,
+`loss_kwh` (part of `conversion_loss_kwh`) and `loss_pct_at_nameplate`. With
+temperature derating it adds `temperature_derating`: the `ambient` source
+(`"weather"` or `"stated"`), the year's `min_output_fraction` and its
+`derated_hours`. `energy_balance.pv_dc` reconciles PV
 routing; `energy_balance.ac_delivery` reconciles delivered/exported AC; and
 `energy_balance.battery_stored_energy` reconciles beginning/end energy,
 charge, discharge, standby, capacity-window, and replacement boundary flows.
 
-Use {py:func}`breos.plotting.plot_pv_loss_waterfall` to render the same
-block as a PV loss diagram.
+With an AC-coupled battery (`battery_coupling = "ac"`) the `inverter` block
+is the PV inverter's alone: its `conversion_loss_kwh` is the direct-PV loss
+and `battery_discharge_conversion_loss_kwh` is 0. A `battery_inverter` block
+reports the battery inverter: `ac_capacity_kw`, `efficiency_pct`,
+`charge_conversion_loss_kwh` (PV and grid charge), `discharge_conversion_loss_kwh`
+and their sum, `conversion_loss_kwh`. `energy_balance.ac_delivery` adds
+`pv_to_battery_kwh`, the PV inverter's AC sent to the battery, which is not
+part of `usable_system_production_kwh`; that energy reaches the load as
+`pv_origin_battery_to_load_kwh`.
+
+Use {py:func}`breos.plotting.plot_pv_loss_waterfall` to draw the block as an
+energy-flow diagram: a band whose width is the remaining energy runs from the
+horizontal irradiance reference to the PV DC output and on to the usable AC
+energy, with each loss or gain as a strip on the same scale. The static
+PVWatts losses get a row each. After the PV DC output come curtailment,
+`inverter.direct_pv_conversion_loss_kwh`, PV supplied to idle inverters when
+identifiable, and a remainder. With battery flow this is labelled "Battery
+losses and stored energy" and drawn in grey: the data does not separate
+PV-origin battery losses from PV energy still stored at the period end.
+Without battery flow the remainder uses a general energy-balance label. A bar under
+the diagram splits the usable AC energy into direct use, use through the
+battery and grid export. With an AC-coupled battery the inverter row is the
+PV inverter's whole conversion loss. With a vehicle, PV charging it is a use,
+not a loss: the bar adds `pv_to_vehicle_kwh` less
+`pv_origin_vehicle_to_load_kwh`, the PV energy the vehicle returned to the
+home, and the last band is the usable AC energy and vehicle charging. If
+returns exceed charging, the net energy carried into the period joins the
+band as an incoming flow and the final band equals usable AC energy. Pass `yearly=result["yearly"]` to add the PV DC
+output and usable AC energy over the project years, and `replacement_years`
+to mark battery replacements on it. The diagram itself always shows year 1,
+or the simulated window of a `[period]` run.
 
 ## Economic conventions
 
@@ -335,14 +611,24 @@ civil month of its window). From the quickstart run:
     "grid_import_kwh": 146.36,
     "grid_export_kwh": 281.8,
     "grid_independence_pct": 64.07,
+    # and the month's irradiance keys, described below
 }
 ```
+
+Each row also carries the month's `global_horizontal_kwh_m2`,
+`global_incident_kwh_m2` and `performance_ratio_pct`, defined as the year-1
+keys of the same names. With the existing `pv_dc_generation_kwh` (PVsyst's
+E_Array) and `usable_ac_system_production_kwh` they make PVsyst's monthly
+balance table. The performance ratio counts PV that reaches the house through
+a battery at its delivered AC, so a battery's round-trip losses lower it, and
+it counts curtailed PV as lost. `performance_ratio_pct` is `None` in a month
+without irradiance in the plane.
 
 ### `yearly`
 
 A list of one dict per simulation year (length `projection_years`). Each
-row contains the same fields as `monthly` aggregated to a year, plus
-`soh_pct` when a battery is present.
+row contains the same energy fields as `monthly` aggregated to a year, plus
+`soh_pct` when a battery is present. The irradiance keys are year 1's only.
 
 ### `financial`
 
@@ -544,8 +830,10 @@ by feature:
 - **Irradiance resampling.** App `provenance.weather` and Monte Carlo
   `settings` and `runtime_weather.metadata` record `irradiance_resampling`
   (requested) and `irradiance_resampling_resolved`, with per-component
-  fallback and zero-support counts and the observational
-  `irradiance_closure` residuals. `irradiance_resampling` is in
+  fallback and zero-support counts, the count of quarter-hours whose DNI was
+  capped (`irradiance_resampling_capped_counts`) and the observational
+  `irradiance_closure` residuals, and under `"quadrature"` the
+  `irradiance_quadrature` record. `irradiance_resampling` is in
   `resolved_config` and in the optimizer's `simulation` config, and
   optimizer provenance carries `simulation`, `weather` and, for a real
   weather sequence, `weather_by_year`. See
@@ -599,7 +887,7 @@ Other keys keep the spelling you configured.
 
 | 0.6.2 key or flag | 0.7.0 replacement or action |
 |---|---|
-| App `dc_coupled`, `breos run --dc-coupled`, optimizer `battery.dc_coupled` | Remove. BREOS always uses its DC-coupled/hybrid dispatch. |
+| App `dc_coupled`, `breos run --dc-coupled`, optimizer `battery.dc_coupled` | Remove. 0.7.0 always uses its DC-coupled/hybrid dispatch; from 0.8.0 `battery_coupling` selects the topology. |
 | `load_profile = "1"` or `"default"` | `"demandlib_h0"` |
 | `load_profile = "4"`, `"5"`, `"6"` | `"eredes_btn_a"`, `"eredes_btn_b"`, `"eredes_btn_c"` |
 | `load_profile = "7"`, `"8"` | `"bdew_h0"`, `"ree_2.0td"` |

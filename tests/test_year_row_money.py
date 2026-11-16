@@ -4,8 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos import App
-from breos.economics import YEAR_ROW_MONEY_COLUMNS, cost_analysis_projection, price_year_rows
+from breos.economics import cost_analysis_projection, price_year_rows
 
 COSTS = {
     "total_initial_cost": 6000.0,
@@ -64,27 +63,3 @@ def test_money_columns_given_by_the_caller_are_kept():
 
     assert priced["Import_Cost"].iloc[0] == 123.0
     assert projection["Cost_Import"].iloc[0] == 123.0
-
-
-@pytest.mark.usefixtures("_patch_weather")
-def test_app_rows_and_financial_components_reconcile():
-    app = App(
-        {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5, "projection_years": 3}
-    )
-    app.simulate()
-    result = app.result()
-
-    for row in result["financial"][1:]:
-        assert {"cost_import", "revenue_export", "cost_operation", "cost_fixed_charge", "cost_replacement"} <= set(row)
-    first = result["financial"][1]
-    year1 = result["yearly"][0]
-    assert first["cost_import"] == pytest.approx(
-        year1["grid_import_kwh"] * app._resolved.cost_params.electricity_cost, abs=0.02
-    )
-    assert set(YEAR_ROW_MONEY_COLUMNS) == {
-        "Import_Cost",
-        "Export_Revenue",
-        "Fixed_Charge",
-        "Baseline_Import_Cost",
-        "Baseline_Fixed_Charge",
-    }

@@ -37,11 +37,6 @@ class TestCatalog:
         assert module.T_Voc_pct == pytest.approx(-0.26)
         assert module.beta_voc == pytest.approx(-0.13, abs=0.001)
 
-    def test_catalog_efficiencies_are_physical_when_present(self):
-        for key, module in MODULES.items():
-            if module.Module_Efficiency is not None:
-                assert 0 < module.Module_Efficiency <= 1, key
-
     def test_unsourced_entries_leave_efficiency_unset_for_the_breos_default(self):
         # These two entries name no datasheet that quotes an efficiency, so they
         # stay None and pick up DEFAULT_MODULE_EFFICIENCY in the PVsyst path

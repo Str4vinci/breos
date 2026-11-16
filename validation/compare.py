@@ -8,8 +8,11 @@ writes ``validation/REPORT.md``.
 The references do NOT share weather with BREOS: BREOS runs on a PVGIS TMY,
 PVGIS PVcalc averages the full multi-year satellite record, and PVWatts uses
 NSRDB/international station data. Deviations therefore bundle weather-source
-differences with model differences — expect single-digit percentages, and
-read the monthly shape, not just the annual number.
+differences with model differences. The PVWatts CI band compares performance
+ratios (AC / front-side irradiation / DC nameplate) within ±8%; annual AC
+deviations remain visible for context.
+BREOS AC is normalized by an independent pvlib Perez transposition of its
+weather, shared across all variants, to take irradiance out of the comparison.
 
 Usage:
     uv run python validation/compare.py
@@ -47,6 +50,10 @@ def _fmt_kwh(v):
     return f"{v:.0f}" if v is not None else "—"
 
 
+def _fmt_pr(v):
+    return f"{v:.3f}" if v is not None else "—"
+
+
 def build_rows(results: dict):
     rows = []
     for key, res in results["locations"].items():
@@ -69,6 +76,17 @@ def build_rows(results: dict):
         nameplate_bifacial_rear = (res["models"].get("nameplate_bifacial_rear_1200") or {}).get("annual_kwh")
         pvgis_annual = pvgis.get("annual_kwh")
         pvwatts_annual = pvwatts.get("annual_kwh")
+        perez_result = res["models"]["perez"]
+        breos_poa = perez_result.get("annual_poa_kwh_m2")
+        breos_capacity = perez_result.get("dc_nameplate_kw")
+        pvwatts_solrad = pvwatts.get("solrad_annual_kwh_m2_day")
+        pvwatts_capacity = (pvwatts.get("params") or {}).get("system_capacity")
+        breos_pr = perez / (breos_poa * breos_capacity) if breos_poa and breos_capacity else None
+        pvwatts_pr = (
+            pvwatts_annual / (pvwatts_solrad * 365 * pvwatts_capacity)
+            if pvwatts_annual and pvwatts_solrad and pvwatts_capacity
+            else None
+        )
 
         monthly_dev_max = None
         if pvgis.get("monthly_kwh"):
@@ -84,6 +102,12 @@ def build_rows(results: dict):
         elif pvwatts:
             dist = pvwatts.get("station_distance_m")
             notes.append(f"PVWatts {pvwatts.get('dataset')} ({dist} m){'' if pvwatts.get('trusted') else ' UNTRUSTED'}")
+            if pvwatts.get("mismatched_inputs"):
+                notes.append(f"PVWatts mismatched inputs: {', '.join(pvwatts['mismatched_inputs'])}")
+            if breos_pr is None:
+                notes.append("BREOS POA/nameplate missing: run validation/run_breos.py to populate PR")
+            elif pvwatts_capacity and breos_capacity != pvwatts_capacity:
+                notes.append(f"PR uses own DC nameplates: BREOS {breos_capacity} kW, PVWatts {pvwatts_capacity} kW")
 
         rows.append(
             {
@@ -124,6 +148,9 @@ def build_rows(results: dict):
                 "pvwatts": pvwatts_annual,
                 "pvwatts_trusted": bool(pvwatts_annual and pvwatts.get("trusted")),
                 "pvwatts_dev": _pct(perez, pvwatts_annual),
+                "breos_pr": breos_pr,
+                "pvwatts_pr": pvwatts_pr,
+                "pvwatts_pr_dev": _pct(breos_pr, pvwatts_pr) if breos_pr is not None else None,
                 "monthly_dev_max": monthly_dev_max,
                 "notes": "; ".join(notes),
                 "monthly_breos": res["models"]["perez"]["monthly_kwh"],
@@ -139,7 +166,7 @@ def print_table(rows, results):
         f"{'location':<16} {'BREOS iso':>10} {'BREOS perez':>12} {'perez+mid':>10} {'perez+IAM':>10} {'PVGIS':>8} "
         f"{'Δperez':>8} {'Δ+mid':>8} {'Δ+IAM':>8} {'Δphys':>8} {'ΔMR':>8} {'Δiso':>8} "
         f"{'PVsystΔ':>8} {'SAPMΔ':>8} {'rearΔ':>8} "
-        f"{'PVWatts':>8} {'Δperez':>8}  notes"
+        f"{'PVWatts':>8} {'Δperez':>8} {'PR BREOS':>9} {'PR PVWatts':>10} {'Δ PR':>8}  notes"
     )
     print(header)
     print("-" * len(header))
@@ -151,7 +178,9 @@ def print_table(rows, results):
             f"{_fmt_pct(r['pvgis_dev_diffuse']):>8} {_fmt_pct(r['physical_delta']):>8} "
             f"{_fmt_pct(r['martin_ruiz_delta']):>8} {_fmt_pct(r['pvgis_dev_iso']):>8} "
             f"{_fmt_pct(r['roof_delta']):>8} {_fmt_pct(r['sapm_roof_delta']):>8} {_fmt_pct(r['bifacial_gain']):>8} "
-            f"{_fmt_kwh(r['pvwatts']):>8} {_fmt_pct(r['pvwatts_dev']):>8}  {r['notes']}"
+            f"{_fmt_kwh(r['pvwatts']):>8} {_fmt_pct(r['pvwatts_dev']):>8} "
+            f"{_fmt_pr(r['breos_pr']):>9} {_fmt_pr(r['pvwatts_pr']):>10} "
+            f"{_fmt_pct(r['pvwatts_pr_dev']):>8}  {r['notes']}"
         )
 
     print("\nEqual-nameplate comparison — annual AC yield (kWh), 1.2 kWp STC")
@@ -170,20 +199,20 @@ def print_table(rows, results):
 
 
 def _pvwatts_status(rows):
-    """Report lines saying which locations the PVWatts band test checks; it skips the others."""
+    """Report which locations CI checks against the ±8% PVWatts PR band."""
     untrusted = [r["name"] for r in rows if not r["pvwatts_trusted"]]
     if not untrusted:
         return []
     if len(untrusted) == len(rows):
         text = (
             "No location has a trusted PVWatts v8 reference in the committed snapshot (the Notes column "
-            "gives each fetch result), so the PVWatts columns are empty and the PVWatts band test skips. "
+            "gives each fetch result), so the PVWatts PR band test skips all locations. "
             "This report is not a PVWatts validation."
         )
     else:
         text = (
             f"{', '.join(untrusted)} {'has' if len(untrusted) == 1 else 'have'} no trusted PVWatts v8 "
-            "reference in the committed snapshot, so the PVWatts band test skips "
+            "reference in the committed snapshot, so the PVWatts PR band test skips "
             f"{'it' if len(untrusted) == 1 else 'them'}."
         )
     return [text, ""]
@@ -204,7 +233,11 @@ def write_report(rows, results):
         "Deviations bundle weather-source differences with model differences "
         "(BREOS runs on a PVGIS TMY; PVGIS PVcalc averages the full multi-year record; "
         "PVWatts uses NSRDB/international station data). The tight regression guarantee "
-        "is the baseline test in `tests/test_validation_drift.py`; these bands catch gross drift.",
+        "is the baseline test in `tests/test_validation_drift.py`. CI checks PVGIS annual AC within ±10%, "
+        "and the PVWatts performance ratio within ±8%: PR = annual AC / (annual front-side POA × DC "
+        "nameplate). PVWatts reports its own POA (daily solrad × 365); for BREOS the POA is an independent "
+        "pvlib Perez transposition of BREOS's weather, so the ratio takes the weather out without "
+        "hiding a BREOS transposition error. PVWatts annual AC is context, not the banded quantity.",
         "",
         *_pvwatts_status(rows),
         "The roof-mount column is the yield delta of `perez_roof` (PVsyst semi-integrated "
@@ -228,8 +261,8 @@ def write_report(rows, results):
         "| Location | BREOS isotropic | BREOS perez | BREOS perez+mid-interval | BREOS perez+diffuse-IAM "
         "| PVGIS PVcalc | Δ perez vs PVGIS | Δ perez+mid vs PVGIS | Δ perez+diffuse vs PVGIS "
         "| Physical IAM Δ | Martin-Ruiz IAM Δ | PVsyst roof-mount yield Δ | SAPM roof-mount yield Δ "
-        "| Bifacial rear-gain Δ | PVWatts v8 | Δ perez vs PVWatts | Notes |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Bifacial rear-gain Δ | PVWatts v8 | Δ perez vs PVWatts | PR BREOS | PR PVWatts | Δ PR | Notes |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         lines.append(
@@ -242,6 +275,7 @@ def write_report(rows, results):
             f"| {_fmt_pct(r['sapm_roof_delta'])} "
             f"| {_fmt_pct(r['bifacial_gain'])} "
             f"| {_fmt_kwh(r['pvwatts'])} | {_fmt_pct(r['pvwatts_dev'])} "
+            f"| {_fmt_pr(r['breos_pr'])} | {_fmt_pr(r['pvwatts_pr'])} | {_fmt_pct(r['pvwatts_pr_dev'])} "
             f"| {r['notes']} |"
         )
 

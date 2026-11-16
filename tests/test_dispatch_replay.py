@@ -187,7 +187,7 @@ def test_a_replay_rejects_what_it_cannot_price_or_check():
 
 def test_replay_runs_the_requested_backend_without_changing_the_case():
     pytest.importorskip("numba")
-    case = prepare_replay(CONFIG)
+    case = prepare_replay({**CONFIG, "execution_backend": "python"})
     instructions = _fixed_target(case)
 
     python = replay_instructions(case, instructions)

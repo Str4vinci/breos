@@ -13,7 +13,7 @@ from pvlib.location import Location
 
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, solar_position_at_labels
 from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column
-from breos.weather import WEATHER_METADATA_KEY
+from breos.weather import WEATHER_METADATA_KEY, validate_weather_irradiance
 
 
 def normalise_horizon_profile(profile: Any) -> list[list[float]] | None:
@@ -123,6 +123,7 @@ def apply_terrain_horizon_profile(
     ghi_column = _weather_column(weather, "ghi")
     dni_column = _weather_column(weather, "dni")
     dhi_column = _weather_column(weather, "dhi")
+    validate_weather_irradiance(weather)
     solarpos, position_method = solar_position_at_labels(location, weather.index, weather, freq, solar_position)
     if "apparent_elevation" in solarpos:
         solar_elevation = np.asarray(solarpos["apparent_elevation"], dtype=float)
@@ -139,9 +140,9 @@ def apply_terrain_horizon_profile(
         if not pd.api.types.is_float_dtype(result[column]):
             nullable = isinstance(result[column].dtype, pd.api.extensions.ExtensionDtype)
             result[column] = result[column].astype("Float64" if nullable else float)
-    dni = np.nan_to_num(result[dni_column].to_numpy(dtype=float, na_value=np.nan), nan=0.0)
-    ghi = np.nan_to_num(result[ghi_column].to_numpy(dtype=float, na_value=np.nan), nan=0.0)
-    dhi = np.nan_to_num(result[dhi_column].to_numpy(dtype=float, na_value=np.nan), nan=0.0)
+    dni = result[dni_column].to_numpy(dtype=float, na_value=np.nan)
+    ghi = result[ghi_column].to_numpy(dtype=float, na_value=np.nan)
+    dhi = result[dhi_column].to_numpy(dtype=float, na_value=np.nan)
     shaded = np.isfinite(solar_elevation) & np.isfinite(horizon_elevation) & (solar_elevation <= horizon_elevation)
     shaded &= dni > 0.0
 

@@ -42,6 +42,7 @@ Preset keys for the `cost_preset` config key, from `breos/data/configs/costs.jso
 
 | Key | Currency | Buy (per kWh) | Export (per kWh) | Battery (per kWh) |
 |---|---|---|---|---|
+| `commercial_pt` | EUR | 0.16 | 0.03 | 500 |
 | `residential_de` | EUR | 0.4042 | 0.079 | 500 |
 | `residential_es` | EUR | 0.2841 | 0.08 | 500 |
 | `residential_pt` | EUR | 0.2582 | 0.04 | 500 |

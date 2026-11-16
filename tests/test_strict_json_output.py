@@ -203,16 +203,15 @@ def test_montecarlo_cli_rejects_an_infinite_max_load_scale(tmp_path, capsys):
     assert cli.main(["montecarlo", "--config", str(config), "--output", str(tmp_path / "out.csv"), "--json"]) == 1
 
     err = capsys.readouterr().err
-    assert "max_load_scale must be a finite number, or None to leave the load scale unbounded, got inf" in err
+    # The [montecarlo] table refuses it before the run, as run_montecarlo does for a Python caller.
+    assert "'montecarlo.max_load_scale' must be a finite number" in err
     assert not (tmp_path / "out.provenance.json").exists()
 
 
 @pytest.mark.parametrize("bound", [float("inf"), float("-inf"), float("nan")])
-def test_run_montecarlo_rejects_a_nonfinite_max_load_scale(tmp_path, bound):
-    settings = MonteCarloSettings(weather_file=str(tmp_path / "unused.csv"), n_runs=1, max_load_scale=bound)
-
+def test_montecarlo_settings_refuse_a_nonfinite_max_load_scale(tmp_path, bound):
     with pytest.raises(ValueError, match="max_load_scale must be a finite number, or None"):
-        run_montecarlo({"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000}, settings)
+        MonteCarloSettings(weather_file=str(tmp_path / "unused.csv"), n_runs=1, max_load_scale=bound)
 
 
 def test_run_montecarlo_accepts_an_unbounded_max_load_scale(tmp_path, write_multiyear_weather):

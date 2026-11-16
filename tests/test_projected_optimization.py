@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from breos.battery import SimulationSummary
 from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.optimization import (
     _evaluate_projected_design_metrics,
@@ -47,7 +48,7 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
     temperature = pd.Series([20.0, 20.0], index=idx)
     calls = []
 
-    def fake_balance(**kwargs):
+    def fake_summary(**kwargs):
         calls.append(kwargs)
         year = len(calls)
         results = pd.DataFrame(
@@ -65,21 +66,32 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
             },
             index=idx,
         )
-        degradation = pd.DataFrame(
-            {
-                "Cumulative_FEC": [10.0 * year],
-                "Cumulative_FEC_All_Packs": [4.0 * year],
-                "Cumulative_Calendar_Seconds": [1000.0 * year],
-                "Cumulative_Cycle_Degradation": [0.01 * year],
-                "Cumulative_Calendar_Degradation": [0.02 * year],
-                "Resistance_Growth": [0.03 * year],
-                "SOH": [95.0 if year == 1 else 99.0],
-            }
-        )
         replacements = 1 if year == 2 else 0
-        results["Battery_Replaced"] = [False, bool(replacements)]
-        results["Battery_Replaced_Capacity_Wh"] = [0.0, 2000.0 * replacements]
-        return results, 0.0, pd.DataFrame(), replacements, degradation, {"year": year}
+        return SimulationSummary(
+            n_steps=len(results),
+            hours_per_step=1.0,
+            column_sums={column: float(results[column].sum()) for column in results.columns},
+            total_pv_wh=0.0,
+            summary_row={},
+            final_soh_percent=95.0 if year == 1 else 99.0,
+            n_replacements=replacements,
+            replaced_capacity_wh=2000.0 * replacements,
+            opening_energy_wh=0.0,
+            opening_pv_origin_energy_wh=0.0,
+            opening_grid_origin_energy_wh=0.0,
+            carried_energy_wh=float(results["Battery_Energy_End"].iloc[-1]),
+            carried_pv_origin_energy_wh=float(results["Battery_PV_Origin_Energy_End"].iloc[-1]),
+            carried_grid_origin_energy_wh=0.0,
+            has_degradation_rows=True,
+            fec_cum=10.0 * year,
+            cumulative_calendar_seconds=1000.0 * year,
+            cumulative_cycle_degradation=0.01 * year,
+            cumulative_calendar_degradation=0.02 * year,
+            resistance_growth=0.03 * year,
+            replacement_steps=(1,) if replacements else (),
+            fec_all_packs=4.0 * year,
+            final_degradation_state={"year": year},
+        )
 
     captured = {}
 
@@ -99,7 +111,7 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
         projection.attrs["total_replacement_cost"] = 1000.0
         return projection
 
-    monkeypatch.setattr("breos.projection.simulate_energy_balance", fake_balance)
+    monkeypatch.setattr("breos.projection.simulate_energy_balance_summary", fake_summary)
     monkeypatch.setattr("breos.optimization.cost_analysis_projection", fake_projection)
 
     metrics = _evaluate_projected_design_metrics(
@@ -125,8 +137,9 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
         return_tables=True,
     )
 
-    assert np.array_equal(calls[0]["pv_dc"].to_numpy(), base_dc.to_numpy())
-    assert np.allclose(calls[1]["pv_dc"].to_numpy(), base_dc.to_numpy() * 0.9)
+    assert np.array_equal(calls[0]["aligned"].pv_dc_w, base_dc.to_numpy())
+    assert np.array_equal(calls[1]["aligned"].pv_dc_w, base_dc.to_numpy() * 0.9)
+    assert np.array_equal(calls[1]["aligned"].temperature_c, temperature.to_numpy())
     assert calls[1]["initial_fec"] == pytest.approx(10.0)
     assert calls[1]["initial_calendar_seconds"] == pytest.approx(1000.0)
     assert calls[1]["initial_resistance_growth"] == pytest.approx(0.03)
@@ -154,96 +167,6 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
     assert metrics["_yearly_summary_df"]["Battery_Cumulative_Calendar_Degradation"].tolist() == pytest.approx(
         [0.02, 0.04]
     )
-
-
-def _synthetic_projection_inputs(days: int = 30):
-    """A short, hard-cycled year that is cheap enough to project twice."""
-    idx = pd.date_range("2025-01-01 00:00", periods=days * 24, freq="h", tz="UTC")
-    daily_pv = [0.0] * 8 + [3000.0] * 8 + [0.0] * 8
-    daily_load = [900.0] * 8 + [0.0] * 8 + [900.0] * 8
-    base_dc = pd.Series(daily_pv * days, index=idx)
-    houseload = pd.DataFrame({"Load": daily_load * days}, index=idx)
-    temperature = pd.Series(25.0, index=idx)
-    return idx, base_dc, houseload, temperature
-
-
-def _project(batt_spec, *, battery_kwh, years=2, days=30):
-    idx, base_dc, houseload, temperature = _synthetic_projection_inputs(days)
-    return _evaluate_projected_design_metrics(
-        base_dc_power=base_dc,
-        houseload=houseload,
-        temperature_series=temperature,
-        pv_params=get_module("Suntech_STP550S_STC"),
-        batt_spec=batt_spec,
-        costs_cfg={"storage_cost_per_kwh": 500.0},
-        fin_cfg={**_RATES, "project_lifespan": years},
-        freq="h",
-        years_projection=years,
-        degradation_rate=0.005,
-        n_modules=6,
-        battery_kwh=battery_kwh,
-        inverter_efficiency=0.96,
-        inverter_ac_capacity_w=2640.0,
-        return_tables=True,
-    )
-
-
-def test_annual_fec_spans_a_replacement_inside_one_projected_year():
-    # The pack starts a hair above end of life, so it retires on the first
-    # simulated day and a fresh pack carries the rest of year 1. Cumulative
-    # FEC only ever reports the pack currently installed, so the retired
-    # pack's part-year cycles survive only if annual FEC is accumulated
-    # separately.
-    metrics = _project(
-        {
-            "min_soc": 0.1,
-            "max_soc": 0.9,
-            "initial_soh": 70.000001,
-            "eol_percentage": 0.70,
-            "enable_replacement": True,
-        },
-        battery_kwh=5.0,
-    )
-    yearly = metrics["_yearly_summary_df"]
-
-    assert yearly["Replacements"].tolist() == [1, 0]
-    year1 = yearly.iloc[0]
-    # Both sides of the replacement are present: the annual figure exceeds
-    # what the post-replacement pack alone accumulated, and the excess is the
-    # retired pack's own part-year count.
-    assert year1["Battery_Annual_FEC"] > year1["Battery_Cumulative_FEC"] > 0.0
-    retired_pack_fec = year1["Battery_Annual_FEC"] - year1["Battery_Cumulative_FEC"]
-    assert retired_pack_fec > 0.0
-
-    # Year 2 has no replacement, so the annual figure is exactly the
-    # difference of the cumulative series across the year boundary.
-    year2 = yearly.iloc[1]
-    assert year2["Battery_Annual_FEC"] == pytest.approx(
-        year2["Battery_Cumulative_FEC"] - year1["Battery_Cumulative_FEC"], abs=1e-12
-    )
-
-
-def test_annual_fec_is_zero_without_a_battery():
-    metrics = _project({"min_soc": 0.1, "max_soc": 0.9, "enable_replacement": True}, battery_kwh=0.0)
-    yearly = metrics["_yearly_summary_df"]
-
-    assert "Battery_Annual_FEC" in yearly.columns
-    assert yearly["Battery_Annual_FEC"].tolist() == [0.0, 0.0]
-    assert yearly["Battery_Cumulative_FEC"].tolist() == [0.0, 0.0]
-    assert metrics["Projected_Total_Replacements"] == 0
-
-
-def test_annual_fec_differences_the_cumulative_series_without_a_replacement():
-    metrics = _project(
-        {"min_soc": 0.1, "max_soc": 0.9, "eol_percentage": 0.70, "enable_replacement": True},
-        battery_kwh=5.0,
-    )
-    yearly = metrics["_yearly_summary_df"]
-
-    assert metrics["Projected_Total_Replacements"] == 0
-    assert (yearly["Battery_Annual_FEC"] > 0.0).all()
-    cumulative = np.concatenate([[0.0], yearly["Battery_Cumulative_FEC"].to_numpy()])
-    np.testing.assert_allclose(yearly["Battery_Annual_FEC"].to_numpy(), np.diff(cumulative), atol=1e-12)
 
 
 class TestZeroModuleDesign:

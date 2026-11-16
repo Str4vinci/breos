@@ -1,6 +1,6 @@
 # Energy balance
 
-Per-timestep energy-flow accounting for PV, load, battery, and grid. The
+Per-timestep energy-flow accounting for PV, load, stationary battery, vehicle and grid. The
 energy-balance engine runs the same way for PV-only and PV+battery systems —
 when no battery is configured, it simply skips the storage path.
 
@@ -43,9 +43,21 @@ attrs as JSON in `to_parquet`).
 
 ## Physical boundary and coupling
 
-BREOS currently implements **DC-coupled/hybrid dispatch only**. PV and the
-battery share one inverter AC nameplate. This is the only supported App
-dispatch model; there is no configuration option to select AC coupling.
+`BatteryConfig(coupling=...)`, the App's `battery_coupling`, selects one of
+two topologies (ADR 0004):
+
+- `"dc"`, the default: a hybrid inverter that PV and the battery share. PV
+  DC charges the battery before it crosses the inverter, and PV and battery
+  discharge share one AC nameplate.
+- `"ac"`: a battery with its own bidirectional inverter on the AC bus, beside
+  the PV inverter. The PV inverter converts exactly as in a system without a
+  battery; its AC serves the load, charges the battery through the battery
+  inverter, or is exported. The battery inverter converts in both directions
+  through the PVWatts part-load curve at its nominal efficiency
+  (`battery_inverter_efficiency`, which has no default) and its AC rating
+  (`battery_inverter_ac_capacity_w`; `None` is a flat, unclipped
+  conversion). The charging direction is an assumption: the curve is a
+  discharging curve. Several PV inverters with a battery need `"ac"`.
 
 Inputs and flow columns are average power in W over each interval. Dispatch
 converts them once to Wh (`W × interval hours`), applies all limits and
@@ -53,13 +65,16 @@ conservation equations in energy units, then converts flows back to W.
 Stored-energy state columns remain Wh.
 
 Direct PV and battery discharge use the same PVWatts part-load inverter
-curve as `breos.solar.dc_to_ac`. The configured AC nameplate remains shared:
-PV output consumes headroom before battery discharge, and combined delivery
-cannot exceed the rating. A lower-level `BatteryConfig` with no inverter
+curve as `breos.solar.dc_to_ac`. With `"dc"` the configured AC nameplate is
+shared: PV output consumes headroom before battery discharge, and combined
+delivery cannot exceed the rating. With `"ac"` each inverter has its own
+rating, and the PV inverter's rating never limits the battery. A lower-level `BatteryConfig` with no inverter
 nameplate keeps the legacy unbounded flat-efficiency fallback because an
 inverter loading fraction cannot be defined without rated power.
 
 ## DC routing and limits
+
+This section describes the `"dc"` topology; `"ac"` routing follows it.
 
 Direct PV serves AC load first. Surplus PV DC charges the battery before
 export; remaining DC exports within unused inverter headroom. Only DC that
@@ -77,6 +92,31 @@ most 5 kW in either direction. Its DC input while charging is higher by the
 charge loss, and its AC output while discharging is lower by the discharge and
 inverter losses.
 
+### AC coupling
+
+With `"ac"`, PV AC serves the house load first, then idle PV inverters'
+draw. The remaining surplus AC enters the battery
+inverter, up to its rating and the battery's charge-input and stored-energy
+limits, and what is left is exported. Clipping and curtailment are the PV
+inverter's alone. The battery discharges through its inverter to the
+remaining load, up to its rating and `max_discharge_power_w`, which is the
+battery inverter's AC output. The two limits keep their meaning:
+`max_charge_power_w` is the DC side of the battery inverter while charging.
+A step either charges or discharges, never both.
+
+Each PV inverter draws on every step without its own PV DC. PV surplus
+after the house load serves that draw before battery charging or export;
+the uncovered part is grid import, whatever the battery does. The battery
+never serves the draw. `Inverter_Night_Consumption` records the whole draw;
+its PV share is
+`min(Inverter_Night_Consumption, max(0, PV_DC_To_Inverter - PV_Direct_Inverter_Loss - PV_AC_To_Load))`.
+Single-inverter runs are unchanged. An AC-coupled battery is costed with its own
+inverter price, `battery_inverter_cost_per_kw`; see
+[Cost and emissions presets](../getting-started/configuration.md#cost-and-emissions-presets). Inverter replacement on
+its own schedule is not modelled, for the PV, hybrid and battery inverters
+alike. The battery inverter's standby consumption is not modelled either; a
+PV or hybrid inverter's stated `night_consumption_w` is.
+
 ## Dispatch instructions and grid charging
 
 `simulate_energy_balance(..., dispatch_instructions=...)` takes a
@@ -90,7 +130,9 @@ one entry per simulation step; the last two are scalars.
 - `grid_target_fraction`: a grid-charge target as a usable fraction, or NaN
   for no grid charge in that step.
 - `grid_charge_efficiency`: the hybrid inverter's AC-to-DC conversion on the
-  charging path.
+  charging path. An AC-coupled battery converts grid charge in its own
+  inverter, so its grid-charging instructions take `None`, which a DC-coupled
+  run refuses.
 - `grid_import_limit_w`: the site import limit that grid charging respects,
   counting the load's own import against it (`math.inf` for none). Load
   import itself is never cut.
@@ -114,9 +156,11 @@ temperature capacity factor every step and with SOH every day. The same
 target therefore names less energy on a cold night and falls as the pack
 fades.
 
-Grid charging runs after PV allocation in the same step. Grid AC `a` becomes
-DC charge input `a × grid_charge_efficiency`, which then passes through the
-cell charge efficiency like PV charge input. It is booked as
+Grid charging runs after PV allocation in the same step. With `"dc"`, grid
+AC `a` becomes DC charge input `a × grid_charge_efficiency`; with `"ac"`, the
+battery inverter converts PV and grid AC together on its part-load curve and
+splits the DC in proportion to each source's AC. The DC then passes through
+the cell charge efficiency like PV charge input. It is booked as
 `Battery_Charge_Input`, so cell losses, self-heating and both aging engines
 see it. PV keeps priority on every limit the two share:
 
@@ -124,12 +168,16 @@ see it. PV keeps priority on every limit the two share:
   (`power_limit_c_rate`) bound PV and grid charge together;
 - grid-charge AC input is at most the inverter AC rating minus the step's PV
   AC output. This summed-throughput rule is conservative: a real hybrid
-  inverter may net the two flows internally;
+  inverter may net the two flows internally. With `"ac"` it applies to the
+  battery inverter: PV and grid AC into it are at most its rating, and the
+  PV inverter's rating does not limit grid charge;
 - grid-charge import is at most `grid_import_limit_w` minus the step's load
   import.
 
 There is no grid charging in a step that exports PV or discharges the
-battery. Grid-charge AC is part of `Import_From_Grid`.
+battery. Grid-charge AC is part of `Import_From_Grid`. With `"ac"`, PV
+surplus and grid AC entering the battery inverter in one step convert at one
+operating point, and the DC is split in proportion to each source's AC.
 
 | Column | Unit/basis | Definition |
 |---|---|---|
@@ -144,20 +192,27 @@ battery. Grid-charge AC is part of `Import_From_Grid`.
 |---|---|---|
 | `PV_DC` | W, DC | PV generated before dispatch |
 | `PV_DC_To_Inverter` | W, DC | Direct PV entering the inverter |
-| `PV_DC_To_Battery` | W, DC | Charge-path input, before charge loss |
+| `PV_DC_To_Battery` | W, DC | Charge-path input, before charge loss; 0 with `"ac"` |
 | `PV_DC_Curtailed` | W, DC | PV that cannot be routed |
 | `PV_AC_To_Load` | W, AC | Direct PV delivered to load |
 | `PV_AC_Export` | W, AC | Direct PV exported |
 | `Battery_Charge_Stored` | W-equivalent | Increase due to charging after charge loss |
 | `Battery_Discharge_DC` | W-equivalent, stored DC | Energy removed from storage |
 | `Battery_AC_To_Load` | W, AC | All battery energy delivered to load |
+| `PV_AC_To_Battery` | W, AC | PV inverter AC entering the battery inverter; 0 with `"dc"` |
+| `PV_Charge_Conversion_Loss` | W | The battery inverter's charging loss on that AC; 0 with `"dc"` |
 | `PV_Direct_Inverter_Loss` | W | Direct-PV inverter conversion loss |
-| `Battery_Inverter_Loss` | W | Battery-discharge inverter loss |
+| `Battery_Inverter_Loss` | W | Battery-discharge inverter loss, the battery inverter's with `"ac"` |
 | `Battery_Charge_Loss` / `Battery_Discharge_Loss` | W | Cell conversion losses |
 | `Standby_Loss` | W | Storage standby loss |
 | `Capacity_Window_Loss` | W | Energy explicitly removed when temperature/SOH lowers `Emax` |
 | `Battery_Energy_Beginning` / `Battery_Energy_End` | Wh | Stored energy at interval boundaries |
 | `Battery_Energy_Delta` | W-equivalent | End minus beginning, including explicit boundary adjustments |
+
+Ledger schema 3.1 adds `PV_AC_To_Battery`, `PV_Charge_Conversion_Loss` and
+the vehicle columns below.
+With `"ac"`, `Battery_Charge_Input` is `PV_AC_To_Battery −
+PV_Charge_Conversion_Loss + Grid_DC_To_Battery`.
 
 Ledger schema 2.0 removed four columns that repeated another under a second
 name. Read the second name of each pair instead: `Sell_To_Grid` →
@@ -198,6 +253,120 @@ App and Monte Carlo projections carry total stored energy and both origin
 balances from one simulated year into the next. They do not reset the battery
 to a free full state at calendar boundaries.
 
+## Vehicle ledger
+
+The vehicle dispatches after the stationary battery, through its own AC
+charger. It can serve only the remaining house load. It neither exports
+nor transfers energy to another store. With no vehicle, all vehicle columns
+are zero and existing flows are unchanged. See the
+[configuration guide](../getting-started/configuration.md#vehicle-to-home)
+for schedules, limits and the model assumptions.
+
+States are end-of-step values. Energy states are **Wh**; SOC and SOH are
+fractions. All transfer and loss columns are **average W**, including
+departures, arrivals, driving, shortfalls and replacement transfers. Multiply
+a flow by `hours_per_step` to compare it with a stored-energy difference.
+A sum of flows times `hours_per_step / 1000` gives kWh.
+
+| Column | Unit | Meaning |
+|---|---|---|
+| `Vehicle_Plugged` | 0/1 | Home for the whole step |
+| `Vehicle_Energy_Onboard` | Wh | Energy in the pack, at home or away |
+| `Vehicle_Energy` | Wh | On-board energy while plugged in; zero away |
+| `Vehicle_SOC_Absolute`, `Vehicle_SOH` | fraction | On-board SOC against current capacity; pack health |
+| `Vehicle_PV_Origin_Energy_End`, `Vehicle_Grid_Origin_Energy_End` | Wh | On-board energy by origin, including while away |
+| `PV_AC_To_Vehicle`, `Grid_AC_To_Vehicle` | W | Home charger AC input by source; grid input is part of `Import_From_Grid` |
+| `Vehicle_Charge_Conversion_Loss`, `Vehicle_Charge_Input` | W | Charger charging loss and resulting DC input to the pack |
+| `Vehicle_Charge_Loss` | W | Pack charging loss; input minus this loss is stored |
+| `Vehicle_Discharge_DC`, `Vehicle_Discharge_Loss` | W | Withdrawal from stored energy and pack discharge loss |
+| `Vehicle_Charger_Loss`, `Vehicle_AC_To_Load` | W | Discharge conversion loss and AC delivered to the house |
+| `PV_Origin_Vehicle_AC_To_Load`, `Grid_Origin_Vehicle_AC_To_Load` | W | Home delivery by origin |
+| `Vehicle_Departure_Energy`, `Vehicle_Arrival_Energy` | W | Energy crossing the site boundary at departure/arrival, before that step's driving/home dispatch |
+| `Vehicle_Departure_Shortfall` | W | Missing departure-target energy, booked only at departure and only above `1e-9 × current capacity` |
+| `Vehicle_Drive_Energy`, `Vehicle_Drive_Unserved` | W | Driving served from the pack and scheduled driving left unserved |
+| `Vehicle_Away_Charge_Purchased`, `Vehicle_Away_Charge_Loss` | W | Purchased away energy and its loss; separate from the site meter |
+| `Vehicle_Capacity_Window_Loss` | W | Excess energy removed when daily ageing lowers the SOC ceiling |
+| `Vehicle_Replacement_Energy_Removed`, `Vehicle_Replacement_Energy_Added` | W | Outgoing and incoming pack energy, also for an away swap |
+| `PV_Origin_Vehicle_Charge_Stored`, `Grid_Origin_Vehicle_Charge_Stored` | W | Home charging stored after all charging losses, by source |
+| `PV_Origin_Vehicle_Discharge_DC`, `Grid_Origin_Vehicle_Discharge_DC` | W | Home withdrawal from each stored origin |
+| `PV_Origin_Vehicle_Drive_Energy`, `Grid_Origin_Vehicle_Drive_Energy` | W | Driving withdrawal by origin |
+| `PV_Origin_Vehicle_Capacity_Window_Loss`, `Grid_Origin_Vehicle_Capacity_Window_Loss` | W | Capacity-window removal by origin |
+| `PV_Origin_Vehicle_Replacement_Energy_Removed`, `Grid_Origin_Vehicle_Replacement_Energy_Removed` | W | Outgoing pack energy by origin |
+
+### Home balances
+
+All terms in these equations are average W. Let `N_pv` be idle-inverter
+draw supplied by surplus PV, as defined under [AC coupling](#ac-coupling),
+and `N_grid = Inverter_Night_Consumption − N_pv`.
+
+```text
+Houseload = PV_AC_To_Load + Battery_AC_To_Load + Vehicle_AC_To_Load
+          + Import_From_Grid − Grid_AC_To_Battery − Grid_AC_To_Vehicle − N_grid
+
+PV_DC_To_Inverter − PV_Direct_Inverter_Loss
+    = PV_AC_To_Load + PV_AC_To_Battery + PV_AC_To_Vehicle + PV_AC_Export + N_pv
+
+PV_AC_To_Vehicle + Grid_AC_To_Vehicle
+    = Vehicle_Charge_Conversion_Loss + Vehicle_Charge_Input
+
+Vehicle_Discharge_DC
+    = Vehicle_Discharge_Loss + Vehicle_Charger_Loss + Vehicle_AC_To_Load
+```
+
+The PV equation applies to AC coupling or no stationary pack. With DC
+coupling the stationary DC routing is unchanged; the vehicle reduces its
+remaining AC export. PV and grid AC share one charger operating point.
+Their sum cannot exceed `charger_ac_rating_kw × 1000`, nor can AC discharge.
+Home charge and discharge never occur together.
+
+### On-board and site balances
+
+Let `h = hours_per_step`. The on-board balance follows the vehicle everywhere:
+
+```text
+E_onboard,end − E_onboard,begin = h × (
+    Vehicle_Charge_Input − Vehicle_Charge_Loss − Vehicle_Discharge_DC
+    + Vehicle_Away_Charge_Purchased − Vehicle_Away_Charge_Loss
+    − Vehicle_Drive_Energy − Vehicle_Capacity_Window_Loss
+    − Vehicle_Replacement_Energy_Removed + Vehicle_Replacement_Energy_Added)
+```
+
+Departure and arrival change the site inventory, not on-board energy.
+`Vehicle_Energy = Vehicle_Plugged × Vehicle_Energy_Onboard`. The departure
+transfer is the beginning on-board energy divided by `h`; the arrival
+transfer is the same at arrival. The whole-site balance is:
+
+```text
+PV_DC + Import_From_Grid + Battery_Replacement_Energy_Added
+    + Vehicle_Arrival_Energy + plugged × Vehicle_Replacement_Energy_Added
+  = Houseload + PV_AC_Export + PV_DC_Curtailed + L_stationary + L_vehicle
+    + Battery_Energy_Delta + ΔVehicle_Energy / h + Vehicle_Departure_Energy
+    + plugged × (Vehicle_Capacity_Window_Loss + Vehicle_Replacement_Energy_Removed)
+```
+
+Here `plugged` is 0 or 1. `L_stationary` sums `Inverter_Loss`,
+`Inverter_Night_Consumption`, `Battery_Charge_Loss`, `Battery_Discharge_Loss`,
+`Grid_Charge_Conversion_Loss`, `PV_Charge_Conversion_Loss`, `Standby_Loss`,
+`Capacity_Window_Loss` and `Battery_Replacement_Energy_Removed`.
+`L_vehicle` sums the four home losses: charging conversion, pack charging,
+pack discharge and charger discharge. `Battery_Energy_Delta` is already
+average W; `ΔVehicle_Energy` is a Wh state difference. Driving and away
+charging do not enter this site equation. An away swap changes only the
+on-board balance.
+
+Driving served plus driving unserved equals the scheduled withdrawal.
+Driving stops at `min_soc × current capacity` and never borrows from later
+charging. Away energy stored equals purchases minus away loss, or purchases
+times away efficiency. It is bounded by power times permitted parked hours
+and stops at the target, without removing energy already above it.
+
+PV, grid and unattributed origins reconcile on board. Home charging adds its
+stored shares; away charging adds to the grid origin. Discharge, driving,
+capacity-window loss and replacement removal take from every origin in
+proportion at that operation. Initial and replacement energy are
+unattributed. Departure and arrival leave origins unchanged. Summing the
+origin balances therefore gives the on-board balance above.
+
 ## Compatibility fields and KPIs
 
 `PV_Production` is retained as an AC-equivalent compatibility field. With a
@@ -206,7 +375,9 @@ loss; lower-level callers that omit a nameplate retain the exact legacy
 `(PV_DC − PV_DC_Curtailed) × inverter_efficiency` calculation. It is not
 physical AC delivery through storage, and new KPIs do not derive from it.
 
-Self-consumed PV is `PV_AC_To_Load + PV_Origin_Battery_AC_To_Load`. Usable system AC
+Self-consumed PV is `PV_AC_To_Load + PV_Origin_Battery_AC_To_Load`, plus
+`PV_Origin_Vehicle_AC_To_Load` with a vehicle. PV-origin driving is reported
+separately, not counted as house self-consumption. Usable system AC
 generation is self-consumed PV plus `PV_AC_Export`. Grid independence is
 `1 − Import_From_Grid / Houseload`.
 

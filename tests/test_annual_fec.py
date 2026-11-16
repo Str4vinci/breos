@@ -140,7 +140,11 @@ def test_projected_yearly_ledger_reports_the_battery_fields():
     missing = [column for column in REQUIRED_YEARLY_BATTERY_COLUMNS if column not in result.yearly.columns]
     assert missing == []
     assert result.yearly["Year"].tolist() == [1, 2]
+    assert result.metrics["Projected_Total_Replacements"] == 0
     assert (result.yearly["Battery_Annual_FEC"] > 0.0).all()
+    # Without a replacement, annual FEC is the difference of the cumulative series.
+    cumulative = np.concatenate([[0.0], result.yearly["Battery_Cumulative_FEC"].to_numpy()])
+    np.testing.assert_allclose(result.yearly["Battery_Annual_FEC"].to_numpy(), np.diff(cumulative), atol=1e-12)
 
 
 def test_projected_yearly_ledger_reports_zero_cycles_without_a_battery():
@@ -150,3 +154,40 @@ def test_projected_yearly_ledger_reports_zero_cycles_without_a_battery():
     )
 
     assert result.yearly["Battery_Annual_FEC"].tolist() == [0.0, 0.0]
+    assert result.yearly["Battery_Cumulative_FEC"].tolist() == [0.0, 0.0]
+    assert result.metrics["Projected_Total_Replacements"] == 0
+
+
+def test_projected_annual_fec_spans_a_replacement_inside_one_year():
+    # The pack starts a hair above end of life, so it retires on the first
+    # simulated day and a fresh pack carries the rest of year 1. Cumulative
+    # FEC only ever reports the pack currently installed, so the retired
+    # pack's part-year cycles survive only if annual FEC is accumulated
+    # separately.
+    result = _projected_result(
+        battery_kwh=5.0,
+        batt_spec={
+            "min_soc": 0.1,
+            "max_soc": 0.9,
+            "initial_soh": 70.000001,
+            "eol_percentage": 0.70,
+            "enable_replacement": True,
+        },
+    )
+    yearly = result.yearly
+
+    assert yearly["Replacements"].tolist() == [1, 0]
+    year1 = yearly.iloc[0]
+    # Both sides of the replacement are present: the annual figure exceeds
+    # what the post-replacement pack alone accumulated, and the excess is the
+    # retired pack's own part-year count.
+    assert year1["Battery_Annual_FEC"] > year1["Battery_Cumulative_FEC"] > 0.0
+    retired_pack_fec = year1["Battery_Annual_FEC"] - year1["Battery_Cumulative_FEC"]
+    assert retired_pack_fec > 0.0
+
+    # Year 2 has no replacement, so the annual figure is exactly the
+    # difference of the cumulative series across the year boundary.
+    year2 = yearly.iloc[1]
+    assert year2["Battery_Annual_FEC"] == pytest.approx(
+        year2["Battery_Cumulative_FEC"] - year1["Battery_Cumulative_FEC"], abs=1e-12
+    )

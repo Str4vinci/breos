@@ -8,10 +8,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos._dispatch import _dispatch_dc_step, lfp_capacity_factor
+from breos._dispatch import (
+    _VEHICLE_LEDGER_COLUMNS,
+    _VEHICLE_STATE_COLUMNS,
+    _dispatch_dc_step,
+    lfp_capacity_factor,
+)
 from breos.app import App
 from breos.battery import BatteryConfig, _simulate_detailed_run, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
+from breos.inverter import NO_CONVERSION
 from breos.smart_charging import FixedTargetDayController, SmartChargingSpec, period_layout, resolve_instructions
 from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 from tests.test_controller_seam import SPEC, _project, _Recording, _scenario, _steps_per_day
@@ -105,6 +111,8 @@ def _step(
         floor,
         0.95,
         1e9,
+        *NO_CONVERSION.kernel_arguments(1.0),
+        inverter_cap,
     )
 
 
@@ -279,11 +287,13 @@ def test_overlap_controller_carries_exact_instructions_across_the_year_seam(freq
 # Captured before adding overlap support: every numeric ledger column, in
 # order, at both resolutions. BLAST aging's float bits differ between
 # environments, so its default path is pinned by the App goldens instead.
+# Re-pinned once when calendar resistance growth started running from each
+# period's start (#436); the scenario enables resistance fade.
 @pytest.mark.parametrize(
     ("name", "freq", "digest"),
     [
-        ("fixed_target", "h", "40da4a37357944f0f5d4bcb304ab8680ee59f3773d0efa9a149278174e9b412a"),
-        ("fixed_target", "15min", "5ebb36809c4cd411e9493c080c3aa607146f9f4e68a30f928519cf01a2725261"),
+        ("fixed_target", "h", "9f6dd243ba81c330bce9b452b8321026199783941480319ca7620c219600ab74"),
+        ("fixed_target", "15min", "e68060e3c6099bf5fcabaddbf7c0d66a791d498263c9c614ef60a8c8d21ffce5"),
     ],
 )
 def test_default_reject_preserves_the_existing_ledger_bits(name, freq, digest):
@@ -297,7 +307,18 @@ def test_default_reject_preserves_the_existing_ledger_bits(name, freq, digest):
         execution_backend="python",
         **kwargs,
     )[0]
-    assert hashlib.sha256(frame.drop(columns="Datetime").to_numpy(dtype=np.float64).tobytes()).hexdigest() == digest
+    # No inverter night consumption is configured and the battery is DC-coupled:
+    # the columns added since are 0 and the rest keep their bits.
+    added = [
+        "Inverter_Night_Consumption",
+        "PV_AC_To_Battery",
+        "PV_Charge_Conversion_Loss",
+        *_VEHICLE_STATE_COLUMNS,
+        *_VEHICLE_LEDGER_COLUMNS,
+    ]
+    assert (frame[added] == 0.0).all().all()
+    ledger = frame.drop(columns=["Datetime", *added])
+    assert hashlib.sha256(ledger.to_numpy(dtype=np.float64).tobytes()).hexdigest() == digest
 
 
 @pytest.mark.usefixtures("_patch_weather")

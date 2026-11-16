@@ -6,14 +6,15 @@ import warnings
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
+import numpy as np
 import pandas as pd
 
 from breos._daily_persistence import DailyPersistenceController, daily_persistence_provenance
 from breos.app_config import ResolvedAppConfig, SimulationPeriod
 from breos.app_inputs import (
     AppRuntimeDependencies,
+    arrays_with_module_shading,
     prepare_planner_forecast,
-    prepare_simulation_inputs,
     prepare_simulation_inputs_cached,
     unknown_source_metadata,
 )
@@ -22,6 +23,7 @@ from breos.degradation.results import DegradationEngineName, build_degradation_s
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import TerminalHealthCredit, find_payback_year
 from breos.execution import aggregate_jit_cache_states, backend_provenance, config_has_battery
+from breos.inverter import InverterUnits, convert_units
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import (
     BASELINE_NETWORK_CREDIT_COLUMNS,
@@ -30,14 +32,22 @@ from breos.projection import (
     ProjectionValue,
     ProjectionYear,
     YearInstructions,
-    effective_reference_escalation,
+    build_pv_only_battery_config,
     price_reference_year_rows,
     price_tariff_year_rows_by_step,
     reprice_network_credit_year_rows,
     reprice_tariff_year_rows,
     run_projection,
+    tariff_records,
     value_projection,
 )
+from breos.pv.model_options import (
+    normalise_model_name,
+    solar_position_record,
+    solar_position_warning_scope,
+    warn_solar_position_fallback,
+)
+from breos.pv.shading import CIRCUMSOLAR_MODELS, as_shading_table
 from breos.pv_modules import get_module
 from breos.smart_charging import (
     PLANNER_MODES,
@@ -47,9 +57,16 @@ from breos.smart_charging import (
     stored_energy_by_origin,
 )
 from breos.solar import PVProductionBreakdown
-from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
+from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
-from breos.weather import WEATHER_METADATA_KEY
+from breos.vehicle import resolve_vehicle_schedule
+from breos.vehicle.households import (
+    VehicleHouseholds,
+    household_configs,
+    run_vehicle_baseline,
+    value_vehicle_households,
+)
+from breos.weather import WEATHER_METADATA_KEY, build_battery_temperature_series
 
 
 @dataclass(frozen=True)
@@ -93,10 +110,39 @@ class SimulationArtifacts:
     terminal_health: TerminalHealthCredit | None = None
     # Each end-of-life crossing of the battery, in project order (ADR 0003 E11).
     end_of_life_events: tuple[dict[str, Any], ...] = ()
+    # The solar-position method asked for, the one it resolved to on the
+    # run's weather, and the offset after each label it applied.
+    solar_position: dict[str, Any] | None = None
+    vehicle_households: VehicleHouseholds | None = None
+    vehicle: dict[str, Any] | None = None
+    solver_diagnostics: dict[str, Any] | None = None
+    # Year 1's (or the window's) irradiance on the results' steps: "GHI" in
+    # W/m2 and "POA_STC_DC", the arrays' STC power at their unshaded
+    # plane-of-array irradiance, in W. None when the PV model gave neither.
+    irradiance: pd.DataFrame | None = None
+
+
+def first_year_irradiance(pv_breakdown: PVProductionBreakdown, results_df: pd.DataFrame) -> pd.DataFrame | None:
+    """The breakdown's irradiance on the steps of ``results_df``, in its row order, or None without it."""
+    if pv_breakdown.ghi is None or pv_breakdown.poa_global_stc_dc is None:
+        return None
+    frame = pd.DataFrame({"GHI": pv_breakdown.ghi, "POA_STC_DC": pv_breakdown.poa_global_stc_dc})
+    times = pd.DatetimeIndex(results_df["Datetime"])
+    aligned = frame.reindex(times)
+    if aligned.isna().to_numpy().any():
+        raise ValueError("the PV breakdown does not cover every step of the first-year results")
+    return aligned.set_axis(results_df.index)
 
 
 # The avoided-CO2 columns a result reports for its first year, or its window.
 CO2_COLUMNS = ("CO2_Avoided_SelfConsumed_kg", "CO2_Avoided_Export_kg", "CO2_Avoided_Total_kg")
+
+
+def first_year_co2(projection: pd.DataFrame) -> dict[str, float] | None:
+    """A projection's first-row avoided CO2 by pathway (kg), or None when it has no CO2 columns."""
+    if not all(column in projection.columns for column in CO2_COLUMNS):
+        return None
+    return {column: float(projection[column].iloc[0]) for column in CO2_COLUMNS}
 
 
 def _economics_fields(value: ProjectionValue, period: SimulationPeriod | None) -> dict[str, Any]:
@@ -117,12 +163,6 @@ def _economics_fields(value: ProjectionValue, period: SimulationPeriod | None) -
             "period_co2": None,
             "terminal_health": value.terminal_health,
         }
-    projection = value.cost_projection
-    co2 = (
-        {column: float(projection[column].iloc[0]) for column in CO2_COLUMNS}
-        if all(column in projection.columns for column in CO2_COLUMNS)
-        else None
-    )
     return {
         "yearly_df": value.yearly_df,
         "cost_projection": None,
@@ -130,7 +170,7 @@ def _economics_fields(value: ProjectionValue, period: SimulationPeriod | None) -
         "payback_year": None,
         "lcoe": None,
         "total_replacement_cost": None,
-        "period_co2": co2,
+        "period_co2": first_year_co2(value.cost_projection),
         "terminal_health": None,
     }
 
@@ -216,8 +256,217 @@ def _bifacial_summary(
     }
 
 
+def _inverter_model_fields(
+    resolved: ResolvedAppConfig,
+    pv_breakdown: PVProductionBreakdown,
+    first_year_results_df: pd.DataFrame,
+    freq: str,
+    inverter_ac_derate: pd.Series | None,
+) -> dict[str, Any]:
+    """The inverter block's records of an efficiency curve, an AC cable, temperature derating and night draw.
+
+    Each is present only when configured. The AC cable's loss is part of
+    ``conversion_loss_kwh``; ``ac_cable.loss_kwh`` reports it alone, from the
+    inverter's delivered AC output at each step. A curve read at each step's
+    operating voltage reports that voltage's mean, weighted by the DC; its
+    ``row_position`` and ``voltage_v`` are then the row of the steps
+    without PV.
+    """
+    fields: dict[str, Any] = {}
+    conversion = resolved.inverter_conversion
+    electrical = resolved.electrical
+    curve = electrical.inverters[0].efficiency_curve if electrical is not None and electrical.inverters else None
+    if conversion is not None and curve is not None:
+        position = conversion.curve_row
+        voltages = curve.voltages_v
+        fields["efficiency_curve"] = {
+            "row_position": _rounded(position, digits=4),
+            "voltage_v": None
+            if voltages is None
+            else _rounded(float(np.interp(position, np.arange(len(voltages)), voltages)), digits=1),
+            "voltage_basis": "fixed",
+        }
+        operating = pv_breakdown.dc_voltage
+        if operating is not None and voltages is not None and len(voltages) > 1:
+            weights = pv_breakdown.dc_after_losses.to_numpy(dtype=float).clip(min=0.0)
+            weights = np.where(operating.to_numpy(dtype=float) > 0, weights, 0.0)
+            mean = float(np.average(operating, weights=weights)) if weights.sum() > 0 else None
+            fields["efficiency_curve"].update(
+                voltage_basis="operating",
+                operating_voltage_v=None if mean is None else _rounded(mean, digits=1),
+            )
+    cable = resolved.ac_cable
+    if cable is not None:
+        k = cable.loss_coefficient_per_w
+        # The cable carries the PV inverter's output: with a hybrid inverter
+        # that includes the battery's discharge; beside an AC-coupled
+        # battery it is PV alone, including the AC it sends the battery.
+        third = "PV_AC_To_Battery" if resolved.cfg["battery_coupling"] == "ac" else "Battery_AC_To_Load"
+        delivered = (
+            first_year_results_df["PV_AC_To_Load"]
+            + first_year_results_df["PV_AC_Export"]
+            + first_year_results_df[third]
+        ).to_numpy(dtype=float)
+        if electrical is not None and len(electrical.inverters) > 1:
+            # The cable also delivered PV AC that served idle units before
+            # battery charging or export (ADR 0004 M9).
+            surplus = (
+                first_year_results_df["PV_DC_To_Inverter"]
+                - first_year_results_df["PV_Direct_Inverter_Loss"]
+                - first_year_results_df["PV_AC_To_Load"]
+            ).clip(lower=0.0)
+            delivered = delivered + np.minimum(
+                surplus.to_numpy(dtype=float), first_year_results_df["Inverter_Night_Consumption"].to_numpy(dtype=float)
+            )
+        if resolved.vehicle is not None:
+            delivered += first_year_results_df["PV_AC_To_Vehicle"].to_numpy(dtype=float)
+        root = np.sqrt(np.clip(1.0 - 4.0 * k * delivered, 0.0, None))
+        gross = 2.0 * delivered / (1.0 + root)
+        loss = pd.Series(gross - delivered, index=first_year_results_df.index)
+        fields["ac_cable"] = {
+            "conductor_resistance_ohm": _rounded(cable.conductor_resistance_ohm, digits=6),
+            "conductor_temp_c": cable.conductor_c,
+            "conductor_temp_stated": cable.conductor_temp_c is not None,
+            "loss_kwh": _rounded(_series_energy_kwh(loss, freq)),
+            "loss_pct_at_nameplate": _rounded(cable.loss_pct_at(resolved.inverter_ac_capacity_w or 0.0), digits=4),
+        }
+    if electrical is not None and any(i.night_consumption_w is not None for i in electrical.inverters):
+        night = first_year_results_df["Inverter_Night_Consumption"]
+        fields["night_consumption"] = {
+            "power_w": sum(i.night_consumption_w or 0.0 for i in electrical.inverters),
+            "energy_kwh": _rounded(_series_energy_kwh(night, freq)),
+            "hours": _rounded(float((night > 0).sum()) * get_hours_per_step(freq)),
+        }
+    if inverter_ac_derate is not None:
+        assert electrical is not None
+        fields["temperature_derating"] = {
+            "ambient": "weather" if electrical.environment.inverter_ambient_temp_c is None else "stated",
+            "min_output_fraction": _rounded(float(inverter_ac_derate.min()), digits=4),
+            "derated_hours": _rounded(float((inverter_ac_derate < 1.0).sum()) * get_hours_per_step(freq)),
+        }
+    return fields
+
+
+def _inverter_units_summary(
+    resolved: ResolvedAppConfig, pv_dc: pd.Series, units: InverterUnits | None, freq: str
+) -> list[dict[str, Any]] | None:
+    """Each inverter's year-1 energy when string-level energy converts several, or None.
+
+    The dispatch's own conversion (:func:`breos.inverter.convert_units`),
+    repeated on year 1's DC, which no PV degradation has yet reduced.
+    """
+    if units is None or resolved.electrical is None:
+        return None
+    hours = get_hours_per_step(freq)
+    aligned = units.aligned(pd.DatetimeIndex(pv_dc.index))
+    battery_config = build_pv_only_battery_config(resolved.cfg, resolved)
+    converted = convert_units(
+        np.maximum(0.0, pv_dc.to_numpy(dtype=float)) * hours,
+        aligned,
+        inverter_efficiency=battery_config.inverter_efficiency,
+        ac_output_scale=battery_config.ac_output_scale,
+        hours_per_step=hours,
+    )
+    efficiencies = units.efficiencies(battery_config.inverter_efficiency)
+    rows = []
+    for number, (inverter, flows) in enumerate(zip(resolved.electrical.inverters, converted.inverters, strict=True)):
+        derate = aligned.ac_derate.iloc[:, number].to_numpy(dtype=float)
+        row: dict[str, Any] = {
+            "inverter": number,
+            "ac_capacity_kw": _rounded(units.ac_capacity_w[number] / 1000.0, digits=3),
+            "efficiency_pct": _rounded(efficiencies[number] * 100.0),
+            "dc_input_kwh": _rounded(float(flows["dc"].sum()) / 1000.0),
+            "clipping_kwh": _rounded(float(flows["clipping"].sum()) / 1000.0),
+            "conversion_loss_kwh": _rounded(float(flows["conversion_loss"].sum()) / 1000.0),
+            "ac_cable_loss_kwh": _rounded(float(flows["cable_loss"].sum()) / 1000.0),
+            "ac_output_kwh": _rounded(float(flows["ac"].sum()) / 1000.0),
+            "night_consumption_kwh": _rounded(float(flows["night"].sum()) / 1000.0),
+        }
+        if inverter.temperature_derating is not None:
+            row["temperature_derating"] = {
+                "min_output_fraction": _rounded(float(derate.min()), digits=4),
+                "derated_hours": _rounded(float((derate < 1.0).sum()) * hours),
+            }
+        rows.append(row)
+    return rows
+
+
+def _near_shading_summary(resolved: ResolvedAppConfig, poa_dc: float, poa_shaded_dc: float) -> dict[str, Any] | None:
+    """The arrays' near-shading inputs and their loss, or None when no array has a table."""
+    tables = [as_shading_table(arr.get("shading")) for arr in arrays_with_module_shading(resolved)]
+    if not any(table is not None for table in tables):
+        return None
+    cfg = resolved.cfg
+    arrays = []
+    for index, (arr, table) in enumerate(zip(resolved.pv_arrays or [], tables, strict=True)):
+        assert table is not None
+        transposition = normalise_model_name(arr.get("transposition_model", cfg["transposition_model"]))
+        arrays.append(
+            {
+                "array": index,
+                **table.as_dict(),
+                "circumsolar_shaded_with_beam": transposition in CIRCUMSOLAR_MODELS,
+            }
+        )
+    loss = poa_dc - poa_shaded_dc
+    return {
+        "loss_kwh": _rounded(loss),
+        "loss_pct_of_poa": _rounded(loss / poa_dc * 100.0 if poa_dc else 0.0),
+        "flat_shading_pct": float((cfg["pv_loss_overrides"] or {}).get("shading", 0.0)),
+        "arrays": arrays,
+    }
+
+
+def _shading_mismatch_summary(
+    resolved: ResolvedAppConfig, pv_breakdown: PVProductionBreakdown, freq: str
+) -> dict[str, Any] | None:
+    """The electrical effect of the modules' own shading, per string, or None without module shading."""
+    if pv_breakdown.shading_mismatch_loss is None or resolved.electrical is None:
+        return None
+    environment = resolved.electrical.environment
+    strings = []
+    for index, loss in sorted((pv_breakdown.string_shading_mismatch or {}).items()):
+        shading = resolved.electrical.strings[index].module_shading
+        assert shading is not None
+        strings.append({"string": index, "loss_kwh": _rounded(_series_energy_kwh(loss, freq)), **shading.as_dict()})
+    return {
+        "loss_kwh": _rounded(_series_energy_kwh(pv_breakdown.shading_mismatch_loss, freq)),
+        "bypass_diode_voltage_v": environment.bypass_diode_v,
+        "bypass_diode_voltage_stated": environment.bypass_diode_voltage_v is not None,
+        "strings": strings,
+    }
+
+
+def _parallel_mismatch_summary(
+    resolved: ResolvedAppConfig, pv_breakdown: PVProductionBreakdown, freq: str
+) -> dict[str, Any] | None:
+    """What strings in parallel lose by sharing an input's voltage, per input, or None when none do."""
+    if pv_breakdown.parallel_mismatch_loss is None or resolved.electrical is None:
+        return None
+    inputs = []
+    for (inverter, mppt), loss in sorted((pv_breakdown.input_parallel_mismatch or {}).items()):
+        strings = [
+            i
+            for i, string in enumerate(resolved.electrical.strings)
+            if (string.inverter, string.mppt) == (inverter, mppt)
+        ]
+        inputs.append(
+            {
+                "inverter": inverter,
+                "mppt": mppt,
+                "strings": strings,
+                "loss_kwh": _rounded(_series_energy_kwh(loss, freq)),
+            }
+        )
+    return {"loss_kwh": _rounded(_series_energy_kwh(pv_breakdown.parallel_mismatch_loss, freq)), "inputs": inputs}
+
+
 def _build_pv_loss_waterfall(
-    pv_breakdown: PVProductionBreakdown, first_year_results_df: pd.DataFrame, resolved: ResolvedAppConfig
+    pv_breakdown: PVProductionBreakdown,
+    first_year_results_df: pd.DataFrame,
+    resolved: ResolvedAppConfig,
+    inverter_ac_derate: pd.Series | None = None,
+    inverter_units: InverterUnits | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable year-1 PV loss waterfall, or the window's for a [period] run."""
     cfg = resolved.cfg
@@ -245,9 +494,28 @@ def _build_pv_loss_waterfall(
     export_ac = e("PV_AC_Export")
     battery_ac = e("Battery_AC_To_Load")
     pv_origin_battery_ac = e("PV_Origin_Battery_AC_To_Load")
+    pv_origin_vehicle_ac = e("PV_Origin_Vehicle_AC_To_Load") if resolved.vehicle is not None else 0.0
+    usable_system_production = direct_pv_ac + pv_origin_battery_ac + export_ac
+    if resolved.vehicle is not None:
+        usable_system_production += pv_origin_vehicle_ac
     inverter_conversion = e("Inverter_Loss")
     direct_pv_conversion = e("PV_Direct_Inverter_Loss")
     battery_discharge_conversion = e("Battery_Inverter_Loss")
+    # An AC-coupled battery has its own inverter (ADR 0004 C8): the inverter
+    # block stays the PV inverter's, and the battery's conversion is reported
+    # in a block of its own.
+    battery_inverter: dict[str, Any] | None = None
+    if resolved.battery_inverter_ac_capacity_w is not None:
+        charge_conversion = e("PV_Charge_Conversion_Loss") + e("Grid_Charge_Conversion_Loss")
+        battery_inverter = {
+            "ac_capacity_kw": _rounded(resolved.battery_inverter_ac_capacity_w / 1000.0, digits=3),
+            "efficiency_pct": _rounded(cfg["battery_inverter_efficiency"] * 100.0),
+            "conversion_loss_kwh": _rounded(charge_conversion + battery_discharge_conversion),
+            "charge_conversion_loss_kwh": _rounded(charge_conversion),
+            "discharge_conversion_loss_kwh": _rounded(battery_discharge_conversion),
+        }
+        inverter_conversion = direct_pv_conversion
+        battery_discharge_conversion = 0.0
 
     pvwatts_components = {
         name: _rounded(_series_energy_kwh(loss, freq)) for name, loss in pv_breakdown.pvwatts_component_losses.items()
@@ -265,11 +533,37 @@ def _build_pv_loss_waterfall(
     stages = [
         _waterfall_stage("horizontal_reference_dc", "Horizontal irradiance reference", horizontal_dc),
         _waterfall_stage("transposition", "Plane-of-array transposition", poa_dc, horizontal_dc),
-        _waterfall_stage("iam", "Front-side incidence-angle modifier", front_effective_dc, poa_dc),
+    ]
+    poa_shaded_dc = poa_dc
+    if pv_breakdown.poa_shaded_dc is not None:
+        # The arrays' near-shading tables.
+        poa_shaded_dc = _series_energy_kwh(pv_breakdown.poa_shaded_dc, freq)
+        stages.append(_waterfall_stage("near_shading", "Near shading", poa_shaded_dc, poa_dc))
+    stages += [
+        _waterfall_stage("iam", "Front-side incidence-angle modifier", front_effective_dc, poa_shaded_dc),
         _waterfall_stage("bifacial_rear_gain", "Bifacial rear gain", effective_dc, front_effective_dc),
         _waterfall_stage("temperature", "Cell temperature", module_dc, effective_dc),
         _waterfall_stage("pvwatts_static", "Static PVWatts losses", dc_after_static, module_dc),
     ]
+    after_mismatch = dc_after_static
+    if pv_breakdown.shading_mismatch_loss is not None:
+        # The electrical effect of uneven shading on the strings' modules.
+        after_mismatch = dc_after_static - _series_energy_kwh(pv_breakdown.shading_mismatch_loss, freq)
+        stages.append(_waterfall_stage("shading_mismatch", "Shading mismatch", after_mismatch, dc_after_static))
+    after_wiring = after_mismatch
+    if pv_breakdown.dc_wiring_loss is not None:
+        # The strings' cables, when the topology gives them.
+        after_wiring = after_mismatch - _series_energy_kwh(pv_breakdown.dc_wiring_loss, freq)
+        stages.append(_waterfall_stage("dc_wiring", "DC cables", after_wiring, after_mismatch))
+    after_parallel = after_wiring
+    if pv_breakdown.parallel_mismatch_loss is not None:
+        # String-level energy: strings on different curves share an input's voltage.
+        after_parallel = after_wiring - _series_energy_kwh(pv_breakdown.parallel_mismatch_loss, freq)
+        stages.append(_waterfall_stage("parallel_mismatch", "Strings in parallel", after_parallel, after_wiring))
+    if pv_breakdown.mppt_limit_loss is not None:
+        # String-level energy: the inverter's input limits.
+        after_limits = after_parallel - _series_energy_kwh(pv_breakdown.mppt_limit_loss, freq)
+        stages.append(_waterfall_stage("mppt_limits", "Inverter input limits", after_limits, after_parallel))
 
     battery_begin = float(first_year_results_df["Battery_Energy_Beginning"].iloc[0]) / 1000.0
     battery_end = float(first_year_results_df["Battery_Energy_End"].iloc[-1]) / 1000.0
@@ -306,6 +600,9 @@ def _build_pv_loss_waterfall(
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "stages": stages,
         "bifacial": _bifacial_summary(resolved, front_effective_dc, rear_gain_dc),
+        "near_shading": _near_shading_summary(resolved, poa_dc, poa_shaded_dc),
+        "shading_mismatch": _shading_mismatch_summary(resolved, pv_breakdown, freq),
+        "parallel_mismatch": _parallel_mismatch_summary(resolved, pv_breakdown, freq),
         "pvwatts": {
             "components_pct": {name: float(value) for name, value in pv_breakdown.pvwatts_components_pct.items()},
             "components_kwh": pvwatts_components,
@@ -318,7 +615,16 @@ def _build_pv_loss_waterfall(
             "conversion_loss_kwh": _rounded(inverter_conversion),
             "direct_pv_conversion_loss_kwh": _rounded(direct_pv_conversion),
             "battery_discharge_conversion_loss_kwh": _rounded(battery_discharge_conversion),
+            **_inverter_model_fields(resolved, pv_breakdown, first_year_results_df, freq, inverter_ac_derate),
+            **(
+                {}
+                if inverter_units is None
+                else {
+                    "inverters": _inverter_units_summary(resolved, pv_breakdown.dc_after_losses, inverter_units, freq)
+                }
+            ),
         },
+        **({} if battery_inverter is None else {"battery_inverter": battery_inverter}),
         "dispatch": dispatch,
         "energy_balance": {
             "pv_dc": {
@@ -333,7 +639,16 @@ def _build_pv_loss_waterfall(
                 "pv_origin_battery_to_load_kwh": _rounded(pv_origin_battery_ac),
                 "battery_to_load_all_origins_kwh": _rounded(battery_ac),
                 "export_kwh": _rounded(export_ac),
-                "usable_system_production_kwh": _rounded(direct_pv_ac + pv_origin_battery_ac + export_ac),
+                "usable_system_production_kwh": _rounded(usable_system_production),
+                **(
+                    {
+                        "pv_origin_vehicle_to_load_kwh": _rounded(pv_origin_vehicle_ac),
+                        "pv_to_vehicle_kwh": _rounded(e("PV_AC_To_Vehicle")),
+                    }
+                    if resolved.vehicle is not None
+                    else {}
+                ),
+                **({} if battery_inverter is None else {"pv_to_battery_kwh": _rounded(e("PV_AC_To_Battery"))}),
             },
             "battery_stored_energy": {
                 "beginning_kwh": _rounded(battery_begin),
@@ -350,6 +665,9 @@ def _build_pv_loss_waterfall(
     }
 
 
+# One solar_position = "auto" fallback warning per run, however many times
+# the run computes the sun position (arrays, terrain shading, forecast files).
+@solar_position_warning_scope()
 def run_app_simulation(
     resolved: ResolvedAppConfig,
     deps: AppRuntimeDependencies,
@@ -375,7 +693,11 @@ def run_app_simulation(
     # Asked the way the dispatch asks it, so the run and its provenance agree
     # on what counts as PV-only.
     has_battery = config_has_battery(cfg)
-    execution = backend_provenance(execution_backend, pv_only=not has_battery)
+    execution = backend_provenance(
+        execution_backend,
+        pv_only=not has_battery and resolved.vehicle is None,
+        requested=resolved.requested_execution_backend,
+    )
     spec = resolved.smart_charging
     planned = instructions is None and spec is not None and spec.mode in PLANNER_MODES and has_battery
     if planned and execution_backend == "python" and cfg["resolution"] == "15min":
@@ -383,12 +705,18 @@ def run_app_simulation(
         # program every simulated day, which the Python backend runs slowly.
         warnings.warn(
             "smart_charging mode = 'daily_persistence' re-plans every day, which is slow on the Python backend "
-            "at 15-minute resolution; set execution_backend = 'numba' (the breos[fast] extra) for this mode.",
+            "at 15-minute resolution; install the breos[fast] extra, and leave execution_backend at 'auto' or "
+            "set it to 'numba', for this mode.",
             UserWarning,
             stacklevel=3,
         )
 
-    inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=prepare_simulation_inputs)
+    inputs = prepare_simulation_inputs_cached(cfg, resolved, deps)
+    # Reused inputs skip the preparation that warns about an "auto" fallback,
+    # so the run warns from its own record. Inside this run's scope, a run
+    # whose preparation warned already does not warn again.
+    solar_position = solar_position_record(cfg["solar_position"], inputs.weather, cfg["resolution"])
+    warn_solar_position_fallback(solar_position["requested"], solar_position["resolved"])
 
     # A [period] window runs once. Replayed as project years, it would carry
     # degradation over copies of one window as if each were a year.
@@ -400,6 +728,30 @@ def run_app_simulation(
     # 25 hours but is one day of the tariff.
     extra = {"Billed_Days": float(period.days)} if period is not None else {}
 
+    vehicle = resolved.vehicle
+    schedule = (
+        None
+        if vehicle is None
+        else resolve_vehicle_schedule(
+            vehicle,
+            pd.DatetimeIndex(inputs.dc_system_base.index),
+            timezone=resolved.timezone,
+            reference_year=int(cfg["start_date"][:4]),
+        )
+    )
+    vehicle_temperature = (
+        None
+        if vehicle is None
+        else build_battery_temperature_series(
+            vehicle.battery_temperature,
+            pd.DatetimeIndex(inputs.dc_system_base.index),
+            weather_df=inputs.weather,
+            indoor_model={"enabled": False},
+        )
+    )
+    limit = (cfg.get("smart_charging") or {}).get("grid_import_limit_w")
+    grid_limit = np.inf if limit is None else float(limit)
+
     def year_inputs(year_idx: int) -> ProjectionYear:
         pv_degradation_factor = (1 - degradation_rate) ** year_idx
         return ProjectionYear(
@@ -408,6 +760,11 @@ def run_app_simulation(
             houseload=inputs.load_data,
             temperature_series=inputs.temperature_series,
             extra=extra,
+            inverter_ac_derate=inputs.inverter_ac_derate,
+            inverter_curve_row=inputs.inverter_curve_row,
+            inverter_units=inputs.inverter_units,
+            vehicle_schedule=schedule,
+            vehicle_temperature_series=vehicle_temperature,
         )
 
     # Every project year replays the start-year calendar (ADR 0002 A2), so the
@@ -440,7 +797,7 @@ def run_app_simulation(
         instructions = resolve_instructions(spec, tariff) if spec is not None and has_battery else None
         # The configured table runs through the civil-day controller seam
         # (ADR 0002 A11); a replayed schedule stays on the static path.
-        if instructions is not None:
+        if instructions is not None and vehicle is None:
             day_controller = FixedTargetDayController(instructions)
     projection = run_projection(
         cfg,
@@ -459,7 +816,9 @@ def run_app_simulation(
         # calendar, so a civil day cut by a year's end continues next year.
         replay_seam=period is None,
         reference_tariff=reference_tariff,
-        record_priced_flows=_price_blind(instructions, day_controller),
+        record_priced_flows=vehicle is not None or _price_blind(instructions, day_controller),
+        vehicle_config=vehicle,
+        grid_import_limit_w=grid_limit,
     )
     first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
     current_soh = projection.carry.soh_pct
@@ -469,7 +828,41 @@ def run_app_simulation(
     degradation_engine = cfg["degradation_engine"]
     blast_model = cfg["blast_model"]
 
-    economics = _economics_fields(value_projection(cfg, resolved, projection), period)
+    vehicle_households = None
+    vehicle_result = None
+    if vehicle is None:
+        value = value_projection(cfg, resolved, projection)
+    else:
+        assert schedule is not None
+        configs = household_configs(vehicle)
+        runs = {
+            "R0": run_vehicle_baseline(
+                projection_years,
+                year_inputs,
+                configs["R0"],
+                freq=cfg["resolution"],
+                execution_backend=execution_backend,
+                grid_import_limit_w=grid_limit,
+            ),
+            "R2": projection,
+        }
+        if "R1" in configs:
+            runs["R1"] = run_projection(
+                cfg,
+                resolved,
+                projection_years,
+                year_inputs,
+                has_battery=has_battery,
+                execution_backend=execution_backend,
+                tariff=tariff,
+                instructions=instructions,
+                record_priced_flows=True,
+                vehicle_config=configs["R1"],
+                grid_import_limit_w=grid_limit,
+            )
+        vehicle_households = VehicleHouseholds(runs, schedule)
+        value, vehicle_result = value_vehicle_households(cfg, resolved, vehicle_households, tariff, reference_tariff)
+    economics = _economics_fields(value, period)
     yearly_df = economics["yearly_df"]
 
     replacement_events = [
@@ -521,21 +914,26 @@ def run_app_simulation(
         current_soh=current_soh,
         total_replacements=total_replacements,
         end_of_life_events=projection.end_of_life_events,
-        pv_loss_waterfall=_build_pv_loss_waterfall(inputs.pv_breakdown, first_year_results_df, resolved),
+        solver_diagnostics=inputs.pv_breakdown.solver_diagnostics,
+        irradiance=first_year_irradiance(inputs.pv_breakdown, first_year_results_df),
+        pv_loss_waterfall=_build_pv_loss_waterfall(
+            inputs.pv_breakdown, first_year_results_df, resolved, inputs.inverter_ac_derate, inputs.inverter_units
+        ),
         weather_metadata=dict(inputs.weather.attrs.get(WEATHER_METADATA_KEY, unknown_source_metadata("weather"))),
         load_profile_metadata=dict(
             inputs.load_data.attrs.get(LOAD_PROFILE_METADATA_KEY, unknown_source_metadata("load-profile"))
         ),
         degradation_summary=degradation_summary,
         execution=execution,
-        tariff=tariff_provenance(tariff, calendar_year=int(cfg["start_date"][:4])) if tariff is not None else None,
         smart_charging=smart_charging,
         projection=projection,
-        resolved_tariff=tariff,
         # Only one static set can be re-resolved and compared on revaluation.
         instructions=instructions if isinstance(instructions, DispatchInstructions) else None,
         period=period.record() if period is not None else None,
-        **_reference_fields(resolved, reference_tariff),
+        **_tariff_fields(resolved, tariff, reference_tariff),
+        solar_position=solar_position,
+        vehicle_households=vehicle_households,
+        vehicle=vehicle_result,
     )
 
 
@@ -550,16 +948,17 @@ def _price_blind(instructions: object, day_controller: object) -> bool:
     return instructions is None and day_controller is None
 
 
-def _reference_fields(resolved: ResolvedAppConfig, reference: ResolvedTariff | None) -> dict[str, Any]:
-    """The artifact fields of a run's no-system reference tariff."""
-    if reference is None or resolved.reference_tariff is None:
-        return {"reference_tariff": None, "resolved_reference_tariff": None}
-    record = reference_tariff_provenance(
-        reference,
-        calendar_year=int(resolved.cfg["start_date"][:4]),
-        import_price_escalation=effective_reference_escalation(resolved),
-    )
-    return {"reference_tariff": record, "resolved_reference_tariff": reference}
+def _tariff_fields(
+    resolved: ResolvedAppConfig, tariff: ResolvedTariff | None, reference: ResolvedTariff | None
+) -> dict[str, Any]:
+    """The artifact fields of a run's tariff and no-system reference tariff: each resolved, and its record."""
+    records = tariff_records(resolved, tariff, reference, calendar_year=int(resolved.cfg["start_date"][:4]))
+    return {
+        "tariff": records.get("tariff"),
+        "resolved_tariff": tariff,
+        "reference_tariff": records.get("reference_tariff"),
+        "resolved_reference_tariff": reference,
+    }
 
 
 # The year-row columns a tariff fills; without one, economics prices the
@@ -624,6 +1023,38 @@ def revalue_app_simulation(
         if resolved.tariff
         else None
     )
+    if resolved.vehicle is not None:
+        assert artifacts.vehicle_households is not None
+        configs = household_configs(resolved.vehicle)
+        period_controls = any(config.charge_periods or config.discharge_periods for config in configs.values())
+        if period_controls and (
+            tariff is None or old_tariff is None or tariff.schedule_hash != old_tariff.schedule_hash
+        ):
+            return run_app_simulation(resolved, deps), "resimulated"
+        if artifacts.instructions is not None and resolved.smart_charging is not None:
+            new_instructions = resolve_instructions(resolved.smart_charging, tariff)
+            if (
+                new_instructions is None
+                or new_instructions.instruction_hash() != artifacts.instructions.instruction_hash()
+            ):
+                return run_app_simulation(resolved, deps), "resimulated"
+        reference = (
+            resolved.reference_tariff.resolve(_simulated_index(artifacts), resolved.timezone)
+            if resolved.reference_tariff
+            else None
+        )
+        value, vehicle_result = value_vehicle_households(cfg, resolved, artifacts.vehicle_households, tariff, reference)
+        updated = replace(
+            artifacts,
+            **_economics_fields(value, resolved.period),
+            vehicle=vehicle_result,
+            **_tariff_fields(resolved, tariff, reference),
+        )
+        changed_schedule = tariff is not None and (
+            old_tariff is None or tariff.schedule_hash != old_tariff.schedule_hash
+        )
+        return updated, "repriced_by_step" if changed_schedule else "repriced"
+
     # A new schedule, or a first one, gives the stored energy by period no
     # meaning; only a run whose dispatch never read a tariff can be priced
     # on it, step by step.
@@ -684,9 +1115,7 @@ def revalue_app_simulation(
     revalued = replace(
         artifacts,
         **_economics_fields(value, resolved.period),
-        tariff=tariff_provenance(tariff, calendar_year=int(cfg["start_date"][:4])) if tariff is not None else None,
         smart_charging=smart_charging,
-        resolved_tariff=tariff,
-        **_reference_fields(resolved, reference),
+        **_tariff_fields(resolved, tariff, reference),
     )
     return revalued, "repriced_by_step" if new_schedule else "repriced"

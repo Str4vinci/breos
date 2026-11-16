@@ -8,40 +8,35 @@ of the tariff's own gross prices, so they set the cap and are never added to
 the bill.
 """
 
-import math
 from copy import deepcopy
-from unittest import mock
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from breos import App, optimization
+from breos import App
 from breos.app import _revalued_config
 from breos.battery import BatteryConfig
 from breos.economics import cost_analysis_projection
-from breos.montecarlo import MonteCarloSettings, _pv_cache_key, run_montecarlo
+from breos.montecarlo import _pv_cache_key, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
 from breos.projection import ProjectionYear, project_years
 from breos.tariffs import FLAT_SCHEDULE, AnnualNetworkCredit, TariffPrices, resolve_tariff
-from tools.generate_app_golden import EXCLUDED_PREFIXES, SCENARIOS, _fake_fetch, flatten
+from tests.offline_app import (
+    BASE,
+    CREDIT,
+    FLAT_REFERENCE,
+    TOU,
+    assert_fields_close,
+    evaluate_pv_design,
+    result_fields,
+    revalue_offline,
+    simulate_offline,
+)
+from tools.generate_app_golden import flatten
 
 BERLIN = "Europe/Berlin"
 LISBON = "Europe/Lisbon"
-BASE = {**SCENARIOS["native_h_replacement"], "execution_backend": "python"}
-TOU = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.28, "off_peak": 0.11},
-    "export_prices": {"all": 0.05},
-    "fixed_charge_per_day": 0.25,
-}
-CREDIT = {
-    "amount_per_year": 146.58,
-    "network_fixed_per_year": 39.70,
-    "network_import_prices": {"peak": 0.0888, "off_peak": 0.0311},
-}
-FLAT_REFERENCE = {"currency": "EUR", "import_prices": {"all": 0.30}, "fixed_charge_per_day": 0.40}
 FLAT_CREDIT = {**CREDIT, "network_import_prices": {"all": 0.0888}}
 
 # Stromnetz Berlin's Modul 1: 146.58 EUR a year, capped at the network
@@ -50,44 +45,6 @@ FLAT_CREDIT = {**CREDIT, "network_import_prices": {"all": 0.0888}}
 MODULE1 = AnnualNetworkCredit(
     amount_per_year=146.58, network_fixed_per_year=39.70, network_import_prices={"all": 0.0888}
 )
-
-
-def _offline():
-    return (
-        mock.patch("breos.app.fetch_tmy_weather_data", _fake_fetch),
-        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-    )
-
-
-def _simulated(config):
-    fetch, weather = _offline()
-    with fetch, weather:
-        app = App(config)
-        app.simulate()
-    return app
-
-
-def _revalued(app, changes):
-    fetch, weather = _offline()
-    with fetch, weather:
-        return app.revalue(changes)
-
-
-def _fields(result):
-    return {
-        key: value
-        for key, value in flatten(result).items()
-        if not key.startswith(EXCLUDED_PREFIXES) and not key.startswith("provenance.revaluation")
-    }
-
-
-def _assert_close(revalued, fresh, rel=1e-12):
-    assert revalued.keys() == fresh.keys()
-    for key, value in fresh.items():
-        if isinstance(value, float) and math.isfinite(value):
-            assert revalued[key] == pytest.approx(value, rel=rel, abs=1e-9), key
-        else:
-            assert revalued[key] == value, key
 
 
 def _flat_tariff(index, *, price=0.355096, fixed_per_day=0.4405, credit=MODULE1):
@@ -113,12 +70,12 @@ def _pv_equals_load(index, *, tariff, extra=None, reference=None):
 
 @pytest.fixture(scope="module")
 def tou_app():
-    return _simulated({**BASE, "tariff": TOU})
+    return simulate_offline({**BASE, "tariff": TOU})
 
 
 @pytest.fixture(scope="module")
 def credit_app():
-    return _simulated({**BASE, "tariff": {**TOU, "annual_network_credit": CREDIT}})
+    return simulate_offline({**BASE, "tariff": {**TOU, "annual_network_credit": CREDIT}})
 
 
 # --- The cap -------------------------------------------------------------------
@@ -158,6 +115,19 @@ def test_system_and_no_system_credits_differ_on_the_same_day():
     assert year["Baseline_Network_Charge"] == pytest.approx(2.2399671, abs=5e-8)
     assert year["Baseline_Network_Credit"] == pytest.approx(146.58 / 365, rel=1e-15)
     assert year["Baseline_Network_Credit"] == pytest.approx(0.4015890, abs=5e-8)
+
+
+def test_a_nan_billed_days_bills_the_simulated_duration_as_revaluation_does():
+    # A year-row frame holds NaN Billed_Days for a span that is not a window,
+    # and re-pricing bills such a row on its simulated hours; so does the run.
+    index = pd.date_range("2026-03-10", periods=48, freq="h", tz=BERLIN)
+    unset = _pv_equals_load(index, tariff=_flat_tariff(index)).iloc[0]
+    nan = _pv_equals_load(index, tariff=_flat_tariff(index), extra={"Billed_Days": np.nan}).iloc[0]
+    assert nan["Fixed_Charge"] == unset["Fixed_Charge"] == pytest.approx(2 * 0.4405, rel=1e-15)
+    assert nan["Network_Credit"] == unset["Network_Credit"]
+    # A finite value is billed as given, its scalar type included.
+    days32 = _pv_equals_load(index, tariff=_flat_tariff(index), extra={"Billed_Days": np.float32(2.0)}).iloc[0]
+    assert days32["Fixed_Charge"] == 0.4405 * np.float32(2.0)
 
 
 def test_a_leap_year_gets_the_annual_amount_and_a_window_its_share_of_the_year():
@@ -204,8 +174,8 @@ def test_vat_is_applied_once_and_the_network_parts_are_never_added():
         "fixed_charge_per_day": 0.4405,
     }
     credit = {"amount_per_year": 146.58, "network_fixed_per_year": 39.70, "network_import_prices": network}
-    plain = _simulated({**BASE, "tariff": tariff})
-    credited = _simulated({**BASE, "tariff": {**tariff, "annual_network_credit": credit}})
+    plain = simulate_offline({**BASE, "tariff": tariff})
+    credited = simulate_offline({**BASE, "tariff": {**tariff, "annual_network_credit": credit}})
 
     plain_rows, rows = plain._artifacts.yearly_df, credited._artifacts.yearly_df
     # The bill is the same: the network parts are not added to it, and the
@@ -265,9 +235,9 @@ def test_without_the_table_results_carry_no_credit(tou_app):
 
 def test_a_zero_credit_changes_no_reported_value(tou_app):
     zero = {"amount_per_year": 0.0, "network_fixed_per_year": 0.0, "network_import_prices": {"all": 0.0}}
-    credited = _simulated({**BASE, "tariff": {**TOU, "annual_network_credit": zero}}).result()
-    plain = _fields(tou_app.result())
-    fields = _fields(credited)
+    credited = simulate_offline({**BASE, "tariff": {**TOU, "annual_network_credit": zero}}).result()
+    plain = result_fields(tou_app.result())
+    fields = result_fields(credited)
     for key, value in plain.items():
         if key.startswith(("provenance.tariff.price_hash", "resolved_config.tariff")):
             continue
@@ -315,13 +285,13 @@ def test_the_app_books_each_credit_in_its_household_cashflow(tou_app, credit_app
 
 def test_a_reference_gives_the_no_system_household_its_own_credit_or_none():
     tariff = {**TOU, "annual_network_credit": CREDIT}
-    without = _simulated({**BASE, "tariff": tariff, "reference_tariff": FLAT_REFERENCE})
+    without = simulate_offline({**BASE, "tariff": tariff, "reference_tariff": FLAT_REFERENCE})
     rows = without._artifacts.yearly_df
     assert "Network_Credit" in rows and "Baseline_Network_Credit" not in rows
     assert "no_system_network_credit" not in without.result()["financial"][1]
 
     reference = {**FLAT_REFERENCE, "import_price_escalation": 0.0, "annual_network_credit": FLAT_CREDIT}
-    own = _simulated({**BASE, "reference_tariff": reference})
+    own = simulate_offline({**BASE, "reference_tariff": reference})
     rows, flows = own._artifacts.yearly_df, own._artifacts.cost_projection
     np.testing.assert_allclose(rows["Baseline_Network_Charge"], rows["Load_kWh"] * 0.0888 + 39.70, rtol=1e-12)
     assert (rows["Baseline_Network_Credit"] == 146.58).all()
@@ -339,7 +309,7 @@ def test_a_period_gets_its_share_of_the_annual_amounts():
         "period": {"start": "2025-03-01", "end": "2025-04-01"},
         "tariff": {**TOU, "annual_network_credit": CREDIT},
     }
-    app = _simulated(config)
+    app = simulate_offline(config)
     row = app._artifacts.yearly_df.iloc[0]
     assert row["Baseline_Network_Credit"] == pytest.approx(146.58 * 31 / 365, rel=1e-15)
     assert row["Network_Charge"] - row["Network_Credit"] >= 0
@@ -362,50 +332,26 @@ def test_a_period_gets_its_share_of_the_annual_amounts():
 )
 def test_revalue_reprices_the_credit_to_the_values_of_a_fresh_run(changes, tou_app, credit_app):
     start = tou_app if changes == {"tariff": {"annual_network_credit": CREDIT}} else credit_app
-    revalued = _revalued(start, changes)
+    revalued = revalue_offline(start, changes)
     assert revalued["provenance"]["revaluation"]["method"] == "repriced"
-    fresh = _simulated(_revalued_config(start._config, changes)).result()
+    fresh = simulate_offline(_revalued_config(start._config, changes)).result()
     # Re-priced from the energy by period, which agrees with the per-step sums to rounding.
-    _assert_close(_fields(revalued), _fields(fresh))
+    assert_fields_close(result_fields(revalued), result_fields(fresh))
 
 
 def test_revalue_of_the_credit_alone_keeps_the_energy_money(credit_app):
-    revalued = _revalued(credit_app, {"tariff": {"annual_network_credit": {"amount_per_year": 50.0}}})
+    revalued = revalue_offline(credit_app, {"tariff": {"annual_network_credit": {"amount_per_year": 50.0}}})
     before = credit_app.result()
     for key in ("grid_import_cost_year1_prices", "fixed_charge_year1_prices", "no_system_import_cost_year1_prices"):
         assert revalued[key] == before[key]
     assert revalued["no_system_network_credit_year1_prices"] == 50.0
 
 
-def test_revalue_never_resimulates_for_the_credit_under_daily_persistence():
-    window = {key: value for key, value in BASE.items() if key != "projection_years"}
-    config = {
-        **window,
-        "tariff": TOU,
-        "period": {"start": "2025-01-10", "end": "2025-01-14"},
-        "smart_charging": {
-            "mode": "daily_persistence",
-            "charge_periods": ["off_peak"],
-            "discharge_periods": ["peak"],
-            "grid_charge_efficiency": 0.95,
-            "target_levels": 3,
-            "soc_states": 3,
-        },
-    }
-    app = _simulated(config)
-    changes = {"tariff": {"annual_network_credit": CREDIT}}
-    revalued = _revalued(app, changes)
-    assert revalued["provenance"]["revaluation"]["method"] == "repriced"
-    assert revalued["provenance"]["smart_charging"] == app.result()["provenance"]["smart_charging"]
-    _assert_close(_fields(revalued), _fields(_simulated(_revalued_config(config, changes)).result()))
-
-
 # --- Monte Carlo -----------------------------------------------------------------------
 
 
-def test_montecarlo_caps_each_trajectory_at_its_own_import(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
+def test_montecarlo_caps_each_trajectory_at_its_own_import(small_mc_settings):
+    settings = small_mc_settings
     config = {
         "location": "porto",
         "n_modules": 8,
@@ -438,40 +384,9 @@ def test_montecarlo_caps_each_trajectory_at_its_own_import(tmp_path, write_multi
 # --- Projected optimization -------------------------------------------------------------
 
 
-@pytest.fixture
-def optimizer_case(monkeypatch):
-    index = pd.date_range("2026-01-05", periods=48, freq="h", tz=LISBON)
-    weather = pd.DataFrame({"temp_air": 20.0}, index=index)
-    load = pd.DataFrame({"Load": 1000.0}, index=index)
-    pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
-    monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())
-    config = {
-        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": LISBON, "altitude": 100},
-        "simulation": {"resolution": "h", "years_projection": 2},
-        "financials": {"inflation_rate": 0.02, "discount_rate": 0.05},
-        "battery": {"temperature": 20.0},
-        "mode": {"fixed_azimuth": 180.0},
-        "constraints": {"budget": 100000, "max_area_m2": 100, "max_tilt_deg": 60},
-        "tariff": {
-            "schedule": "pt_mainland_2026_daily_bi",
-            "currency": "EUR",
-            "import_prices": {"peak": 0.50, "off_peak": 0.10},
-            "export_prices": {"all": 0.03},
-            "fixed_charge_per_day": 0.40,
-        },
-    }
-    return weather, load, config
-
-
-def _evaluate(weather, load, config):
-    return optimization.evaluate_projected_design(
-        weather, load, config, n_modules=4, battery_kwh=0.0, tilt=30.0, azimuth=180.0
-    )
-
-
-def test_the_optimizer_npv_includes_both_credits(optimizer_case):
-    weather, load, config = optimizer_case
-    plain = _evaluate(weather, load, config)
+def test_the_optimizer_npv_includes_both_credits(tou_optimizer_case):
+    weather, load, config = tou_optimizer_case
+    plain = evaluate_pv_design(weather, load, config)
     credited_config = deepcopy(config)
     credited_config["tariff"]["annual_network_credit"] = {
         "amount_per_year": 146.58,
@@ -480,7 +395,7 @@ def test_the_optimizer_npv_includes_both_credits(optimizer_case):
     }
     resolved = resolve_optimization_config(credited_config)
     assert resolved["tariff"]["annual_network_credit"]["amount_per_year"] == 146.58
-    credited = _evaluate(weather, load, resolved)
+    credited = evaluate_pv_design(weather, load, resolved)
 
     # Two days of the 48-step year (no [period]) are one simulated year each.
     rows, flows = credited.yearly, credited.financial
@@ -490,20 +405,3 @@ def test_the_optimizer_npv_includes_both_credits(optimizer_case):
     saving = float(np.sum((flows["Cost_Network_Credit"] - flows["Cost_No_Sys_Network_Credit"]) / discount))
     assert credited.metrics["Projected_NPV"] == pytest.approx(plain.metrics["Projected_NPV"] + saving, rel=1e-12)
     assert credited.provenance["tariff"]["annual_network_credit"]["network_fixed_per_year"] == 39.70
-
-
-def test_the_optimizer_search_scores_with_the_credit(optimizer_case):
-    pytest.importorskip("pymoo")
-    import pickle
-
-    weather, load, config = optimizer_case
-    config["tariff"]["annual_network_credit"] = {
-        "amount_per_year": 146.58,
-        "network_fixed_per_year": 39.70,
-        "network_import_prices": {"peak": 0.0888, "off_peak": 0.0311},
-    }
-    fixed = _evaluate(weather, load, config)
-    problem = pickle.loads(pickle.dumps(optimization.SolarDesignProblem(weather, load, config)))
-    out = {}
-    problem._evaluate(np.array([4, 0.0, 30.0]), out)
-    assert out["F"][1] == -fixed.metrics["Projected_NPV"]

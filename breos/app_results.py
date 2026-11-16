@@ -13,23 +13,58 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig
 from breos.battery import LEDGER_SCHEMA_VERSION, resistance_to_efficiency
 from breos.economics import projection_rates_record
+from breos.electrical import electrical_result
 from breos.execution import config_has_battery
 from breos.projection import build_battery_config
 from breos.result_schema import RESULT_SCHEMA_VERSION
-from breos.runners.app import CO2_COLUMNS, SimulationArtifacts
+from breos.runners.app import SimulationArtifacts, first_year_co2
 from breos.smart_charging import PLANNER_MODES
 from breos.utils import get_hours_per_step, local_datetime_index, package_version
+from breos.vehicle.results import vehicle_year_record
 
 
-def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None = None) -> list[dict[str, Any]]:
+def irradiance_fields(
+    usable_ac_kwh: float, ghi_kwh_m2: float | None, poa_stc_dc_kwh: float | None, system_kwp: float | None
+) -> dict[str, Any]:
+    """The irradiance keys of a monthly row or the year-1 summary.
+
+    ``poa_stc_dc_kwh`` is the arrays' STC energy at their unshaded
+    plane-of-array irradiance: divided by the STC power it is the incident
+    irradiance weighted by array power, and the performance ratio is the
+    usable AC production over it (IEC 61724-1, with PVsyst's GlobInc).
+    """
+    if ghi_kwh_m2 is None or poa_stc_dc_kwh is None or not system_kwp:
+        return {}
+    return {
+        "global_horizontal_kwh_m2": round(ghi_kwh_m2, 2),
+        "global_incident_kwh_m2": round(poa_stc_dc_kwh / system_kwp, 2),
+        "performance_ratio_pct": round(usable_ac_kwh / poa_stc_dc_kwh * 100, 2) if poa_stc_dc_kwh > 0 else None,
+    }
+
+
+def monthly_to_dicts(
+    results_df: pd.DataFrame,
+    freq: str,
+    timezone: str | None = None,
+    *,
+    vehicle: bool = False,
+    irradiance: pd.DataFrame | None = None,
+    system_kwp: float | None = None,
+) -> list[dict[str, Any]]:
     """Convert first-year timestep results into monthly energy rows.
 
     Months follow the wall clock of the results, unless ``timezone`` names
     the zone to group them in instead (a [period] run groups its window by
     the location's civil months, on which the window is defined).
+    ``irradiance`` (columns ``GHI`` and ``POA_STC_DC`` on the results'
+    steps) and ``system_kwp`` add the irradiance keys of
+    :func:`irradiance_fields`.
     """
     hours_per_step = get_hours_per_step(freq)
     df = results_df.copy()
+    if irradiance is not None:
+        df["GHI"] = irradiance["GHI"].to_numpy(dtype=float)
+        df["POA_STC_DC"] = irradiance["POA_STC_DC"].to_numpy(dtype=float)
     if not isinstance(df.index, pd.DatetimeIndex):
         if "Datetime" in df.columns:
             df.index = local_datetime_index(df.pop("Datetime"))
@@ -47,6 +82,10 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None =
         "PV_AC_Export",
         "PV_DC_Curtailed",
     ]
+    if vehicle:
+        columns.append("PV_Origin_Vehicle_AC_To_Load")
+    if irradiance is not None:
+        columns += ["GHI", "POA_STC_DC"]
     monthly = df[columns].resample("ME").sum()
     monthly = monthly * hours_per_step / 1000
 
@@ -55,11 +94,16 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None =
         pv_dc = float(row["PV_DC"])
         direct = float(row["PV_AC_To_Load"])
         battery = float(row["PV_Origin_Battery_AC_To_Load"])
+        vehicle_pv = float(row["PV_Origin_Vehicle_AC_To_Load"]) if vehicle else 0.0
         usable_pv = direct + battery + float(row["PV_AC_Export"])
+        if vehicle:
+            usable_pv += vehicle_pv
         consumption = float(row["Houseload"])
         export = float(row["PV_AC_Export"])
         imported = float(row["Import_From_Grid"])
         self_consumption = direct + battery
+        if vehicle:
+            self_consumption += vehicle_pv
         rows.append(
             {
                 "month": cast(pd.Timestamp, idx).strftime("%b"),
@@ -73,6 +117,12 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None =
                 "grid_import_kwh": round(imported, 2),
                 "grid_export_kwh": round(export, 2),
                 "grid_independence_pct": round((1 - imported / consumption) * 100, 2) if consumption > 0 else 0.0,
+                **irradiance_fields(
+                    usable_pv,
+                    float(row["GHI"]) if irradiance is not None else None,
+                    float(row["POA_STC_DC"]) if irradiance is not None else None,
+                    system_kwp,
+                ),
             }
         )
     return rows
@@ -255,8 +305,21 @@ def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = Non
         }
         if row["Battery_SOH_%"] is not None:
             item["soh_pct"] = round(float(row["Battery_SOH_%"]), 2)
+        if "Vehicle_SOH" in row:
+            item["vehicle"] = vehicle_year_record(row.to_dict())
         rows.append(item)
     return rows
+
+
+def _infinity_as_text(value: Any) -> Any:
+    """Replace infinite floats by "inf" or "-inf", recursively."""
+    if isinstance(value, float) and math.isinf(value):
+        return "inf" if value > 0 else "-inf"
+    if isinstance(value, Mapping):
+        return {key: _infinity_as_text(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_infinity_as_text(item) for item in value]
+    return value
 
 
 def _provenance(
@@ -267,6 +330,9 @@ def _provenance(
     cfg = resolved.cfg
     normalized_cfg = {
         **cfg,
+        # The request, "auto" by default, as for solar_position: the record
+        # replays on a machine without Numba. The execution block names what ran.
+        "execution_backend": resolved.requested_execution_backend,
         "location": {
             "preset": resolved.loc_key,
             "latitude": resolved.lat,
@@ -279,7 +345,8 @@ def _provenance(
         "pv_module": cfg["pv_module"] or resolved.pv_module_key,
     }
     # Round-trip through JSON to guarantee only public, serializable scalar types.
-    normalized_cfg = json.loads(json.dumps(normalized_cfg, default=str))
+    # An unbounded equipment limit is written "inf", as JSON has no infinity.
+    normalized_cfg = json.loads(json.dumps(_infinity_as_text(normalized_cfg), default=str))
     weather = json.loads(json.dumps(artifacts.weather_metadata, default=str))
     weather.setdefault("latitude", resolved.lat)
     weather.setdefault("longitude", resolved.lon)
@@ -294,7 +361,10 @@ def _provenance(
         "resolution": cfg["resolution"],
         "timezone": resolved.timezone,
         "start_date": cfg["start_date"],
-        "pv_model": {"bifacial": deepcopy(artifacts.pv_loss_waterfall["bifacial"])},
+        "pv_model": {
+            "bifacial": deepcopy(artifacts.pv_loss_waterfall["bifacial"]),
+            **({"solar_position": deepcopy(artifacts.solar_position)} if artifacts.solar_position else {}),
+        },
         "degradation": artifacts.degradation_summary,
         # Which dispatch implementation produced these numbers, and the
         # toolchain it ran on. A bit-identity claim cannot be checked after the
@@ -302,6 +372,9 @@ def _provenance(
         # benchmarks. Same keys as the Monte Carlo block, from the same code.
         "execution": deepcopy(artifacts.execution),
         "economics": projection_rates_record(cfg),
+        "vehicle": artifacts.vehicle_households.provenance(resolved.vehicle)
+        if artifacts.vehicle_households is not None and resolved.vehicle is not None
+        else None,
     }
     # Only runs given repair reports carry the key, so existing results are
     # unchanged. An empty list is recorded as given.
@@ -373,6 +446,18 @@ def smart_charging_to_dict(artifacts: SimulationArtifacts) -> dict[str, Any]:
     }
 
 
+def _year_irradiance_fields(
+    usable_ac_kwh: float, irradiance: pd.DataFrame | None, freq: str, system_kwp: float
+) -> dict[str, Any]:
+    """The year-1 (or window) irradiance keys of :func:`irradiance_fields`, or none without irradiance."""
+    if irradiance is None:
+        return {}
+    hours_per_step = get_hours_per_step(freq)
+    ghi = float(irradiance["GHI"].sum()) * hours_per_step / 1000
+    poa = float(irradiance["POA_STC_DC"].sum()) * hours_per_step / 1000
+    return irradiance_fields(usable_ac_kwh, ghi, poa, system_kwp)
+
+
 def build_result(
     resolved: ResolvedAppConfig,
     artifacts: SimulationArtifacts,
@@ -418,6 +503,7 @@ def build_result(
         "grid_export_kwh": round(float(yr1_export), 2),
         "grid_independence_pct": round(float(grid_indep_y1), 2),
         "self_consumption_pct": round(float(self_consumption_pct), 2),
+        **_year_irradiance_fields(float(yr1_pv), artifacts.irradiance, cfg["resolution"], resolved.system_kwp),
         "total_investment": round(float(total_initial), 2),
         "payback_year": int(artifacts.payback_year) if artifacts.payback_year is not None else None,
         "npv_savings": npv_savings,
@@ -432,14 +518,26 @@ def build_result(
             artifacts.first_year_results_df,
             cfg["resolution"],
             timezone=resolved.timezone if artifacts.period is not None else None,
+            vehicle=resolved.vehicle is not None,
+            irradiance=artifacts.irradiance,
+            system_kwp=resolved.system_kwp,
         ),
         "financial": financial_to_dicts(cost_projection, total_initial) if cost_projection is not None else None,
         # Copied, so editing a result cannot reach the stored run that
         # App.revalue prices again.
         "pv_loss_waterfall": deepcopy(artifacts.pv_loss_waterfall),
+        "electrical": electrical_result(resolved.electrical, artifacts.solver_diagnostics),
         "provenance": _provenance(resolved, artifacts, input_repairs),
         "degradation": deepcopy(artifacts.degradation_summary),
     }
+    if artifacts.vehicle is not None:
+        result["vehicle"] = deepcopy(artifacts.vehicle)
+        adjusted = artifacts.vehicle["household_adjusted_npv"]
+        benefit = artifacts.vehicle["vehicle_benefit"]
+        result["npv_savings_household_adjusted"] = round(adjusted["npv"], 2) if adjusted is not None else None
+        result["household_adjusted_comparable"] = adjusted["comparable"] if adjusted is not None else None
+        result["vehicle_benefit_npv"] = round(benefit["npv"], 2) if benefit is not None else None
+        result["vehicle_benefit_comparable"] = benefit["comparable"] if benefit is not None else None
     # One copy, as provenance and the top level have always shared it.
     result["provenance"]["degradation"] = result["degradation"]
 
@@ -495,7 +593,8 @@ def build_result(
         # every runner (#183); a [period] window keeps its one row's.
         projection = artifacts.cost_projection
         if projection is not None:
-            co2 = {column: float(projection[column].iloc[0]) for column in CO2_COLUMNS}
+            co2 = first_year_co2(projection)
+            assert co2 is not None
             lifetime: dict[str, float | None] = {
                 "self": round(float(projection.attrs["lifetime_co2_avoided_self_consumed_kg"]), 2),
                 "export": round(float(projection.attrs["lifetime_co2_avoided_export_kg"]), 2),

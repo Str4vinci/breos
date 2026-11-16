@@ -52,55 +52,22 @@ _SAPM_MOUNTING = {
 DEFAULT_MODULE_EFFICIENCY = 0.20
 
 
-def _valid_efficiency(module_efficiency) -> bool:
-    """Return whether a supplied module efficiency is a usable fraction."""
-    return bool(
-        not isinstance(module_efficiency, (bool, np.bool_))
-        and isinstance(module_efficiency, (int, float, np.number))
-        and np.isfinite(module_efficiency)
-        and 0 < module_efficiency <= 1
-    )
-
-
-def _valid_noct(noct) -> bool:
-    """Return whether a supplied datasheet NOCT is a plausible finite °C value."""
-    return bool(
-        not isinstance(noct, (bool, np.bool_))
-        and isinstance(noct, (int, float, np.number))
-        and np.isfinite(noct)
-        and 0 < noct <= 100
-    )
-
-
 def validate_temperature_inputs(temperature_model: str, module_efficiency=None, noct=None) -> None:
-    """Validate model-specific thermal metadata without supplying defaults.
+    """Check that the thermal model has the module metadata it needs, without supplying defaults.
 
     PVsyst tolerates a missing module efficiency because a representative c-Si
-    value is defensible for it (see :data:`DEFAULT_MODULE_EFFICIENCY`) -- but a
-    *supplied* value must still be physical. SAM's NOCT model has no such
-    fallback: NOCT varies far too much between constructions to stand in for,
-    so both it and an efficiency fraction are required before it can run.
+    value is defensible for it (see :data:`DEFAULT_MODULE_EFFICIENCY`). SAM's
+    NOCT model has no such fallback: NOCT varies far too much between
+    constructions to stand in for, so both it and an efficiency fraction are
+    required before it can run. The values themselves are checked by
+    :class:`breos.pv_modules.PVModuleParams`.
     """
-    if (
-        temperature_model in _PVSYST_MOUNTING
-        and module_efficiency is not None
-        and not _valid_efficiency(module_efficiency)
-    ):
-        raise ValueError(
-            "PV module Module_Efficiency must be a finite fraction in (0, 1] when supplied to a PVsyst temperature model"
-        )
     if temperature_model != "noct-sam":
         return
     if module_efficiency is None:
         raise ValueError("temperature_model='noct-sam' requires PV module Module_Efficiency metadata")
-    if not _valid_efficiency(module_efficiency):
-        raise ValueError(
-            "PV module Module_Efficiency must be a finite fraction in (0, 1] for temperature_model='noct-sam'"
-        )
     if noct is None:
         raise ValueError("temperature_model='noct-sam' requires PV module NOCT metadata")
-    if not _valid_noct(noct):
-        raise ValueError("PV module NOCT must be a finite temperature in (0, 100] °C for temperature_model='noct-sam'")
 
 
 def calculate_cell_temperature(
@@ -116,7 +83,7 @@ def calculate_cell_temperature(
 
     ``temperature_model`` must already be one of ``TEMPERATURE_MODELS``; an
     unrecognised name raises ``KeyError`` here rather than being validated,
-    because :func:`breos.pv.model_options.resolve_temperature_model` owns that
+    because :func:`breos.pv.model_options.resolve_pv_model_options` owns that
     check. PVsyst's heat balance uses a sourced ``module_efficiency`` when the
     module carries one and :data:`DEFAULT_MODULE_EFFICIENCY` otherwise, so every
     module is modelled with a realistic conversion efficiency rather than
@@ -129,7 +96,6 @@ def calculate_cell_temperature(
         return pvlib.temperature.faiman(poa_global, temp_air, wind_speed)
 
     if temperature_model in _PVSYST_MOUNTING:
-        validate_temperature_inputs(temperature_model, module_efficiency, noct)
         params = dict(pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"][_PVSYST_MOUNTING[temperature_model]])
         # Always forward an explicit efficiency. Omitting the keyword would fall
         # through to pvlib's 0.1, which would model two catalog modules under

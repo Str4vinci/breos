@@ -15,7 +15,7 @@ import pvlib
 
 # BREOS IAM model name -> pvlib beam-IAM callable. Bound explicitly, and at
 # import, so that a pvlib rename fails when the package loads rather than
-# midway through a simulation. ``breos.pv.model_options.resolve_iam_model``
+# midway through a simulation. ``breos.pv.model_options.resolve_pv_model_options``
 # owns validating the name, so the keys here must track ``IAM_MODELS``.
 _IAM_MODELS = {
     "ashrae": pvlib.iam.ashrae,
@@ -90,7 +90,7 @@ def calculate_front_effective_irradiance(
 
     ``iam_model`` must already be one of ``IAM_MODELS``; an unrecognised name
     raises ``KeyError`` here rather than being validated, because
-    :func:`breos.pv.model_options.resolve_iam_model` owns that check.
+    :func:`breos.pv.model_options.resolve_pv_model_options` owns that check.
     """
     iam = _IAM_MODELS[iam_model](aoi)
     poa_direct = np.nan_to_num(poa["poa_direct"].values, nan=0.0)

@@ -15,6 +15,7 @@ from breos.app_inputs import AppRuntimeDependencies, load_weather_for_simulation
 from breos.load_profiles import load_profile
 from breos.runners.app import run_app_simulation
 from breos.weather import fetch_tmy_weather_data, fill_leap_day, load_weather, resample_to_15min
+from tests.conftest import INSTANT_AT_LABELS
 
 
 def _tmy(year: int, tz: str = "UTC") -> pd.DataFrame:
@@ -62,16 +63,6 @@ def test_fetch_tmy_accepts_a_leap_sample_year(monkeypatch):
     assert weather.index[0] == pd.Timestamp("2028-01-01", tz="UTC")
     assert weather.index[-1] == pd.Timestamp("2028-12-31 23:00", tz="UTC")
     assert weather.attrs["breos_weather_metadata"]["leap_day"]["year"] == 2028
-
-
-def test_remap_tmy_year_onto_a_leap_year_fills_29_february():
-    remapped = remap_tmy_year(_tmy(2025), 2028)
-
-    assert len(remapped) == 8784
-    assert (remapped.index.year == 2028).all()
-    np.testing.assert_array_equal(
-        remapped.loc["2028-02-29", "ghi"].to_numpy(), remapped.loc["2028-02-28", "ghi"].to_numpy()
-    )
 
 
 @pytest.mark.parametrize("resolution", ["h", "15min"])
@@ -140,15 +131,34 @@ def _clear_sky_tmy(latitude: float, longitude: float, tz) -> pd.DataFrame:
     return frame
 
 
-def _load_cached_tmy(tmp_path, frame, freq, *, name, latitude, longitude, timezone_name):
-    frame.to_csv(tmp_path / f"{name}_tmy_2005_2020_pvgis-sarah3.csv")
-    deps = AppRuntimeDependencies(
+def _deps(load_weather, resample=resample_to_15min) -> AppRuntimeDependencies:
+    """Runtime dependencies that read weather only through ``load_weather``."""
+    return AppRuntimeDependencies(
         load_profile=lambda **kwargs: None,
         load_weather=load_weather,
-        fetch_tmy_weather_data=lambda **kwargs: pytest.fail("the cached TMY should be used"),
-        resample_to_15min=resample_to_15min,
+        fetch_tmy_weather_data=lambda **kwargs: pytest.fail("the supplied weather should be used"),
+        resample_to_15min=resample,
         build_battery_temperature_series=lambda **kwargs: None,
     )
+
+
+def _assert_leap_day_copied(weather: pd.DataFrame, freq: str) -> None:
+    """29 February is a full day copied from 28 February, and the metadata says so."""
+    per_day = 24 if freq == "h" else 96
+    feb28 = _on_day(weather, 2, 28)
+    feb29 = _on_day(weather, 2, 29)
+    assert len(feb29) == per_day
+    if freq == "h":
+        np.testing.assert_array_equal(feb29, feb28)
+    else:
+        # The resampler reads one neighbouring hour across each midnight.
+        assert feb29.sum() == pytest.approx(feb28.sum(), rel=1e-3)
+    assert weather.attrs["breos_weather_metadata"]["leap_day"] == {"year": 2028, "filled_from": "2028-02-28"}
+
+
+def _load_cached_tmy(tmp_path, frame, freq, *, name, latitude, longitude, timezone_name):
+    frame.to_csv(tmp_path / f"{name}_tmy_2005_2020_pvgis-sarah3.csv")
+    deps = _deps(load_weather)
     resolved = SimpleNamespace(loc_key=name, lat=latitude, lon=longitude, timezone=timezone_name)
     return load_weather_for_simulation(resolved, freq, 2028, deps, weather_dir=tmp_path)
 
@@ -171,19 +181,9 @@ def test_cached_fixed_offset_tmy_gets_29_february(tmp_path, freq, name, latitude
         tmp_path, source, freq, name=name, latitude=latitude, longitude=longitude, timezone_name=timezone_name
     )
 
-    per_day = 24 if freq == "h" else 96
-    index = weather.index
-    assert index.tz.utcoffset(None) == timedelta(hours=hours)
-    assert len(weather) == 366 * per_day
-    feb28 = weather.loc[(index.month == 2) & (index.day == 28), "ghi"]
-    feb29 = weather.loc[(index.month == 2) & (index.day == 29), "ghi"]
-    assert len(feb29) == per_day
-    if freq == "h":
-        np.testing.assert_array_equal(feb29.to_numpy(), feb28.to_numpy())
-    else:
-        # The resampler reads one neighbouring hour across each midnight.
-        assert feb29.sum() == pytest.approx(feb28.sum(), rel=1e-3)
-    assert weather.attrs["breos_weather_metadata"]["leap_day"] == {"year": 2028, "filled_from": "2028-02-28"}
+    assert weather.index.tz.utcoffset(None) == timedelta(hours=hours)
+    assert len(weather) == 366 * (24 if freq == "h" else 96)
+    _assert_leap_day_copied(weather, freq)
 
 
 @pytest.mark.filterwarnings("ignore")
@@ -201,18 +201,6 @@ def test_cached_utc_tmy_is_shifted_as_before(tmp_path):
     assert str(weather.index.tz) == "UTC"
     pd.testing.assert_frame_equal(weather, expected, check_freq=False)
     assert weather.attrs["breos_weather_metadata"]["leap_day"] == {"year": 2028, "filled_from": "2028-02-28"}
-
-
-def test_remap_tmy_year_of_a_naive_index_matches_its_utc_remap():
-    naive = _tmy(2025)
-    naive.index = naive.index.tz_localize(None)
-
-    remapped = remap_tmy_year(naive, 2028)
-
-    utc = remap_tmy_year(_tmy(2025), 2028)
-    assert remapped.index.tz is None
-    np.testing.assert_array_equal(remapped.index, utc.index.tz_localize(None))
-    np.testing.assert_array_equal(remapped["ghi"].to_numpy(), utc["ghi"].to_numpy())
 
 
 def _zone_tmy(zone: str, freq: str, year: int) -> pd.DataFrame:
@@ -302,12 +290,9 @@ def test_weather_loader_rejects_a_tmy_remapped_across_changed_offset_rules(
     assert len(remapped) == 8784 * (1 if freq == "h" else 4)
     assert remapped.index[0] == pd.Timestamp(first)
     assert remapped.index[-1] == year_end - pd.Timedelta(hours=1) - step
-    deps = AppRuntimeDependencies(
-        load_profile=lambda **kwargs: None,
-        load_weather=lambda **kwargs: source.copy(),
-        fetch_tmy_weather_data=lambda **kwargs: pytest.fail("the injected weather should be used"),
-        resample_to_15min=lambda *args, **kwargs: pytest.fail("the source already has the requested cadence"),
-        build_battery_temperature_series=lambda **kwargs: None,
+    deps = _deps(
+        lambda **kwargs: source.copy(),
+        resample=lambda *args, **kwargs: pytest.fail("the source already has the requested cadence"),
     )
     resolved = SimpleNamespace(loc_key="here", lat=0.0, lon=0.0, timezone=zone)
 
@@ -396,7 +381,7 @@ def test_app_remaps_weather_instants_but_uses_target_civil_time_for_load_and_tar
     source = Location(41.15, -8.61).get_clearsky(_civil_year(zone, source_freq, 2021))
     source["temp_air"] = np.arange(len(source), dtype=float) / 10000.0
     source["wind_speed"] = 2.0
-    source.attrs["breos_weather_metadata"] = {"source": "injected"}
+    source.attrs["breos_weather_metadata"] = {"source": "injected", **INSTANT_AT_LABELS}
     (tmp_path / "weather").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("breos.app.load_weather", lambda **kwargs: source.copy())
@@ -527,25 +512,10 @@ def test_named_zone_weather_gets_29_february_in_the_app_input_stage(tmp_path, fr
     """#329: injected weather in a named zone, through load_weather_for_simulation."""
     source = _clear_sky_tmy(latitude, longitude, zone)
     source.attrs["breos_weather_metadata"] = {"source": "injected"}
-    deps = AppRuntimeDependencies(
-        load_profile=lambda **kwargs: None,
-        load_weather=lambda **kwargs: source.copy(),
-        fetch_tmy_weather_data=lambda **kwargs: pytest.fail("the injected weather should be used"),
-        resample_to_15min=resample_to_15min,
-        build_battery_temperature_series=lambda **kwargs: None,
-    )
+    deps = _deps(lambda **kwargs: source.copy())
     resolved = SimpleNamespace(loc_key="here", lat=latitude, lon=longitude, timezone=zone)
 
     weather = load_weather_for_simulation(resolved, freq, 2028, deps, weather_dir=tmp_path)
 
-    per_day = 24 if freq == "h" else 96
     pd.testing.assert_index_equal(weather.index, _civil_year(zone, freq, 2028).as_unit(weather.index.unit))
-    feb28 = _on_day(weather, 2, 28)
-    feb29 = _on_day(weather, 2, 29)
-    assert len(feb29) == per_day
-    if freq == "h":
-        np.testing.assert_array_equal(feb29, feb28)
-    else:
-        # The resampler reads one neighbouring hour across each midnight.
-        assert feb29.sum() == pytest.approx(feb28.sum(), rel=1e-3)
-    assert weather.attrs["breos_weather_metadata"]["leap_day"] == {"year": 2028, "filled_from": "2028-02-28"}
+    _assert_leap_day_copied(weather, freq)

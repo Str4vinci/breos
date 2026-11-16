@@ -300,7 +300,10 @@ At exactly `t = T`, the end of the project horizon in years, the full
 replacement-pack price is computed by the existing replacement-outlay
 routine (E3/E4): `C0 × (1 + inflation_rate)^T ×
 (1 - replacement_cost_learning)^T`. `C0` is the resolved full replacement
-price at t = 0, including cost overrides. The nominal credit is this price
+price at t = 0, including cost overrides. *(Amended by ADR 0004 C9 in 0.8.0:
+`C0` is the pack price that `replacement_event_cost` computes from
+`battery_cost_per_kwh`, never `battery_replacement_cost`, so a bundled
+replacement price does not credit an inverter.)* The nominal credit is this price
 times `f`, and its present value is discounted by `(1 + discount_rate)^T`,
 the same convention as other year-T flows. This uses exponent T, not T − 1
 (the annual energy-flow exponent), and no mid-year fallback.

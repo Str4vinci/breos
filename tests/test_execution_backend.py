@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.app_config import APP_CONFIG_FIELDS
-from breos.battery import BatteryConfig, _dispatch_day_python, _resolve_dispatch_day, _ResultBuffers
-from breos.execution import EXECUTION_BACKENDS, aggregate_jit_cache_states
+from breos.app_inputs import InverterSteps
+from breos.battery import BatteryConfig, _ResultBuffers
+from breos.execution import aggregate_jit_cache_states
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
 
@@ -27,18 +27,9 @@ def _base_config():
     }
 
 
-def test_python_is_the_default_and_the_reference():
-    assert EXECUTION_BACKENDS == ("python", "numba")
-    # Unset Monte Carlo settings inherit the App key, whose default is python.
-    assert MonteCarloSettings(weather_file="x").execution_backend is None
-    assert APP_CONFIG_FIELDS["execution_backend"].default == "python"
-    assert _resolve_dispatch_day("python") is _dispatch_day_python
-
-
 def test_montecarlo_rejects_unknown_backend_before_loading_inputs(tmp_path):
-    settings = MonteCarloSettings(weather_file=str(tmp_path / "missing.csv"), n_runs=1, execution_backend="cuda")
     with pytest.raises(ValueError, match="execution_backend must be one of"):
-        run_montecarlo(_base_config(), settings)
+        MonteCarloSettings(weather_file=str(tmp_path / "missing.csv"), n_runs=1, execution_backend="cuda")
 
 
 def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch, write_multiyear_weather):
@@ -61,17 +52,47 @@ def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch, w
 
 def test_provenance_records_the_python_backend_and_versions(tmp_path, write_multiyear_weather):
     weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=3)
+    settings = MonteCarloSettings(
+        weather_file=str(weather), n_runs=1, years_per_run=1, seed=3, execution_backend="python"
+    )
     result = run_montecarlo(_base_config(), settings)
 
     execution = result.provenance["execution"]
     assert execution["execution_backend"] == "python"
+    assert execution["requested_execution_backend"] == "python"
     assert execution["numpy"] == np.__version__
     assert execution["pandas"] == pd.__version__
     assert execution["python"].count(".") == 2
     # No compiler is involved on the reference path, so none is claimed.
     assert "numba" not in execution
     assert "jit_cache" not in execution
+
+
+@pytest.mark.parametrize("where", ["default", "settings", "config"])
+def test_auto_is_resolved_once_and_recorded_with_the_backend_that_ran(
+    tmp_path, write_multiyear_weather, monkeypatch, where
+):
+    """The "auto" request, from the default, the settings or the config, resolves once, before any trajectory.
+
+    numba_available is pinned to False so this runs without the extra; the
+    resolution with Numba installed is covered in test_execution_backend_propagation.
+    """
+    import breos._numba_dispatch as dispatch
+
+    monkeypatch.setattr(dispatch, "numba_available", lambda: False)
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    config = {**_base_config(), **({"execution_backend": "auto"} if where == "config" else {})}
+    backend = {"execution_backend": "auto"} if where == "settings" else {}
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=3, **backend)
+    result = run_montecarlo(config, settings)
+
+    execution = result.provenance["execution"]
+    assert execution["requested_execution_backend"] == "auto"
+    assert execution["execution_backend"] == "python"
+    # The settings record the backend that ran; the resolved config keeps the
+    # config's own request, so it replays on a machine with or without Numba.
+    assert result.settings.execution_backend == "python"
+    assert result.provenance["resolved_config"]["execution_backend"] == "auto"
 
 
 def test_provenance_records_the_compiler_versions_and_cache_state(tmp_path, write_multiyear_weather):
@@ -162,6 +183,7 @@ def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(
         lambda *args, **kwargs: (
             {2021: pd.Series([0.0], index=pd.DatetimeIndex(["2021-01-01"]))},
             {2021: pd.Series([25.0], index=pd.DatetimeIndex(["2021-01-01"]))},
+            {2021: InverterSteps(None, None)},
         ),
     )
     # A one-column frame, which is what load_consumption_profile really
@@ -310,16 +332,6 @@ def test_dispatch_kernel_cache_survives_a_new_process(tmp_path):
     second = _run_cache_probe(cache_dir)
     assert second["hits"] == 1, "a second process must load the compiled kernel from disk"
     assert second["misses"] == 0
-
-
-def test_dispatch_kernel_cache_does_not_accumulate_data_files(tmp_path):
-    """Repeated processes must reuse one cache entry rather than append new ones."""
-    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
-    cache_dir = tmp_path / "numba-cache"
-    cache_dir.mkdir()
-
-    for _ in range(3):
-        _run_cache_probe(cache_dir)
-
+    # Reusing the entry, rather than appending one per process, keeps one data file.
     data_files = _dispatch_cache_data_files(cache_dir)
     assert len(data_files) == 1, f"cache entries accumulated across processes: {[p.name for p in data_files]}"

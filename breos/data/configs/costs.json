@@ -1,4 +1,20 @@
 {
+    "commercial_pt": {
+        "currency": "EUR",
+        "electricity_cost": 0.16,
+        "electricity_sold_cost": 0.03,
+        "module_cost_per_w": 0.12,
+        "inverter_cost_per_kw_hybrid": 102.58,
+        "inverter_cost_per_kw_simple": 70,
+        "storage_cost_per_kwh": 500,
+        "installation_cost_per_module": 250,
+        "installation_cost_battery": 350,
+        "maintenance_cost": 300,
+        "maintenance_cost_per_panel": 4,
+        "daily_power_cost": 0.3,
+        "other_costs": 3000,
+        "other_cost_per_module": 100
+    },
     "residential_de": {
         "currency": "EUR",
         "electricity_cost": 0.4042,

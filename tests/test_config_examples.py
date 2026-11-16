@@ -16,6 +16,7 @@ import pytest
 
 from breos.app_config import DEFAULTS
 from breos.montecarlo import MonteCarloSettings
+from tests.offline_app import offline_weather
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "configs" / "examples"
 _ANNOTATED = re.compile(r"^#?\s*([a-z_]+)\s*=\s*[^#]+#\s*\[([^\]]+)\]")
@@ -59,3 +60,32 @@ def test_example_comments_state_the_real_defaults(name, defaults, minimum):
         if defaults.get(key, object()) != value
     }
     assert wrong == {}
+
+
+def test_the_balcony_example_runs_each_module_on_its_own_input():
+
+    from breos import App
+
+    config = tomllib.loads((EXAMPLES / "balcony-microinverter.toml").read_text(encoding="utf-8"))
+
+    def run(config):
+        with offline_weather():
+            app = App(config)
+            app.simulate()
+        return app
+
+    app = run(config)
+    result = app.result()
+    # With one module per input there is no series mismatch: the PVWatts
+    # mismatch loss is off, 2 % of the DC by default.
+    with_mismatch = run({key: value for key, value in config.items() if key != "pv_loss_overrides"})
+    produced = app.timeseries()["PV_DC"].sum()
+    assert produced == pytest.approx(with_mismatch.timeseries()["PV_DC"].sum() / 0.98, rel=1e-3)
+    # Every limit of the microinverter holds; only the module's unstated
+    # system voltage leaves a check not run.
+    assert [(f["code"], f["field"]) for f in result["electrical"]["findings"]] == [
+        ("missing_value", "Max_System_Voltage")
+    ]
+    stages = {stage["key"]: stage for stage in result["pv_loss_waterfall"]["stages"]}
+    assert stages["mppt_limits"]["delta_kwh"] == 0.0
+    assert result["electrical"]["status"] == "incomplete"

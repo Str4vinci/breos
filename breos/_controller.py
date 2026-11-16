@@ -324,17 +324,23 @@ class _InstructionBuffer:
         "grid_target_fraction",
         "grid_charge_efficiency",
         "grid_import_limit_w",
+        "_bound",
+        "_ac_coupled",
     )
 
-    def __init__(self, n_steps: int) -> None:
+    def __init__(self, n_steps: int, *, ac_coupled: bool = False) -> None:
         self._discharge = np.zeros(n_steps, dtype=np.bool_)
         self._reserve = np.zeros(n_steps, dtype=np.float64)
         self._target = np.full(n_steps, np.nan, dtype=np.float64)
         self.discharge_allowed = self._read_only(self._discharge)
         self.reserve_fraction = self._read_only(self._reserve)
         self.grid_target_fraction = self._read_only(self._target)
+        # An AC-coupled battery's efficiency is None (ADR 0004 C11), so
+        # ``_bound``, not None, says whether a decision has bound the scalars.
         self.grid_charge_efficiency: float | None = None
         self.grid_import_limit_w: float | None = None
+        self._bound = False
+        self._ac_coupled = ac_coupled
 
     @staticmethod
     def _read_only(array: np.ndarray) -> np.ndarray:
@@ -344,8 +350,18 @@ class _InstructionBuffer:
 
     def bind_scalars(self, instructions: DispatchInstructions) -> None:
         scalars = (instructions.grid_charge_efficiency, instructions.grid_import_limit_w)
-        if self.grid_charge_efficiency is None:
+        if (
+            self._ac_coupled
+            and instructions.grid_charge_efficiency is not None
+            and not np.isnan(instructions.grid_target_fraction).all()
+        ):
+            raise ValueError(
+                "an AC-coupled battery grid-charges through its own inverter; a daily decision's instructions "
+                "take grid_charge_efficiency = None"
+            )
+        if not self._bound:
             self.grid_charge_efficiency, self.grid_import_limit_w = scalars
+            self._bound = True
         elif (self.grid_charge_efficiency, self.grid_import_limit_w) != scalars:
             raise ValueError(
                 "every daily decision in one simulation must keep grid_charge_efficiency and grid_import_limit_w"
@@ -366,8 +382,9 @@ class _InstructionBuffer:
         next call runs, or that no call runs because this call was the last,
         are not. None when no decision was made.
         """
-        if self.grid_charge_efficiency is None or self.grid_import_limit_w is None:
+        if not self._bound:
             return None
+        assert self.grid_import_limit_w is not None
         return DispatchInstructions(
             discharge_allowed=self._discharge,
             reserve_fraction=self._reserve,
@@ -492,7 +509,7 @@ class _ControllerSession:
         self._next_day_ordinal = carry.next_project_day_ordinal
         self._pending: PendingObservedCivilDay | None = None
         self._active: _ActiveDecision | None = None
-        self.instructions = _InstructionBuffer(n_steps)
+        self.instructions = _InstructionBuffer(n_steps, ac_coupled=battery_config.get("coupling") == "ac")
         self._day = -1
         self._segment: tuple[int, int, int] | None = None
         self._seam_head: tuple[SlotKey, ...] | None = None

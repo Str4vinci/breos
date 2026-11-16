@@ -10,13 +10,13 @@ For each location in ``validation/locations.json`` this fetches, per source:
   and mounting — the JRC's independent PV model (Huld et al. 2010), computed
   on the full multi-year satellite record.
 - ``pvwatts``:  NREL PVWatts v8 monthly/annual AC output for the same system.
-  Uses ``NREL_API_KEY`` if set, otherwise ``DEMO_KEY`` (rate-limited but
-  sufficient for the handful of validation sites).
+  Uses ``NREL_API_KEY`` (from developer.nlr.gov) if set, otherwise ``DEMO_KEY``
+  (rate-limited but sufficient for the handful of validation sites).
 
 Each source is fetched independently and failures are recorded in the
 reference JSON instead of aborting, so partial refreshes work — e.g. run
 ``--sources pvwatts`` later from a network that can reach
-``developer.nrel.gov``. Existing reference JSONs are merged, not overwritten.
+``developer.nlr.gov``. Existing reference JSONs are merged, not overwritten.
 
 Usage:
     uv run python validation/fetch_references.py                    # everything
@@ -42,7 +42,7 @@ from breos.utils import safe_path_slug  # noqa: E402
 from validation.common import REFERENCES_DIR, WEATHER_DIR, find_weather_file, load_spec  # noqa: E402
 
 PVGIS_PVCALC_URL = "https://re.jrc.ec.europa.eu/api/v5_3/PVcalc"
-PVWATTS_URL = "https://developer.nrel.gov/api/pvwatts/v8.json"
+PVWATTS_URL = "https://developer.nlr.gov/api/pvwatts/v8.json"
 
 # PVWatts station-based international data can sit far from the site; beyond
 # this distance the reference is recorded but flagged untrusted (excluded
@@ -155,6 +155,29 @@ def fetch_pvgis_pvcalc(loc: dict, system: dict, losses: dict) -> dict:
     }
 
 
+def mismatched_pvwatts_inputs(params: dict, inputs: dict) -> list[str]:
+    """Name missing/different echoed request inputs, excluding the API key.
+
+    Numeric strings compare numerically (e.g. ``"4"`` equals ``4.0``);
+    other values compare as strings. Extra response inputs are ignored.
+    """
+    mismatched = []
+    for key, requested in params.items():
+        if key == "api_key":
+            continue
+        if key not in inputs:
+            mismatched.append(key)
+            continue
+        echoed = inputs[key]
+        try:
+            matches = float(requested) == float(echoed)
+        except (TypeError, ValueError):
+            matches = str(requested) == str(echoed)
+        if not matches:
+            mismatched.append(key)
+    return mismatched
+
+
 def fetch_pvwatts(loc: dict, system: dict, losses: dict) -> dict:
     """Fetch PVWatts v8 monthly/annual AC output. Tries nsrdb, then intl."""
     api_key = os.environ.get("NREL_API_KEY", "DEMO_KEY")
@@ -198,18 +221,27 @@ def fetch_pvwatts(loc: dict, system: dict, losses: dict) -> dict:
         distance = station.get("distance")
         trusted = dataset == "nsrdb" or (distance is not None and distance <= PVWATTS_TRUST_DISTANCE_M)
         stored_params = {k: v for k, v in params.items() if k != "api_key"}
+        mismatched_inputs = mismatched_pvwatts_inputs(params, data.get("inputs") or {})
 
         print(f"  pvwatts: ac_annual = {outputs['ac_annual']:.0f} kWh (dataset={dataset}, station {distance} m)")
         return {
             "fetched": _today(),
             "params": stored_params,
+            "version": data.get("version"),
+            "ssc_version": (data.get("ssc_info") or {}).get("version"),
             "dataset": dataset,
             "station_distance_m": distance,
             "station": station.get("location") or station.get("solar_resource_file"),
+            "weather_data_source": station.get("weather_data_source"),
+            "station_latitude": station.get("lat"),
+            "station_longitude": station.get("lon"),
+            "station_elevation_m": station.get("elev"),
             "monthly_kwh": [round(float(v), 2) for v in outputs["ac_monthly"]],
             "annual_kwh": round(float(outputs["ac_annual"]), 2),
             "solrad_annual_kwh_m2_day": round(float(outputs["solrad_annual"]), 3),
-            "trusted": bool(trusted),
+            "mismatched_inputs": mismatched_inputs,
+            "trusted": bool(trusted and not mismatched_inputs),
+            **({"warnings": data["warnings"]} if data.get("warnings") else {}),
         }
 
     print(f"  pvwatts: FAILED ({last_error})")

@@ -37,15 +37,14 @@ whole point of the baseline is that it does not move silently.
   that works for every site. The TMY weather BREOS runs on comes from the
   same database, so this is the closest thing to a same-weather comparison
   among the public calculators.
-- **NREL PVWatts v8** (`developer.nrel.gov/api/pvwatts/v8.json`) — the
+- **NREL PVWatts v8** (`developer.nlr.gov/api/pvwatts/v8.json`) — the
   NREL/SAM reference implementation. `NREL_API_KEY` env var (free at
-  https://developer.nrel.gov/signup/), falls back to `DEMO_KEY`. Coverage:
-  NSRDB for the Americas and parts of Asia; station-based `intl` data
-  elsewhere (the fetcher records station distance and marks references
-  \>200 km as untrusted, which excludes them from CI assertions). The
-  committed reference snapshot has no PVWatts results: the fetch failed when
-  it was taken, and each reference file records the error. The PVWatts band
-  test skips until a fetch succeeds and the references are committed again.
+  https://developer.nlr.gov/signup/), falls back to `DEMO_KEY`. The fetcher
+  tries NSRDB, then station-based `intl` data. Each reference records the
+  fetch date, the API and SSC versions, the weather source and station, and
+  `mismatched_inputs`: request parameters the API did not echo back
+  unchanged. A reference is trusted when every input matches and the dataset
+  is NSRDB or an `intl` station within 200 km; the band test skips the rest.
 - **PVGIS TMY** (via `breos.weather.fetch_tmy_weather_data`) — the checked-in
   hourly weather inputs, trimmed to the five columns BREOS reads
   (`ghi`/`dni`/`dhi`/`temp_air`/`wind_speed`), rounded to physical precision
@@ -57,10 +56,17 @@ whole point of the baseline is that it does not move silently.
 
 Deviations against these references bundle **weather-source differences with
 model differences** (TMY vs multi-year record vs NSRDB stations). That is why
-the CI bands are loose (±10% PVGIS, ±15% PVWatts) — they catch gross errors.
+CI checks annual AC within ±10% of PVGIS, and the performance ratio (PR)
+within ±8% of trusted PVWatts references: PR = annual AC / (annual
+front-side POA × DC nameplate). PVWatts reports its own POA; for BREOS the POA
+is an independent pvlib Perez transposition of BREOS's weather, so the ratio
+takes the weather out without hiding a BREOS transposition error.
 The *tight* guarantee is the self-baseline regression (0.1%), which catches
 any unintended change to transposition, IAM, thermal, DC, loss, or inverter
 modeling the moment it lands.
+
+`run_breos.py` records that POA (`annual_poa_kwh_m2`) and the nameplate
+(`dc_nameplate_kw`) next to each model's energies.
 
 The [external validation](../docs/modeling/validation.md) page covers separate
 parts of the model against measured data from NIST Gaithersburg, the DKA Solar
@@ -104,4 +110,4 @@ albedo 0.2, same tilt/azimuth per site.
 
 PVGIS data © European Union, 2001–2024, reuse permitted with attribution
 (CC BY 4.0). PVWatts results courtesy of the NREL developer API under its
-[terms of service](https://developer.nrel.gov/docs/terms/).
+[terms of service](https://developer.nlr.gov/terms/).

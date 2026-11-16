@@ -33,6 +33,7 @@ from breos.tariffs import (
     resolve_tariff,
     tariff_provenance,
 )
+from tests.conftest import declare_instant_at_labels
 
 QUARTERS = {"q1": [1, 2, 3], "q2": [4, 5, 6], "q3": [7, 8, 9], "q4": [10, 11, 12]}
 # A §14a Module 3-style day: low, standard and high windows. The windows and
@@ -741,7 +742,7 @@ def test_montecarlo_prices_every_trajectory_by_season(tmp_path, write_multiyear_
 def quarter_boundary_case(monkeypatch):
     # 48 hours across the Q1/Q2 boundary, in Lisbon.
     index = pd.date_range("2026-03-31", periods=48, freq="h", tz="Europe/Lisbon")
-    weather = pd.DataFrame({"temp_air": 20.0}, index=index)
+    weather = declare_instant_at_labels(pd.DataFrame({"temp_air": 20.0}, index=index))
     load = pd.DataFrame({"Load": 1000.0}, index=index)
     pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
     monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())

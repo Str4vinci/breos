@@ -201,13 +201,16 @@ Neither tool gives a forecast, a deployable controller or a bound on lifetime NP
 
 ## Outside 0.7.0
 
+Vehicle-to-home was outside 0.7.0 and is implemented for 0.8.0 in App and
+paired Monte Carlo; see [ADR 0005](../adr/0005-vehicle-to-home.md).
+
 These items are not implemented:
 
 - Live tariffs, market prices, FX conversion and currencies other than EUR.
 - 30-minute input, and boundary policies that approximate a boundary.
 - Calendars that advance across project years (A2).
 - Inverter netting of PV and grid-charge AC flows (A6).
-- Thermal storage, heat pumps, electro-thermal dispatch and vehicle-to-home.
+- Thermal storage, heat pumps and electro-thermal dispatch.
 - Price-aware predictive dispatch beyond the experimental daily planner.
 - Collective self-consumption (ACC). Sharing coefficients are a pure
   transformation of a community production series and a per-participant

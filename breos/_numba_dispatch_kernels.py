@@ -22,6 +22,13 @@ Importing this module requires Numba. :mod:`breos._numba_dispatch` must stay
 importable without it -- that is where the availability check and the friendly
 error live -- so this module is imported lazily from there, never at its top.
 
+One compiled function is not shared with the Python backend:
+:func:`breos.degradation._rainflow_kernel.rainflow_day`, the native rainflow
+count's daily scan on arrays. The Python backend keeps the numpy scan of
+``breos._rainflow.RainflowCounter``; the two repeat the same float64 arithmetic in the
+same order, and ``tests/test_degradation_protocol.py`` holds both, and the
+interpreted kernel, to a per-sample reference by repr.
+
 ``fastmath=False`` is deliberate: enabling it would let LLVM reassociate and
 contract the arithmetic and would break bit identity with the Python backend.
 """
@@ -32,8 +39,13 @@ from numba import njit
 from numba.extending import register_jitable
 
 from breos import _dispatch
+from breos.degradation import _rainflow_kernel
 
 for _helper in (
+    _dispatch._curve_efficiency,
+    _dispatch._curve_ac,
+    _dispatch._curve_dc,
+    _dispatch._cable_gross,
     _dispatch._dc_ac,
     _dispatch._dc_for_ac,
     _dispatch.lfp_capacity_factor,
@@ -43,7 +55,20 @@ for _helper in (
     _dispatch._grid_charge,
     _dispatch._combined_conversion,
     _dispatch._dispatch_dc_step,
+    _dispatch._battery_inverter_charge,
+    _dispatch._battery_inverter_charge_input,
+    _dispatch._dispatch_ac_step,
+    _dispatch._dispatch_vehicle_step,
+    _dispatch._vehicle_drive,
+    _dispatch._dispatch_vehicle_away_step,
+    _dispatch._dispatch_day,
 ):
     register_jitable(fastmath=False)(_helper)
 
 _dispatch_day_kernel = njit(cache=True, fastmath=False, nogil=True)(_dispatch._dispatch_day)
+_dispatch_day_candidates_kernel = njit(cache=True, fastmath=False, nogil=True)(_dispatch._dispatch_day_candidates)
+
+for _rainflow_helper in (_rainflow_kernel._emit_cycle, _rainflow_kernel._push_reversal):
+    register_jitable(fastmath=False)(_rainflow_helper)
+
+_rainflow_day_kernel = njit(cache=True, fastmath=False, nogil=True)(_rainflow_kernel.rainflow_day)

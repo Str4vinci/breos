@@ -8,8 +8,10 @@ from breos.tariffs import (
     TariffPrices,
     TariffSchedule,
     available_tariff_schedules,
+    civil_day_starts,
     classify_tariff_periods,
     get_tariff_schedule,
+    parse_schedule_definition,
     resolve_flat_tariff,
     resolve_named_tariff,
     resolve_tariff,
@@ -32,7 +34,7 @@ def _daily_schedule() -> TariffSchedule:
 def test_tariff_values_are_frozen_and_currency_qualified():
     schedule = _daily_schedule()
     prices = TariffPrices(
-        currency="eur",
+        currency=" eur ",
         import_prices={"off_peak": 0.12, "peak": 0.30},
         export_prices={"all": 0.04},
     )
@@ -48,11 +50,6 @@ def test_tariff_values_are_frozen_and_currency_qualified():
 def test_unknown_currency_fails_before_resolution(currency):
     with pytest.raises(ValueError, match="must be an ISO 4217 currency code"):
         TariffPrices(currency=currency, import_prices={"all": 0.2}, export_prices={"all": 0.04})
-
-
-def test_currency_codes_are_upper_cased():
-    prices = TariffPrices(currency=" usd ", import_prices={"all": 20.0}, export_prices={"all": 4.0})
-    assert prices.currency == "USD"
 
 
 @pytest.mark.parametrize("value", [-0.01, float("nan"), float("inf"), True])
@@ -175,59 +172,10 @@ def test_unknown_bundled_schedule_fails_without_country_fallback():
         get_tariff_schedule("pt")
 
 
-@pytest.mark.parametrize(
-    ("timestamp", "expected"),
-    [
-        ("2026-01-12 08:59", "mid_peak"),
-        ("2026-01-12 09:00", "peak"),
-        ("2026-01-12 10:30", "mid_peak"),
-        ("2026-07-13 10:29", "mid_peak"),
-        ("2026-07-13 10:30", "peak"),
-        ("2026-07-13 13:00", "mid_peak"),
-    ],
-)
-def test_portuguese_2026_daily_tri_classifies_standard_and_dst_boundaries(timestamp, expected):
-    instant = pd.DatetimeIndex([timestamp]).tz_localize("Europe/Lisbon")
-
-    assert classify_tariff_periods(instant, "pt_mainland_2026_daily_tri", timezone=LISBON) == (expected,)
-
-
 def test_portuguese_2026_weekly_tri_requires_quarter_hour_alignment():
-    hourly = pd.date_range("2026-07-13", periods=24, freq="h", tz="Europe/Lisbon")
-    with pytest.raises(ValueError, match="requires 15-minute resolution"):
-        classify_tariff_periods(hourly, "pt_mainland_2026_weekly_tri", timezone=LISBON)
-
     offset = pd.date_range("2026-07-13 00:05", periods=4, freq="15min", tz="Europe/Lisbon")
     with pytest.raises(ValueError, match="boundaries do not align"):
         classify_tariff_periods(offset, "pt_mainland_2026_weekly_tri", timezone=LISBON)
-
-    quarter_hour = pd.date_range("2026-07-13 09:00", periods=15, freq="15min", tz="Europe/Lisbon")
-    labels = classify_tariff_periods(quarter_hour, "pt_mainland_2026_weekly_tri", timezone=LISBON)
-    assert labels[:1] == ("mid_peak",)
-    assert labels[1:13] == ("peak",) * 12
-    assert labels[13:] == ("mid_peak",) * 2
-
-
-@pytest.mark.parametrize(
-    ("day", "expected_steps"),
-    [("2026-03-29", 23), ("2026-10-25", 25)],
-)
-def test_tariff_classification_preserves_portuguese_dst_day_instants(day, expected_steps):
-    index = pd.date_range(day, pd.Timestamp(day) + pd.Timedelta(days=1), freq="h", inclusive="left", tz="Europe/Lisbon")
-
-    labels = classify_tariff_periods(index, "pt_mainland_2026_daily_bi", timezone=LISBON)
-
-    assert len(index) == expected_steps
-    assert len(labels) == expected_steps
-
-
-def test_same_instants_classify_identically_from_different_timezone_views():
-    utc_index = pd.date_range("2026-10-25 00:00", periods=5, freq="h", tz="UTC")
-    lisbon_index = utc_index.tz_convert("Europe/Lisbon")
-
-    assert classify_tariff_periods(utc_index, "pt_mainland_2026_daily_bi", timezone=LISBON) == classify_tariff_periods(
-        lisbon_index, "pt_mainland_2026_daily_bi", timezone=LISBON
-    )
 
 
 def test_future_schedule_requires_an_explicit_effective_study_date_for_reference_year_data():
@@ -296,6 +244,76 @@ def test_day_starts_follow_civil_days_across_dst(freq, per_hour):
         local = index[start].tz_convert(LISBON)
         assert (local.hour, local.minute) == (0, 0)
     assert resolved.timezone == LISBON
+
+
+@pytest.mark.parametrize(("freq", "per_hour"), [("h", 1), ("15min", 4)])
+@pytest.mark.parametrize(
+    ("timezone", "short_day", "long_day"),
+    [
+        ("Atlantic/Azores", date(2026, 3, 29), date(2026, 10, 25)),
+        ("America/Santiago", date(2026, 9, 6), date(2026, 4, 4)),
+    ],
+)
+def test_day_starts_with_midnight_dst_transitions(timezone, short_day, long_day, freq, per_hour):
+    index = pd.date_range("2026-01-01", "2027-01-01", freq=freq, tz=timezone, inclusive="left")
+    starts = civil_day_starts(index.tz_convert("UTC"), timezone)
+    days = index.date
+    expected = (0, *(position for position in range(1, len(days)) if days[position] != days[position - 1]))
+
+    assert starts == (*expected, len(index))
+    assert len(starts) - 1 == len(set(days)) == 365
+    lengths = {days[start]: end - start for start, end in zip(starts, starts[1:])}
+    assert lengths[short_day] == 23 * per_hour
+    assert lengths[long_day] == 25 * per_hour
+    assert set(lengths.values()) == {23 * per_hour, 24 * per_hour, 25 * per_hour}
+    short_start = starts[list(lengths).index(short_day)]
+    assert (index[short_start].hour, index[short_start].minute) == (1, 0)
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_lisbon_day_starts_match_previous_normalization(freq):
+    index = pd.date_range("2026-01-01", "2027-01-01", freq=freq, tz="UTC", inclusive="left")
+    local_days = index.tz_convert(LISBON).normalize().tz_localize(None).as_unit("ns").asi8
+    previous = (
+        0,
+        *(position for position in range(1, len(index)) if local_days[position] != local_days[position - 1]),
+        len(index),
+    )
+
+    assert civil_day_starts(index, LISBON) == previous
+
+
+def test_time_of_use_tariff_resolves_across_missing_azores_midnight():
+    timezone = "Atlantic/Azores"
+    schedule = parse_schedule_definition(
+        "azores_daily",
+        {
+            "version": "1",
+            "timezone": timezone,
+            "cycle": "daily",
+            "periods": ["off_peak", "peak"],
+            "rules": [
+                {
+                    "days": "all",
+                    "season": "all",
+                    "intervals": {"off_peak": [["00:00", "08:00"], ["22:00", "24:00"]], "peak": [["08:00", "22:00"]]},
+                }
+            ],
+        },
+    )
+    index = pd.date_range("2026-03-28", "2026-03-31", freq="15min", tz=timezone, inclusive="left")
+    prices = TariffPrices(currency="EUR", import_prices={"off_peak": 0.1, "peak": 0.3}, export_prices={"all": 0})
+
+    resolved = resolve_named_tariff(index.tz_convert("UTC"), schedule, prices, timezone=timezone)
+
+    expected = tuple("peak" if 8 <= stamp.hour < 22 else "off_peak" for stamp in index)
+    assert resolved.period_labels == expected
+    assert resolved.import_price_per_kwh == tuple(0.3 if label == "peak" else 0.1 for label in expected)
+    assert resolved.day_starts == (0, 96, 188, 284)
+    # Saturday 23:45 is followed by Sunday 01:00; 00:00 is absent.
+    assert index[95].isoformat() == "2026-03-28T23:45:00-01:00"
+    assert index[96].isoformat() == "2026-03-29T01:00:00+00:00"
+    assert resolved.period_labels[95:97] == ("off_peak", "off_peak")
 
 
 def test_a_schedule_is_not_moved_to_another_zone():

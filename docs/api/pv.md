@@ -13,9 +13,134 @@ The module-performance path uses the CEC six-parameter single-diode model.
 BREOS fits its parameters locally from catalogue or datasheet values with
 `breos.cec_fit`, then evaluates them with pvlib. It does not require PySAM and
 does not automatically import SAM/CEC component tables; those remain useful
-model documentation and comparison data.
+model documentation and comparison data. When a datasheet has no solution at
+its short-circuit current, the fit raises it by 1 % per step, as SAM does, and
+records the datasheet and fitted values in the result's `isc_adjustment`.
 
-## Production
+## Specified inverter data
+
+`breos.equipment.InverterSpec` stores an inverter's AC nameplate and optional
+datasheet limits with validation. Unpublished limits remain `None`. Product
+identities, certification evidence and prices belong to the caller's catalog.
+
+The DC voltage limits apply to every input. `mppts` lists the inputs in
+datasheet order as `MpptSpec` entries, each with its own operating current,
+short-circuit current and string limits, so inverters with asymmetric inputs
+keep their published values. `isc_comparison_factor` records the multiplier the
+manufacturer applies to array Isc before comparing it with an input's
+short-circuit rating, such as 1.25. `None` means a value is unknown. An upper
+limit of `math.inf` or a lower limit of 0 states that the inverter has none, so
+unbounded and unpublished limits stay distinct. `mppts` also accepts mappings of
+`MpptSpec` fields, so catalog JSON loads without conversion.
+
+```python
+from breos import App
+from breos.equipment import InverterSpec, MpptSpec
+
+inverter = InverterSpec(
+    nominal_power_w=4000,
+    inverter_efficiency=0.975,
+    mppts=(
+        MpptSpec(max_input_current_a=16, max_short_circuit_current_a=24, max_strings=2),
+        MpptSpec(max_input_current_a=13, max_short_circuit_current_a=20, max_strings=1),
+    ),
+)
+app = App({"location": "porto", "n_modules": 12,
+           "annual_consumption_kwh": 4000, **inverter.as_app_config()})
+```
+
+The adapter supplies the AC rating in kW, clears the sizing ratio, and supplies
+efficiency only when known. The aggregate simulation consumes those values;
+the stored DC/MPPT limits do not enable topology validation or per-MPPT
+simulation. Unknown efficiency leaves the engine's existing assumption in place.
+
+```{eval-rst}
+.. autoclass:: breos.equipment.InverterSpec
+   :members:
+
+.. autoclass:: breos.equipment.MpptSpec
+   :members:
+
+.. autoclass:: breos.equipment.EfficiencyCurve
+   :members:
+
+.. autoclass:: breos.equipment.TemperatureDerating
+   :members:
+
+.. autoclass:: breos.inverter.InverterConversion
+   :members:
+
+.. autoclass:: breos.inverter.AcCable
+   :members:
+
+.. autofunction:: breos.inverter.ac_derate
+```
+
+## String topology checks
+
+{py:func}`breos.electrical.check_topology` checks declared strings against
+module and inverter datasheet limits at the site's design temperatures and
+returns structured findings. App runs it when the configuration sets
+`inverters`, `pv_strings` and `electrical_environment`; see
+[String topology checks](../getting-started/configuration.md#string-topology-checks).
+
+```python
+from breos.electrical import ElectricalEnvironment, PVString, check_topology
+from breos.pv_modules import get_module
+
+check = check_topology(
+    arrays=[(get_module("MyModule_450W"), 10)],
+    inverters=[inverter],
+    strings=[PVString(inverter=0, mppt=0, array=0, modules=10)],
+    environment=ElectricalEnvironment(min_design_temp_c=-5, max_ambient_temp_c=40),
+)
+check.status, [finding.code for finding in check.findings]
+```
+
+```{eval-rst}
+.. autofunction:: breos.electrical.check_topology
+
+.. autoclass:: breos.electrical.PVString
+   :members:
+
+.. autoclass:: breos.electrical.ElectricalEnvironment
+   :members:
+
+.. autoclass:: breos.electrical.ArrayMounting
+   :members:
+
+.. autoclass:: breos.electrical.TopologyCheck
+   :members:
+
+.. autoclass:: breos.electrical.ElectricalFinding
+   :members:
+
+.. autoclass:: breos.electrical.FindingKind
+   :members:
+
+.. autodata:: breos.electrical.FINDING_CODES
+   :no-value:
+
+.. autofunction:: breos.electrical.string_limited_dc
+
+.. autofunction:: breos.electrical.string_model_problems
+
+.. autofunction:: breos.electrical.string_cable_loss
+
+.. autofunction:: breos.electrical.cable_summary
+
+.. autodata:: breos.electrical.CONDUCTOR_RESISTIVITY_20C_OHM_M
+
+.. autodata:: breos.electrical.CONDUCTOR_TEMPERATURE_COEFFICIENT_PER_K
+
+.. autodata:: breos.electrical.DEFAULT_CONDUCTOR_TEMP_C
+
+.. autodata:: breos.electrical.MOUNTING_TEMPERATURE_RISE_C
+
+.. autodata:: breos.electrical.BIFACIAL_REAR_IRRADIANCE_RATIO
+```
+
+## Production functions
 
 ```{eval-rst}
 .. autosummary::
@@ -26,6 +151,7 @@ model documentation and comparison data.
    breos.solar.calculate_pv_production_breakdown
    breos.solar.calculate_pv_production_ac
    breos.solar.calculate_multi_array_production
+   breos.solar.calculate_array_breakdowns
    breos.solar.dc_to_ac
 ```
 

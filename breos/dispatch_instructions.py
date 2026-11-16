@@ -49,7 +49,10 @@ class DispatchInstructions:
     discharge_allowed: np.ndarray  # bool, shape (n,)
     reserve_fraction: np.ndarray  # float64 in [0, 1]; usable fraction kept before discharge
     grid_target_fraction: np.ndarray  # float64 in [0, 1]; NaN = no grid charge on that step
-    grid_charge_efficiency: float  # in (0, 1]; AC-to-DC, applied before the existing charge efficiency (A6)
+    # In (0, 1]; AC-to-DC, applied before the existing charge efficiency (A6).
+    # None for an AC-coupled battery, whose own inverter converts grid charge
+    # (ADR 0004 C7); only an AC-coupled run accepts it.
+    grid_charge_efficiency: float | None
     grid_import_limit_w: float  # > 0; math.inf = no site limit
 
     def __post_init__(self) -> None:
@@ -86,9 +89,14 @@ class DispatchInstructions:
                 "reserve_fraction must be >= grid_target_fraction"
             )
 
-        efficiency = _scalar(self.grid_charge_efficiency, "grid_charge_efficiency")
-        if not (math.isfinite(efficiency) and 0.0 < efficiency <= 1.0):
-            raise ValueError("'grid_charge_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
+        efficiency: float | None = None
+        if self.grid_charge_efficiency is not None:
+            efficiency = _scalar(self.grid_charge_efficiency, "grid_charge_efficiency")
+            if not (math.isfinite(efficiency) and 0.0 < efficiency <= 1.0):
+                raise ValueError(
+                    "'grid_charge_efficiency' must be between 0 (exclusive) and 1 (inclusive), "
+                    "or None for an AC-coupled battery"
+                )
         limit = _scalar(self.grid_import_limit_w, "grid_import_limit_w")
         if math.isnan(limit) or limit <= 0.0:
             raise ValueError("'grid_import_limit_w' must be greater than 0, or math.inf for no site limit")
@@ -128,6 +136,16 @@ class DispatchInstructions:
     def __len__(self) -> int:
         return len(self.discharge_allowed)
 
+    def take(self, index: slice | np.ndarray) -> DispatchInstructions:
+        """The instructions at ``index``, a slice or an array of step positions, with the same two scalars."""
+        return DispatchInstructions(
+            discharge_allowed=self.discharge_allowed[index],
+            reserve_fraction=self.reserve_fraction[index],
+            grid_target_fraction=self.grid_target_fraction[index],
+            grid_charge_efficiency=self.grid_charge_efficiency,
+            grid_import_limit_w=self.grid_import_limit_w,
+        )
+
     def instruction_hash(self) -> str:
         """A sha256 of every array and scalar, the same on every platform and run."""
         digest = hashlib.sha256(_HASH_SCHEMA)
@@ -135,7 +153,12 @@ class DispatchInstructions:
         digest.update(self.discharge_allowed.astype(np.uint8).tobytes())
         digest.update(self.reserve_fraction.astype("<f8").tobytes())
         digest.update(self.grid_target_fraction.astype("<f8").tobytes())
-        digest.update(struct.pack("<dd", self.grid_charge_efficiency, self.grid_import_limit_w))
+        if self.grid_charge_efficiency is None:
+            # Its own bytes, shorter than any packed float pair, so no float
+            # hashes like None and every float keeps the bytes it had before.
+            digest.update(b"none" + struct.pack("<d", self.grid_import_limit_w))
+        else:
+            digest.update(struct.pack("<dd", self.grid_charge_efficiency, self.grid_import_limit_w))
         return digest.hexdigest()
 
     def __eq__(self, other: object) -> bool:

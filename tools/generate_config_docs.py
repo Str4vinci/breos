@@ -27,13 +27,18 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from breos import app_config  # noqa: E402
 from breos.app_config import (  # noqa: E402
+    AC_CABLE_TABLE,
     ANNUAL_NETWORK_CREDIT_TABLE,
     APP_CONFIG_FIELDS,
     COSTS_TABLE,
+    ELECTRICAL_ENVIRONMENT_TABLE,
     INDOOR_MODEL_TABLE,
+    INVERTER_TABLE,
+    MPPT_TABLE,
     NESTED_TABLE_SPECS,
     PERIOD_TABLE,
     PV_ARRAY_TABLE,
+    PV_STRING_TABLE,
     REFERENCE_TARIFF_TABLE,
     SMART_CHARGING_TABLE,
     TARIFF_TABLE,
@@ -41,6 +46,7 @@ from breos.app_config import (  # noqa: E402
 )
 from breos.config_schema import TableSpec  # noqa: E402
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams  # noqa: E402
+from breos.vehicle.config import AWAY_CHARGING_TABLE, DAY_SCHEDULE_TABLE, VEHICLE_SCHEDULE_TABLE  # noqa: E402
 
 OUTPUT_PATH = REPO_ROOT / "docs" / "getting-started" / "config-reference.md"
 
@@ -85,6 +91,35 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "key it omits from the top level. See [Multi-array PV systems](configuration.md#multi-array-pv-systems).",
     ),
     (
+        "inverters",
+        INVERTER_TABLE,
+        "One entry per specified inverter, as `[[inverters]]` in TOML. `None` or an omitted key means a datasheet "
+        "value is unknown; the string check then reports it instead of assuming one. Set with `pv_strings` and "
+        "`electrical_environment`. See [String topology checks](configuration.md#string-topology-checks).",
+    ),
+    (
+        "mppts",
+        MPPT_TABLE,
+        "One entry per MPPT input of an inverter, in datasheet order, as `[[inverters.mppts]]` in TOML. Inputs "
+        "with different limits each list their own.",
+    ),
+    (
+        "pv_strings",
+        PV_STRING_TABLE,
+        "One entry per group of identical strings on one input, as `[[pv_strings]]` in TOML. Every module of every "
+        "array must be in exactly one string. Entries on the same input are counted together.",
+    ),
+    (
+        "electrical_environment",
+        ELECTRICAL_ENVIRONMENT_TABLE,
+        "Design temperatures for the string check, as `[electrical_environment]` in TOML.",
+    ),
+    (
+        "ac_cable",
+        AC_CABLE_TABLE,
+        "The cable from the inverter to the meter, as `[ac_cable]` in TOML; see [AC cable](configuration.md#ac-cable).",
+    ),
+    (
         "tariff",
         TARIFF_TABLE,
         "Time-of-use prices, as `[tariff]` in TOML; see [Time-of-use tariffs](configuration.md#time-of-use-tariffs).",
@@ -117,16 +152,53 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         SMART_CHARGING_TABLE,
         "Battery dispatch by tariff period, as `[smart_charging]` in TOML; see "
         '[Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs '
-        "`target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses "
-        'the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but '
+        "`target_usable_fraction`, `charge_periods`, `discharge_periods` and, with a DC-coupled battery, "
+        '`grid_charge_efficiency`, which `battery_coupling = "ac"` refuses; it refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but '
         "`target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, "
         "`target_levels`, `soc_states`, `wear_cost_per_kwh` and `decision_boundary`. `grid_import_limit_w` is "
         "optional in both. "
         '`mode = "discharge_only"` '
         "takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from "
-        'the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; '
+        'the grid. `mode = "disabled"` takes no other key, except `grid_import_limit_w` when `[vehicle]` is present. '
+        '`overlap_policy` defaults to `"reject"`; '
         '`"hold_target"` permits overlapping periods for `fixed_target` and `daily_persistence`, retaining the target '
         "as the discharge floor.",
+    ),
+    (
+        "vehicle",
+        app_config.VEHICLE_TABLE,
+        "App and Monte Carlo simulate the no-system, reference and study households (ADR 0005); Monte Carlo pairs their sampled inputs and requires native vehicle ageing. "
+        "All prices use the run currency; equipment facts and the pack price have no defaults. "
+        "`daily_persistence` is refused with a vehicle. Without this table, existing behavior is unchanged.",
+    ),
+    (
+        "vehicle.away_charging",
+        AWAY_CHARGING_TABLE,
+        "Optional away charger. All four keys are required; purchases cross no site meter. "
+        "Charging occurs only during schedule charging windows.",
+    ),
+    (
+        "vehicle.schedule",
+        VEHICLE_SCHEDULE_TABLE,
+        "Set weekday and weekend rules, or a CSV file timestamped in the simulation's reference year. "
+        "A step is plugged in only when home for all of it: "
+        "departure rounds down, arrival up. The calendar replays across the year seam; departure counts "
+        "include steps beyond a period window. Times use the configured zone, including DST. "
+        "For a repeated template time, departure uses its first occurrence and arrival its last; nonexistent "
+        "times shift to the DST transition. Naive CSV times at DST transitions are refused; use explicit offsets. "
+        "CSV columns are `start`, `end`, `kind`, `energy_kwh` (drive) and `away_charging` (park, true/false). "
+        "Rows are ordered, non-overlapping segments; gaps mean home. Adjacent segments form one absence. "
+        "Driving is distributed by elapsed overlap; parked charging hours are never rounded up. "
+        "Multiple drive/park alternations within one step collapse into driving before the first park, "
+        "all eligible parked hours, then the remaining driving. A header-only CSV means always home with no departure target.",
+    ),
+    (
+        "vehicle.schedule.weekday",
+        DAY_SCHEDULE_TABLE,
+        "Weekday and weekend rules share these keys. The departure date selects the day type. "
+        "The coarse leg template withdraws half the gross trip energy in the first away step and half in the "
+        "last, with parked charging windows only between those steps. A one-step trip combines both legs "
+        "and has no parked time. This approximates driving; use segments for measured trips.",
     ),
     (
         "period",
@@ -142,6 +214,8 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
 # ``required`` would change the error a missing key raises.
 _ALSO_REQUIRED = {"pv_arrays": frozenset({"modules"})}
 _CONDITIONALLY_REQUIRED = {
+    "vehicle": {"charger_cost": '`mode = "v2h"`'},
+    "vehicle.schedule": {"weekday": "unless file is set", "weekend": "unless file is set"},
     "tariff": {
         "schedule": "exactly one of these",
         "custom_schedule": "exactly one of these",
@@ -149,7 +223,7 @@ _CONDITIONALLY_REQUIRED = {
     "smart_charging": {
         "charge_periods": "`fixed_target`, `daily_persistence`",
         "discharge_periods": "unless `disabled`",
-        "grid_charge_efficiency": "`fixed_target`, `daily_persistence`",
+        "grid_charge_efficiency": '`fixed_target`, `daily_persistence`, with `battery_coupling = "dc"`',
         "target_usable_fraction": "`fixed_target`",
     },
 }
@@ -227,7 +301,16 @@ def _nested_rows(spec: TableSpec, name: str) -> tuple[tuple[str, ...], list[tupl
 
 
 def generate() -> str:
-    sectioned = {id(spec) for _, spec, _ in TABLES}
+    # The AC-coupled variant of [smart_charging] has the same keys and docs.
+    # [montecarlo] is a runner section; the Monte Carlo page describes it.
+    # A custom tariff schedule is described under Time-of-use tariffs.
+    sectioned = {id(spec) for _, spec, _ in TABLES} | {
+        id(app_config.AC_SMART_CHARGING_TABLE),
+        id(app_config.MONTECARLO_TABLE),
+        id(app_config._CUSTOM_SCHEDULE_TABLE),
+        id(app_config._CUSTOM_RULE_TABLE),
+        id(app_config._CUSTOM_HOLIDAYS_TABLE),
+    }
     specs = [
         *NESTED_TABLE_SPECS.values(),
         *(value for value in vars(app_config).values() if isinstance(value, TableSpec)),

@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from breos._daily_targets import _DayEvaluator, daily_target_instructions, solve_daily_targets, target_grid
+from tests.offline_app import TOU
 from tools.oracles.daily_target_dp import (
     DP_DAYS_SCHEMA,
     DP_ORACLE_SCHEMA,
@@ -21,13 +22,6 @@ from tools.oracles.daily_target_dp import (
 from tools.oracles.replay import DEFAULT_TOLERANCE, prepare_replay, replay_instructions
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 1}
-TOU = {
-    "schedule": "pt_mainland_2026_daily_bi",
-    "currency": "EUR",
-    "import_prices": {"peak": 0.28, "off_peak": 0.11},
-    "export_prices": {"all": 0.05},
-    "fixed_charge_per_day": 0.25,
-}
 FIXED = {
     "mode": "fixed_target",
     "target_usable_fraction": 0.5,
@@ -133,10 +127,10 @@ YEARLY_PLANNER = {"target_levels": 3, "soc_states": 3}
 @contextmanager
 def _synthetic_tmy():
     """Offline TMY weather for whole project years, outside the per-test weather fixture."""
-    from tests.conftest import _build_synthetic_weather
+    from tests.conftest import INSTANT_AT_LABELS, _build_synthetic_weather
 
     weather = _build_synthetic_weather()
-    weather.attrs["breos_weather_metadata"] = {"source": "PVGIS_TMY"}
+    weather.attrs["breos_weather_metadata"] = {"source": "PVGIS_TMY", **INSTANT_AT_LABELS}
     tmy = {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr("breos.app.fetch_tmy_weather_data", lambda *args, **kwargs: (weather.copy(), tmy))
@@ -331,9 +325,10 @@ def test_the_command_line_plans_charge_windows(tmp_path):
     config.write_text(json.dumps(_config(2)), encoding="utf-8")
     output, days = tmp_path / "dp.json", tmp_path / "days.csv"
     argv = ["--config", str(config), "--output", str(output), "--csv", str(days), "--target-levels", "3"]
-    assert main([*argv, "--decision-boundary", "charge_window_start"]) == 0
+    assert main([*argv, "--decision-boundary", "charge_window_start", "--wear-cost-per-kwh", "0.05"]) == 0
     summary = json.loads(output.read_text(encoding="utf-8"))
     assert summary["planner"]["decision_boundary"] == "charge_window_start"
+    assert summary["planner"]["wear_cost_per_kwh"] == 0.05
     # The run opens in the 00:00-08:00 window; every later window starts at 22:00.
     frame = pd.read_csv(days, comment="#")
     assert frame["day_start"].str.slice(11, 16).tolist() == ["00:00", "22:00", "22:00"]
@@ -397,15 +392,6 @@ def test_a_wear_cost_does_not_raise_the_discharge_throughput():
     assert free.plan.wear_cost == 0.0 and worn.plan.wear_cost > 0.0
     assert worn.plan.targets.sum() < free.plan.targets.sum()
     assert _discharge_kwh(worn.replay) < _discharge_kwh(free.replay)
-
-
-def test_the_command_line_records_the_wear_cost(tmp_path):
-    config = tmp_path / "config.json"
-    config.write_text(json.dumps(_config(2)), encoding="utf-8")
-    output = tmp_path / "dp.json"
-    argv = ["--config", str(config), "--output", str(output), "--target-levels", "3", "--soc-states", "3"]
-    assert main([*argv, "--wear-cost-per-kwh", "0.05"]) == 0
-    assert json.loads(output.read_text(encoding="utf-8"))["planner"]["wear_cost_per_kwh"] == 0.05
 
 
 @pytest.mark.parametrize("value", ["-0.01", "nan", "inf"])

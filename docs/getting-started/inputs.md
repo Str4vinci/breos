@@ -20,6 +20,19 @@ local weather files through the lower-level weather helpers.
 - For reproducible or offline studies, keep the exact weather file/source
   used for the run.
 
+GHI, DNI and DHI must be finite numbers in every row, including nighttime.
+BREOS refuses DHI exceeding GHI by more than max(50 W/m², 10% of GHI),
+or exceeding 20 W/m² when GHI is at most 1 W/m². Equality passes, and smaller
+measurement discrepancies are preserved. These checks also run before weather
+resampling and terrain-horizon shading. Fill gaps and repair inconsistent
+readings explicitly while preserving a regular time grid; do not drop rows.
+Dark rows with all three components zero are valid.
+
+Klucher transposition additionally requires that positive DHI has nonzero GHI,
+because it divides DHI by GHI. Very small nonzero GHI can still amplify this
+ratio; passing the consistency tolerances does not establish suitability for
+Klucher. Choose the transposition model for your prepared measurements.
+
 ## Load profiles
 
 BREOS bundles only the demandlib-derived H0 example profile. It is suitable

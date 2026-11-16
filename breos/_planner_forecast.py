@@ -65,10 +65,6 @@ def epoch_seconds(index: pd.DatetimeIndex) -> np.ndarray:
     return np.asarray((utc - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1), dtype=np.int64)
 
 
-# Kept under its earlier name for the controller's calendar.
-calendar_epoch_seconds = epoch_seconds
-
-
 def source_times(
     raw_calendar_s: np.ndarray, raw_source_s: np.ndarray, steps_s: np.ndarray, step_s: int, reach_s: int
 ) -> tuple[np.ndarray, np.ndarray]:

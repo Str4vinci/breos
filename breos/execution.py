@@ -8,9 +8,14 @@ toolchain. So the name check, the fail-before-start dependency check, the
 toolchain record and the JIT cache observation live here, and both callers go
 through them.
 
-The default is ``"python"`` everywhere, deliberately. The Python path is the
-numerical reference; the compiled one is an optimisation that has to earn its
-selection explicitly, never by ambient configuration.
+The default is ``"auto"`` at every entry point that takes a config or a study:
+the compiled backend when Numba can be imported, the Python one otherwise. The
+low-level ``simulate_energy_balance`` takes a resolved name and defaults to
+``"python"``. The Python path stays the numerical
+reference, and the two are bit-identical by test, so the choice changes run
+time and the recorded toolchain, never a result. ``"auto"`` is resolved once,
+when a run's config is resolved, so the dispatch only ever sees ``"python"``
+or ``"numba"``, and provenance records both what was asked for and what ran.
 """
 
 from __future__ import annotations
@@ -24,10 +29,14 @@ import numpy as np
 import pandas as pd
 from threadpoolctl import ThreadpoolController, threadpool_limits
 
-EXECUTION_BACKENDS: tuple[str, ...] = ("python", "numba")
+#: The names a config, a CLI flag or an entry point accepts.
+EXECUTION_BACKENDS: tuple[str, ...] = ("auto", "python", "numba")
 
-#: The numerical reference. Anything else must be asked for by name.
-DEFAULT_EXECUTION_BACKEND = "python"
+#: The backends that run. ``"auto"`` resolves to one of these before a run starts.
+RESOLVED_EXECUTION_BACKENDS: tuple[str, ...] = ("python", "numba")
+
+#: Numba when it can be imported, Python otherwise. Results do not depend on it.
+DEFAULT_EXECUTION_BACKEND = "auto"
 
 #: Recorded when the cache outcome could not be classified. Never an error:
 #: provenance bookkeeping must not be able to fail a completed run.
@@ -72,23 +81,57 @@ def config_has_battery(cfg: Mapping[str, Any]) -> bool:
 
 
 def validate_execution_backend(execution_backend: Any) -> str:
-    """Return a known backend name, or say what was asked for and what exists."""
+    """Return a backend that runs, ``"python"`` or ``"numba"``, or say what was given.
+
+    The dispatch asks this of the name it was handed. ``"auto"`` is not one:
+    an entry point resolves it first, with :func:`resolve_execution_backend`.
+    """
+    if execution_backend not in RESOLVED_EXECUTION_BACKENDS:
+        raise ValueError(
+            f"execution_backend must be one of {RESOLVED_EXECUTION_BACKENDS} here, got {execution_backend!r}; "
+            "resolve 'auto' with resolve_execution_backend first"
+        )
+    return str(execution_backend)
+
+
+def validate_requested_backend(execution_backend: Any) -> str:
+    """Return a name a caller may ask for, or say what was asked for and what exists."""
     if execution_backend not in EXECUTION_BACKENDS:
         raise ValueError(f"execution_backend must be one of {EXECUTION_BACKENDS}, got {execution_backend!r}")
     return str(execution_backend)
 
 
-def require_backend(execution_backend: str) -> None:
-    """Fail before any timestep runs if the chosen backend cannot be used.
+def resolve_execution_backend(execution_backend: Any) -> str:
+    """Return the backend that runs for a requested name.
+
+    ``"auto"`` is ``"numba"`` when Numba can be imported and compiles
+    (``NUMBA_DISABLE_JIT`` is not set) and ``"python"`` otherwise, without a
+    warning: the two give the same numbers. The other
+    names are returned as they are, so ``"numba"`` without Numba still fails
+    in :func:`require_backend` with the install hint. Called once per run or
+    study, where its config is resolved, never per step or per day.
+    """
+    requested = validate_requested_backend(execution_backend)
+    if requested != "auto":
+        return requested
+    from breos._numba_dispatch import numba_available, numba_jit_enabled
+
+    return "numba" if numba_available() and numba_jit_enabled() else "python"
+
+
+def require_backend(execution_backend: str) -> str:
+    """Resolve the requested backend and fail before any timestep runs if it cannot be used.
 
     Called once per study or per App run, so a missing optional dependency
     stops the job at the start rather than part-way through a long one.
+    Returns the backend that runs.
     """
-    validate_execution_backend(execution_backend)
-    if execution_backend == "numba":
+    backend = resolve_execution_backend(execution_backend)
+    if backend == "numba":
         from breos._numba_dispatch import require_numba_dispatch_day
 
         require_numba_dispatch_day()
+    return backend
 
 
 def limit_worker_threads() -> None:
@@ -125,7 +168,9 @@ def single_thread_blas() -> Iterator[None]:
         yield
 
 
-def backend_provenance(execution_backend: str, *, pv_only: bool = False) -> dict[str, Any]:
+def backend_provenance(
+    execution_backend: str, *, pv_only: bool = False, requested: str | None = None
+) -> dict[str, Any]:
     """Check the backend is usable and record the toolchain it ran on.
 
     A bit-identity claim cannot be checked after the fact without a stated
@@ -143,10 +188,18 @@ def backend_provenance(execution_backend: str, *, pv_only: bool = False) -> dict
     ``pv_only`` records that the run took the shared vectorized PV-only
     balance, which no backend name implies on its own. Callers decide it with
     :func:`is_pv_only_dispatch` so the record and the dispatch cannot disagree.
+
+    ``execution_backend`` is the backend that ran. ``requested`` is the name
+    the run asked for, which the config defaults to ``"auto"``; it is
+    recorded as ``requested_execution_backend``. None records the backend
+    that ran as the request.
     """
     validate_execution_backend(execution_backend)
     provenance: dict[str, Any] = {
         "execution_backend": execution_backend,
+        "requested_execution_backend": validate_requested_backend(
+            execution_backend if requested is None else requested
+        ),
         "python": platform.python_version(),
         "numpy": np.__version__,
         "pandas": pd.__version__,

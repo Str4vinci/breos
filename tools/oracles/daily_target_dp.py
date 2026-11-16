@@ -112,7 +112,13 @@ from breos._daily_targets import (
     target_grid,
 )
 from breos.app_inputs import reuse_prepared_inputs
-from breos.battery import _resolve_dispatch_day, _ResultBuffers, _step_energy_cap, align_simulation_inputs
+from breos.battery import (
+    _pv_inverter_conversion,
+    _resolve_dispatch_day,
+    _ResultBuffers,
+    _step_energy_cap,
+    align_simulation_inputs,
+)
 from breos.dispatch_instructions import DispatchInstructions
 from breos.projection import YearStart
 from breos.smart_charging import DECISION_BOUNDARIES
@@ -135,6 +141,16 @@ DP_YEAR_DAYS_SCHEMA = "breos_daily_target_dp_year_days_v1"
 PLANNING_MODES = ("first_year", "yearly")
 # Planned and delivered energy must agree to within this before a step counts as a mismatch.
 DEFAULT_REPLAY_TOLERANCE = Tolerance(atol_wh=1.0)
+
+
+def _refuse_several_inverters(case: ReplayCase) -> None:
+    """Refuse a system whose PV several inverters convert: the planner plans through one (ADR 0004 M7)."""
+    electrical = case.resolved.electrical
+    if electrical is not None and electrical.fidelity == "string" and len(electrical.inverters) > 1:
+        raise ValueError(
+            f"The daily-target oracle plans with one PV inverter, not {len(electrical.inverters)}; "
+            "its planner would convert their PV as one"
+        )
 
 
 @dataclass(frozen=True)
@@ -183,6 +199,7 @@ class YearlyDailyTargetPlanner:
         decision_boundary: str = "civil_day",
         wear_cost_per_kwh: float = 0.0,
     ) -> None:
+        _refuse_several_inverters(case)
         self.case = case
         self.decision_boundary = decision_boundary
         self.layout = case.configured_instructions()
@@ -288,6 +305,7 @@ def daily_target_problem(case: ReplayCase, decision_boundary: str = "civil_day")
     spec = case.resolved.smart_charging
     if spec is None or spec.mode != "fixed_target":
         raise ValueError("The daily-target oracle needs a [smart_charging] table with mode = 'fixed_target'")
+    _refuse_several_inverters(case)
     aligned = case.aligned_inputs()
     return DailyTargetProblem.from_tariff(
         case.tariff,
@@ -311,6 +329,17 @@ def fixed_health_state(problem: DailyTargetProblem) -> dict[str, Any]:
     soh, eff_charge, eff_discharge = problem.health()
     config = problem.battery_config
     hours = problem.hours_per_step
+    cap_wh = _step_energy_cap(config.inverter_ac_capacity_w, hours)
+    pv_chain = None
+    if config.coupling == "ac" and config.nominal_energy_wh > 0.0:
+        # ADR 0004 M7: forecast PV on the scalar curve row, at the full rating.
+        ac, loss, clip, _night = _pv_inverter_conversion(
+            np.maximum(0.0, np.asarray(problem.pv_dc_w) * hours),
+            battery_config=config,
+            hours_per_step=hours,
+            cap_wh=cap_wh,
+        )
+        pv_chain = (ac, loss, clip, np.zeros(len(ac)))
     return {
         "battery_config": config,
         "battery_soh_decimal": soh,
@@ -320,10 +349,11 @@ def fixed_health_state(problem: DailyTargetProblem) -> dict[str, Any]:
         "eff_discharge": eff_discharge,
         "hours_per_step": hours,
         "standby_loss_per_step_wh": config.standby_loss_wh * hours,
-        "cap_wh": _step_energy_cap(config.inverter_ac_capacity_w, hours),
+        "cap_wh": cap_wh,
         "cap_charge_wh": _step_energy_cap(config.max_charge_power_w, hours),
         "cap_discharge_wh": _step_energy_cap(config.max_discharge_power_w, hours),
         "cap_stored_wh": _step_energy_cap(config.stored_power_limit_w, hours),
+        "pv_chain": pv_chain,
     }
 
 

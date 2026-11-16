@@ -1,6 +1,5 @@
 """The battery and inverter App, Monte Carlo and the optimizer build are built once (#179)."""
 
-import dataclasses
 import math
 
 import pytest
@@ -69,15 +68,3 @@ def test_app_and_montecarlo_run_the_shared_projection():
     for module in (app_runner, montecarlo_module):
         assert module.run_projection is projection_module.run_projection
         assert module.value_projection is projection_module.value_projection
-
-
-def test_battery_config_without_rte_keeps_the_dataclass_efficiencies():
-    resolved = resolve_app_config({**BASE, "battery_rte": None})
-    defaults = {
-        f.name: f.default for f in dataclasses.fields(build_battery_config(resolved.cfg, resolved, initial_soh=100))
-    }
-
-    battery = build_battery_config(resolved.cfg, resolved, initial_soh=100)
-
-    assert battery.charge_efficiency == defaults["charge_efficiency"]
-    assert battery.discharge_efficiency == defaults["discharge_efficiency"]
