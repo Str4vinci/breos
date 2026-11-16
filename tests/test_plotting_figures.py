@@ -336,6 +336,146 @@ def test_waterfall_is_closed_once_saved_and_open_otherwise(tmp_path):
     assert (tmp_path / "waterfall.png").stat().st_size > 0
 
 
+def _full_waterfall(battery: bool = True, basis: str = "year_1") -> dict:
+    """A reconciled waterfall: 1000 kWh DC after two static losses, then curtailment, inverter and battery."""
+    stages = [
+        {"key": "horizontal_reference_dc", "label": "Horizontal irradiance reference", "energy_kwh": 1000.0},
+        {"key": "transposition", "label": "Plane-of-array transposition", "energy_kwh": 1100.0, "delta_kwh": 100.0},
+        {"key": "temperature", "label": "Cell temperature", "energy_kwh": 1060.0, "delta_kwh": -40.0},
+        {"key": "pvwatts_static", "label": "Static PVWatts losses", "energy_kwh": 1000.0, "delta_kwh": -60.0},
+    ]
+    via_battery = 100.0 if battery else 0.0
+    battery_path = 20.0 if battery else 0.0
+    usable = 1000.0 - 0.4 - 30.0 - battery_path
+    return {
+        "basis": basis,
+        "stages": stages,
+        "bifacial": {"enabled": False},
+        "pvwatts": {
+            "components_pct": {"soiling": 2.0, "snow": 0.0, "lid": 3.66},
+            "components_kwh": {"soiling": 21.2, "snow": 0.0, "lid": 38.8},
+        },
+        "inverter": {"direct_pv_conversion_loss_kwh": 30.0},
+        "energy_balance": {
+            "pv_dc": {"curtailed_kwh": 0.4},
+            "ac_delivery": {
+                "direct_pv_to_load_kwh": 300.0,
+                "pv_origin_battery_to_load_kwh": via_battery,
+                "export_kwh": usable - 300.0 - via_battery,
+                "usable_system_production_kwh": usable,
+            },
+        },
+    }
+
+
+def test_waterfall_itemises_the_static_losses_and_follows_the_energy_to_ac():
+    labels = _stage_labels(plotting.plot_pv_loss_waterfall(_full_waterfall()))
+
+    assert {"Soiling", "Light-induced degradation", "PV DC output", "Usable AC energy"} <= {
+        label.split("   ")[0] for label in labels
+    }
+    # A zero component and the collapsed static stage get no row.
+    assert "Snow" not in labels and "Static losses" not in labels
+    # Tiny curtailment keeps its row, with one decimal.
+    assert {"Curtailment", "−0.4 kWh", "Inverter conversion, direct PV", "Battery losses and stored energy"} <= labels
+    assert {"−20 kWh", "Direct to load", "Via battery to load", "Grid export"} <= labels
+
+
+def test_waterfall_without_a_battery_has_no_battery_path():
+    labels = _stage_labels(plotting.plot_pv_loss_waterfall(_full_waterfall(battery=False)))
+
+    assert "Battery losses and stored energy" not in labels and "Via battery to load" not in labels
+    assert {"Direct to load", "Grid export", "Usable AC energy   970 kWh"} <= labels
+
+
+def test_waterfall_without_the_optional_blocks_draws_its_stages():
+    labels = _stage_labels(plotting.plot_pv_loss_waterfall(_waterfall(bifacial_enabled=False)))
+
+    assert {"Tilt and orientation (transposition)", "Cell temperature", "PV DC output   1200 kWh"} <= labels
+    assert not any(label.startswith(("Usable AC energy", "Curtailment")) for label in labels)
+
+
+def test_waterfall_needs_two_stages():
+    with pytest.raises(ValueError, match="at least two stages"):
+        plotting.plot_pv_loss_waterfall({"stages": _waterfall()["stages"][:1]})
+
+
+@pytest.mark.parametrize(
+    ("basis", "title"), [("year_1", "PV energy flow, year 1"), ("period", "PV energy flow, simulated period")]
+)
+def test_waterfall_title_names_its_basis(basis, title):
+    assert title in _stage_labels(plotting.plot_pv_loss_waterfall(_full_waterfall(basis=basis)))
+
+
+def test_waterfall_lifetime_strip_draws_with_yearly_rows():
+    yearly = [
+        {"year": year, "pv_dc_generation_kwh": 1000.0 - 5 * year, "usable_ac_system_production_kwh": 950.0 - 5 * year}
+        for year in range(1, 21)
+    ]
+    plain = plotting.plot_pv_loss_waterfall(_full_waterfall())
+    fig = plotting.plot_pv_loss_waterfall(_full_waterfall(), yearly=yearly, replacement_years=[11])
+
+    assert len(plain.axes) == 1
+    assert len(fig.axes) == 2
+    labels = _stage_labels(fig)
+    assert {"Project lifetime, kWh per year", "Year 1", "Year 20", "20-year total", "18 950"} <= labels
+    chart_texts = {text.get_text() for text in fig.axes[1].texts}
+    assert {"PV DC output", "Usable AC energy", "Battery replacement"} <= chart_texts
+    # One year draws no strip.
+    assert len(plotting.plot_pv_loss_waterfall(_full_waterfall(), yearly=yearly[:1]).axes) == 1
+
+
+def _vehicle_waterfall() -> dict:
+    """``_full_waterfall`` with 120 kWh of PV AC into the vehicle, 8 kWh of it back to the load."""
+    waterfall = _full_waterfall()
+    ac = waterfall["energy_balance"]["ac_delivery"]
+    ac["export_kwh"] -= 120.0
+    ac["pv_origin_vehicle_to_load_kwh"] = 8.0
+    ac["usable_system_production_kwh"] -= 120.0 - 8.0
+    ac["pv_to_vehicle_kwh"] = 120.0
+    return waterfall
+
+
+def test_waterfall_counts_vehicle_charging_as_a_use_and_closes_the_balance():
+    waterfall = _vehicle_waterfall()
+    rows = plotting._flow_rows(waterfall, waterfall["stages"])
+    after_dc = rows[[label for _, label, _ in rows].index("PV DC output") :]
+    losses = {label: -value for kind, label, value in after_dc if kind == "step"}
+    end_uses = {label: value for label, _, value in plotting._flow_end_uses(waterfall["energy_balance"]["ac_delivery"])}
+
+    # Only real losses leave the band: the battery path stays at 20 kWh.
+    assert losses == pytest.approx(
+        {"Curtailment": 0.4, "Inverter conversion, direct PV": 30.0, "Battery losses and stored energy": 20.0}
+    )
+    assert end_uses["Vehicle charging, net of energy returned"] == pytest.approx(112.0)
+    assert end_uses["Via vehicle to load"] == pytest.approx(8.0)
+    assert after_dc[-1][1:] == ("Usable AC energy and vehicle charging", pytest.approx(sum(end_uses.values())))
+    assert sum(losses.values()) + sum(end_uses.values()) == pytest.approx(1000.0)
+
+    fig = plotting.plot_pv_loss_waterfall(waterfall)
+    labels = _stage_labels(fig)
+    assert "Where the PV energy goes" in labels
+    assert not any(label.startswith("Battery and vehicle") for label in labels)
+
+
+def test_waterfall_names_the_pv_inverter_loss_of_an_ac_coupled_battery():
+    waterfall = _full_waterfall()
+    waterfall["battery_inverter"] = {"conversion_loss_kwh": 10.0}
+    waterfall["energy_balance"]["ac_delivery"]["pv_to_battery_kwh"] = 110.0
+
+    labels = _stage_labels(plotting.plot_pv_loss_waterfall(waterfall))
+    assert "PV inverter conversion" in labels and "Inverter conversion, direct PV" not in labels
+    assert "Inverter conversion, direct PV" in _stage_labels(plotting.plot_pv_loss_waterfall(_full_waterfall()))
+
+
+@pytest.mark.parametrize(
+    ("value", "decimals", "text"),
+    [(5000.0, 0, "5000"), (12345.0, 0, "12 345"), (-150.4, 0, "−150"), (-0.04, 1, "0.0"), (1.75, 1, "1.8")],
+)
+def test_flow_number_format(value, decimals, text):
+    assert plotting._flow_number(value, decimals) == text
+
+
 # ---------------------------------------------------------------------------
 # Break-even CDF and histogram
 # ---------------------------------------------------------------------------

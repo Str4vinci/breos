@@ -544,8 +544,27 @@ and their sum, `conversion_loss_kwh`. `energy_balance.ac_delivery` adds
 part of `usable_system_production_kwh`; that energy reaches the load as
 `pv_origin_battery_to_load_kwh`.
 
-Use {py:func}`breos.plotting.plot_pv_loss_waterfall` to render the same
-block as a PV loss diagram.
+Use {py:func}`breos.plotting.plot_pv_loss_waterfall` to draw the block as an
+energy-flow diagram: a band whose width is the remaining energy runs from the
+horizontal irradiance reference to the PV DC output and on to the usable AC
+energy, with each loss or gain as a strip on the same scale. The static
+PVWatts losses get a row each. After the PV DC output come curtailment,
+`inverter.direct_pv_conversion_loss_kwh`, PV supplied to idle inverters when
+identifiable, and a remainder. With battery flow this is labelled "Battery
+losses and stored energy" and drawn in grey: the data does not separate
+PV-origin battery losses from PV energy still stored at the period end.
+Without battery flow the remainder uses a general energy-balance label. A bar under
+the diagram splits the usable AC energy into direct use, use through the
+battery and grid export. With an AC-coupled battery the inverter row is the
+PV inverter's whole conversion loss. With a vehicle, PV charging it is a use,
+not a loss: the bar adds `pv_to_vehicle_kwh` less
+`pv_origin_vehicle_to_load_kwh`, the PV energy the vehicle returned to the
+home, and the last band is the usable AC energy and vehicle charging. If
+returns exceed charging, the net energy carried into the period joins the
+band as an incoming flow and the final band equals usable AC energy. Pass `yearly=result["yearly"]` to add the PV DC
+output and usable AC energy over the project years, and `replacement_years`
+to mark battery replacements on it. The diagram itself always shows year 1,
+or the simulated window of a `[period]` run.
 
 ## Economic conventions
 
