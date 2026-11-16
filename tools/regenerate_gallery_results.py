@@ -1355,7 +1355,9 @@ def nsga2_front(ctx: Context) -> Output:
             freq=config["simulation"]["resolution"],
             timezone=config["location"]["timezone"],
         )
-        result = optimize_system_multi_objective(weather, load, config, n_procs=ctx.options.procs)
+        result = optimize_system_multi_objective(
+            weather, load, config, n_procs=ctx.options.procs, execution_backend=GALLERY_BACKEND
+        )
     if result.details["pareto"].attrs.get("currency"):
         ctx.currencies.add(str(result.details["pareto"].attrs["currency"]))
     pareto = result.details["pareto"].sort_values("Battery_kWh").reset_index(drop=True)
@@ -1365,6 +1367,7 @@ def nsga2_front(ctx: Context) -> Output:
             "annual_consumption_kwh": annual_kwh,
             "load_profile": "demandlib_h0",
             "n_procs": ctx.options.procs,
+            "execution_backend": GALLERY_BACKEND,
             "generations": result.iterations,
             "constraints": config["constraints"],
             "module_area_m2": round(config["pv"]["module_width_m"] * config["pv"]["module_length_m"], 4),

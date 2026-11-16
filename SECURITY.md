@@ -8,6 +8,11 @@ versions, such as the `develop` branch or a version not yet published on PyPI,
 are not supported. Please make sure you are on the most recent release before
 reporting an issue.
 
+| Version | Security fixes |
+|---|---|
+| Latest 0.8.x release | Supported |
+| Earlier releases | Not supported |
+
 ## Reporting a vulnerability
 
 Please **do not** open a public GitHub issue for security vulnerabilities.

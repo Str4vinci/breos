@@ -96,6 +96,31 @@ def test_every_case_has_an_intact_manifest(name):
             assert len(pd.read_csv(directory / filename)) > 0
 
 
+def test_optimizer_gallery_uses_python_backend(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import breos.load_profiles
+    import breos.optimization
+    import breos.weather
+
+    ctx = TOOL.Context(tmp_path / "work", argparse.Namespace(procs=2))
+    monkeypatch.setattr(ctx, "stage_tmy", lambda *args: None)
+    weather = pd.DataFrame(index=pd.date_range("2023-01-01", periods=2, freq="h", tz="UTC"))
+    monkeypatch.setattr(breos.weather, "load_weather", lambda *args, **kwargs: weather)
+    monkeypatch.setattr(breos.load_profiles, "load_profile", lambda *args, **kwargs: pd.DataFrame())
+    received = {}
+
+    def optimize(weather, load, config, *, n_procs, execution_backend):
+        received.update(n_procs=n_procs, execution_backend=execution_backend)
+        return SimpleNamespace(iterations=40, details={"pareto": pd.DataFrame({"Battery_kWh": [0.0]})})
+
+    monkeypatch.setattr(breos.optimization, "optimize_system_multi_objective", optimize)
+    output = TOOL.nsga2_front(ctx)
+
+    assert received == {"n_procs": 2, "execution_backend": "python"}
+    assert output.manifest["execution_backend"] == "python"
+
+
 def test_stored_results_hold_no_local_paths():
     for path in RESULTS.rglob("*"):
         if path.is_file():

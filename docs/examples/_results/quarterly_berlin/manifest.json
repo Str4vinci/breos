@@ -1,10 +1,10 @@
 {
  "case": "quarterly_berlin",
  "title": "Discharge-only dispatch on a quarterly tariff in Berlin",
- "breos_version": "0.7.0",
- "git_describe": "v0.7.1-265-gde72cf7",
- "generated_utc": "2026-11-13T23:46:38+00:00",
- "runtime_s": 12.0,
+ "breos_version": "0.8.0",
+ "git_describe": "v0.7.1-416-g54e3654",
+ "generated_utc": "2026-11-16T13:29:49+00:00",
+ "runtime_s": 5.6,
  "cheap": true,
  "configs": {
   "configs/examples/quarterly-tariff-berlin.toml": "b042aab2be03be12ee4b89ba21de6e4cdef95d68ce893fd6180f8340bf8bc977"
@@ -16,7 +16,7 @@
   }
  },
  "dependencies": {
-  "python": "3.12.13",
+  "python": "3.13.14",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
@@ -47,6 +47,6 @@
   }
  },
  "files": {
-  "strategies.json": "9bbd979cbee99e7b1a2547570a83e12252d7aae4ace9532bbeaca8919dd316ff"
+  "strategies.json": "b3efc8dafa94bbfd19172843dbd5a64c41a2d46517ecd5f09e9ff7291f575706"
  }
 }

@@ -2,7 +2,14 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.8.0] - 2026-11-16
+
+BREOS 0.8.0 adds vehicle charging and vehicle-to-home simulation, AC-coupled
+batteries and collective self-consumption. It brings string-level electrical
+checks and shading into the PV model, adds inverter and yield-analysis options,
+and speeds up long studies. The default solar position now follows weather
+timing metadata where available; review the result-affecting changes below when
+comparing with an earlier release.
 
 ### Added
 
