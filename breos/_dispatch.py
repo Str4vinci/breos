@@ -278,7 +278,8 @@ def _dc_for_ac(
 
 
 # Version of the ledger: the per-step columns below and the App's PV loss
-# waterfall built from them. Bump it with any change a consumer could see.
+# waterfall built from them. Bump it with any change a consumer could see;
+# tests/test_ledger_layout.py pins the frame columns of each version.
 # App, Monte Carlo and SimulationSummary all report it.
 # 1.1 adds the bifacial_rear_gain PV loss-waterfall stage, relabels the iam
 # stage to name the front side explicitly, and adds the pv_model provenance

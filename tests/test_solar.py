@@ -942,6 +942,13 @@ class TestPerezCoefficients:
             dc = self._perez(synthetic_weather, porto_location, pv_params, model_perez)
             assert dc.sum() > 0, model_perez
 
+    def test_the_default_perez_set_is_pvlibs(self):
+        import inspect
+
+        from breos.pv.model_options import DEFAULT_PEREZ_MODEL
+
+        assert inspect.signature(pvlib.irradiance.perez).parameters["model"].default == DEFAULT_PEREZ_MODEL
+
 
 @pytest.mark.parametrize(
     ("option_name", "value"),
