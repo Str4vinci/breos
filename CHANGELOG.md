@@ -292,6 +292,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- `plot_pv_loss_waterfall` draws a vertical energy-flow diagram instead of
+  the funnel and its text box. A band whose width is the remaining energy runs
+  from the horizontal irradiance reference through each static PVWatts loss
+  to the PV DC output, then through curtailment, the inverter's loss on
+  direct PV and the battery path to the usable AC energy, all on one kWh
+  scale. A bar splits the usable AC energy into direct use, use through the
+  battery and grid export. The new optional `yearly` and `replacement_years`
+  arguments add a strip with both totals over the project years. `title` and
+  `figsize` now default to None: the title names the year-1 or `[period]`
+  basis, and the figure is sized to the diagram. Results are unchanged.
 - The sun's position, about 80 % of a PV run's time, is computed once per
   site and time grid and kept for the next request, up to about 20 MB per
   process. A repeated PV run takes a fifth of the time, and the arrays of

@@ -149,13 +149,17 @@ weekly_graphs(summer, case.manifest["iso_weeks"]["summer"])
 # %%
 # Where the PV energy goes
 # ------------------------
-# The loss diagram follows the year-1 energy from the irradiance on a
+# The energy-flow diagram follows the year-1 energy from the irradiance on a
 # horizontal surface, through transposition onto the tilted array and the
-# optical, thermal and static losses, to the DC energy ready for dispatch. The
-# box below it splits that energy into what reached the load directly or
-# through the battery, what was exported and what the inverter lost.
+# optical, thermal and static losses, to the PV DC output, and on through
+# curtailment, the inverter and the battery to the usable AC energy. The width
+# of the band is the energy left at each step. The bar under it splits the
+# usable AC energy into what reached the load directly or through the battery
+# and what was exported. The strip below follows the two totals over the
+# project years.
 
-fig = plot_pv_loss_waterfall(result["pv_loss_waterfall"], figsize=(10, 8))
+replacement_years = [event["year"] for event in result["degradation"]["replacement_events"]]
+fig = plot_pv_loss_waterfall(result["pv_loss_waterfall"], yearly=result["yearly"], replacement_years=replacement_years)
 
 # %%
 # The battery over the project
