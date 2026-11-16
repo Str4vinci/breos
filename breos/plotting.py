@@ -47,7 +47,8 @@ try:
     import matplotlib.pyplot as plt
     from matplotlib.figure import Figure
     from matplotlib.lines import Line2D
-    from matplotlib.patches import Polygon, Rectangle
+    from matplotlib.patches import PathPatch, Rectangle
+    from matplotlib.path import Path as MplPath
     from matplotlib.ticker import MaxNLocator
 except ImportError as exc:
     raise ModuleNotFoundError('breos.plotting needs matplotlib. Install it with: pip install "breos[plots]"') from exc
@@ -196,21 +197,6 @@ def _grouped(value: float, decimals: int = 0) -> str:
     return text.replace(",", " " if len(whole) > 5 else "")
 
 
-def _format_loss_energy(value_kwh: float) -> str:
-    """Format kWh values compactly for plot annotations."""
-    if abs(value_kwh) >= 1000:
-        return f"{value_kwh / 1000:.2f} MWh"
-    return f"{value_kwh:.1f} kWh"
-
-
-def _format_loss_delta(stage: dict) -> str:
-    """Format a stage delta using the plot's sign convention."""
-    delta_pct = float(stage.get("delta_pct_of_previous", 0.0))
-    delta_kwh = float(stage.get("delta_kwh", 0.0))
-    sign = "+" if delta_pct > 0 else ""
-    return f"{sign}{delta_pct:.2f}% ({sign}{_format_loss_energy(delta_kwh)})"
-
-
 def _is_monofacial_rear_stage(stage: Mapping[str, Any], waterfall: Mapping[str, Any]) -> bool:
     """True for the bifacial rear-gain stage of a system without bifacial modelling."""
     if stage.get("key") != "bifacial_rear_gain":
@@ -221,26 +207,134 @@ def _is_monofacial_rear_stage(stage: Mapping[str, Any], waterfall: Mapping[str, 
     return float(stage.get("delta_kwh", 0.0)) == 0.0
 
 
+# Colours of the PV energy-flow diagram. Text uses the two inks only.
+_FLOW_INK, _FLOW_INK2, _FLOW_MUTED = "#0b0b0b", "#52514e", "#898781"
+_FLOW_GRID, _FLOW_BASE, _FLOW_SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
+_FLOW_BAND, _FLOW_TOTAL, _FLOW_GAIN, _FLOW_LOSS = "#cde2fb", "#184f95", "#2a78d6", "#e34948"
+# Where the usable AC energy goes: (ac_delivery key, label, colour).
+_FLOW_END_USES = (
+    ("direct_pv_to_load_kwh", "Direct to load", "#1baf7a"),
+    ("pv_origin_battery_to_load_kwh", "Via battery to load", "#eda100"),
+    ("pv_origin_vehicle_to_load_kwh", "Via vehicle to load", "#d55d9b"),
+    ("export_kwh", "Grid export", "#6250d6"),
+)
+_FLOW_STAGE_LABELS = {
+    "horizontal_reference_dc": "Horizontal irradiance reference",
+    "transposition": "Tilt and orientation (transposition)",
+    "iam": "Incidence angle (front side)",
+    "pvwatts_static": "Static losses",
+}
+_FLOW_STATIC_LABELS = {"lid": "Light-induced degradation"}
+# A step smaller than this prints as 0.0 kWh, so it gets no row.
+_FLOW_MIN_KWH = 0.05
+
+
+def _flow_number(value: float, decimals: int = 0) -> str:
+    """``value`` as 5000, 12 345 (narrow space) or −150: never a comma, a real minus sign."""
+    text = f"{abs(value):,.{decimals}f}"
+    text = text.replace(",", " " if len(text.split(".")[0]) > 5 else "")
+    return ("−" if round(value, decimals) < 0 else "") + text
+
+
+def _flow_rows(waterfall: Mapping[str, Any], stages: Sequence[Mapping[str, Any]]) -> List[Tuple[str, str, float]]:
+    """The diagram's rows as ``(kind, label, kWh)``: kind ``"total"`` is a stage total, ``"step"`` a gain or loss."""
+    rows: List[Tuple[str, str, float]] = []
+    first = stages[0]
+    rows.append(("total", _FLOW_STAGE_LABELS.get(first.get("key", ""), first["label"]), float(first["energy_kwh"])))
+    components = (waterfall.get("pvwatts") or {}).get("components_kwh") or {}
+    previous = float(first["energy_kwh"])
+    for stage in stages[1:]:
+        key = stage.get("key", "")
+        energy = float(stage["energy_kwh"])
+        delta = float(stage.get("delta_kwh", energy - previous))
+        previous = energy
+        if key == "pvwatts_static" and components:
+            # Each static PVWatts loss on its own row; anything they leave out as one more.
+            for name, kwh in components.items():
+                if abs(float(kwh)) >= _FLOW_MIN_KWH:
+                    label = _FLOW_STATIC_LABELS.get(name, name.replace("_", " ").capitalize())
+                    rows.append(("step", label, -float(kwh)))
+            rest = delta + sum(float(kwh) for kwh in components.values())
+            if abs(rest) >= max(0.5, 1e-3 * abs(delta)):
+                rows.append(("step", "Other static losses", rest))
+        elif key == "bifacial_rear_gain" or abs(delta) >= _FLOW_MIN_KWH:
+            rows.append(("step", _FLOW_STAGE_LABELS.get(key, stage["label"]), delta))
+    pv_dc = float(stages[-1]["energy_kwh"])
+    rows.append(("total", "PV DC output", pv_dc))
+
+    ac = (waterfall.get("energy_balance") or {}).get("ac_delivery") or {}
+    if not ac:
+        return rows
+    usable = float(ac.get("usable_system_production_kwh", sum(float(ac.get(key, 0.0)) for key, _, _ in _FLOW_END_USES)))
+    curtailed = float(((waterfall.get("energy_balance") or {}).get("pv_dc") or {}).get("curtailed_kwh", 0.0))
+    direct_loss = (waterfall.get("inverter") or {}).get("direct_pv_conversion_loss_kwh")
+    remainder = pv_dc - curtailed - usable
+    if abs(curtailed) >= _FLOW_MIN_KWH:
+        rows.append(("step", "Curtailment", -curtailed))
+    if direct_loss is None:
+        remainder_label = "Inverter and battery path"
+    else:
+        remainder -= float(direct_loss)
+        if abs(float(direct_loss)) >= _FLOW_MIN_KWH:
+            rows.append(("step", "Inverter conversion, direct PV", -float(direct_loss)))
+        remainder_label = "Battery and vehicle path" if "pv_origin_vehicle_to_load_kwh" in ac else "Battery path"
+    if abs(remainder) >= _FLOW_MIN_KWH:
+        rows.append(("step", remainder_label, -remainder))
+    rows.append(("total", "Usable AC energy", usable))
+    return rows
+
+
 def plot_pv_loss_waterfall(
     waterfall: dict,
     output_path: Optional[str] = None,
-    title: str = "PV Loss Diagram - Year 1",
-    figsize: Tuple[float, float] = (12.5, 10.0),
+    title: Optional[str] = None,
+    figsize: Optional[Tuple[float, float]] = None,
+    yearly: Optional[Sequence[Mapping[str, Any]]] = None,
+    replacement_years: Sequence[float] = (),
 ):
     """
-    Plot an annual PV loss diagram from ``pv_loss_waterfall``.
+    Plot the PV energy flow from ``pv_loss_waterfall``, with an optional lifetime strip.
 
-    A monofacial system has no ``Bifacial rear gain`` stage on the diagram:
-    the stage is left out when ``waterfall["bifacial"]["enabled"]`` is false,
-    or, for a waterfall without that block, when the stage changes nothing.
+    A band whose width is the remaining energy runs from the horizontal
+    irradiance reference down to the PV DC output and, when the waterfall has
+    an ``energy_balance`` block, on to the usable AC energy. Each loss leaves
+    the band as a red strip and each gain joins it as a blue strip, all on
+    one scale, labelled with its kWh and its percent of the energy before it.
+    The static PVWatts losses get one row each from ``pvwatts.components_kwh``.
+    After the PV DC output come curtailment, the inverter's conversion loss on
+    direct PV and the battery path: the rest of the PV DC output that does not
+    arrive as usable AC energy. A bar under the last band splits the usable
+    AC energy into direct use, use through the battery (and vehicle) and
+    grid export. Steps that round to 0.0 kWh are left out, and a waterfall
+    without the ``pvwatts``, ``inverter`` or ``energy_balance`` block draws
+    the stages it has.
+
+    A monofacial system has no ``Bifacial rear gain`` row: the stage is left
+    out when ``waterfall["bifacial"]["enabled"]`` is false, or, for a
+    waterfall without that block, when the stage changes nothing.
+
+    The diagram shows year 1, or the simulated window of a ``[period]`` run
+    (``waterfall["basis"] == "period"``), which the default title then says.
 
     Args:
         waterfall: ``App.result()["pv_loss_waterfall"]`` dictionary.
         output_path: Optional PNG/PDF/SVG path. When provided, parent
             directories are created, the figure is saved and then closed.
             Without it, the figure is returned open.
-        title: Figure title.
-        figsize: Matplotlib figure size.
+        title: Figure title. None names the basis: ``"PV energy flow, year 1"``
+            or ``"PV energy flow, simulated period"``.
+        figsize: Matplotlib figure size. None, the default, sizes the figure
+            to the diagram. A given size scales the drawing and its text to
+            fit, keeping the proportions.
+        yearly: Optional ``App.result()["yearly"]`` list. With more than one
+            year, a strip under the diagram plots ``pv_dc_generation_kwh`` and
+            ``usable_ac_system_production_kwh`` over the project years and
+            tabulates year 1, the last year, the lifetime total and the
+            lifetime mean.
+        replacement_years: Project years with a battery replacement, marked
+            on the lifetime strip, for example
+            ``[event["year"] for event in result["degradation"]["replacement_events"]]``.
+            Used only with ``yearly``.
 
     Returns:
         The matplotlib ``Figure``.
@@ -248,214 +342,175 @@ def plot_pv_loss_waterfall(
     stages = [stage for stage in waterfall.get("stages", []) if not _is_monofacial_rear_stage(stage, waterfall)]
     if len(stages) < 2:
         raise ValueError("waterfall must contain at least two stages")
+    rows = _flow_rows(waterfall, stages)
+    ac = (waterfall.get("energy_balance") or {}).get("ac_delivery") or {}
+    end_uses = [(label, color, float(ac.get(key, 0.0))) for key, label, color in _FLOW_END_USES]
+    end_uses = [item for item in end_uses if abs(item[2]) >= _FLOW_MIN_KWH]
+    years = list(yearly or [])
+    lifetime = len(years) > 1
+    period = waterfall.get("basis") == "period"
 
-    energies = np.array([float(stage["energy_kwh"]) for stage in stages], dtype=float)
-    max_energy = max(float(np.nanmax(energies)), 1.0)
-    reference_energy = energies[0] if energies[0] > 0 else 1.0
-    n_stages = len(stages)
-
-    # Funnel occupies the left/centre; stage names and step losses sit to the
-    # right of each band (PVsyst-style) so the diagram is self-describing.
-    center_x = 0.32
-    max_width = 0.46
-    top_y, bottom_y = 0.86, 0.30
-    y_positions = np.linspace(top_y, bottom_y, n_stages)
-    widths = np.maximum(0.05, max_width * energies / max_energy)
-    left = center_x - widths / 2.0
-    right = center_x + widths / 2.0
-    label_x = center_x + max_width / 2.0 + 0.035
-
-    fig, ax = plt.subplots(figsize=figsize)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.axis("off")
-    ax.text(0.04, 0.965, title, ha="left", va="center", fontsize=16, weight="bold", color="#111827")
-    ax.text(
-        0.04,
-        0.93,
-        "Annual PV conversion stages to the dispatch-ready DC bus",
-        ha="left",
-        va="center",
-        fontsize=9,
-        color="#4b5563",
-    )
-
-    flow_points = [(left[0], y_positions[0]), *zip(left[1:], y_positions[1:], strict=True)]
-    flow_points += [(right[-1], y_positions[-1]), *zip(right[-2::-1], y_positions[-2::-1], strict=True)]
-    ax.add_patch(Polygon(flow_points, closed=True, facecolor="#eef6ff", edgecolor="none", zorder=1))
-
-    # Hatch (rather than solid-fill) the area gained/lost between consecutive
-    # stages so the wedges read as loss annotations, not as a render artefact.
-    for idx in range(1, n_stages):
-        delta = float(stages[idx].get("delta_kwh", 0.0))
-        if delta == 0.0:
-            continue
-        if delta > 0:
-            face, hatch_color = "#f0fdf4", "#4ade80"
-        else:
-            face, hatch_color = "#fef2f2", "#f87171"
-        y0, y1 = y_positions[idx - 1], y_positions[idx]
-        for prev_edge, edge in ((left[idx - 1], left[idx]), (right[idx - 1], right[idx])):
-            ax.add_patch(
-                Polygon(
-                    [(prev_edge, y0), (edge, y1), (prev_edge, y1)],
-                    closed=True,
-                    facecolor=face,
-                    edgecolor=hatch_color,
-                    hatch="////",
-                    linewidth=0.0,
-                    zorder=2,
-                )
-            )
-
-    ax.add_patch(Polygon(flow_points, closed=True, facecolor="none", edgecolor="#1f2937", linewidth=1.2, zorder=4))
-
-    for idx, (stage, y) in enumerate(zip(stages, y_positions, strict=True)):
-        is_edge = idx in (0, n_stages - 1)
-        ax.plot([left[idx], right[idx]], [y, y], color="#1f2937", linewidth=0.7, alpha=0.35, zorder=3)
-
-        cumulative_pct = 100.0 * energies[idx] / reference_energy
-        ax.text(
-            center_x,
-            y + 0.011,
-            f"{_format_loss_energy(float(stage['energy_kwh']))}  ·  {cumulative_pct:.1f}%",
-            ha="center",
-            va="bottom",
-            fontsize=8.6,
-            weight="bold" if is_edge else "normal",
-            color="#111827",
-        )
-
-        # Dotted leader tying the band to its stage label on the right.
-        ax.plot(
-            [right[idx] + 0.008, label_x - 0.008],
-            [y, y],
-            color="#9ca3af",
-            linewidth=0.6,
-            linestyle=(0, (2, 3)),
-            zorder=0,
-        )
-        if idx == 0:
-            ax.text(label_x, y, stage["label"], ha="left", va="center", fontsize=9.2, weight="bold", color="#111827")
-            continue
-        delta_pct = float(stage.get("delta_pct_of_previous", 0.0))
-        step_color = "#047857" if delta_pct > 0 else "#b91c1c" if delta_pct < 0 else "#9ca3af"
-        ax.text(
-            label_x,
-            y + 0.009,
-            stage["label"],
-            ha="left",
-            va="bottom",
-            fontsize=9.2,
-            weight="bold" if is_edge else "normal",
-            color="#111827",
-        )
-        ax.text(
-            label_x,
-            y - 0.009,
-            _format_loss_delta(stage) if delta_pct else "0.00% (0.0 kWh)",
-            ha="left",
-            va="top",
-            fontsize=8.4,
-            color=step_color,
-        )
-
-    ax.text(
-        center_x,
-        bottom_y - 0.05,
-        f"Dispatch-ready PV DC: {_format_loss_energy(float(stages[-1]['energy_kwh']))}",
-        ha="center",
-        va="center",
-        fontsize=11,
-        weight="bold",
-        color="#111827",
-    )
-
-    detail_y0 = 0.035
-    detail_h = 0.165
-    ax.add_patch(
-        Rectangle(
-            (0.04, detail_y0),
-            0.92,
-            detail_h,
-            facecolor="#f9fafb",
-            edgecolor="#e5e7eb",
-            linewidth=0.8,
-        )
-    )
-    component_items = list(waterfall.get("pvwatts", {}).get("components_kwh", {}).items())
-    left_components = component_items[:5]
-    right_components = component_items[5:]
-    component_pct = waterfall.get("pvwatts", {}).get("components_pct", {})
-
-    def _component_line(name: str, value: float) -> str:
-        pct = component_pct.get(name)
-        pct_text = f"{pct:.1f}% · " if isinstance(pct, (int, float)) else ""
-        return f"{name.replace('_', ' ').title()}: {pct_text}{_format_loss_energy(float(value))}"
-
-    heading_y = detail_y0 + detail_h - 0.022
-    row0_y = detail_y0 + detail_h - 0.046
-    row_step = 0.021
-    ax.text(0.06, heading_y, "Static PVWatts components", ha="left", va="center", fontsize=8.7, weight="bold")
-    for row, (name, value) in enumerate(left_components):
-        ax.text(
-            0.06,
-            row0_y - row * row_step,
-            _component_line(name, value),
-            ha="left",
-            va="center",
-            fontsize=7.5,
-            color="#374151",
-        )
-    for row, (name, value) in enumerate(right_components):
-        ax.text(
-            0.35,
-            row0_y - row * row_step,
-            _component_line(name, value),
-            ha="left",
-            va="center",
-            fontsize=7.5,
-            color="#374151",
-        )
-
-    ax.text(0.66, heading_y, "Inverter and dispatch", ha="left", va="center", fontsize=8.7, weight="bold")
-    balance = waterfall.get("energy_balance", {})
-    pv_dc = balance.get("pv_dc", {})
-    ac = balance.get("ac_delivery", {})
-    extra_rows = [
-        ("Direct PV to load (AC)", ac.get("direct_pv_to_load_kwh", 0.0)),
-        ("PV via battery to load (AC)", ac.get("pv_origin_battery_to_load_kwh", 0.0)),
-        ("Grid export (AC)", ac.get("export_kwh", 0.0)),
-        ("Inverter conversion loss", waterfall.get("inverter", {}).get("conversion_loss_kwh", 0.0)),
-        ("Curtailment (DC)", pv_dc.get("curtailed_kwh", 0.0)),
+    # Layout in inches, s along the flow (down), c across it (right).
+    energy, peak = 0.0, 1e-9
+    for kind, _, value in rows:
+        energy = value if kind == "total" else energy + value
+        peak = max(peak, energy)
+    ipk = 4.2 / peak  # inches per kWh
+    step_h, total_h, radius = 0.42, 0.36, 0.28
+    c_end = peak * ipk + 0.55
+    x0, y0 = 0.6, 1.55
+    labels = [label for kind, label, _ in rows if kind == "step"] + [label for label, _, _ in end_uses]
+    change_x = max(3.45, 0.07 * max((len(label) for label in labels), default=0) + 1.1)
+    pct_x = change_x + 0.8
+    label_x = x0 + c_end + 0.12
+    end_h = max(0.5, 0.24 * len(end_uses))
+    # A gain after a loss starts lower, so the two labels keep apart.
+    gain_pad = [
+        0.1 if kind == "step" and v > 0 and i and rows[i - 1][0] == "step" and rows[i - 1][2] < 0 else 0.0
+        for i, (kind, _, v) in enumerate(rows)
     ]
-    for row, (label, value) in enumerate(extra_rows):
+    heights = [
+        total_h + 0.03 if kind == "total" else max(step_h, abs(v) * ipk + 0.2) + pad
+        for (kind, _, v), pad in zip(rows, gain_pad, strict=True)
+    ]
+    length = sum(heights)
+    flow_end = y0 + length
+    height = flow_end + (0.1 + end_h + 0.45 if end_uses else 0.0)
+    strip_top = height + 0.55
+    if lifetime:
+        height = strip_top + 0.45 + 2.2 + 0.55
+    size = (label_x + pct_x + 0.35, height + 0.35)
+
+    fig = plt.figure(figsize=figsize or size)
+    # A given figsize scales the drawing, and the text with it.
+    scale = min(figsize[0] / size[0], figsize[1] / size[1]) if figsize else 1.0
+    fig.patch.set_facecolor(_FLOW_SURFACE)
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
+    ax.set_xlim(0, size[0])
+    ax.set_ylim(size[1], 0)
+    ax.set_aspect("equal", anchor="N")
+    ax.axis("off")
+    ax.apply_aspect()
+    if title is None:
+        title = "PV energy flow, simulated period" if period else "PV energy flow, year 1"
+    basis = "kWh over the simulated period, which is not a full year." if period else "kWh in year 1 of the project."
+    ax.text(x0 - 0.15, 0.5, title, fontsize=15 * scale, weight="bold", color=_FLOW_INK, va="center")
+    ax.text(
+        x0 - 0.15,
+        0.88,
+        "The width of the band is the energy that remains. Losses leave the band, gains join it, all to the same scale.",
+        fontsize=9.5 * scale,
+        color=_FLOW_INK2,
+        va="center",
+    )
+    ax.text(x0 - 0.15, 1.12, basis, fontsize=9.5 * scale, color=_FLOW_INK2, va="center")
+
+    def rect(s: float, c: float, ds: float, dc: float, color: str) -> None:
+        ax.add_patch(Rectangle((x0 + c, y0 + s), dc, ds, facecolor=color, edgecolor="none"))
+
+    def columns(y: float, label: str, change: str, pct: str, x: float = label_x) -> None:
+        ax.text(x, y, label, ha="left", va="center", fontsize=9 * scale, color=_FLOW_INK)
+        ax.text(label_x + change_x, y, change, ha="right", va="center", fontsize=9 * scale, color=_FLOW_INK)
+        ax.text(label_x + pct_x, y, pct, ha="right", va="center", fontsize=9 * scale, color=_FLOW_INK2)
+
+    s, energy = 0.0, 0.0
+    for (kind, label, value), h, pad in zip(rows, heights, gain_pad, strict=True):
+        if kind == "total":
+            energy = value
+            width = max(value, 0.0) * ipk
+            rect(s, 0, total_h, width, _FLOW_TOTAL)
+            text = f"{label}   {_flow_number(value)} kWh"
+            mark = ax.text(
+                x0 + width / 2,
+                y0 + s + total_h / 2,
+                text,
+                ha="center",
+                va="center",
+                fontsize=9 * scale,
+                color="white",
+                weight="bold",
+            )
+            # A band too narrow for its label gets it beside the band, in ink.
+            text_px = mark.get_window_extent(renderer=fig.canvas.get_renderer()).width
+            band_px = ax.transData.transform((width, 0))[0] - ax.transData.transform((0, 0))[0]
+            if text_px + 0.2 * scale * fig.dpi > band_px:
+                mark.set(x=x0 + width + 0.12, ha="left", color=_FLOW_INK)
+            s += h
+            continue
+        thickness = abs(value) * ipk
+        after = energy + value
+        cb, ca = max(energy, 0.0) * ipk, max(after, 0.0) * ipk
+        moveto, curve, lineto = MplPath.MOVETO, MplPath.CURVE3, MplPath.LINETO
+        if value < 0:  # leaves at the start of the row, then turns outward
+            rect(s, 0, h, ca, _FLOW_BAND)
+            lo = s + h - 0.06
+            hi = lo - thickness
+            pts = [
+                (s, ca),
+                (s, cb),
+                (hi, cb),
+                (hi, cb + radius),
+                (hi, c_end),
+                (lo, c_end),
+                (lo, cb + radius),
+                (lo, ca),
+                (s, ca),
+            ]
+        else:  # arrives from outside and joins at the end of the row
+            rect(s, 0, h, cb, _FLOW_BAND)
+            hi = s + 0.06 + pad
+            lo = hi + thickness
+            pts = [
+                (s + h, cb),
+                (s + h, ca),
+                (lo, ca),
+                (lo, ca + radius),
+                (lo, c_end),
+                (hi, c_end),
+                (hi, ca + radius),
+                (hi, cb),
+                (s + h, cb),
+            ]
+        color = _FLOW_LOSS if value < 0 else _FLOW_GAIN
+        codes = [moveto, lineto, curve, curve, lineto, lineto, lineto, curve, curve]
+        path = MplPath([(x0 + c, y0 + v) for v, c in pts], codes)
+        ax.add_patch(PathPatch(path, facecolor=color, edgecolor=color, linewidth=0.8))
+        sign = "+" if value > 0 else ""
+        pct = f"{sign}{_flow_number(100.0 * value / energy, 2)} %" if energy else ""
+        change = f"{sign}{_flow_number(value, 0 if abs(value) >= 10 else 1)} kWh"
+        columns(y0 + (hi + lo) / 2, label, change, pct)
         ax.text(
-            0.66,
-            row0_y - row * row_step,
-            f"{label}: {_format_loss_energy(float(value))}",
+            x0 + 0.1, y0 + s + h / 2, _flow_number(after), ha="left", va="center", fontsize=8 * scale, color=_FLOW_INK2
+        )
+        energy = after
+        s += h
+
+    if end_uses:
+        top = flow_end + 0.1
+        total = sum(value for _, _, value in end_uses)
+        c = 0.0
+        for i, (label, color, value) in enumerate(end_uses):
+            width = max(value, 0.0) * ipk
+            ax.add_patch(
+                Rectangle((x0 + c + 0.01, top), max(width - 0.02, 0.0), end_h, facecolor=color, edgecolor="none")
+            )
+            c += width
+            y = top + end_h / 2 + (i - (len(end_uses) - 1) / 2) * 0.24
+            ax.add_patch(Rectangle((label_x, y - 0.07), 0.14, 0.14, facecolor=color, edgecolor="none"))
+            share = f"{_flow_number(100.0 * value / total, 1)} %" if total else ""
+            columns(y, label, f"{_flow_number(value)} kWh", share, x=label_x + 0.24)
+        ax.text(
+            x0,
+            top + end_h + 0.2,
+            "Where the usable AC energy goes",
             ha="left",
             va="center",
-            fontsize=7.5,
-            color="#374151",
+            fontsize=8.5 * scale,
+            color=_FLOW_INK2,
         )
 
-    # Keep this summary near the detail box rather than as a stage row because
-    # the component losses are sequential and therefore do not sum arithmetically
-    # to the combined percentage.
-    combined = waterfall.get("pvwatts", {}).get("combined_kwh")
-    combined_pct = waterfall.get("pvwatts", {}).get("combined_pct")
-    if isinstance(combined, (int, float)) and isinstance(combined_pct, (int, float)):
-        ax.text(
-            0.35,
-            detail_y0 + 0.012,
-            f"PVWatts combined: {combined_pct:.2f}% · {_format_loss_energy(float(combined))}",
-            ha="left",
-            va="center",
-            fontsize=7.7,
-            color="#111827",
-            weight="bold",
-        )
+    if lifetime:
+        _draw_lifetime_strip(fig, ax, years, replacement_years, x0, strip_top, c_end, label_x, pct_x, scale)
 
     if output_path:
         output_dir = os.path.dirname(os.path.abspath(output_path))
@@ -465,6 +520,112 @@ def plot_pv_loss_waterfall(
         plt.close(fig)
 
     return fig
+
+
+def _draw_lifetime_strip(
+    fig: Figure,
+    ax: Any,
+    yearly: Sequence[Mapping[str, Any]],
+    replacement_years: Sequence[float],
+    x0: float,
+    top: float,
+    c_end: float,
+    label_x: float,
+    pct_x: float,
+    scale: float,
+) -> None:
+    """Draw the yearly PV DC and usable AC lines with their table under the flow diagram; positions in inches."""
+    years = [int(row["year"]) for row in yearly]
+    dc = [float(row["pv_dc_generation_kwh"]) for row in yearly]
+    usable = [float(row["usable_ac_system_production_kwh"]) for row in yearly]
+    n = len(years)
+    ax.text(
+        x0 - 0.15,
+        top,
+        "Project lifetime, kWh per year",
+        fontsize=10 * scale,
+        weight="bold",
+        color=_FLOW_INK,
+        va="center",
+    )
+
+    # Place the chart in inches through the main axes, which may be scaled to a given figsize.
+    ax.apply_aspect()
+    to_figure = ax.transData + fig.transFigure.inverted()
+    left, chart_top, chart_h = x0 + 0.55, top + 0.45, 2.2
+    right = x0 + c_end - 1.35
+    (fx0, fy1), (fx1, fy0) = to_figure.transform([(left, chart_top), (right, chart_top + chart_h)])
+    chart = fig.add_axes((fx0, fy0, fx1 - fx0, fy1 - fy0))
+    chart.set_facecolor(_FLOW_SURFACE)
+    for side in ("top", "right", "left"):
+        chart.spines[side].set_visible(False)
+    chart.spines["bottom"].set_color(_FLOW_BASE)
+    chart.tick_params(axis="both", colors=_FLOW_MUTED, labelsize=8 * scale, length=0)
+    chart.yaxis.grid(True, color=_FLOW_GRID, linewidth=0.6)
+    chart.set_axisbelow(True)
+    chart.plot(years, dc, color=_FLOW_INK2, linewidth=2)
+    chart.plot(years, usable, color=_FLOW_GAIN, linewidth=2)
+    low, high = min(usable + dc), max(usable + dc)
+    pad = 0.08 * (high - low or high or 1.0)
+    chart.set_ylim(low - pad, high + pad)
+    chart.set_xlim(years[0] - 0.4, years[-1] + 0.4)
+    ticks = sorted({years[0], years[-1], *range(5, years[-1], 5)}) if n > 10 else years
+    chart.set_xticks([year for year in ticks if years[0] <= year <= years[-1]])
+    chart.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: _flow_number(value)))
+    chart.set_xlabel("Project year", fontsize=8.5 * scale, color=_FLOW_INK2)
+
+    # Direct labels at the line ends, pushed apart when the lines end close together.
+    span = chart.get_ylim()[1] - chart.get_ylim()[0]
+    gap = 0.2 / chart_h * span
+    y_dc, y_ac = dc[-1], usable[-1]
+    if abs(y_dc - y_ac) < gap:
+        middle = (y_dc + y_ac) / 2
+        y_dc, y_ac = (
+            (middle + gap / 2, middle - gap / 2) if dc[-1] >= usable[-1] else (middle - gap / 2, middle + gap / 2)
+        )
+    for y, label in ((y_dc, "PV DC output"), (y_ac, "Usable AC energy")):
+        chart.text(years[-1] + 0.6, y, label, fontsize=8.5 * scale, color=_FLOW_INK2, va="center", clip_on=False)
+    for year in replacement_years:
+        if years[0] <= year <= years[-1]:
+            chart.axvline(year, color=_FLOW_BASE, linewidth=0.8, linestyle=(0, (3, 3)))
+            chart.text(
+                year,
+                1.02,
+                "Battery replacement",
+                transform=chart.get_xaxis_transform(),
+                fontsize=8 * scale,
+                color=_FLOW_INK2,
+                ha="center",
+                va="bottom",
+            )
+
+    # The table beside the chart.
+    right_edges = (label_x + pct_x - 2.0, label_x + pct_x - 1.0, label_x + pct_x)
+    header = ("Year 1", f"Year {years[-1]}", f"{n}-year total")
+    table = (("PV DC output", dc), ("Usable AC energy", usable))
+    y = chart_top + 0.15
+    for edge, text in zip(right_edges, header, strict=True):
+        ax.text(edge, y, text, ha="right", va="center", fontsize=8.5 * scale, color=_FLOW_MUTED)
+    for name, values in table:
+        y += 0.32
+        ax.text(label_x, y, name, ha="left", va="center", fontsize=8.5 * scale, color=_FLOW_INK, weight="bold")
+        cells = (values[0], values[-1], sum(values))
+        for edge, value in zip(right_edges, cells, strict=True):
+            ax.text(edge, y, _flow_number(value), ha="right", va="center", fontsize=8.5 * scale, color=_FLOW_INK)
+    mean = sum(usable) / n
+    change = (
+        f"{'+' if mean > usable[0] else ''}{_flow_number(100.0 * (mean / usable[0] - 1.0), 1)} %" if usable[0] else ""
+    )
+    ax.text(
+        label_x,
+        y + 0.55,
+        f"Lifetime mean usable AC energy: {_flow_number(mean)} kWh per year,\n{change} against year 1.",
+        ha="left",
+        va="top",
+        fontsize=8.5 * scale,
+        color=_FLOW_INK2,
+        linespacing=1.4,
+    )
 
 
 def yearly_graphs(results_df: pd.DataFrame, results_directory: Optional[str] = None) -> Figure:
