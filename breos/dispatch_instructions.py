@@ -49,7 +49,7 @@ class DispatchInstructions:
     discharge_allowed: np.ndarray  # bool, shape (n,)
     reserve_fraction: np.ndarray  # float64 in [0, 1]; usable fraction kept before discharge
     grid_target_fraction: np.ndarray  # float64 in [0, 1]; NaN = no grid charge on that step
-    # In (0, 1]; AC-to-DC, applied before the existing charge efficiency (A6).
+    # In (0, 1]; AC-to-DC, applied before the existing charge efficiency (ADR 0002 A6).
     # None for an AC-coupled battery, whose own inverter converts grid charge
     # (ADR 0004 C7); only an AC-coupled run accepts it.
     grid_charge_efficiency: float | None

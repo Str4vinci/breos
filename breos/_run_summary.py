@@ -138,7 +138,7 @@ def _energy_block(result: dict[str, Any]) -> list[str]:
 
 
 def _vehicle_study_year1(result: dict[str, Any]) -> dict[str, Any] | None:
-    """Year 1 of the studied household (R2) in a vehicle run, else None."""
+    """Year 1 of the studied household (R2, ADR 0005 V8) in a vehicle run, else None."""
     households = (result.get("vehicle") or {}).get("households") or {}
     yearly = (households.get("R2") or {}).get("yearly") or []
     return yearly[0] if yearly else None

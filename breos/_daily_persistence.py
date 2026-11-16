@@ -97,7 +97,8 @@ WINDOW_POLICY = {
     "forecast_policy": "repeat_local_day_before_decision",
     "warm_start_policy": "no_grid_until_a_window_after_one_complete_local_day",
 }
-# The forecast policy of a planner forecast other than persistence (A20).
+# The forecast policy of a planner forecast other than persistence: a
+# day-ahead weather forecast for PV (ADR 0002 A20).
 FORECAST_POLICIES = {
     "weather": "weather_forecast_pv_by_published_lead_load_temperature_persistence",
     "perfect": "perfect_information_reference",
@@ -169,14 +170,15 @@ class DailyPersistenceController:
     the simulation's own. Under ``civil_day`` it keeps no policy state:
     every decision follows from the day's input. Under
     ``charge_window_start`` the policy state is the target in force (None for
-    none), carried across midnights and the A2 year seam until the next
-    window starts.
+    none), carried across midnights and the year seam (ADR 0002 A2) until the
+    next window starts.
     """
 
     spec: SmartChargingSpec
     hours_per_step: float
     execution_backend: str
-    # The planner's forecast in place of persistence (A20); None is persistence.
+    # The planner's forecast in place of persistence (ADR 0002 A20); None is
+    # persistence.
     forecast: PlannerForecast | None = None
 
     def __post_init__(self) -> None:
@@ -206,7 +208,7 @@ class DailyPersistenceController:
         """The planner's PV, load and temperature for ``slot_keys`` from ``day``'s decision.
 
         Persistence, with the PV (or, under ``perfect``, every series) of the
-        configured forecast in its place (A20).
+        configured forecast in its place (ADR 0002 A20).
         """
         pv, load, temperature = persistence_forecast(observed, slot_keys)
         if self.forecast is None:
@@ -215,7 +217,7 @@ class DailyPersistenceController:
 
     @property
     def windowed(self) -> bool:
-        """Whether targets are decided at charge-window starts (A19), not civil midnights."""
+        """Whether targets are decided at charge-window starts (ADR 0002 A19), not civil midnights."""
         return self.spec.decision_boundary == "charge_window_start"
 
     @property
@@ -229,7 +231,8 @@ class DailyPersistenceController:
     def decision_starts(self, tariff: ResolvedTariff) -> np.ndarray | None:
         """The charge-window starts of ``tariff``'s calendar, or None when deciding civil days.
 
-        The first step follows the calendar's last, as an A2 replay continues it.
+        The first step follows the calendar's last, as the next project year's
+        replay of the calendar continues it (ADR 0002 A2).
         """
         if not self.windowed:
             return None
@@ -329,7 +332,7 @@ class DailyPersistenceController:
 def observed_day_before(
     last_complete: ObservedCivilDay | None, today: PendingObservedCivilDay | None
 ) -> ObservedCivilDay | None:
-    """The local day before a decision: each slot's most recent observation (A19).
+    """The local day before a decision: each slot's most recent observation (ADR 0002 A19).
 
     The current day's observed slots replace the last complete day's slots
     at the same wall time and fold, and add any it lacks. When the last
@@ -372,7 +375,7 @@ def observed_day_before(
 def window_plan_span(
     horizon: KnownTariffHorizon, layout: DispatchInstructions, planning_days: int
 ) -> tuple[int, tuple[int, ...]]:
-    """How many horizon steps a window decision plans, and its windows' starts in them (A19).
+    """How many horizon steps a window decision plans, and its windows' starts in them (ADR 0002 A19).
 
     The plan covers the windows that start before the decision's wall-clock
     time ``planning_days`` civil days later, the decision's own window
@@ -417,7 +420,7 @@ def daily_persistence_provenance(
     ``executed`` is every instruction the run dispatched, in project order
     across all its years; its hash identifies what the policy did without
     exposing its forecasts or per-day targets. A run with a planner forecast
-    other than persistence (A20) also records it under ``planner_forecast``.
+    other than persistence (ADR 0002 A20) also records it under ``planner_forecast``.
     """
     policy = {
         "controller_version": CONTROLLER_VERSION,

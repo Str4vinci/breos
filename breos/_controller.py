@@ -2,8 +2,8 @@
 
 A daily controller decides one configured-zone civil day at a time and returns
 canonical :class:`~breos.dispatch_instructions.DispatchInstructions` for it.
-A controller may also name steps inside a day where it decides again (A19):
-each such decision covers the rest of the day from that step.
+A controller may also name steps inside a day where it decides again (ADR 0002
+A19): each such decision covers the rest of the day from that step.
 It receives the day's calendar, the known tariff for the day, the current
 battery state, and observations of days that have already completed.
 Simulation truth is captured by the core after each dispatch segment and is
@@ -12,8 +12,10 @@ array reaches the controller.
 
 The seam is private. :class:`_ControllerSession` is what
 :func:`breos.battery._simulate_core` drives: it splits dispatch at civil-day
-boundaries, keeps a monotonic project clock, stitches a logical day across an
-ADR 0002 A2 year seam, and owns the observation history. Degradation windows
+boundaries, keeps a monotonic project clock, stitches a logical day across the
+year seam, and owns the observation history. Every project year replays the
+start-year calendar (ADR 0002 A2), so at the year seam the final civil day of
+the calendar continues at its head. Degradation windows
 stay positional; the session never moves them.
 """
 
@@ -33,7 +35,7 @@ if TYPE_CHECKING:
 
 # A configured-zone wall-clock slot: seconds after local midnight, and the DST
 # fold (0 for the first occurrence of a wall time, 1 for its repeat). It holds
-# no date, so a logical day stitched across an A2 seam compares by wall slot
+# no date, so a logical day stitched across the year seam compares by wall slot
 # only; the date is a label.
 SlotKey: TypeAlias = tuple[int, int]
 
@@ -175,14 +177,14 @@ class ControllerDayInput:
     ``expected_slot_keys`` is the whole civil day; the decision covers
     ``decision_step_count`` of them from ``civil_slot_offset``. The current
     simulation call dispatches ``segment_step_count`` of those from
-    ``segment_offset``; a day stitched across an A2 seam dispatches the rest
+    ``segment_offset``; a day stitched across the year seam dispatches the rest
     in the next call. ``initial_partial_day`` marks a projection that starts
     mid-day, ``clipped_start`` and ``clipped_end`` a span that lacks the day's
     first or last slots for any other reason, such as a ``[period]`` edge.
 
     ``decision_start`` is True on a step the controller's own
-    ``decision_starts`` marks (A19), whether a civil day starts there or
-    not. A decision inside a civil day covers the rest of the logical day
+    ``decision_starts`` marks (ADR 0002 A19), whether a civil day starts there
+    or not. A decision inside a civil day covers the rest of the logical day
     from its step, and ``observed_today`` holds the day's observations made
     before it; ``civil_slot_offset`` is then the step's own slot. At a
     civil-day start ``observed_today`` is None.
@@ -259,10 +261,10 @@ class DailyDispatchController(Protocol):
     controller sees from the start of each decision.
 
     A controller may also define ``decision_starts(tariff)``, returning one
-    boolean per step of the resolved calendar, or None. The session then
-    also decides on every marked step inside a civil day (A19). A mark on
-    the first step treats the step before it as the calendar's last, as an
-    A2 replay continues it.
+    boolean per step of the resolved calendar, or None. The session then also
+    decides on every marked step inside a civil day (ADR 0002 A19). A mark on
+    the first step treats the step before it as the calendar's last, as the
+    next project year's replay continues it.
     """
 
     @property
@@ -432,8 +434,8 @@ class _ControllerSession:
 
     At each dispatch segment start the core asks :meth:`decides_at`, calls
     :meth:`decide` with the current battery state when a civil day begins or
-    the step is one the controller marked (A19), takes the segment end from
-    :meth:`prepare_segment`, dispatches, and reports the finished segment
+    the step is one the controller marked (ADR 0002 A19), takes the segment end
+    from :meth:`prepare_segment`, dispatches, and reports the finished segment
     through :meth:`complete_segment`. Civil boundaries come from
     ``tariff.day_starts`` only; marks from the controller's optional
     ``decision_starts``.
@@ -538,7 +540,7 @@ class _ControllerSession:
         return tuple(zip(wall.tolist(), fold.tolist(), strict=True))
 
     def _head_completes_tail(self) -> bool:
-        """Whether the replayed head day completes the final civil day across an A2 seam."""
+        """Whether the replayed head day completes the final civil day across the year seam."""
         if self._seam_head is None:
             head: tuple[SlotKey, ...] = ()
             if self._replay_seam and self._n_days >= 2:
@@ -555,10 +557,10 @@ class _ControllerSession:
     def _logical_day(self, start: int) -> tuple[list[range], int | None]:
         """Calendar ranges of the logical day starting at ``start``, and the next day's start.
 
-        A2 replays one calendar, so in a replay the day after the final civil
-        day is the head of the same calendar. When the head completes the
-        final day, the two are one logical day. A standalone span has no day
-        after its end.
+        Every project year replays one calendar (ADR 0002 A2), so in a replay
+        the day after the final civil day is the head of the same calendar.
+        When the head completes the final day, the two are one logical day. A
+        standalone span has no day after its end.
         """
         end = self._day_starts[self._day_of_start[start] + 1]
         ranges = [range(start, end)]
@@ -685,7 +687,7 @@ class _ControllerSession:
         ranges[0] = range(position, ranges[0].stop)
         span_count = len(active.instructions) - active.cursor
         if sum(len(part) for part in ranges) != span_count:
-            # A day resumed across an A2 seam is the head part only.
+            # A day resumed across the year seam is the head part only.
             ranges = [range(position, self._day_starts[self._day + 1])]
         offset = active.civil_slot_offset + active.cursor
         base = self._day_input

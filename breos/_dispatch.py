@@ -1007,7 +1007,7 @@ def _dispatch_dc_step(
 
     battery_charge_input = drawn
     if not math.isnan(grid_target_energy) and pv_ac_export <= 0.0 and battery_discharge_dc <= 0.0:
-        # PV keeps priority on every limit the two sources share (A6): grid
+        # PV keeps priority on every limit the two sources share (ADR 0002 A6): grid
         # charge gets the charge input and stored energy PV did not use, the
         # inverter rating less the step's PV AC output, and the site limit
         # less the step's load import.
@@ -1202,7 +1202,7 @@ def _dispatch_ac_step(
         grid_import = grid_import + (night - pv_to_night)
 
     # 3. Grid charge toward the target, with what PV left of every shared
-    # limit, including the battery inverter's AC input (C7).
+    # limit, including the battery inverter's AC input (ADR 0004 C7).
     if not math.isnan(grid_target_energy) and pv_ac_export <= 0.0 and battery_discharge_dc <= 0.0 and eff_charge > 0.0:
         goal = min(grid_target_energy, emax)
         if goal - battery_energy > 0.0:
@@ -1527,7 +1527,7 @@ def _dispatch_day(
     ``discharge_allowed``, ``reserve_fraction`` and ``grid_target_fraction``
     are the per-step instruction arrays (ADR 0002), indexed like the inputs.
     A fraction is of each step's usable window, ``emin + f * (emax - emin)``,
-    so the energy it names moves with temperature and health (A7).
+    so the energy it names moves with temperature and health (ADR 0002 A7).
 
     ``curve_ac``, ``curve_eff`` and ``cable_k`` are the inverter's conversion
     (:func:`_dc_ac`), with ``curve_rows`` each step's operating voltage as a
@@ -1610,7 +1610,9 @@ def _dispatch_day(
             target = grid_target_fraction[i]
             grid_target_energy = emin + target * (emax - emin) if not math.isnan(target) else math.nan
             if discharge_allowed[i] and reserve == target:
-                # A14's shared fraction has one A7 energy bound, exactly.
+                # A shared period holds the target (ADR 0002 A14): reserve and
+                # target are one fraction, so the floor is the target energy
+                # itself, one bound on the current window (ADR 0002 A7).
                 discharge_floor = grid_target_energy
 
             # Discharge takes from every origin in proportion to its share before

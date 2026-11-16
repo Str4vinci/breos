@@ -224,7 +224,7 @@ def replay_instructions(
     replayed every project year, as App replays its own (ADR 0002 A2); a
     sequence gives one set per project year, and a
     :data:`~breos.projection.YearPlanner` chooses each year's set as the year
-    begins, from the state the replay has reached (A16). ``planned``
+    begins, from the state the replay has reached (ADR 0002 A16). ``planned``
     maps names in :data:`PLANNED_FLOWS` to one value per step of the first
     project year, the only year whose per-step frame the run keeps; later
     years are simulated and priced but not compared. ``tolerance`` is one
