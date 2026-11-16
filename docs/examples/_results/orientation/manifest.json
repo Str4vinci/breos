@@ -2,9 +2,9 @@
  "case": "orientation",
  "title": "Array tilt and azimuth",
  "breos_version": "0.8.0",
- "git_describe": "v0.7.1-409-g2a964f2-dirty",
- "generated_utc": "2026-11-14T15:06:05+00:00",
- "runtime_s": 122.3,
+ "git_describe": "v0.7.1-416-g54e3654",
+ "generated_utc": "2026-11-16T13:29:16+00:00",
+ "runtime_s": 155.1,
  "cheap": false,
  "configs": {
   "configs/examples/pv-only.toml": "b05d6a251ee3a4b9a4510866f9268b740434280ced704f9e8e4654363c35c8b0"

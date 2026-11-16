@@ -2,9 +2,9 @@
  "case": "quarterly_berlin",
  "title": "Discharge-only dispatch on a quarterly tariff in Berlin",
  "breos_version": "0.8.0",
- "git_describe": "v0.7.1-409-g2a964f2-dirty",
- "generated_utc": "2026-11-14T15:06:36+00:00",
- "runtime_s": 5.5,
+ "git_describe": "v0.7.1-416-g54e3654",
+ "generated_utc": "2026-11-16T13:29:49+00:00",
+ "runtime_s": 5.6,
  "cheap": true,
  "configs": {
   "configs/examples/quarterly-tariff-berlin.toml": "b042aab2be03be12ee4b89ba21de6e4cdef95d68ce893fd6180f8340bf8bc977"

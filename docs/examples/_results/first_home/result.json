@@ -14,6 +14,9 @@
  "grid_export_kwh": 4990.65,
  "grid_independence_pct": 78.91,
  "self_consumption_pct": 38.72,
+ "global_horizontal_kwh_m2": 1713.28,
+ "global_incident_kwh_m2": 1938.62,
+ "performance_ratio_pct": 76.37,
  "total_investment": 7788.85,
  "payback_year": 13,
  "npv_savings": 4717.13,
@@ -315,7 +318,10 @@
    "self_consumption_kwh": 257.01,
    "grid_import_kwh": 146.5,
    "grid_export_kwh": 282.15,
-   "grid_independence_pct": 64.04
+   "grid_independence_pct": 64.04,
+   "global_horizontal_kwh_m2": 73.86,
+   "global_incident_kwh_m2": 124.31,
+   "performance_ratio_pct": 78.86
   },
   {
    "month": "Feb",
@@ -328,7 +334,10 @@
    "self_consumption_kwh": 226.54,
    "grid_import_kwh": 131.49,
    "grid_export_kwh": 180.83,
-   "grid_independence_pct": 63.28
+   "grid_independence_pct": 63.28,
+   "global_horizontal_kwh_m2": 70.13,
+   "global_incident_kwh_m2": 94.18,
+   "performance_ratio_pct": 78.65
   },
   {
    "month": "Mar",
@@ -341,7 +350,10 @@
    "self_consumption_kwh": 276.62,
    "grid_import_kwh": 95.49,
    "grid_export_kwh": 370.38,
-   "grid_independence_pct": 74.34
+   "grid_independence_pct": 74.34,
+   "global_horizontal_kwh_m2": 126.84,
+   "global_incident_kwh_m2": 150.52,
+   "performance_ratio_pct": 78.15
   },
   {
    "month": "Apr",
@@ -354,7 +366,10 @@
    "self_consumption_kwh": 289.76,
    "grid_import_kwh": 45.12,
    "grid_export_kwh": 482.94,
-   "grid_independence_pct": 86.53
+   "grid_independence_pct": 86.53,
+   "global_horizontal_kwh_m2": 172.45,
+   "global_incident_kwh_m2": 182.95,
+   "performance_ratio_pct": 76.79
   },
   {
    "month": "May",
@@ -367,7 +382,10 @@
    "self_consumption_kwh": 296.94,
    "grid_import_kwh": 16.39,
    "grid_export_kwh": 538.72,
-   "grid_independence_pct": 94.77
+   "grid_independence_pct": 94.77,
+   "global_horizontal_kwh_m2": 206.09,
+   "global_incident_kwh_m2": 199.51,
+   "performance_ratio_pct": 76.16
   },
   {
    "month": "Jun",
@@ -380,7 +398,10 @@
    "self_consumption_kwh": 275.28,
    "grid_import_kwh": 6.2,
    "grid_export_kwh": 545.55,
-   "grid_independence_pct": 97.8
+   "grid_independence_pct": 97.8,
+   "global_horizontal_kwh_m2": 212.62,
+   "global_incident_kwh_m2": 198.14,
+   "performance_ratio_pct": 75.32
   },
   {
    "month": "Jul",
@@ -393,7 +414,10 @@
    "self_consumption_kwh": 279.43,
    "grid_import_kwh": 0.08,
    "grid_export_kwh": 657.3,
-   "grid_independence_pct": 99.97
+   "grid_independence_pct": 99.97,
+   "global_horizontal_kwh_m2": 240.07,
+   "global_incident_kwh_m2": 228.55,
+   "performance_ratio_pct": 74.52
   },
   {
    "month": "Aug",
@@ -406,7 +430,10 @@
    "self_consumption_kwh": 273.79,
    "grid_import_kwh": 10.99,
    "grid_export_kwh": 605.36,
-   "grid_independence_pct": 96.14
+   "grid_independence_pct": 96.14,
+   "global_horizontal_kwh_m2": 206.72,
+   "global_incident_kwh_m2": 214.92,
+   "performance_ratio_pct": 74.37
   },
   {
    "month": "Sep",
@@ -419,7 +446,10 @@
    "self_consumption_kwh": 260.6,
    "grid_import_kwh": 32.93,
    "grid_export_kwh": 540.06,
-   "grid_independence_pct": 88.78
+   "grid_independence_pct": 88.78,
+   "global_horizontal_kwh_m2": 164.7,
+   "global_incident_kwh_m2": 194.13,
+   "performance_ratio_pct": 74.99
   },
   {
    "month": "Oct",
@@ -432,7 +462,10 @@
    "self_consumption_kwh": 267.29,
    "grid_import_kwh": 65.44,
    "grid_export_kwh": 400.2,
-   "grid_independence_pct": 80.33
+   "grid_independence_pct": 80.33,
+   "global_horizontal_kwh_m2": 118.51,
+   "global_incident_kwh_m2": 158.51,
+   "performance_ratio_pct": 76.56
   },
   {
    "month": "Nov",
@@ -445,7 +478,10 @@
    "self_consumption_kwh": 241.18,
    "grid_import_kwh": 104.26,
    "grid_export_kwh": 252.83,
-   "grid_independence_pct": 69.82
+   "grid_independence_pct": 69.82,
+   "global_horizontal_kwh_m2": 72.1,
+   "global_incident_kwh_m2": 114.18,
+   "performance_ratio_pct": 78.66
   },
   {
    "month": "Dec",
@@ -458,7 +494,10 @@
    "self_consumption_kwh": 208.29,
    "grid_import_kwh": 188.52,
    "grid_export_kwh": 134.32,
-   "grid_independence_pct": 52.49
+   "grid_independence_pct": 52.49,
+   "global_horizontal_kwh_m2": 49.21,
+   "global_incident_kwh_m2": 78.72,
+   "performance_ratio_pct": 79.13
   }
  ],
  "financial": [
