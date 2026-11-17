@@ -350,3 +350,22 @@ def test_monte_carlo_years_take_the_tables(shaded_config, synthetic_weather):
         dc, _, _ = _build_pv_years(resolved.cfg, resolved, {2023: synthetic_weather})
         years[name] = dc[2023].sum()
     assert years["shaded"] < years["plain"]
+
+
+def test_editing_returned_shading_does_not_change_the_next_simulation(shaded_config, _patch_weather):
+    from breos import App
+
+    app = App(shaded_config)
+    app.simulate()
+    result = app.result()
+    generation = result["pv_dc_generation_kwh"]
+    shading = result["pv_arrays"][0]["shading"]
+    shading["beam_shaded_fraction"][0][1] = 0.0
+    shading["sky_view_factor"] = 0.4
+
+    app.simulate()
+
+    original = app.result()
+    assert original["pv_dc_generation_kwh"] == generation
+    assert original["pv_arrays"][0]["shading"] == EAST_WALL
+    assert original["provenance"]["resolved_config"]["pv_arrays"][0]["shading"] == EAST_WALL
