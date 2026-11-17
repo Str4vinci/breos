@@ -49,7 +49,6 @@ def fetch_tmy(args):
     loc_slug = safe_path_slug(args.location)
     print(f"Location: {args.location} ({loc['latitude']}, {loc['longitude']})")
 
-    # Check if TMY already exists locally
     WEATHER_DIR.mkdir(exist_ok=True)
     existing = []
     for fname in os.listdir(WEATHER_DIR):
@@ -69,7 +68,6 @@ def fetch_tmy(args):
         save_to_file=False,
     )
 
-    # Build proper filename from metadata
     inputs = metadata.get("inputs", {})
     rad_db = inputs.get("meteo_data", {}).get("radiation_db", "unknown")
     year_min = inputs.get("meteo_data", {}).get("year_min", "unknown")
@@ -128,12 +126,10 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch and save weather data for a location")
     sub = parser.add_subparsers(dest="command")
 
-    # tmy subcommand
     tmy_p = sub.add_parser("tmy", help="Fetch TMY from PVGIS")
     tmy_p.add_argument("--location", required=True, help="Location key (e.g., 'porto')")
     tmy_p.add_argument("--force", action="store_true", help="Overwrite existing file")
 
-    # historical subcommand
     hist_p = sub.add_parser("historical", help="Fetch historical data from Open-Meteo")
     hist_p.add_argument("--location", required=True, help="Location key (e.g., 'porto')")
     hist_p.add_argument("--start", type=int, required=True, help="Start year (e.g., 2005)")
@@ -146,7 +142,6 @@ def main():
     )
     hist_p.add_argument("--force", action="store_true", help="Overwrite existing file")
 
-    # list subcommand
     sub.add_parser("list", help="List available locations")
 
     args = parser.parse_args()

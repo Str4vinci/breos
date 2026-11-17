@@ -38,7 +38,10 @@ def vehicle_pack_value(
     learning: float,
     discount: float,
 ) -> dict[str, Any]:
-    """P and H in V10; every invoice is booked at its own swap instant."""
+    """The discounted pack replacement outlays P and terminal pack credit H of ADR 0005 V10.
+
+    Every invoice is booked at its own swap instant.
+    """
     require_vehicle_prices(config)
     invoice = replacement_event_cost(config.battery_kwh, config.battery_cost_per_kwh, config.battery_replacement_cost)
     history = []

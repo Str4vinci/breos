@@ -408,8 +408,8 @@ def _compute_irradiance_and_cell_temp_detail(
         ground_kwargs["surface_type"] = model_options.surface_type
 
     # apparent_zenith (refraction-corrected) everywhere, matching pvlib's
-    # ModelChain; aoi above uses it too. Mixing true and apparent zenith in
-    # one transposition call was an inconsistency fixed in 0.3.4.
+    # ModelChain; aoi above uses it too. True and apparent zenith must not be
+    # mixed in one transposition call.
     if model_options.transposition_model == "klucher":
         bad = (ghi == 0) & (dhi > 0)
         if bad.any():

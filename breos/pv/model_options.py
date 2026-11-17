@@ -43,7 +43,8 @@ TRANSPOSITION_MODELS = (
 DEFAULT_TRANSPOSITION_MODEL = "isotropic"
 
 # Perez sky-diffusion coefficient sets accepted by pvlib's perez model. Only
-# used when ``transposition_model == "perez"``; the default matches pvlib.
+# used when ``transposition_model == "perez"``; the default is pvlib's
+# (pinned by tests/test_solar.py).
 PEREZ_MODELS = (
     "allsitescomposite1990",
     "allsitescomposite1988",

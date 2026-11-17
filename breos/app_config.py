@@ -220,8 +220,8 @@ class AppConfigField:
     """Declarative metadata for one public App configuration key.
 
     Scientific constraints intentionally remain in the focused validators
-    below. This registry owns the mechanical contract that had previously
-    drifted across defaults, the allowed-key list, CLI arguments, and CLI
+    below. This registry owns the mechanical contract that would otherwise
+    drift across defaults, the allowed-key list, CLI arguments, and CLI
     override propagation.
 
     ``doc`` describes the key in the generated configuration key reference
@@ -1312,9 +1312,8 @@ DEFAULTS: dict[str, Any] = {name: field.default for name, field in APP_CONFIG_FI
 # ``batery_kwh``) fail loudly instead of being silently dropped by defaults.
 ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(APP_CONFIG_FIELDS)
 
-# Cost override keys deliberately use the existing preset-catalog vocabulary;
-# the canonical translation to CostParams lives in ``breos.economics`` so the
-# App and lower-level construction helper cannot drift.
+# Cost override keys use the preset-catalog vocabulary; ``breos.economics``
+# translates them to CostParams for App and the lower-level helper alike.
 COST_OVERRIDE_KEYS: frozenset[str] = frozenset(COST_CONFIG_KEY_TO_PARAM)
 COSTS_TABLE = TableSpec(
     "costs",
