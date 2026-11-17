@@ -346,12 +346,16 @@ def test_frames_summaries_and_numba_agree_on_a_retired_projection():
 # -- App, Monte Carlo and the optimizer ------------------------------------------------
 
 
-def _three(**overrides):
-    """Replace, keep and retire on one two-year App case whose year-2 swaps the minimum skips."""
-    replace = _app(**overrides)
+def _keep_and_retire(**overrides):
+    """Keep and retire on one two-year App case whose year-2 swaps the minimum skips."""
     keep = _app(battery_replacement_min_remaining_years=1, **overrides)
     retire = _app(battery_replacement_min_remaining_years=1, battery_skipped_replacement_action="retire", **overrides)
-    return replace, keep, retire
+    return keep, retire
+
+
+def _three(**overrides):
+    """Replace, keep and retire on one two-year App case whose year-2 swaps the minimum skips."""
+    return (_app(**overrides), *_keep_and_retire(**overrides))
 
 
 def test_replace_keep_and_retire_share_every_flow_before_the_crossing():
@@ -381,7 +385,7 @@ def test_replace_keep_and_retire_share_every_flow_before_the_crossing():
 
 
 def test_retire_beats_keep_when_grid_charging_loses_money():
-    _replace, keep, retire = _three(tariff=FLAT_TOU, smart_charging=FILL_OFF_PEAK)
+    keep, retire = _keep_and_retire(tariff=FLAT_TOU, smart_charging=FILL_OFF_PEAK)
     keep_result, retire_result = keep.result(), retire.result()
     keep_rows, retire_rows = keep._artifacts.yearly_df, retire._artifacts.yearly_df
 
@@ -397,7 +401,7 @@ def test_a_daily_controller_cannot_dispatch_a_retired_battery():
     from tests.offline_app import TOU
     from tests.test_daily_persistence import COARSE, DAILY
 
-    _replace, keep, retire = _three(tariff=TOU, smart_charging={**DAILY, **COARSE})
+    keep, retire = _keep_and_retire(tariff=TOU, smart_charging={**DAILY, **COARSE})
     keep_rows, retire_rows = keep._artifacts.yearly_df, retire._artifacts.yearly_df
 
     pd.testing.assert_frame_equal(keep_rows.iloc[:1], retire_rows.iloc[:1], check_exact=True)

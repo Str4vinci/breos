@@ -2,6 +2,7 @@
 
 import json
 import math
+from copy import deepcopy
 from unittest import mock
 
 import pandas as pd
@@ -10,6 +11,7 @@ import pytest
 import breos.app as app_module
 from breos.app import App
 from breos.app_config import merge_defaults, validate_config
+from tests.conftest import _build_synthetic_weather, _patch_tmy_weather
 from tests.project_year_runs import record_project_years
 from tools.generate_app_golden import _fake_fetch as golden_fetch
 
@@ -630,24 +632,32 @@ class TestGcrValidation:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="module")
+def _no_battery_result():
+    """One offline PV-only run for TestAppSimulateNoBattery, whose tests only read it."""
+    with (
+        mock.patch("breos.app.fetch_tmy_weather_data", golden_fetch),
+        mock.patch("breos.app.load_weather", lambda **_kwargs: None),
+    ):
+        app = App(
+            {
+                **_SIX_MODULE_BASE,
+                "cost_preset": "residential_pt",
+                "emissions_country": "PT",
+                "projection_years": 5,
+            }
+        )
+        app.simulate()
+    return app.result()
+
+
+@pytest.mark.xdist_group("app_no_battery")
 class TestAppSimulateNoBattery:
-    @pytest.fixture(autouse=True, scope="class")
-    def _setup(self, request):
-        # One offline run serves the class; each test only reads its result.
-        with (
-            mock.patch("breos.app.fetch_tmy_weather_data", golden_fetch),
-            mock.patch("breos.app.load_weather", lambda **_kwargs: None),
-        ):
-            app = App(
-                {
-                    **_SIX_MODULE_BASE,
-                    "cost_preset": "residential_pt",
-                    "emissions_country": "PT",
-                    "projection_years": 5,
-                }
-            )
-            app.simulate()
-        request.cls.result = app.result()
+    @pytest.fixture(autouse=True)
+    def _setup(self, _no_battery_result):
+        # The group keeps the shared run on one worker; each test reads its
+        # own copy, so none can change another's result.
+        self.result = deepcopy(_no_battery_result)
 
     def test_pv_loss_waterfall_reconciles_to_reported_pv(self):
         waterfall = self.result["pv_loss_waterfall"]
@@ -968,10 +978,12 @@ class TestAppSimulateTracking:
         )
 
 
-class TestAppSimulateWithBattery:
-    @pytest.fixture(autouse=True)
-    def _setup(self, _patch_weather):
-        self.app = App(
+@pytest.fixture(scope="module")
+def _with_battery_result():
+    """One battery run on the _patch_weather weather for TestAppSimulateWithBattery."""
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        _patch_tmy_weather(monkeypatch, _build_synthetic_weather())
+        app = App(
             {
                 **_SIX_MODULE_BASE,
                 "battery_kwh": 5.0,
@@ -980,8 +992,17 @@ class TestAppSimulateWithBattery:
                 "projection_years": 5,
             }
         )
-        self.app.simulate()
-        self.result = self.app.result()
+        app.simulate()
+    return app.result()
+
+
+@pytest.mark.xdist_group("app_with_battery")
+class TestAppSimulateWithBattery:
+    @pytest.fixture(autouse=True)
+    def _setup(self, _with_battery_result):
+        # The group keeps the shared run on one worker; each test reads its
+        # own copy, so none can change another's result.
+        self.result = deepcopy(_with_battery_result)
 
     def test_loss_waterfall_reports_battery_dispatch_losses(self):
         dispatch = self.result["pv_loss_waterfall"]["dispatch"]
