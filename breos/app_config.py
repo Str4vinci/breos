@@ -3109,12 +3109,13 @@ def normalise_pv_arrays(
 
     normalized: list[dict[str, Any]] = []
     for arr in arrays:
+        array_tilt, array_azimuth, tracking = (arr.get(key) for key in ("tilt", "azimuth", "tracking"))
         entry = {
             "modules": int(arr["modules"]),
             "module": arr.get("module") or default_module,
-            "tilt": float(arr.get("tilt", tilt)),
-            "azimuth": float(arr.get("azimuth", azimuth)),
-            "tracking": arr.get("tracking", tracker_defaults["tracking"]),
+            "tilt": float(tilt if array_tilt is None else array_tilt),
+            "azimuth": float(azimuth if array_azimuth is None else array_azimuth),
+            "tracking": tracker_defaults["tracking"] if tracking is None else tracking,
         }
         if entry["tracking"] != "fixed":
             for key in _TRACKER_GEOMETRY_KEYS:
