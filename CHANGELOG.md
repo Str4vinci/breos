@@ -2,6 +2,17 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+
+- The provenance of `evaluate_projected_design` and
+  `optimize_system_multi_objective` now has an `execution` record, as App and
+  Monte Carlo results do: the backend that ran and the one asked for, so a
+  saved optimizer result shows whether `"auto"` chose the compiled or the
+  Python backend. A search records no PV-only `dispatch_path`, since it mixes
+  designs with and without a battery (#463).
+
 ## [0.8.0] - 2026-11-16
 
 BREOS 0.8.0 adds vehicle charging and vehicle-to-home simulation, AC-coupled
