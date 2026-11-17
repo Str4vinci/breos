@@ -49,3 +49,20 @@ def test_period_window_reports_its_own_irradiance():
     assert len(result["monthly"]) == 1
     assert result["global_horizontal_kwh_m2"] == pytest.approx(result["monthly"][0]["global_horizontal_kwh_m2"])
     assert result["global_incident_kwh_m2"] > 0
+
+
+@pytest.mark.parametrize("tracking", ["fixed", "single_axis"])
+def test_null_array_geometry_inherits_from_the_system(tracking):
+    config = {"tilt": 35, "azimuth": 170, "tracking": tracking, "axis_azimuth": 15}
+    explicit = {"modules": 4, "tilt": 0, "azimuth": 0, "tracking": "fixed"}
+    omitted = _result(**config, pv_arrays=[{"modules": 4}, explicit])
+    null = _result(
+        **config,
+        pv_arrays=[{"modules": 4, "tilt": None, "azimuth": None, "tracking": None}, explicit],
+    )
+
+    assert null["pv_arrays"] == omitted["pv_arrays"]
+    assert null["pv_dc_generation_kwh"] == omitted["pv_dc_generation_kwh"]
+    assert null["pv_arrays"][0]["tracking"] == tracking
+    assert null["pv_arrays"][1]["tilt"] == 0
+    assert null["pv_arrays"][1]["azimuth"] == 0
