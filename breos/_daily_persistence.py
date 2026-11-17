@@ -97,8 +97,9 @@ WINDOW_POLICY = {
     "forecast_policy": "repeat_local_day_before_decision",
     "warm_start_policy": "no_grid_until_a_window_after_one_complete_local_day",
 }
-# The forecast policy of a planner forecast other than persistence: a
-# day-ahead weather forecast for PV (ADR 0002 A20).
+# The forecast policy of each planner forecast other than persistence
+# (ADR 0002 A20): a weather forecast for PV, or perfect information on PV,
+# load and temperature.
 FORECAST_POLICIES = {
     "weather": "weather_forecast_pv_by_published_lead_load_temperature_persistence",
     "perfect": "perfect_information_reference",

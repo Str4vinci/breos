@@ -14,9 +14,9 @@ The seam is private. :class:`_ControllerSession` is what
 :func:`breos.battery._simulate_core` drives: it splits dispatch at civil-day
 boundaries, keeps a monotonic project clock, stitches a logical day across the
 year seam, and owns the observation history. Every project year replays the
-start-year calendar (ADR 0002 A2), so at the year seam the final civil day of
-the calendar continues at its head. Degradation windows
-stay positional; the session never moves them.
+start-year calendar (ADR 0002 A2), so when the calendar ends part-way through
+a civil day, the replayed head of the next year completes that day.
+Degradation windows stay positional; the session never moves them.
 """
 
 from __future__ import annotations
