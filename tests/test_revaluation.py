@@ -1,9 +1,12 @@
 """App.revalue re-prices a finished run, or re-simulates when prices change the dispatch (#183, #393)."""
 
+from dataclasses import replace
+
 import pytest
 
 from breos import App
 from breos.app import REVALUATION_KEYS
+from breos.pv_modules import MODULES, get_module
 from tests.offline_app import (
     BASE,
     CREDIT,
@@ -12,6 +15,7 @@ from tests.offline_app import (
     TOU,
     TOU_REFERENCE,
     assert_fields_close,
+    offline_weather,
     result_fields,
     revalue_offline,
     simulate_offline,
@@ -305,3 +309,49 @@ def test_a_revalued_result_shares_nothing_with_the_run():
 def test_none_in_a_new_table_removes_nothing(flat_app):
     revalued = revalue_offline(flat_app, {"costs": {"storage_cost_per_kwh": None}})
     assert result_fields(revalued) == result_fields(flat_app.result())
+
+
+@pytest.mark.parametrize("arrays", [False, True])
+def test_revalue_and_repeat_simulation_keep_the_original_module_after_a_catalogue_edit(monkeypatch, arrays):
+    name = "RevaluationTestModule"
+    original = get_module("Suntech_STP550S_STC")
+    monkeypatch.setitem(MODULES, name, original)
+    config = {**BASE, "projection_years": 1, "battery_kwh": 0}
+    if arrays:
+        config["pv_arrays"] = [{"modules": 4}, {"modules": 4, "module": name}]
+    else:
+        config["pv_module"] = name
+    app = simulate_offline(config)
+    initial = result_fields(app.result())
+    monkeypatch.setitem(MODULES, name, replace(original, Mpp=original.Mpp * 0.9, Imp=original.Imp * 0.9))
+
+    fresh = simulate_offline(config).result()
+    assert fresh["pv_kwp"] != app.result()["pv_kwp"]
+    assert fresh["pv_dc_generation_kwh"] != app.result()["pv_dc_generation_kwh"]
+    assert result_fields(app.revalue({})) == initial
+
+    monkeypatch.delitem(MODULES, name)
+    with offline_weather():
+        app.simulate()
+    assert result_fields(app.result()) == initial
+
+
+def test_revalue_that_resimulates_uses_the_original_array_modules(monkeypatch):
+    name = "RevaluationTestModule"
+    monkeypatch.setitem(MODULES, name, get_module("Suntech_STP550S_STC"))
+    config = {
+        **BASE,
+        "projection_years": 1,
+        "resolution": "15min",
+        "pv_arrays": [{"modules": 4}, {"modules": 4, "module": name}],
+        "tariff": TOU,
+        "smart_charging": SMART,
+    }
+    app = simulate_offline(config)
+    fresh = simulate_offline({**config, "tariff": DAILY_TRI}).result()
+
+    monkeypatch.delitem(MODULES, name)
+    revalued = revalue_offline(app, {"tariff": DAILY_TRI})
+
+    assert revalued["provenance"]["revaluation"]["method"] == "resimulated"
+    assert_fields_close(result_fields(revalued), result_fields(fresh))

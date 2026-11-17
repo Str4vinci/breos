@@ -28,7 +28,7 @@ from breos.pv import _solver
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs, solar_position_warning_scope
 from breos.pv.shading import ModuleMeanShading
-from breos.pv_modules import catalogue_snapshot, get_module
+from breos.pv_modules import get_module
 from breos.solar import (
     PVProductionBreakdown,
     _array_breakdown,
@@ -557,7 +557,10 @@ def _build_pv_production_breakdown(
     grid = _prepare_solarpos_and_weather(weather, location, cfg["resolution"], options.pop("solar_position"))
     if resolved.pv_arrays:
         models = [
-            _configured_array(i, arr, location, options) for i, arr in enumerate(arrays_with_module_shading(resolved))
+            _configured_array(i, arr, location, options, pv_params=module)
+            for i, (arr, module) in enumerate(
+                zip(arrays_with_module_shading(resolved), resolved.pv_array_modules, strict=True)
+            )
         ]
     else:
         models = [
@@ -754,7 +757,7 @@ def build_inverter_units(
     assert pv_breakdown.inverter_dc_voltage is not None
     index = pd.DatetimeIndex(pv_breakdown.dc_after_losses.index)
     total = pv_breakdown.dc_after_losses.to_numpy(dtype=float)
-    modules = [get_module(arr["module"]) for arr in resolved.pv_arrays] or [resolved.pv_params]
+    modules = resolved.pv_array_modules or (resolved.pv_params,)
     ambient = None
     conversions, shares, derates, rows = [], {}, {}, {}
     for number, inverter in enumerate(electrical.inverters):
@@ -952,7 +955,9 @@ def reuse_prepared_inputs() -> Iterator[None]:
         _PREPARED_INPUTS_CACHE.reset(token)
 
 
-def config_cache_key(cfg: dict[str, Any], independent_keys: frozenset[str]) -> str | None:
+def config_cache_key(
+    cfg: dict[str, Any], independent_keys: frozenset[str], *, module_catalogue: str | None = None
+) -> str | None:
     """A resolved config without ``independent_keys``, as canonical JSON, with the parameters of its modules.
 
     A module is named by its catalogue key, and a registered module's
@@ -962,7 +967,8 @@ def config_cache_key(cfg: dict[str, Any], independent_keys: frozenset[str]) -> s
     """
     relevant = {key: value for key, value in cfg.items() if key not in independent_keys}
     try:
-        return json.dumps([relevant, _module_parameters(cfg)], sort_keys=True)
+        modules = _module_parameters(cfg) if module_catalogue is None else module_catalogue
+        return json.dumps([relevant, modules], sort_keys=True)
     except (TypeError, ValueError):
         return None
 
@@ -985,17 +991,11 @@ def _module_parameters(cfg: dict[str, Any]) -> list[Any]:
 def _input_cache_key(cfg: dict[str, Any], resolved: ResolvedAppConfig | None = None) -> str | None:
     """The resolved config without the input-independent keys, as canonical JSON, or None.
 
-    ``resolved`` carries what an App took from the module catalogue when it
-    was built, which preparation uses even if the catalogue changed since:
-    each array's module, the bypass diodes its shading is bound to, and the
-    inverter curve's row for steps without PV. The catalogue as it was then
-    stands for all of them, and the catalogue now for the modules
-    preparation reads again by those names.
+    Preparation uses the catalogue captured when the App was resolved.
     """
-    key = config_cache_key(cfg, INPUT_INDEPENDENT_KEYS)
-    if key is None or resolved is None:
-        return key
-    return json.dumps([key, resolved.module_catalogue, catalogue_snapshot()], sort_keys=True)
+    return config_cache_key(
+        cfg, INPUT_INDEPENDENT_KEYS, module_catalogue=resolved.module_catalogue if resolved is not None else None
+    )
 
 
 def input_configuration_key(config: dict[str, Any]) -> str | None:

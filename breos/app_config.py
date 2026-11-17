@@ -1548,6 +1548,7 @@ class ResolvedAppConfig:
     timezone: str
     loc_key: str | None
     pv_arrays: list[dict[str, Any]]
+    pv_array_modules: tuple[PVModuleParams, ...]
     pv_params: PVModuleParams
     # Catalogue key of ``pv_params`` (the first array's module with pv_arrays),
     # which App accepts back as ``pv_module``; ``pv_params.Name`` is a display
@@ -2005,18 +2006,24 @@ def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
     _check_fields(cfg)
     _validate_pv_and_inverter(cfg, has_arrays)
     _validate_time_and_weather(cfg)
+    timezone = resolve_location(cfg)[2] if cfg["tariff"] is not None or cfg["reference_tariff"] is not None else ""
+    tariff_spec, reference_spec, currency = _validate_pricing(cfg, timezone)
+    _validate_battery_and_degradation(cfg)
+    _validate_battery_coupling(cfg)
+    _validate_period(cfg)
+    smart_charging, vehicle = _validate_tariff_controls(cfg, tariff_spec)
+    _electrical_inputs(cfg)
+    if cfg["electrical_fidelity"] == "string" and cfg.get("inverters") is None:
+        raise ValueError("electrical_fidelity = 'string' needs 'inverters', 'pv_strings' and 'electrical_environment'")
+    return ValidatedSpecs(tariff_spec, reference_spec, smart_charging, currency, vehicle)
+
+
+def _validate_pricing(cfg: dict[str, Any], timezone: str) -> tuple[TariffSpec | None, ReferenceTariffSpec | None, str]:
+    """Resolve prices and currency for both new Apps and revaluation."""
     _validate_economics(cfg)
-    tariff_spec = reference_spec = None
-    if cfg["tariff"] is not None or cfg["reference_tariff"] is not None:
-        # Resolve location before PV module metadata or weather work. The
-        # schedule's civil-time zone is part of the tariff definition, not a
-        # conversion that may be deferred until the simulation is running.
-        timezone = resolve_location(cfg)[2]
-    if cfg["tariff"] is not None:
-        tariff_spec = resolve_tariff_spec(cfg, timezone)
+    tariff_spec = resolve_tariff_spec(cfg, timezone)
     currency = run_currency(cfg["currency"], tariff_spec.prices.currency if tariff_spec is not None else None)
-    if cfg["reference_tariff"] is not None:
-        reference_spec = resolve_reference_tariff_spec(cfg, timezone, currency)
+    reference_spec = resolve_reference_tariff_spec(cfg, timezone, currency)
     check_cost_currency(
         currency,
         given=cfg.get("costs") or {},
@@ -2027,9 +2034,13 @@ def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
         battery=cfg["battery_kwh"] * 1000 > 1,
         coupling=cfg["battery_coupling"],
     )
-    _validate_battery_and_degradation(cfg)
-    _validate_battery_coupling(cfg)
-    _validate_period(cfg)
+    return tariff_spec, reference_spec, currency
+
+
+def _validate_tariff_controls(
+    cfg: dict[str, Any], tariff_spec: TariffSpec | None
+) -> tuple[SmartChargingSpec | None, VehicleConfig | None]:
+    """Validate controller settings against the active tariff's periods."""
     vehicle = None
     if "vehicle" in cfg:
         periods = tuple(tariff_spec.definition.schedule.periods) if tariff_spec is not None else None
@@ -2038,10 +2049,7 @@ def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
         if isinstance(smart, Mapping) and str(smart.get("mode")).strip().lower() == "daily_persistence":
             raise ValueError("'smart_charging.mode' = 'daily_persistence' is not supported with [vehicle]")
     smart_charging = resolve_smart_charging_spec(cfg, tariff_spec)
-    _electrical_inputs(cfg)
-    if cfg["electrical_fidelity"] == "string" and cfg.get("inverters") is None:
-        raise ValueError("electrical_fidelity = 'string' needs 'inverters', 'pv_strings' and 'electrical_environment'")
-    return ValidatedSpecs(tariff_spec, reference_spec, smart_charging, currency, vehicle)
+    return smart_charging, vehicle
 
 
 def _tariff_study_date(value: Any, where: str) -> date:
@@ -3145,7 +3153,7 @@ def _plain_shading(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def resolve_pv_system(
     cfg: dict[str, Any], *, tilt: float, azimuth: float, axis_azimuth: float
-) -> tuple[list[dict[str, Any]], str, PVModuleParams, int, float, float]:
+) -> tuple[list[dict[str, Any]], tuple[PVModuleParams, ...], str, PVModuleParams, int, float, float]:
     """Resolve PV module, array, and system sizing details.
 
     ``tilt``, ``azimuth`` and ``axis_azimuth`` are the top-level values from
@@ -3158,9 +3166,10 @@ def resolve_pv_system(
     :class:`ResolvedAppConfig` is built once and not mutated in place.
     """
     pv_arrays = normalise_pv_arrays(cfg["pv_arrays"], cfg, tilt=tilt, azimuth=azimuth, axis_azimuth=axis_azimuth)
+    array_modules = tuple(get_module(arr["module"]) for arr in pv_arrays)
     if pv_arrays:
         n_modules = sum(arr["modules"] for arr in pv_arrays)
-        total_power_w = sum(arr["modules"] * get_module(arr["module"]).Mpp for arr in pv_arrays)
+        total_power_w = sum(arr["modules"] * module.Mpp for arr, module in zip(pv_arrays, array_modules, strict=True))
         avg_module_power_w = total_power_w / n_modules
         system_kwp = total_power_w / 1000
         module_name = pv_arrays[0]["module"]
@@ -3170,17 +3179,18 @@ def resolve_pv_system(
 
     if module_name is None:
         module_name = default_module_key()
-    pv_params = get_module(module_name)
+    pv_params = array_modules[0] if array_modules else get_module(module_name)
 
     if not pv_arrays:
         avg_module_power_w = pv_params.Mpp
         system_kwp = n_modules * pv_params.Mpp / 1000
-    return pv_arrays, module_name, pv_params, n_modules, avg_module_power_w, system_kwp
+    return pv_arrays, array_modules, module_name, pv_params, n_modules, avg_module_power_w, system_kwp
 
 
 def validate_temperature_module_metadata(
     temperature_model: str,
     pv_arrays: list[dict[str, Any]],
+    array_modules: tuple[PVModuleParams, ...],
     pv_params: PVModuleParams,
 ) -> None:
     """Validate any module metadata required by the selected thermal model.
@@ -3194,8 +3204,7 @@ def validate_temperature_module_metadata(
         validate_temperature_inputs(
             normalise_model_name(temperature_model), pv_params.Module_Efficiency, pv_params.NOCT
         )
-    for arr in pv_arrays:
-        module = get_module(arr["module"])
+    for arr, module in zip(pv_arrays, array_modules, strict=True):
         model = normalise_model_name(arr.get("temperature_model", temperature_model))
         validate_temperature_inputs(model, module.Module_Efficiency, module.NOCT)
 
@@ -3399,10 +3408,10 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
     tilt, azimuth, axis_azimuth = resolve_orientation(cfg, lat)
-    pv_arrays, pv_module_key, pv_params, n_modules, avg_module_power_w, system_kwp = resolve_pv_system(
+    pv_arrays, array_modules, pv_module_key, pv_params, n_modules, avg_module_power_w, system_kwp = resolve_pv_system(
         cfg, tilt=tilt, azimuth=azimuth, axis_azimuth=axis_azimuth
     )
-    validate_temperature_module_metadata(cfg["temperature_model"], pv_arrays, pv_params)
+    validate_temperature_module_metadata(cfg["temperature_model"], pv_arrays, array_modules, pv_params)
     tracking = cfg["tracking"]
 
     # Materialise the resolved module count (derived from pv_arrays when set)
@@ -3410,12 +3419,8 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     cfg = {**cfg, "n_modules": n_modules}
     cost_params = resolve_costs(cfg)
     battery_inverter_w = battery_inverter_ac_capacity_w(cfg)
-    if battery_inverter_w is not None and cost_params.battery_inverter_cost_per_kw is None:
-        raise ValueError(
-            "An AC-coupled battery needs '[costs] battery_inverter_cost_per_kw', the price of its own inverter per "
-            "kW; BREOS has no default for it. Set 0 if another price already includes the inverter"
-        )
-    electrical = _resolve_electrical(cfg, pv_arrays, pv_params, n_modules)
+    _check_battery_inverter_cost(cost_params, battery_inverter_w)
+    electrical = _resolve_electrical(cfg, pv_arrays, array_modules, pv_params, n_modules)
     if electrical is not None and any(string.module_shading is not None for string in electrical.strings):
         # The result echoes each module's tables as plain floats.
         cfg["pv_strings"] = [
@@ -3476,6 +3481,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         timezone=timezone,
         loc_key=loc_key,
         pv_arrays=pv_arrays,
+        pv_array_modules=array_modules,
         pv_params=pv_params,
         pv_module_key=pv_module_key,
         avg_module_power_w=avg_module_power_w,
@@ -3496,17 +3502,54 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         requested_execution_backend=requested_execution_backend,
         electrical=electrical,
         ac_cable=ac_cable,
-        inverter_conversion=_inverter_conversion(electrical, ac_cable, pv_arrays, pv_params),
+        inverter_conversion=_inverter_conversion(electrical, ac_cable, array_modules or (pv_params,)),
         module_catalogue=module_catalogue,
         battery_inverter_ac_capacity_w=battery_inverter_w,
+    )
+
+
+def _check_battery_inverter_cost(cost_params: CostParams, battery_inverter_w: float | None) -> None:
+    if battery_inverter_w is not None and cost_params.battery_inverter_cost_per_kw is None:
+        raise ValueError(
+            "An AC-coupled battery needs '[costs] battery_inverter_cost_per_kw', the price of its own inverter per "
+            "kW; BREOS has no default for it. Set 0 if another price already includes the inverter"
+        )
+
+
+def resolve_app_revaluation(
+    original: ResolvedAppConfig, config: dict[str, Any], price_keys: Sequence[str]
+) -> ResolvedAppConfig:
+    """Apply merged price inputs to the original equipment and validate tariff dependencies."""
+    cfg = dict(original.cfg)
+    for key in price_keys:
+        field = APP_CONFIG_FIELDS[key]
+        value = config[key]
+        cfg[key] = field.normalizer(value) if field.normalizer is not None else value
+    _refuse_dc_battery_inverter_keys(cfg)
+    for key in price_keys:
+        check = APP_CONFIG_FIELDS[key].check
+        if check is not None:
+            check(cfg[key], key)
+    tariff, reference_tariff, currency = _validate_pricing(cfg, original.timezone)
+    smart_charging, vehicle = _validate_tariff_controls(cfg, tariff)
+    cost_params = replace(resolve_costs(cfg), dc_ac_ratio=original.cost_params.dc_ac_ratio)
+    _check_battery_inverter_cost(cost_params, original.battery_inverter_ac_capacity_w)
+    return replace(
+        original,
+        cfg=cfg,
+        tariff=tariff,
+        reference_tariff=reference_tariff,
+        currency=currency,
+        smart_charging=smart_charging,
+        vehicle=vehicle,
+        cost_params=cost_params,
     )
 
 
 def _inverter_conversion(
     electrical: ElectricalSetup | None,
     ac_cable: AcCable | None,
-    pv_arrays: list[dict[str, Any]],
-    pv_params: PVModuleParams,
+    modules: tuple[PVModuleParams, ...],
 ) -> InverterConversion | None:
     """The efficiency curve, AC cable and night consumption the dispatch runs, or None for none of them.
 
@@ -3536,7 +3579,6 @@ def _inverter_conversion(
         return None
     voltage = None
     if curve is not None and electrical is not None and electrical.fidelity == "string":
-        modules = [get_module(arr["module"]) for arr in pv_arrays] or [pv_params]
         weighted = [
             (s.modules * s.parallel * modules[s.array].Mpp, s.modules * modules[s.array].Vmp)
             for s in electrical.strings
@@ -3593,14 +3635,20 @@ DC_AC_RATIO_RANGE = (0.8, 1.6)
 
 
 def _resolve_electrical(
-    cfg: Mapping[str, Any], pv_arrays: list[dict[str, Any]], pv_params: PVModuleParams, n_modules: int
+    cfg: Mapping[str, Any],
+    pv_arrays: list[dict[str, Any]],
+    array_modules: tuple[PVModuleParams, ...],
+    pv_params: PVModuleParams,
+    n_modules: int,
 ) -> ElectricalSetup | None:
     """Check the configured string topology against the resolved arrays, or None without one."""
     inputs = _electrical_inputs(cfg)
     if inputs is None:
         return None
     inverters, strings, environment = inputs
-    arrays = [(get_module(arr["module"]), arr["modules"]) for arr in pv_arrays] or [(pv_params, n_modules)]
+    arrays = [(module, arr["modules"]) for arr, module in zip(pv_arrays, array_modules, strict=True)]
+    if not arrays:
+        arrays = [(pv_params, n_modules)]
     mountings = [
         _built(ArrayMounting, {key: arr[key] for key in _PV_ARRAY_MOUNTING_KEYS if key in arr}, f"pv_arrays[{i}]")
         for i, arr in enumerate(pv_arrays)
