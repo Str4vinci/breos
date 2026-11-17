@@ -41,7 +41,8 @@ from breos.config_schema import boolean, choice, number
 from breos.economics import CostParams
 from breos.tariffs import PriceList, ReferenceTariffSpec, ScheduleDefinition, TariffSpec, run_currency
 
-# K3: location includes the timezone; weather is selected once. Equipment's
+# The keys every site must share are set once in [community] and refused in a
+# site (ADR 0006 K3): location includes the timezone; weather is selected once. Equipment's
 # PV degradation is site-specific, but all monetary escalators are shared.
 SHARED_APP_KEYS = frozenset(
     {
@@ -124,7 +125,7 @@ def _unknown(table: Mapping[str, Any], allowed: frozenset[str], where: str) -> N
 
 @dataclass(frozen=True)
 class SharedSettings:
-    """K3's common clock, weather, currency and economics; App defaults apply."""
+    """The settings every site shares (ADR 0006 K3): clock, weather, currency and economics; App defaults apply."""
 
     location: str | Mapping[str, Any]
     weather_file: str | None

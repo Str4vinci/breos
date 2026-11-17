@@ -210,8 +210,9 @@ def test_optimizer_prepares_hourly_weather_before_pv(monkeypatch, runner, policy
     source = _weather()
     config = _problem_config()
     config["simulation"].update(resolution="15min", irradiance_resampling=policy)
-    load = pd.DataFrame({"Load": 100.0}, index=source.index)
     expected = resample_to_15min(source, latitude=41.15, longitude=-8.61, irradiance_resampling=policy)
+    # On the 15-minute steps: a load with no value at some step is refused before the PV model (#461).
+    load = pd.DataFrame({"Load": 100.0}, index=expected.index)
     calls = []
 
     class StopAtPV(RuntimeError):

@@ -135,11 +135,6 @@ _CHILD_BOOTSTRAP = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Command line
-# ---------------------------------------------------------------------------
-
-
 def _positive_int(text: str) -> int:
     try:
         value = int(text)
@@ -244,11 +239,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def missing_dependencies() -> list[str]:
     """The optional packages the benchmark needs and cannot import."""
     return [name for name in ("pymoo", "numba") if importlib.util.find_spec(name) is None]
-
-
-# ---------------------------------------------------------------------------
-# Inputs
-# ---------------------------------------------------------------------------
 
 
 def sha256_file(path: Path) -> str:
@@ -524,11 +514,6 @@ def config_sha256(config: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Parity helpers
-# ---------------------------------------------------------------------------
-
-
 def canonical_pareto(pareto: pd.DataFrame) -> pd.DataFrame:
     """Rows in design order, so a comparison does not depend on NSGA-II row order.
 
@@ -610,11 +595,6 @@ def _check(name: str, differences: list[str], **detail: Any) -> dict[str, Any]:
 
 def _requirement(name: str, passed: bool, **detail: Any) -> dict[str, Any]:
     return {"name": name, "passed": bool(passed), "differences": [], "n_differences": 0, **detail}
-
-
-# ---------------------------------------------------------------------------
-# Children
-# ---------------------------------------------------------------------------
 
 
 def _ru_maxrss() -> int | None:
@@ -1003,11 +983,6 @@ def run_child(kind: str, spec: dict[str, Any], workdir: Path, numba_cache_dir: P
     return payload
 
 
-# ---------------------------------------------------------------------------
-# Report
-# ---------------------------------------------------------------------------
-
-
 def _stats(values: list[float]) -> dict[str, float | None]:
     if not values:
         return {"median": None, "min": None}
@@ -1193,11 +1168,6 @@ def format_case(case: dict[str, Any]) -> list[str]:
             f"peak RSS {warm['peak_rss_mib_max']} MiB" + (f" | {warm_speed:.2f}x vs Python warm" if warm_speed else "")
         )
     return lines
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 def machine_info() -> dict[str, Any]:

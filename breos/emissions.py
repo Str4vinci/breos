@@ -85,8 +85,9 @@ def calculate_co2_projection(
         yearly_grid_shift_kwh: Per year, grid-origin battery AC to load minus
             the grid AC imported to charge the battery; zero or negative.
             None without grid charging.
-        yearly_baseline_import_kwh, yearly_baseline_away_kwh: R0 purchases
-            in each year, replacing the house-only baseline with a vehicle.
+        yearly_baseline_import_kwh, yearly_baseline_away_kwh: The no-system
+            household's (R0) purchases in each year, replacing the house-only
+            baseline with a vehicle.
         yearly_import_kwh, yearly_away_kwh: The study household's site and
             away purchases, kept apart at their respective meter boundaries.
         yearly_unattributed_battery_kwh: Stationary unattributed AC to the

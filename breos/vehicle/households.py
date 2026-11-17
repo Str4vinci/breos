@@ -79,7 +79,7 @@ def run_vehicle_baseline(
     execution_backend: str,
     grid_import_limit_w: float,
 ) -> ProjectionRun:
-    """R0 contains no PV equipment, inverter draw or stationary storage."""
+    """The no-system household (R0, ADR 0005 V8) has no PV equipment, inverter draw or stationary storage."""
 
     def baseline_inputs(year_idx: int) -> ProjectionYear:
         year = year_inputs(year_idx)
@@ -170,7 +170,12 @@ def value_vehicle_households(
     tariff: ResolvedTariff | None,
     reference: ResolvedTariff | None,
 ) -> tuple[ProjectionValue, dict[str, Any]]:
-    """Price each year's actual purchases, then value V10's two comparisons."""
+    """Price each year's actual purchases, then value the two comparisons of ADR 0005 V10.
+
+    The vehicle benefit compares the studied household with the reference
+    household, and the household-adjusted NPV compares it with the no-system
+    household; each counts the pack wear between the two.
+    """
     config = resolved.vehicle
     assert config is not None
     configs = household_configs(config)

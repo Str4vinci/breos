@@ -1151,7 +1151,9 @@ def project_years(
     and a ``ProjectionYear.vehicle_schedule`` on each year's calendar.
     On-board energy, origins and the last plug state carry independently of
     a stationary battery on both frame and aligned-summary paths.
-    App runs these projections independently for R0, R1 and R2.
+    App runs these projections independently for the no-system household
+    (R0), the reference household (R1) and the studied household (R2) of
+    ADR 0005 V8.
     ``year_inputs(year_idx)`` supplies each year, and ``battery_config(soh)``
     builds the battery at the carried SOH. The rainflow residue is counted
     once, at the end of the last year. ``observe_jit_per_year`` records the
@@ -1546,8 +1548,9 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         terminal = terminal_health_credit(
             final_soh_fraction=run.carry.soh_pct / 100 if config_has_battery(cfg) else None,
             threshold=cfg["battery_eol_percentage"],
-            # The pack alone, whatever battery_replacement_cost prices a
-            # replacement at (ADR 0004 C9 amends ADR 0003 E10).
+            # The terminal credit values the pack alone at battery_cost_per_kwh,
+            # whatever battery_replacement_cost prices a replacement at; no
+            # inverter is credited (ADR 0004 C9 amends ADR 0003 E10).
             replacement_cost_each=replacement_event_cost(cfg["battery_kwh"], resolved.cost_params.battery_cost_per_kwh),
             inflation_rate=cfg["inflation_rate"],
             replacement_cost_learning=cfg.get("replacement_cost_learning", 0.0),

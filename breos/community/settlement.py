@@ -87,7 +87,8 @@ def settle_meter_balances(
     ``index`` labels consecutive 15-minute intervals (interval-start or
     interval-end labels are preserved). DST transitions are checked by elapsed
     time. Inputs must have one value per label, and at least one participant.
-    Ids are unique across sites and follow ADR K3's lowercase id syntax.
+    Ids are unique across sites and match ``^[a-z0-9][a-z0-9_-]{0,63}$`` (ADR
+    0006 K3).
 
     Fixed coefficients must name exactly the participants, be finite and
     nonnegative, and sum to 1 within absolute float64 tolerance 1e-12. They are
@@ -100,14 +101,16 @@ def settle_meter_balances(
     The frame has index levels ``interval``, ``site_type``, ``site_id``. Each
     interval contains all sites in sorted id order, followed by a community row
     (type ``community``, id ``""``). Site types are ``participant`` and ``asset``.
-    K6's eleven site columns are zero on community rows; its three community
-    columns are zero on site rows. ``Coefficient`` is dimensionless; every
-    other column is Wh. Version and units live in ``DataFrame.attrs``. All
-    numerical work uses NumPy float64; pandas only packages the output.
+    The settlement ledger's eleven site columns (ADR 0006 K6) are zero on
+    community rows; its three community columns are zero on site rows.
+    ``Coefficient`` is dimensionless; every other column is Wh. Version and
+    units live in ``DataFrame.attrs``. All numerical work uses NumPy float64;
+    pandas only packages the output.
 
     Roundoff can put total use a few ulps above injection. Community surplus
     is clamped to zero in that case; no energy is redistributed or rounded.
-    Closure therefore holds to floating-point precision, as specified by K6.
+    Closure therefore holds to floating-point precision, as ADR 0006 K6
+    specifies for the settlement ledger.
     """
     if not isinstance(index, pd.DatetimeIndex) or index.hasnans or len(index) == 0:
         raise ValueError("index must be a nonempty DatetimeIndex without NaT")

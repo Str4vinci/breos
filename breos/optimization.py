@@ -10,12 +10,12 @@ import threading
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 import pandas as pd
 
-from breos.app_inputs import resample_hourly_weather
+from breos.app_inputs import require_hourly_weather_on_local_hours, resample_hourly_weather
 from breos.battery import AlignedSimulationInputs, BatteryConfig, align_simulation_inputs
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
@@ -147,10 +147,6 @@ def _resolve_max_tilt_deg(constraints: Dict[str, Any], latitude: float) -> float
         return adjusted_max_tilt_deg(latitude, constraints["tilt_margin_deg"])
     return float(value)
 
-
-# ==========================================
-# 2. HELPER FUNCTIONS
-# ==========================================
 
 # Constants for defaults (can be overridden by config)
 DEFAULT_MODULE_AREA = 1.134 * 2.278
@@ -715,6 +711,51 @@ def _prepare_study_weather(weather: pd.DataFrame, config: dict[str, Any], loc_ob
     )
 
 
+def _seconds_into_hour(index: pd.DatetimeIndex, timezone: Optional[str] = None) -> np.ndarray:
+    """The distinct seconds past the whole hour of the stamps, on the UTC clock or on ``timezone``'s.
+
+    A naive stamp counts as UTC, as the energy balance reads it.
+    """
+    aware = index if index.tz is not None else index.tz_localize("UTC")
+    wall = aware.tz_convert(timezone or "UTC").tz_localize(None)
+    return np.unique(np.asarray((wall - pd.Timestamp(0)) // pd.Timedelta(seconds=1), np.int64) % 3600)
+
+
+def _require_load_on_weather_steps(
+    tmy_data: pd.DataFrame, grid: pd.DatetimeIndex, houseload: pd.DataFrame, config: dict[str, Any]
+) -> None:
+    """Refuse a load profile that has no value at some of the weather's steps, before any PV model run.
+
+    The energy balance looks the load up at each weather step, after moving it
+    onto the simulated year by whole years, which keeps every stamp's position
+    within its UTC hour. A step whose position no load stamp shares can never
+    find a value, so the run would fail at the first scored design. Loads
+    stamped on whole local hours are App's load, and get App's refusal.
+    """
+    if not isinstance(houseload.index, pd.DatetimeIndex) or not isinstance(grid, pd.DatetimeIndex):
+        return
+    if not len(houseload.index) or not len(grid):
+        return
+    missing = np.setdiff1d(_seconds_into_hour(grid), _seconds_into_hour(houseload.index))
+    if not missing.size:
+        return
+    timezone = str(config["location"]["timezone"])
+    if _seconds_into_hour(houseload.index, timezone).tolist() == [0]:
+        # App's check reads a timezone-aware index; a naive weather stamp counts as UTC.
+        weather_index = cast(pd.DatetimeIndex, tmy_data.index)
+        if weather_index.tz is None:
+            weather_index = weather_index.tz_localize("UTC")
+        require_hourly_weather_on_local_hours(
+            pd.DataFrame(index=weather_index), str(config["simulation"]["resolution"]), timezone
+        )
+    past = ", ".join(f"{seconds // 60}:{seconds % 60:02d}" for seconds in missing[:6].tolist())
+    raise ValueError(
+        f"The weather has steps at {past} (minutes:seconds) past each UTC hour, where the load profile "
+        "has no value, so the load cannot be aligned with the weather. "
+        "Supply a load profile stamped on the weather's steps."
+    )
+
+
 # The azimuths of an East-West layout: the first array faces east, the second west.
 EAST_WEST_AZIMUTHS = (90.0, 270.0)
 
@@ -863,6 +904,8 @@ class _DesignStudy:
         if weather_by_year is not None:
             frames = tuple(_prepare_study_weather(frame, config, location) for frame in weather_by_year)
         grid = frames[0].index if frames else weather.index
+        houseload = houseload.to_frame(name="Load") if isinstance(houseload, pd.Series) else houseload
+        _require_load_on_weather_steps(tmy_data, grid, houseload, config)
         pricing = _resolve_optimization_tariff(config, grid, battery_kwh, battery_key)
         years = config["simulation"]["years_projection"]
         if frames is not None and len(frames) != years:
@@ -894,7 +937,7 @@ class _DesignStudy:
             # Load alignment (timezone- and DST-aware year remapping) happens
             # inside the energy balance, the code path the App uses, so the
             # load keeps its own timestamps.
-            houseload=houseload.to_frame(name="Load") if isinstance(houseload, pd.Series) else houseload,
+            houseload=houseload,
             pricing=pricing,
             pv_params=pv_params,
             module_area_m2=_module_area_from_dimensions(_dimensions_from_section(pv_cfg)),
@@ -906,8 +949,7 @@ class _DesignStudy:
             emissions_params=EmissionsParams(**config["emissions"]) if config["emissions"] else None,
             # A weather sequence keeps the representative year's temperatures,
             # so they are restamped onto the sequence's calendar year rather
-            # than reindexed across years, which found no match and used to
-            # fall back to 25 C.
+            # than reindexed across years, where no stamp would match.
             temperature_series=build_battery_temperature_series(
                 battery["temperature"],
                 grid,
@@ -1148,11 +1190,6 @@ def evaluate_projected_design(
     )
 
 
-# ==========================================
-# 3. PYMOO OPTIMIZATION CLASSES
-# ==========================================
-
-
 def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, upper: float) -> np.ndarray:
     """Round to the nearest multiple of ``step`` that lies inside the bounds.
 
@@ -1253,7 +1290,6 @@ try:
             self.layouts = tuple(config["mode"]["layouts"])
             self.east_west_tilt_deg = float(config["mode"]["east_west_tilt_deg"])
 
-            # --- Dynamic Variable Setup ---
             # x[0]: n_modules (1-max_modules)
             # x[1]: battery_kwh (0-max_battery_kwh)
             lower = [1, 0.0]

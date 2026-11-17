@@ -31,7 +31,7 @@ class VehicleSchedule:
     ``steps_to_departure`` includes the current plugged step, and is zero
     away or when a file has no departures. Driving runs first, then away
     charging for ``park_hours``, then the second driving leg. More than one
-    parked interval within a step is collapsed into that order (ADR V3).
+    parked interval within a step is collapsed into that order (ADR 0005 V3).
     """
 
     index: pd.DatetimeIndex

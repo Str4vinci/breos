@@ -6,6 +6,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- The optimizer entry points (`optimize_system_multi_objective`,
+  `evaluate_projected_design` and `SolarDesignProblem`) now compare the weather
+  and load timestamps before the PV model runs, and refuse a load with no value
+  at some weather steps, for example hourly weather on whole UTC hours with a
+  load on the local hours of `Asia/Kolkata`. They used to fail at the first
+  scored design; the refusal now uses App's message for that case (#461).
 - The provenance of `evaluate_projected_design` and
   `optimize_system_multi_objective` now has an `execution` record, as App and
   Monte Carlo results do: the backend that ran and the one asked for, so a
