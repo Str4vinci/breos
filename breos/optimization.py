@@ -10,7 +10,7 @@ import threading
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 import pandas as pd
@@ -739,7 +739,13 @@ def _require_load_on_weather_steps(
         return
     timezone = str(config["location"]["timezone"])
     if _seconds_into_hour(houseload.index, timezone).tolist() == [0]:
-        require_hourly_weather_on_local_hours(tmy_data, str(config["simulation"]["resolution"]), timezone)
+        # App's check reads a timezone-aware index; a naive weather stamp counts as UTC.
+        weather_index = cast(pd.DatetimeIndex, tmy_data.index)
+        if weather_index.tz is None:
+            weather_index = weather_index.tz_localize("UTC")
+        require_hourly_weather_on_local_hours(
+            pd.DataFrame(index=weather_index), str(config["simulation"]["resolution"]), timezone
+        )
     past = ", ".join(f"{seconds // 60}:{seconds % 60:02d}" for seconds in missing[:6].tolist())
     raise ValueError(
         f"The weather has steps at {past} (minutes:seconds) past each UTC hour, where the load profile "

@@ -336,6 +336,15 @@ class TestLoadOnWeatherSteps:
         with pytest.raises(ValueError, match=r"stamped on whole UTC hours, which cannot be aligned.*UTC\+5:30"):
             run(self._weather(), self._load(), self._config())
 
+    def test_naive_utc_weather_gets_apps_message(self, monkeypatch):
+        self._forbid_pv_model(monkeypatch)
+        weather = self._weather()
+        weather.index = weather.index.tz_localize(None)
+        with pytest.raises(ValueError, match=r"stamped on whole UTC hours, which cannot be aligned.*UTC\+5:30"):
+            evaluate_projected_design(
+                weather, self._load(), self._config(), n_modules=4, battery_kwh=0.0, tilt=25.0, azimuth=180.0
+            )
+
     def test_load_without_the_weathers_quarter_hours_refused(self, monkeypatch):
         self._forbid_pv_model(monkeypatch)
         with pytest.raises(ValueError, match=r"15:00, 45:00 \(minutes:seconds\) past each UTC hour"):
