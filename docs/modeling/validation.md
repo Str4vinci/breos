@@ -16,6 +16,8 @@ boundary that its source data can support.
 The checks were rerun on the 0.8.0 release candidate at commit
 `419254a5effe51d9d037472bc785d135bdeda5b0`. The displayed headlines are
 unchanged to their shown precision from the preceding 0.8 development replay.
+The DKA Solar Centre orientation-pair comparison was rerun for 0.8.1 with the
+missing-irradiance rule described in its section.
 Raw third-party data and generated measured-data results are not committed to
 this repository. The original drivers, input manifests, and run records are
 preserved in the [BREOS 0.6.2 archive](https://doi.org/10.5281/zenodo.22938914)
@@ -65,21 +67,40 @@ compares modelled plane-of-array irradiance with a co-planar pyranometer at
 within `1.8%` of measured annual plane-of-array irradiance.
 
 The second test compares two otherwise matched BP Solar arrays, one facing
-north and one facing west, over 2,146 screened days from 2009 through 2014.
+north and one facing west, over 2144 screened days from 2009 through 2014.
 Perez reproduced the measured west-to-north energy ratio within `0.60%`.
-Hay-Davies and Reindl were within `0.30%`, and isotropic was within `1.29%`.
-The year-to-year variation of the measured ratio was `0.86` percentage points,
-so the result bounds the transposition error but does not establish one model
-as universally best.
+Hay-Davies and Reindl were within `0.30%`, and isotropic and Klucher were
+within `1.29%`. The Hay-Davies ratio error varies from year to year with a
+standard deviation of `0.86` percentage points over 2009 and 2011–2014, so the
+result bounds the transposition error but does not establish one model as
+universally best.
 
-In the 2009–2014 input, three source samples have missing global horizontal
-irradiance and positive diffuse irradiance. The historical replay fills the
-missing global values with zero; the compatibility replay preserves that
-policy. Klucher's full-chain result is unavailable because its diffuse model
-would divide by zero. Excluding the two affected days from both modelled and
-measured energy after the original screening changes the west-to-north ratio
-error by at most 0.0012 percentage points for the isotropic, Hay-Davies and
-default Perez cases. The 2016 irradiance-only comparison has no such samples.
+Five source samples in the 2009–2020 input have missing global horizontal
+irradiance and positive diffuse irradiance:
+
+| Sample (ACST) | Measured diffuse irradiance (W/m2) | In the 2009–2014 window |
+|---|---:|---|
+| 2012-12-14 11:45 | 867.3 | yes |
+| 2014-02-05 12:55 | 644.8 | yes |
+| 2014-02-05 13:00 | 636.1 | yes |
+| 2015-08-04 10:05 | 310.6 | no |
+| 2017-10-24 17:05 | 58.3 | no |
+
+Global irradiance cannot be filled at these samples without imputing it, and a
+zero fill leaves the diffuse fraction undefined. Each civil day that holds such
+a sample is therefore excluded from the comparison: from both modelled and
+measured energy, for every transposition model, before the day and array
+screens. The source readings are kept unchanged. This removes two days from
+the 2009–2014 comparison and one day each from the 2012, 2014, 2015 and 2017
+annual checks. Model output on every other day is identical to the earlier
+replay, checked step by step for Hay-Davies on both arrays.
+
+The earlier replay filled the missing global values with zero, so Klucher, whose
+diffuse model divides by global irradiance, could not run. For every other
+model, the exclusion changes the west-to-north ratio error by at most `0.0013`
+percentage points and each array's energy bias by at most `0.004` percentage
+points. The 2016 irradiance-only comparison has no such samples and is
+unchanged.
 
 The dual-axis array is excluded from this evidence. Its tracking geometry is
 not equivalent to the fixed-plane comparison and exposed a separate limitation

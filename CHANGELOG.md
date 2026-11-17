@@ -19,6 +19,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Python backend. A search records no PV-only `dispatch_path`, since it mixes
   designs with and without a battery (#463).
 
+### Documentation
+
+- The DKA Solar Centre orientation-pair validation now excludes each civil day
+  with a missing global irradiance sample and positive diffuse irradiance, from
+  both modelled and measured energy and for every transposition model, instead
+  of filling the missing value with zero. Klucher now has a result (west-to-north
+  ratio error `1.29%`); the other models move by at most `0.0013` percentage
+  points. The validation page lists the five affected samples (#471).
+
 ## [0.8.0] - 2026-11-16
 
 BREOS 0.8.0 adds vehicle charging and vehicle-to-home simulation, AC-coupled
