@@ -273,3 +273,92 @@ class TestZeroModuleDesign:
             azimuth=180.0,
         )
         assert seen["inverter_ac_capacity_w"] == pytest.approx(0.0)
+
+
+class TestLoadOnWeatherSteps:
+    """#461: a load with no value at the weather's steps is refused before any PV model run."""
+
+    TZ = "Asia/Kolkata"
+
+    @staticmethod
+    def _weather(freq="h", shift_minutes=0):
+        periods = 8760 if freq == "h" else 4 * 8760
+        index = pd.date_range("2025-01-01", periods=periods, freq=freq, tz="UTC") + pd.Timedelta(minutes=shift_minutes)
+        sun = np.clip(np.sin((index.hour - 6) / 12 * np.pi), 0, 1) * 600.0
+        weather = pd.DataFrame(
+            {"ghi": sun, "dni": 0.7 * sun, "dhi": 0.3 * sun, "temp_air": 20.0, "wind_speed": 2.0}, index=index
+        )
+        weather.attrs["breos_weather_metadata"] = {"radiation_time_basis": "instant"}
+        return weather
+
+    @classmethod
+    def _load(cls, freq="h"):
+        periods = 8760 if freq == "h" else 4 * 8760
+        return pd.DataFrame({"Load": 500.0}, index=pd.date_range("2025-01-01", periods=periods, freq=freq, tz=cls.TZ))
+
+    @classmethod
+    def _config(cls, resolution="h"):
+        return {
+            "location": {"latitude": 28.61, "longitude": 77.21, "timezone": cls.TZ, "altitude": 200},
+            "simulation": {"resolution": resolution, "years_projection": 1},
+            "mode": {"fixed_azimuth": 180.0},
+            "constraints": {"max_modules": 8, "max_area_m2": 100, "max_tilt_deg": 40, "max_battery_kwh": 5},
+        }
+
+    @staticmethod
+    def _entry_points():
+        pytest.importorskip("pymoo")
+        from breos.optimization import SolarDesignProblem, optimize_system_multi_objective
+
+        return {
+            "evaluate_projected_design": lambda w, load, cfg: evaluate_projected_design(
+                w, load, cfg, n_modules=4, battery_kwh=0.0, tilt=25.0, azimuth=180.0
+            ),
+            "optimize_system_multi_objective": lambda w, load, cfg: optimize_system_multi_objective(
+                w, load, cfg, pop_size=4, n_gen=1, seed=1
+            ),
+            "SolarDesignProblem": lambda w, load, cfg: SolarDesignProblem(w, load, cfg),
+        }
+
+    @staticmethod
+    def _forbid_pv_model(monkeypatch):
+        def _never(**_kwargs):
+            raise AssertionError("the PV model ran before the load was checked")
+
+        monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", _never)
+
+    @pytest.mark.parametrize(
+        "entry", ["evaluate_projected_design", "optimize_system_multi_objective", "SolarDesignProblem"]
+    )
+    def test_hourly_utc_weather_and_local_hour_load_refused_with_apps_message(self, monkeypatch, entry):
+        self._forbid_pv_model(monkeypatch)
+        run = self._entry_points()[entry]
+        with pytest.raises(ValueError, match=r"stamped on whole UTC hours, which cannot be aligned.*UTC\+5:30"):
+            run(self._weather(), self._load(), self._config())
+
+    def test_load_without_the_weathers_quarter_hours_refused(self, monkeypatch):
+        self._forbid_pv_model(monkeypatch)
+        with pytest.raises(ValueError, match=r"15:00, 45:00 \(minutes:seconds\) past each UTC hour"):
+            evaluate_projected_design(
+                self._weather("15min"),
+                self._load("h"),
+                self._config("15min"),
+                n_modules=4,
+                battery_kwh=0.0,
+                tilt=25.0,
+                azimuth=180.0,
+            )
+
+    @pytest.mark.parametrize(
+        ("freq", "shift_minutes"), [("h", 30), ("15min", 0)], ids=["hourly-on-local-hours", "quarter-hourly"]
+    )
+    def test_aligned_fractional_offset_inputs_still_run(self, monkeypatch, freq, shift_minutes):
+        weather = self._weather(freq, shift_minutes)
+        monkeypatch.setattr(
+            "breos.optimization.calculate_pv_production_dc",
+            lambda **_kwargs: pd.Series(np.full(len(weather), 300.0), index=weather.index),
+        )
+        result = evaluate_projected_design(
+            weather, self._load(freq), self._config(freq), n_modules=4, battery_kwh=0.0, tilt=25.0, azimuth=180.0
+        )
+        assert np.isfinite(result.metrics["Projected_NPV"])
