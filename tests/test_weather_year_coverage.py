@@ -175,3 +175,46 @@ def test_a_complete_right_labelled_year_covers_the_year_at_every_resolution(
     app.simulate()
 
     assert len(app.timeseries()) == (8760 if resolution == "h" else 35040)
+
+
+@pytest.mark.parametrize("side", ["leading", "trailing"])
+@pytest.mark.parametrize("clock", ["file", "utc", "civil"])
+def test_an_extra_step_is_refused_on_each_accepted_clock(side, clock):
+    zones = {
+        "file": ("Etc/GMT-1", "Etc/GMT-1", "Europe/Berlin"),
+        "utc": ("UTC", "Europe/Berlin", "Europe/Berlin"),
+        "civil": ("America/New_York", "UTC", "America/New_York"),
+    }
+    year_zone, file_zone, site_zone = zones[clock]
+    start = pd.Timestamp("2025-01-01", tz=year_zone)
+    if side == "leading":
+        start -= pd.Timedelta(hours=1)
+    weather = _year(start.tz_localize(None).isoformat(), periods=8761, tz=year_zone).tz_convert(file_zone)
+
+    with pytest.raises(ValueError, match="surplus weather"):
+        require_full_year_weather(weather, 2025, "h", site_zone)
+
+
+def test_duplicate_timestamp_cannot_replace_a_missing_hour():
+    weather = _year("2025-01-01")
+    weather.index = weather.index.delete(24).insert(24, weather.index[25])
+
+    with pytest.raises(ValueError, match="duplicate timestamp"):
+        require_full_year_weather(weather, 2025, "h", "UTC")
+
+
+def test_right_labelled_weather_with_an_extra_day_is_refused(tmp_path, synthetic_weather):
+    from breos.weather import save_weather_csv
+
+    weather = synthetic_weather.reindex(pd.date_range("2025-01-01", periods=8784, freq="h", tz="UTC")).ffill()
+    weather.index += pd.Timedelta(hours=1)
+    weather.attrs["breos_weather_metadata"] = {
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "right",
+    }
+    path = tmp_path / "extra-day.csv"
+    save_weather_csv(weather.rename_axis("date"), path)
+
+    app = App({**_PORTO, "weather_file": str(path)})
+    with pytest.raises(ValueError, match=r"surplus weather \(24 steps after"):
+        app.simulate()

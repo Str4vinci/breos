@@ -194,7 +194,8 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
     The simulation calendar runs from the first to the last weather row, so
     weather missing its first or last days would quietly simulate a shorter
     year against a full year of economics. A gap in the middle is already an
-    error in the PV model; this rejects missing leading and trailing rows.
+    error in the PV model. Reject duplicate timestamps and missing or
+    surplus rows at either end.
 
     The year may be read on three clocks: the weather index's own, UTC, and
     the location's ``timezone``. A PVGIS TMY covers one fixed-offset year,
@@ -206,23 +207,27 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
     index = weather.index
     if not isinstance(index, pd.DatetimeIndex) or index.empty:
         raise ValueError(f"Weather from {_weather_source_label(weather)} has no timestamped rows")
+    if not index.is_unique:
+        duplicate = index[index.duplicated()][0]
+        raise ValueError(f"Weather from {_weather_source_label(weather)} has a duplicate timestamp at {duplicate}")
     step = pd.Timedelta(hours=get_hours_per_step(freq))
     first, last = index.min(), index.max()
 
-    shortfalls = []
+    differences = []
     clocks = {str(clock): clock for clock in (index.tz, "UTC", timezone)}
     for clock in clocks.values():
         # Start each civil year at its first real instant, even if midnight is skipped or repeated.
         year_start = pd.Timestamp(f"{year}-01-01").tz_localize(clock, nonexistent="shift_forward", ambiguous=True)
         year_end = pd.Timestamp(f"{year + 1}-01-01").tz_localize(clock, nonexistent="shift_forward", ambiguous=True)
-        leading = max(first - year_start, pd.Timedelta(0))
-        trailing = max(year_end - (last + step), pd.Timedelta(0))
-        if leading < step and trailing < step:
+        leading = first - year_start
+        trailing = year_end - (last + step)
+        difference = max(abs(leading), abs(trailing))
+        if difference < step:
             return
-        shortfalls.append((max(leading, trailing), leading, trailing, year_start, year_end))
+        differences.append((difference, leading, trailing, year_start, year_end))
 
     # Report on the clock the weather comes closest to covering.
-    _, leading, trailing, year_start, year_end = min(shortfalls, key=lambda item: item[0])
+    _, leading, trailing, year_start, year_end = min(differences, key=lambda item: item[0])
     missing = []
     if leading >= step:
         missing.append(
@@ -233,6 +238,19 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
         missing.append(
             f"the trailing {trailing} ({int(trailing // step)} steps, "
             f"{last.tz_convert(year_end.tz) + step} to {year_end - step})"
+        )
+    surplus = []
+    if leading <= -step:
+        surplus.append(f"{int(-leading // step)} steps before {year_start}")
+    if trailing <= -step:
+        surplus.append(f"{int(-trailing // step)} steps after the last expected step at {year_end - step}")
+    if surplus:
+        details = f"it has surplus weather ({' and '.join(surplus)})"
+        if missing:
+            details += f" and is missing {' and '.join(missing)}"
+        raise ValueError(
+            f"Weather from {_weather_source_label(weather)} does not match the simulated year {year}: "
+            f"after restamping onto {year}, {details}. Supply weather for exactly one calendar year."
         )
     raise ValueError(
         f"Weather from {_weather_source_label(weather)} does not cover the simulated year {year}: "
