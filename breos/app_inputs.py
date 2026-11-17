@@ -244,19 +244,20 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
         surplus.append(f"{int(-leading // step)} steps before {year_start}")
     if trailing <= -step:
         surplus.append(f"{int(-trailing // step)} steps after the last expected step at {year_end - step}")
+    problems = []
     if surplus:
-        details = f"it has surplus weather ({' and '.join(surplus)})"
-        if missing:
-            details += f" and is missing {' and '.join(missing)}"
-        raise ValueError(
-            f"Weather from {_weather_source_label(weather)} does not match the simulated year {year}: "
-            f"after restamping onto {year}, {details}. Supply weather for exactly one calendar year."
-        )
+        problems.append(f"it has surplus weather ({' and '.join(surplus)})")
+    if missing:
+        problems.append(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing")
+    advice = (
+        "supply weather for the full year, or fill the missing rows explicitly."
+        if missing
+        else "supply weather for that year only."
+    )
     raise ValueError(
-        f"Weather from {_weather_source_label(weather)} does not cover the simulated year {year}: "
-        f"after restamping onto {year} it runs from {first} to {last}, so {' and '.join(missing)} "
-        f"{'is' if len(missing) == 1 else 'are'} missing. The App simulates the whole calendar year "
-        "of start_date; supply weather for the full year, or fill the missing rows explicitly."
+        f"Weather from {_weather_source_label(weather)} does not {'match' if surplus else 'cover'} the simulated "
+        f"year {year}: after restamping onto {year} it runs from {first} to {last}, so {' and '.join(problems)}. "
+        f"The App simulates the whole calendar year of start_date; {advice}"
     )
 
 
