@@ -4,6 +4,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- `breos run --help` groups the configuration flags by subject (location and
+  simulation, PV array, inverter, household load, battery, economics,
+  emissions), lists the output flags first, shortens the usage line and ends
+  with example commands and a link to the configuration reference. Flags with
+  long choice lists show the choices in their help text. No flag is added,
+  removed or renamed (#464).
+
 ### Fixed
 
 - The optimizer entry points (`optimize_system_multi_objective`,
@@ -18,6 +27,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   saved optimizer result shows whether `"auto"` chose the compiled or the
   Python backend. A search records no PV-only `dispatch_path`, since it mixes
   designs with and without a battery (#463).
+
+### Documentation
+
+- A new entry path for new users: the README, the docs landing page, the
+  installation page and the quickstart are built around a first `breos run`
+  and the summary it prints, and the interpreting-results page maps each
+  summary line to its result key (#464).
 
 ## [0.8.0] - 2026-11-16
 

@@ -5,6 +5,26 @@ pandas or numpy types. The same dict is written by the CLI's `--output`
 flag. For the step-by-step flows of the first year, use
 [`App.timeseries()`](../api/app.md).
 
+## Reading the run summary
+
+`breos run` prints a summary in the terminal. Each line comes from one key of
+the result; the tables below define them.
+
+| Summary line | Result key | Meaning |
+|---|---|---|
+| PV delivered (AC) | `usable_ac_system_production_kwh` | Year 1 PV output after the inverter that reached the house or the grid, directly or through the battery |
+| House load | `consumption_kwh` | Year 1 household demand |
+| Self-consumed PV | `self_consumption_kwh`, `self_consumption_pct` | PV used in the house, directly or through the battery; the percentage is of the usable AC production (`usable_ac_system_production_kwh`) |
+| Grid import | `grid_import_kwh`, `grid_independence_pct` | Energy bought; grid independence is the share of the load not bought |
+| Grid export | `grid_export_kwh` | Energy sold |
+| Health at the end | `degradation.final_soh_pct`, `degradation.replacement_events` | Battery state of health after the last year, and the years a battery was replaced |
+| Investment | `total_investment` | Total CAPEX |
+| Net present value | `npv_savings` | Discounted savings against the same household without the system, over the horizon |
+| Discounted payback | `payback_year` | First year from which the cumulative discounted savings stay at zero or above |
+| LCOE | `lcoe_per_kwh` | Lifetime cost of the system per kWh it produces |
+
+Money is in the currency named in the economics line (`provenance.currency`).
+
 ## Top-level keys
 
 | Key | Description |
