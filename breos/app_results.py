@@ -559,7 +559,7 @@ def build_result(
     )
 
     if resolved.pv_arrays:
-        result["pv_arrays"] = [dict(arr) for arr in resolved.pv_arrays]
+        result["pv_arrays"] = deepcopy(resolved.pv_arrays)
     if artifacts.smart_charging is not None:
         result["smart_charging"] = smart_charging_to_dict(artifacts)
         # The part of grid_import_cost_year1_prices bought to charge the battery.
