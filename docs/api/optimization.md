@@ -174,6 +174,17 @@ configured `replacement_min_remaining_years` and `skipped_replacement_action`
 with a `minimum_service` description;
 `details["battery_replacement_treatment"]` holds the same record.
 
+Both also carry an `execution` record, built as App and Monte Carlo build
+theirs: the backend that ran (`execution_backend`), the one asked for
+(`requested_execution_backend`, `"auto"` by default) and the toolchain
+versions. A projected design without a dispatchable battery records
+`dispatch_path = "pv_only_vectorized"`. A search scores designs with and
+without a battery, so its record has no `dispatch_path`: a design took the
+PV-only balance when its `Battery_kWh` and the configured SOC window leave
+nothing to dispatch (`breos.execution.is_pv_only_dispatch`). A search's
+compiled-backend `jit_cache` is `"unknown"`, since worker processes score
+designs out of its sight.
+
 Use `evaluate_projected_design` when you need the detailed result for one
 fixed design instead of a Pareto search. It returns the projected metrics, the
 annual energy and degradation-state ledger, and the matching discounted

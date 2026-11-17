@@ -30,6 +30,9 @@ from breos.economics import (
 from breos.emissions import EmissionsParams
 from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
+    aggregate_jit_cache_states,
+    backend_provenance,
+    is_pv_only_dispatch,
     limit_worker_threads,
     require_backend,
     resolve_execution_backend,
@@ -506,6 +509,8 @@ def _evaluate_projected_design_metrics(
         tariff=tariff,
         instructions=instructions if has_battery else None,
         reference_tariff=reference_tariff,
+        # A one-design evaluation reports its compile cost, as an App run does.
+        observe_jit_per_year=return_tables,
     )
     # Priced here, as App and Monte Carlo price theirs (ADR 0003 E4, E7).
     yearly_summary_df = price_year_rows(projection.yearly_df, costs)
@@ -565,6 +570,7 @@ def _evaluate_projected_design_metrics(
     if return_tables:
         metrics["_yearly_summary_df"] = yearly_summary_df
         metrics["_cost_projection_df"] = cost_projection
+        metrics["_jit_cache_states"] = list(projection.jit_cache_states)
     return metrics
 
 
@@ -1116,6 +1122,13 @@ def evaluate_projected_design(
             its temperatures are restamped onto the calendar year of the
             first sequence frame.
             The sequence length must equal the projected horizon.
+        execution_backend: ``"auto"``, ``"python"`` or ``"numba"``. The
+            provenance's ``execution`` record holds the backend that ran
+            (``execution_backend``) and this request
+            (``requested_execution_backend``), as an App run's does. A design
+            without a dispatchable battery
+            (:func:`breos.execution.is_pv_only_dispatch`) also records the
+            PV-only ``dispatch_path``.
 
     Returns:
         Projected metrics, yearly simulation ledger, and financial ledger.
@@ -1136,8 +1149,10 @@ def evaluate_projected_design(
 
     # Before the PV production model runs, not after it. Computing a year of
     # irradiance and then failing on a missing import wastes the expensive part
-    # and reports the cheap problem late.
-    execution_backend = require_backend(execution_backend)
+    # and reports the cheap problem late. The request is kept for the
+    # provenance: "auto" names neither backend.
+    requested_backend = execution_backend
+    execution_backend = require_backend(requested_backend)
 
     study = _DesignStudy.resolve(
         tmy_data,
@@ -1147,9 +1162,20 @@ def evaluate_projected_design(
         execution_backend=execution_backend,
         weather_by_year=weather_by_year,
     )
+    # Asked of the battery the dispatch is handed, so the record and the
+    # dispatch cannot disagree about whether the design ran PV-only.
+    battery = _build_battery_config_from_spec(study.config["battery"], nominal_energy_wh=float(battery_kwh) * 1000.0)
+    execution = backend_provenance(
+        execution_backend,
+        pv_only=is_pv_only_dispatch(battery.nominal_energy_wh, battery.max_soc, battery.min_soc),
+        requested=requested_backend,
+    )
     raw_metrics = study.score(arrays, n_modules=int(n_modules), battery_kwh=float(battery_kwh), return_tables=True)
     yearly = raw_metrics.pop("_yearly_summary_df")
     financial = raw_metrics.pop("_cost_projection_df")
+    jit_cache_states = raw_metrics.pop("_jit_cache_states", [])
+    if "jit_cache" in execution:
+        execution["jit_cache"] = aggregate_jit_cache_states(jit_cache_states)
     metrics = {
         "Modules": int(n_modules),
         "Battery_kWh": float(battery_kwh),
@@ -1159,7 +1185,9 @@ def evaluate_projected_design(
         "Layout": layout,
         **raw_metrics,
     }
-    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=study.provenance())
+    return ProjectedDesignResult(
+        metrics=metrics, yearly=yearly, financial=financial, provenance=study.provenance(execution=execution)
+    )
 
 
 def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, upper: float) -> np.ndarray:
@@ -1595,6 +1623,16 @@ def optimize_system_multi_objective(
         verbose: Print pymoo progress.
         n_procs: Candidate-evaluation worker processes. The default ``1``
             preserves serial behavior.
+        execution_backend: ``"auto"``, ``"python"`` or ``"numba"``.
+            ``details["provenance"]["execution"]`` holds the backend that ran
+            (``execution_backend``) and this request
+            (``requested_execution_backend``). A search scores designs with
+            and without a battery, so the record carries no PV-only
+            ``dispatch_path``: a design took the PV-only balance when its
+            ``Battery_kWh`` and the configured SOC window leave nothing to
+            dispatch (:func:`breos.execution.is_pv_only_dispatch`). Its
+            ``jit_cache`` stays ``"unknown"``, since worker processes score
+            designs out of the search's sight.
 
     Returns:
         :class:`OptimizationResult` whose ``details["pareto"]`` is a DataFrame
@@ -1645,8 +1683,11 @@ def optimize_system_multi_objective(
 
     # Before the worker pool exists. An NSGA-II run is long and a missing
     # optional dependency should not surface as a traceback from inside a pool
-    # that then has to be torn down.
-    execution_backend = require_backend(execution_backend)
+    # that then has to be torn down. The request is kept for the provenance.
+    requested_backend = execution_backend
+    execution_backend = require_backend(requested_backend)
+    # No PV-only claim: the search mixes designs with and without a battery.
+    execution = backend_provenance(execution_backend, requested=requested_backend)
 
     # Invalid tariffs must fail before a worker pool is created.
     problem = SolarDesignProblem(
@@ -1703,6 +1744,7 @@ def optimize_system_multi_objective(
         constraints=dict(config["constraints"]),
         mode={**config["mode"], "layouts": list(config["mode"]["layouts"])},
         run_settings=settings,
+        execution=execution,
     )
     pareto.attrs["currency"] = provenance["currency"]
     evaluated.attrs["currency"] = provenance["currency"]
