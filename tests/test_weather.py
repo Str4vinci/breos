@@ -1080,3 +1080,29 @@ def test_representative_temperatures_are_restamped_on_their_own_clock(source_zon
     # their sun, not their wall clock. In UTC every hour keeps its reading.
     if source_zone == target_zone == "UTC":
         np.testing.assert_array_equal(aligned.to_numpy(), target.hour.to_numpy(dtype=float))
+
+
+def test_preload_weather_skips_a_year_whose_duplicate_hides_a_missing_step(tmp_path, caplog):
+    first = pd.date_range("2023-01-01 00:30", periods=8760, freq="h", tz="UTC")
+    duplicate = first.delete(24).insert(24, first[25])
+    second = pd.date_range("2025-01-01 00:30", periods=8760, freq="h", tz="UTC")
+    path = _hourly_year_csv(tmp_path / "two-years.csv", duplicate.append(second))
+
+    with caplog.at_level("WARNING", logger="breos.weather"):
+        years = preload_weather_by_year(str(path), target_year=2025)
+
+    assert list(years) == [2025]
+    assert pd.DatetimeIndex(years[2025]["date"]).equals(second)
+    assert "2023 (timestamps do not match" in caplog.text
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_preload_weather_fills_all_of_february_29_in_leap_targets(tmp_path, freq):
+    index = pd.date_range("2025-01-01", "2026-01-01", inclusive="left", freq=freq, tz="UTC+01:00")
+    path = tmp_path / "historical.csv"
+    pd.DataFrame({"date": index, "ghi": np.arange(len(index), dtype=float)}).to_csv(path, index=False)
+
+    year = preload_weather_by_year(str(path), target_year=2028)[2025].set_index("date")
+    expected = pd.date_range("2028-01-01", "2029-01-01", inclusive="left", freq=freq, tz="UTC+01:00")
+    assert year.index.equals(expected)
+    np.testing.assert_array_equal(year.loc["2028-02-29", "ghi"], year.loc["2028-02-28", "ghi"])

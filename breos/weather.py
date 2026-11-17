@@ -1538,8 +1538,8 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
 
     Right-labelled interval means are first moved to the start of their
     interval. 29 February is dropped, so a complete year has the step count of
-    a non-leap year at the file's own step size. Incomplete years are left out
-    with a warning.
+    a non-leap year at the file's own step size. Each year must contain
+    every expected timestamp in order. Incomplete years are left out with a warning.
 
     Returns:
         Tuple of (source year -> frame indexed by ``date``, file metadata)
@@ -1575,12 +1575,27 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
     years = df.index.year
     complete: Dict[int, pd.DataFrame] = {}
     incomplete: List[str] = []
-    for year in years.unique():
+    for year in sorted({int(year) for year in years.dropna()}):
         year_data = df[years == year]
-        if len(year_data) == expected_rows:
-            complete[int(year)] = year_data
-        else:
+        if len(year_data) != expected_rows:
             incomplete.append(f"{year} ({len(year_data)} of {expected_rows} rows)")
+            continue
+        # Keep a regular file's label offset, such as hourly samples on the
+        # half-hour, while checking both ends and every intervening step.
+        index = year_data.index
+        first = index[0]
+        phase = (first - first.normalize()) % step
+        expected = pd.date_range(
+            pd.Timestamp(f"{year}-01-01", tz=index.tz) + phase,
+            pd.Timestamp(f"{year + 1}-01-01", tz=index.tz),
+            freq=step,
+            inclusive="left",
+        )
+        expected = expected[~((expected.month == 2) & (expected.day == 29))]
+        if not index.equals(expected):
+            incomplete.append(f"{year} (timestamps do not match the expected {step} calendar grid)")
+            continue
+        complete[int(year)] = year_data
     if incomplete:
         hint = ""
         if metadata.get("source_timestamp_label_basis") == "right":
@@ -1611,8 +1626,9 @@ def preload_weather_by_year(
     Pre-load weather CSV once and split into per-year DataFrames.
 
     Each year's dates are remapped to *target_year* so the resulting
-    DataFrames can be used directly in simulation. Incomplete years are
-    skipped with a warning.
+    DataFrames can be used directly in simulation. If the target is a leap
+    year, 29 February copies 28 February. Incomplete years are skipped with
+    a warning.
 
     Args:
         csv_file_path: Path to the multi-year weather CSV
@@ -1622,7 +1638,9 @@ def preload_weather_by_year(
         Dict mapping original year → DataFrame with target-year timestamps in
         its first column, ``date``, and a row-number index
     """
-    return {year: frame.reset_index() for year, frame in _weather_years(csv_file_path, target_year).items()}
+    return {
+        year: fill_leap_day(frame).reset_index() for year, frame in _weather_years(csv_file_path, target_year).items()
+    }
 
 
 def _coerce_epw_year(df: pd.DataFrame) -> pd.DataFrame:
