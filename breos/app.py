@@ -26,7 +26,13 @@ from typing import Any
 
 import pandas as pd
 
-from breos.app_config import APP_CONFIG_FIELDS, ResolvedAppConfig, normalize_config_keys, resolve_app_config
+from breos.app_config import (
+    APP_CONFIG_FIELDS,
+    ResolvedAppConfig,
+    normalize_config_keys,
+    resolve_app_config,
+    resolve_app_revaluation,
+)
 from breos.app_inputs import AppRuntimeDependencies
 from breos.app_results import build_result as build_app_result
 from breos.load_profiles import load_profile
@@ -260,7 +266,7 @@ class App:
                 f"revalue() changes prices only, and {', '.join(outside)} is not a price key. "
                 f"Build a new App for it. Keys revalue() accepts: {', '.join(sorted(REVALUATION_KEYS))}."
             )
-        resolved = resolve_app_config(config)
+        resolved = resolve_app_revaluation(self._resolved, config, sorted(changes.keys() & REVALUATION_KEYS))
         if "vehicle" in changed:
 
             def physical(config):

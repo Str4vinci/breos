@@ -48,7 +48,6 @@ from breos.pv.model_options import (
     warn_solar_position_fallback,
 )
 from breos.pv.shading import CIRCUMSOLAR_MODELS, as_shading_table
-from breos.pv_modules import get_module
 from breos.smart_charging import (
     PLANNER_MODES,
     FixedTargetDayController,
@@ -222,10 +221,10 @@ def _bifacial_summary(
 
     rows: list[dict[str, Any]] = []
     models: set[str] = set()
-    for index, array in enumerate(arrays):
+    modules = resolved.pv_array_modules or (resolved.pv_params,)
+    for index, (array, module) in enumerate(zip(arrays, modules, strict=True)):
         model = str(array.get("bifacial_model", default_model)).strip().lower()
         module_key = array["module"]
-        module = get_module(module_key)
         models.add(model)
         row: dict[str, Any] = {
             "array_index": index,

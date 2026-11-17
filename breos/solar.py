@@ -1504,7 +1504,14 @@ def _sum_pv_breakdowns(breakdowns: list[PVProductionBreakdown]) -> PVProductionB
     )
 
 
-def _configured_array(index: int, arr: Mapping[str, Any], location: Location, defaults: Mapping[str, Any]) -> _PVArray:
+def _configured_array(
+    index: int,
+    arr: Mapping[str, Any],
+    location: Location,
+    defaults: Mapping[str, Any],
+    *,
+    pv_params: PVModuleParams | None = None,
+) -> _PVArray:
     """The model of one ``arrays`` entry, as :func:`calculate_multi_array_production` reads it.
 
     ``defaults`` is the function-level model-option block without
@@ -1518,7 +1525,8 @@ def _configured_array(index: int, arr: Mapping[str, Any], location: Location, de
     for chosen, other in (("albedo", "surface_type"), ("surface_type", "albedo")):
         if arr.get(chosen) is not None and arr.get(other) is None and other in options:
             options[other] = None
-    pv_params = get_module(arr.get("module", _DEFAULT_MODULE))
+    if pv_params is None:
+        pv_params = get_module(arr.get("module", _DEFAULT_MODULE))
     tracking = arr.get("tracking", "fixed")
     shading = arr.get("shading")
     if tracking == "fixed":
