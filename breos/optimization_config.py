@@ -81,6 +81,24 @@ DEFAULT_EAST_WEST_TILT_DEG = 10.0
 # the [optimization] key, else this.
 DEFAULT_RUN_SETTINGS: Mapping[str, Any] = {"pop_size": 40, "n_gen": 100, "n_offsprings": None, "seed": 1}
 
+# Which designs the Pareto table is taken from. "final_population" is the
+# non-dominated part of NSGA-II's last population; "all_evaluated" is the
+# non-dominated set of every design the search scored, which can hold more
+# designs than the population and never a dominated one the population kept.
+PARETO_FRONT_SOURCES = ("final_population", "all_evaluated")
+DEFAULT_PARETO_FRONT = "final_population"
+
+# Grid-neighbour polish of the front after NSGA-II. "battery" scores the
+# unscored designs one battery step from a front design until the front stops
+# changing; "all" does so one step in any gene; "off" skips it.
+POLISH_GENES = ("off", "battery", "all")
+DEFAULT_POLISH = "off"
+
+# What early stopping watches. "objective_space" is pymoo's objective-space
+# tolerance on the population; "front_hypervolume" is the growth of the
+# hypervolume of the front of every design scored.
+EARLY_STOP_METRICS = ("objective_space", "front_hypervolume")
+
 # A removed key raises with its replacement rather than as unknown.
 _REMOVED_KEYS = {
     ("constraints", "budget_eur"): (
@@ -325,18 +343,23 @@ MODE_TABLE = TableSpec(
     },
 )
 # The early stop's settings when [optimization.early_stop] leaves them out;
-# min_gen defaults to the smaller of 20 and the generation cap.
+# min_gen defaults to the smaller of 20 and the generation cap, and ftol to
+# EARLY_STOP_FTOL of the metric.
 EARLY_STOP_DEFAULTS: Mapping[str, Any] = {
     "enabled": True,
-    "ftol": 0.0025,
+    "metric": "objective_space",
     "period": 10,
     "n_skip": 0,
     "only_feasible": True,
 }
+# The default ftol per metric: pymoo's tolerance on the population, or the
+# front-hypervolume plateau (0.1 % over ``period`` generations).
+EARLY_STOP_FTOL: Mapping[str, float] = {"objective_space": 0.0025, "front_hypervolume": 0.001}
 EARLY_STOP_TABLE = TableSpec(
     "optimization.early_stop",
     keys={
         "enabled": boolean,
+        "metric": choice(EARLY_STOP_METRICS),
         "ftol": number(minimum=0, min_exclusive=True),
         "period": _integer(1),
         "n_skip": _integer(0),
@@ -349,6 +372,8 @@ OPTIMIZATION_TABLE = TableSpec(
     keys={
         "objective_basis": _objective_basis,
         "early_stop": _early_stop,
+        "pareto_front": choice(PARETO_FRONT_SOURCES),
+        "polish": choice(POLISH_GENES),
         "pop_size": _integer(1),
         "n_gen": _integer(1),
         "n_offsprings": _optional(_integer(1)),
@@ -679,6 +704,20 @@ def resolve_optimization_config(config: Mapping[str, Any], *, battery_kwh: float
     # resolved config again (as worker processes do) does not warn again.
     optimization.pop("objective_basis", None)
     optimization.setdefault("early_stop", None)
+    early_stop = optimization["early_stop"]
+    if isinstance(early_stop, Mapping) and early_stop.get("metric") == "front_hypervolume":
+        # The front of every design scored is feasible by construction, and
+        # every generation counts.
+        for key in ("n_skip", "only_feasible"):
+            if key in early_stop:
+                raise ValueError(f"optimization.early_stop.{key} applies to metric = 'objective_space' only")
+    optimization.setdefault("pareto_front", DEFAULT_PARETO_FRONT)
+    optimization.setdefault("polish", DEFAULT_POLISH)
+    if optimization["polish"] != "off" and optimization["pareto_front"] != "all_evaluated":
+        raise ValueError(
+            "optimization.polish refines the front of every design scored; set "
+            "optimization.pareto_front = 'all_evaluated' or optimization.polish = 'off'"
+        )
     for key in ("emissions", "tariff", "reference_tariff", "smart_charging"):
         resolved.setdefault(key, None)
     return resolved

@@ -4,6 +4,43 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- `[optimization] pareto_front = "all_evaluated"` takes the optimizer's
+  Pareto table from every design the search scored (`details["evaluated"]`),
+  not only from NSGA-II's last population. The table is the feasible
+  non-dominated set of those designs, so it weakly dominates the default front
+  and can hold more rows than `pop_size`. The search, its simulations and its
+  generation count are unchanged. `details["pareto_front"]`, also in the
+  provenance, records the choice. The default, `"final_population"`, gives the
+  same results as before. In an enumeration study of the example config's
+  design space it raised the median hypervolume ratio of the shipped search
+  from 0.991–0.997 to 0.994–0.999 of the exact front's.
+- `[optimization.early_stop] metric = "front_hypervolume"` stops the search
+  once the hypervolume of the front of every design scored grew by at most
+  `ftol` (default 0.001, relative) over the last `period` generations,
+  measured in that front's own scale. The default, `"objective_space"`, is
+  pymoo's tolerance on the population, as before; `n_skip` and
+  `only_feasible` apply to it only. Under the shipped 40-generation cap the
+  new rule saved 14 % of evaluations and lost the front's knee in 0.4 % of
+  runs in the enumeration study. As a stop for a population of 100 with a
+  high generation cap, it raised the worst of 4,200 runs from 0.957 to 0.985
+  of the exact front's hypervolume. `details["early_stop"]` records `metric`.
+- `[optimization] polish = "battery" | "all"` refines the front after
+  NSGA-II. Each round scores the unscored designs one grid step from a front
+  design, in the battery gene or in any gene, until a round leaves the front
+  unchanged. Neighbours over the budget or area limit are skipped without a
+  simulation. Polish runs on the search's worker processes, and its designs
+  join `details["evaluated"]` and `details["evaluation_counts"]`.
+  `details["polish"]`, also in the provenance, records the genes, rounds,
+  simulations and skipped neighbours. The default is `"off"`, and polish
+  needs `pareto_front = "all_evaluated"`. In the enumeration study battery
+  polish cost 1–30 % more evaluations and beat spending them on more
+  NSGA-II generations.
+- The optimization guide recommends a population of 100 with
+  `pareto_front = "all_evaluated"` and the `"front_hypervolume"` stop for
+  dense or patchy fronts.
+
 ### Fixed
 
 - The optimizer entry points (`optimize_system_multi_objective`,

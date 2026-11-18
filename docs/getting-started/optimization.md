@@ -142,6 +142,43 @@ same search and the same front. `details["evaluation_counts"]` gives
 simulations it ran, and `distinct_designs`. Within one search every
 distinct design is simulated once, so the last two are equal.
 
+### A front from every evaluated design
+
+By default the front is the non-dominated part of NSGA-II's last population,
+so it has at most `pop_size` rows. Set `[optimization] pareto_front =
+"all_evaluated"` to take it from every design in `details["evaluated"]`
+instead. The search and its cost are unchanged, and the front is at least as
+good and often denser (see
+[Which designs the front holds](../api/optimization.md#which-designs-the-front-holds)).
+
+The shipped settings, a population of 40 for 40 generations, find a front
+close to the exact one for a typical household. Some fronts are denser or
+patchier: many designs on the front, a larger load against a tight budget, or
+a `hold_target` grid-charging policy. For those, run a population of 100,
+take the front from every evaluated design, and let the search stop once that
+front stops improving. Set `n_gen` high, for example 200, as a cap:
+
+```toml
+[optimization]
+pareto_front = "all_evaluated"
+pop_size = 100
+n_offsprings = 50
+n_gen = 200
+
+[optimization.early_stop]
+metric = "front_hypervolume"   # stop when the front's hypervolume grew
+period = 10                    # by at most ftol = 0.1 % in 10 generations
+```
+
+In an enumeration study this search took a median of 1,200–1,700
+evaluations per design space instead of 820. Across 4,200 runs it raised the
+worst run's hypervolume from 0.957 to 0.985 of the exact front's (see
+[When the search stops](../api/optimization.md#when-the-search-stops)).
+`[optimization] polish = "battery"` then scores the unscored battery-size
+neighbours of the front until it stops improving, for a few percent more
+simulations; `"all"` steps every gene (see
+[Polishing the front](../api/optimization.md#polishing-the-front)).
+
 ### Search East–West layouts too
 
 By default every candidate is one array whose tilt and azimuth are searched.

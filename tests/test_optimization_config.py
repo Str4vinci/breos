@@ -28,6 +28,8 @@ def test_the_example_config_resolves():
     resolved = resolve_optimization_config(config)
     assert resolved["constraints"]["budget"] == 15000.0
     assert resolved["optimization"]["pop_size"] == 40
+    assert resolved["optimization"]["pareto_front"] == "final_population"
+    assert resolved["optimization"]["polish"] == "off"
 
 
 def test_every_default_is_filled_in_by_name():
@@ -176,6 +178,25 @@ def test_an_inline_module_states_its_rating():
         ("constraints", {"max_tilt_deg": "steep"}, "Use a number or 'adjust'"),
         ("constraints", {"enforce_zeb": "yes"}, "must be true or false"),
         ("optimization", {"early_stop": {"ftol": 0}}, "optimization.early_stop.ftol"),
+        ("optimization", {"pareto_front": "archive"}, "must be one of: final_population, all_evaluated"),
+        ("optimization", {"polish": "tilt"}, "must be one of: off, battery, all"),
+        (
+            "optimization",
+            {"pareto_front": "final_population", "polish": "battery"},
+            "optimization.polish refines the front of every design scored",
+        ),
+        ("optimization", {"polish": "battery"}, "optimization.polish refines the front of every design scored"),
+        ("optimization", {"early_stop": {"metric": "hv"}}, "must be one of: objective_space, front_hypervolume"),
+        (
+            "optimization",
+            {"early_stop": {"metric": "front_hypervolume", "n_skip": 1}},
+            "early_stop.n_skip applies to metric = 'objective_space' only",
+        ),
+        (
+            "optimization",
+            {"early_stop": {"metric": "front_hypervolume", "only_feasible": False}},
+            "early_stop.only_feasible applies to metric = 'objective_space' only",
+        ),
         ("simulation", {"resolution": "30min"}, "must be one of: h, 15min"),
         ("simulation", {"irradiance_resampling": "invalid"}, "must be one of: auto, clear_sky"),
         ("battery", {"indoor_model": {"setpoint": 22}}, "battery.indoor_model.setpoint"),

@@ -82,7 +82,7 @@ call takes them as DataFrames.
 | `financials` | `inflation_rate` (0.02), `sell_price_inflation` (0), `import_price_escalation`, `om_escalation`, `replacement_cost_learning`, `discount_rate` (0.03), `project_lifespan`, `pv_degradation_rate`, and the flat-price fallbacks `electricity_cost` and `electricity_sold_cost` |
 | `constraints` | see below |
 | `mode` | `fixed_azimuth` (none: azimuth is searched, 90–270° in the northern hemisphere, −90–90° in the southern); `layouts` (`["single"]`; add `"east_west"` to search East–West roofs too); `east_west_tilt_deg` (10), the fixed tilt of an East–West design |
-| `optimization` | `objective_basis` (`"projected"`, deprecated in 0.8.0); `early_stop` (off; `true` or a table turns it on, and a table takes `enabled` (`true`), `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
+| `optimization` | `objective_basis` (`"projected"`, deprecated in 0.8.0); `early_stop` (off; `true` or a table turns it on, and a table takes `enabled` (`true`), `metric` (`"objective_space"`, or `"front_hypervolume"`), `ftol` (0.0025, or 0.001 with `"front_hypervolume"`), `period` 10, `min_gen` min(20, `n_gen`), and with `"objective_space"` only `n_skip` 0 and `only_feasible` `true`; see [When the search stops](#when-the-search-stops)); `pareto_front` (`"final_population"`, or `"all_evaluated"`; see [Which designs the front holds](#which-designs-the-front-holds)); `polish` (`"off"`, `"battery"` or `"all"`; see [Polishing the front](#polishing-the-front)); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
 | `simulation` | `resolution` (`"h"`, or `"15min"`); `irradiance_resampling` (`"auto"`); `years_projection` (20, or `financials.project_lifespan`) |
 | `inverter` | `efficiency`, used when the top-level `inverter_efficiency` (0.96) is not set |
 | `emissions` | the `EmissionsParams` fields; the search then reports `Projected_CO2_*` for every Pareto row |
@@ -157,6 +157,78 @@ the scores of its first simulation instead. A projection depends on the
 design alone, so the search, its front and every value are the same as
 without the cache. The record of scored designs stays in the parent process,
 and worker processes simulate only designs not yet scored.
+
+### Which designs the front holds
+
+`optimization.pareto_front` picks the designs the Pareto table is taken from.
+With `"final_population"`, the default, it is the feasible non-dominated part
+of NSGA-II's last population, as in earlier releases. With `"all_evaluated"`
+it is the feasible non-dominated set of every design in `details["evaluated"]`,
+in the order first scored. That front weakly dominates the default one and
+can hold more rows than `pop_size`: NSGA-II drops some non-dominated designs
+from its population when the front is wider than the population, and the
+record keeps them. It runs the same search and the same simulations, so it
+costs no extra evaluation and gives the same generation count for the same
+seed. `details["pareto_front"]` and `details["provenance"]["pareto_front"]`
+record the choice.
+
+In a study against exhaustive enumeration of the example config's design
+space (91,575 designs, 7 tariff and dispatch scenarios, 100 seeds each), the
+shipped 40 × 40 search returned a median 0.991–0.997 of the exact front's
+hypervolume with `"final_population"` and 0.994–0.999 with `"all_evaluated"`.
+With `"all_evaluated"`, a population of 40 matched or beat 60, 80 and 100 at
+the same 820 evaluations: a larger population spends them on fewer
+generations. With `"final_population"`, 60 beat 40.
+
+### When the search stops
+
+The search runs `n_gen` generations unless `optimization.early_stop` is on.
+Early stopping never ends a search before `min_gen` generations, and
+`early_stop.metric` picks what it watches:
+
+- `"objective_space"`, the default, is pymoo's objective-space tolerance on
+  NSGA-II's population: the search stops once the population's front moved
+  by less than `ftol` in each of the last `period` generations.
+- `"front_hypervolume"` watches the front of every design scored, the front
+  `pareto_front = "all_evaluated"` returns. The search stops once that
+  front's hypervolume grew by at most `ftol` (default 0.001, relative) over
+  the last `period` generations. Both fronts are measured in the current
+  front's own scale, with its ideal and nadir at 0 and 1 and the reference
+  point at 1.1. The stop uses this front whichever `pareto_front` is set.
+
+In the enumeration study, 6 design spaces × 7 tariff and dispatch scenarios ×
+100 seeds, the shipped `"objective_space"` settings never stopped a
+full-space search before generation 40. `"front_hypervolume"` with
+`period = 10` stopped the shipped 40-generation search after a median 700
+evaluations instead of 820 and lost the knee of the front in 0.4 % of runs. A
+larger `period` or a smaller `ftol` stops later. Watching whether the front's
+knee moves is not a safe stop: the knee of an incomplete front can sit still
+for many generations. `details["early_stop"]` records the settings used,
+`metric` included, or `None` when early stopping is off.
+
+### Polishing the front
+
+`optimization.polish` adds a local search after NSGA-II, on the front of every
+design scored. Each round scores every unscored design one grid step from a
+front design: one kWh of battery with `"battery"`, or one step in any gene
+with `"all"` (a module, a kWh, 5° of tilt or azimuth, or the other layout). It
+repeats until a round leaves the front unchanged or has nothing left to
+score. A neighbour over the budget or the area limit is skipped without a
+simulation, since its CAPEX and area do not depend on the simulation. Polish
+needs `pareto_front = "all_evaluated"`. The default, `"off"`, skips it.
+
+The search itself, its seed and its generation count are unchanged. Polish
+runs on the search's worker processes, and its designs join
+`details["evaluated"]` and `details["evaluation_counts"]`, but not
+`details["pymoo_result"]`. `details["polish"]`, also in the provenance,
+records `genes`, `rounds`, `simulations` (the designs it scored) and
+`screened` (the neighbours it skipped).
+
+In the enumeration study, battery polish cost 1–30 % more evaluations. It was
+consistently better than spending the same evaluations on more NSGA-II
+generations, especially for the worst seed. Full polish reached the exact
+front in several scenarios. It cost 2–5 % more where the front is short, but
+50–120 % more in the full tilt-and-azimuth space.
 
 Results expose `Projected_*` diagnostics. The ordinary `Grid_Independence_%`
 and `NPV` columns equal `Projected_Grid_Independence_%` and

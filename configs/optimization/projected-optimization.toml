@@ -58,8 +58,15 @@ n_gen = 40
 seed = 1                         # fix this; NSGA-II is stochastic
 # optimize_system_multi_objective reads the four settings above unless you pass
 # them as arguments; an argument that disagrees with its key raises.
+# pareto_front = "all_evaluated"  # front of every design scored, not only the
+                                  # last population; default "final_population"
+# polish = "battery"   # with "all_evaluated": then score the front's unscored
+                       # one-kWh neighbours until it stops changing; "all" steps every gene
 
 [optimization.early_stop]
+# To stop once the front of every design scored grows by at most 0.1 % in
+# `period` generations instead, set metric = "front_hypervolume" and
+# ftol = 0.001, and remove n_skip, which applies to the default metric only.
 ftol = 0.0025
 period = 10
 min_gen = 20
