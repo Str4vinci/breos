@@ -204,7 +204,7 @@ class BatteryConfig:
     # What a skipped swap does with the old pack: "keep" it in service or
     # "retire" it and finish the span PV-only.
     skipped_replacement_action: str = "keep"
-    calendar_model: str = "naumann_lam_field_calibrated"  # v1 field-calibrated default alias
+    calendar_model: str = "naumann_lam_field_calibrated_v2"
     # Resistance fade (opt-in): grows internal resistance daily and derates
     # the charge/discharge efficiencies in the energy loop so the effective
     # round-trip efficiency declines as the battery ages.

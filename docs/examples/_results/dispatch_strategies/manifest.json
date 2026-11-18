@@ -1,10 +1,10 @@
 {
  "case": "dispatch_strategies",
  "title": "Dispatch strategies on a bi-hourly tariff",
- "breos_version": "0.8.0",
- "git_describe": "v0.7.1-416-g54e3654",
- "generated_utc": "2026-11-16T13:31:17+00:00",
- "runtime_s": 8.1,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.8.0-30-g960137a-dirty",
+ "generated_utc": "2026-11-18T23:00:13+00:00",
+ "runtime_s": 8.7,
  "cheap": false,
  "configs": {
   "configs/examples/smart-charging-portugal.toml": "a07d92cece2557fe891c02ebb36c770e80f5fbf675d71bc018f2110125a1ca6e"
@@ -16,7 +16,7 @@
   }
  },
  "dependencies": {
-  "python": "3.13.14",
+  "python": "3.12.13",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
@@ -58,7 +58,7 @@
  },
  "iso_week": 6,
  "files": {
-  "strategies.csv": "d27f22f58645012259708640b3a81013ce407df6dfc01f19278e93f48eb82bf0",
-  "week_winter.csv": "94166e46a1e13178091b12626704ddf56d6646f94672a206f19080a5af867885"
+  "strategies.csv": "893812d94e01b69842e30e6b9c04aa009e983274cd0247ecff0316937bdf9d91",
+  "week_winter.csv": "9576a2f76d83c936ee42767f95f43246983e5123f55428699ac5b316e778064d"
  }
 }

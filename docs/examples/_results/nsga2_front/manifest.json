@@ -1,13 +1,13 @@
 {
  "case": "nsga2_front",
  "title": "Multi-objective sizing with NSGA-II",
- "breos_version": "0.8.0",
- "git_describe": "v0.7.1-416-g54e3654",
- "generated_utc": "2026-11-16T14:42:08+00:00",
- "runtime_s": 268.6,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.8.0-30-g960137a-dirty",
+ "generated_utc": "2026-11-18T23:03:40+00:00",
+ "runtime_s": 203.4,
  "cheap": false,
  "configs": {
-  "configs/optimization/projected-optimization.toml": "c0f8303aff05aaf8a021102deb049569615d8c5e8b0208172e1c21c808ff7cae"
+  "configs/optimization/projected-optimization.toml": "98398cda2d23e6f0eb2c1ced099921cf72883218c79455b0c205454f00c264fa"
  },
  "weather": {
   "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
@@ -16,7 +16,7 @@
   }
  },
  "dependencies": {
-  "python": "3.13.14",
+  "python": "3.12.13",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
@@ -27,7 +27,7 @@
  "currency": "EUR",
  "annual_consumption_kwh": 4000.0,
  "load_profile": "demandlib_h0",
- "n_procs": 4,
+ "n_procs": 8,
  "execution_backend": "python",
  "generations": 40,
  "constraints": {
@@ -41,6 +41,6 @@
  },
  "module_area_m2": 2.5833,
  "files": {
-  "pareto.csv": "5b2f30192a2e9a1b4c3629f258d73205f422ca227df54424dc4db16f44f8171b"
+  "pareto.csv": "105710831bb5b000dc326adc98a29266c20219e576cca74b36ad1d8903c5b39b"
  }
 }

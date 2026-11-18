@@ -3,10 +3,10 @@
 Configuration, indoor temperature modelling, and the calendar and cycle
 degradation primitives used by the energy balance.
 
-The default calendar model, `naumann_lam_field_calibrated`, maps to the v1
-field-calibrated parameters. `naumann_lam_field_calibrated_v1` is the explicit
-alias. `naumann_lam_field_calibrated_v2` selects the v2 field-calibrated fit
-with Lam `Ea`/`n` fixed and `k0`/`b` fitted to field data.
+The default calendar model, `naumann_lam_field_calibrated_v2`, is the v2
+field-calibrated fit, with Lam `Ea`/`n` fixed and `k0`/`b` fitted to field
+data. `naumann_lam_field_calibrated_v1` and the unversioned
+`naumann_lam_field_calibrated` select the v1 fit, the default before 0.9.0.
 
 ## Configuration
 

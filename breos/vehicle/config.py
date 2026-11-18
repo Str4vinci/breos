@@ -152,7 +152,7 @@ VEHICLE_TABLE = TableSpec(
         "battery_replacement_cost": "Optional price of one swap, including installation; terminal credit remains pack-only",
         "degradation_engine": '"native" (default) or "blast"; BLAST is refused with Monte Carlo',
         "blast_model": "Enabled BLAST cell-model key; required with blast, refused with native",
-        "calendar_model": 'Native calendar model; default "naumann_lam_field_calibrated"',
+        "calendar_model": 'Native calendar model; default "naumann_lam_field_calibrated_v2"',
         "battery_temperature": '"weather" (default), fixed °C or timestamped CSV; no indoor model',
         "away_charging": "Optional away charging equipment and price; all four nested keys required",
         "schedule": "Required weekday/weekend rules or trip-segment CSV; see vehicle.schedule",
@@ -235,7 +235,7 @@ class VehicleConfig:
     battery_replacement_cost: float | None = None
     degradation_engine: str = "native"
     blast_model: str | None = None
-    calendar_model: str = "naumann_lam_field_calibrated"
+    calendar_model: str = "naumann_lam_field_calibrated_v2"
     battery_temperature: float | str = "weather"
     away_charging: AwayChargingConfig | Mapping[str, Any] | None = None
 
