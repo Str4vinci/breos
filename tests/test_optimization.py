@@ -503,7 +503,8 @@ def test_projected_blast_scores_a_pv_only_candidate(synthetic_weather):
     assert 0.0 < out["Projected_Grid_Independence_%"] < 100.0
 
 
-def test_early_stopping_optimizer_result_pickles(monkeypatch):
+@pytest.mark.parametrize("metric", ["objective_space", "front_hypervolume"])
+def test_early_stopping_optimizer_result_pickles(monkeypatch, metric):
     # The minimum-generation wrapper was a local class, so a result run with
     # early stopping could not be pickled (#217).
     import pickle
@@ -516,7 +517,7 @@ def test_early_stopping_optimizer_result_pickles(monkeypatch):
     config = _config(
         simulation={"resolution": "h"},
         constraints={"budget": 1e5, "max_area_m2": 100.0, "max_modules": 4, "max_battery_kwh": 3.0},
-        optimization={"early_stop": {"min_gen": 1}},
+        optimization={"early_stop": {"min_gen": 1, "metric": metric}},
         battery={"temperature": 20.0},
     )
     result = optimize_system_multi_objective(
@@ -869,3 +870,262 @@ def test_threads_scoring_one_array_share_one_stored_series():
         thread.join()
     assert cache.values == 2
     assert all(result is results[0] for result in results[1:])
+
+
+def _rugged_search(monkeypatch, pareto_front, *, polish="off", max_area_m2=100.0, n_gen=8):
+    """A short search on a rugged stub, with every simulated design recorded.
+
+    ``scored`` keeps each design once, in the order it was simulated.
+    """
+    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
+    # The stub DC series carries the tilt, so the scorer can see it.
+    monkeypatch.setattr(
+        "breos.optimization.calculate_pv_production_dc",
+        lambda **kwargs: pd.Series(float(kwargs["tilt"]), index=idx),
+    )
+    scored: dict[tuple[int, float, float], tuple[float, float]] = {}
+
+    def rugged(**kwargs):
+        modules, battery = kwargs["n_modules"], kwargs["battery_kwh"]
+        tilt = float(kwargs["base_dc_power"].iloc[0])
+        independence = 10.0 * modules + 3.0 * battery + tilt / 10.0
+        npv = 1000.0 - 40.0 * modules - 25.0 * battery + 30.0 * ((7 * modules + 3 * battery) % 5) - tilt
+        scored[(modules, battery, tilt)] = (independence, npv)
+        return {**_PROJECTED_STUB, "Projected_Grid_Independence_%": independence, "Projected_NPV": npv}
+
+    monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", rugged)
+    config = _config(
+        simulation={"resolution": "h"},
+        constraints={
+            "budget": 1e5,
+            "max_area_m2": max_area_m2,
+            "max_modules": 8,
+            "max_battery_kwh": 6.0,
+            "max_tilt_deg": 30.0,
+        },
+        battery={"temperature": 20.0},
+        optimization={"pareto_front": pareto_front, "polish": polish},
+    )
+    result = optimize_system_multi_objective(
+        declare_instant_at_labels(pd.DataFrame({"temp_air": 15.0, "ghi": 0.0}, index=idx)),
+        pd.DataFrame({"Load": 500.0}, index=idx),
+        config,
+        pop_size=6,
+        n_offsprings=4,
+        n_gen=n_gen,
+        seed=3,
+    )
+    return result, scored
+
+
+def _objective_points(pareto):
+    return set(zip(pareto["Grid_Independence_%"], pareto["NPV"]))
+
+
+def _non_dominated_points(points):
+    return {p for p in points if not any(q[0] >= p[0] and q[1] >= p[1] and q != p for q in points)}
+
+
+def test_the_all_evaluated_front_is_the_front_of_every_scored_design(monkeypatch):
+    result, scored = _rugged_search(monkeypatch, "all_evaluated")
+    expected = _non_dominated_points(list(scored.values()))
+
+    pareto = result.details["pareto"]
+    assert _objective_points(pareto) == expected
+    # One row per design, however often NSGA-II asked for it.
+    assert not pareto.duplicated(["Modules", "Battery_kWh", "Tilt"]).any()
+    assert len(pareto) == len([design for design, point in scored.items() if point in expected])
+    assert result.details["pareto_front"] == "all_evaluated"
+    assert result.details["provenance"]["pareto_front"] == "all_evaluated"
+    counts = result.details["evaluation_counts"]
+    # NSGA-II asked for some designs twice, so the front had repeats to drop.
+    assert counts["evaluations"] > counts["simulations"] == len(scored)
+
+
+def test_the_final_population_front_is_the_last_populations_front(monkeypatch):
+    result, _ = _rugged_search(monkeypatch, "final_population")
+    np.testing.assert_array_equal(
+        result.details["pareto"]["Projected_NPV"].to_numpy(),
+        result.details["pymoo_result"].opt.get("Projected_NPV"),
+    )
+    assert result.details["pareto_front"] == "final_population"
+
+
+def test_the_all_evaluated_front_weakly_dominates_the_final_population(monkeypatch):
+    final, _ = _rugged_search(monkeypatch, "final_population")
+    archived, _ = _rugged_search(monkeypatch, "all_evaluated")
+
+    # Same seed, same search: only the designs the table is read from differ.
+    assert final.details["evaluation_counts"] == archived.details["evaluation_counts"]
+    pd.testing.assert_frame_equal(final.details["evaluated"], archived.details["evaluated"])
+    final_points = _objective_points(final.details["pareto"])
+    archived_points = _objective_points(archived.details["pareto"])
+    assert all(any(q[0] >= p[0] and q[1] >= p[1] for q in archived_points) for p in final_points)
+    # This search drops front designs from its population, which the record keeps.
+    assert len(archived_points) > len(final_points)
+
+
+def test_a_one_generation_search_has_an_all_evaluated_front(monkeypatch):
+    result, scored = _rugged_search(monkeypatch, "all_evaluated", n_gen=1)
+    assert _objective_points(result.details["pareto"]) == _non_dominated_points(list(scored.values()))
+
+
+def test_an_all_evaluated_result_pickles(monkeypatch):
+    import pickle
+
+    result, _ = _rugged_search(monkeypatch, "all_evaluated")
+    restored = pickle.loads(pickle.dumps(result.details["pymoo_result"]))
+    assert restored.X.shape == result.details["pymoo_result"].X.shape
+
+
+def test_front_hypervolume_is_measured_in_the_fronts_own_scale():
+    from breos.optimization import _hypervolume_2d, _relative_front_growth
+
+    reference = np.array([1.1, 1.1])
+    assert _hypervolume_2d(np.array([[0.0, 0.0]]), reference) == pytest.approx(1.21)
+    assert _hypervolume_2d(np.array([[1.0, 0.0], [0.0, 1.0], [0.5, 1.05]]), reference) == pytest.approx(0.21)
+    # A point beyond the reference adds nothing.
+    assert _hypervolume_2d(np.array([[1.2, 0.0]]), reference) == 0.0
+
+    current = np.array([[0.0, 10.0], [5.0, 0.0]])
+    assert _relative_front_growth(current, current) == 0.0
+    # Scaled to [0, 1] the front is the two-corner front above: HV 0.21,
+    # of which the corner (0, 1) alone covers 0.11.
+    assert _relative_front_growth(current[:1], current) == pytest.approx(0.10 / 0.21)
+    assert _relative_front_growth(np.empty((0, 2)), current) == 1.0
+
+
+class _ScoringAlgorithm:
+    """The part of a pymoo algorithm the front-hypervolume stop reads: the problem's scored designs."""
+
+    def __init__(self):
+        self.problem = type("Problem", (), {"scored": {}})()
+
+    def score(self, *points, feasible=True):
+        for point in points:
+            self.problem.scored[(len(self.problem.scored),)] = {"F": list(point), "G": [-1.0 if feasible else 1.0]}
+        return self
+
+
+def test_front_hypervolume_stops_after_period_generations_without_growth():
+    from breos.optimization import _FrontHypervolumeTermination
+
+    stop = _FrontHypervolumeTermination(tol=1e-3, period=3)
+    algorithm = _ScoringAlgorithm().score([0.0, 1.0], [1.0, 0.0])
+    # The front stays put from the first generation: the fourth is the first
+    # with three generations of history behind it.
+    assert [stop.update(algorithm) for _ in range(4)] == [0.0, 0.0, 0.0, 1.0]
+
+    stop = _FrontHypervolumeTermination(tol=1e-3, period=3)
+    algorithm = _ScoringAlgorithm().score([0.0, 1.0], [1.0, 0.0])
+    progress = [stop.update(algorithm), stop.update(algorithm)]
+    progress.append(stop.update(algorithm.score([0.4, 0.4])))
+    progress.append(stop.update(algorithm.score([2.0, 2.0])))
+    progress.append(stop.update(algorithm.score([0.0, 0.0], feasible=False)))
+    progress += [stop.update(algorithm) for _ in range(2)]
+    # (0.4, 0.4) in generation 3 grows the front, so the stop waits until
+    # generation 6, three generations after it.
+    assert progress == [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0]
+    # Neither the dominated (2, 2) nor the infeasible (0, 0) joins the front.
+    assert len(stop.front) == 3
+
+
+def test_front_hypervolume_early_stop_ends_a_search_whose_front_is_flat(monkeypatch):
+    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
+    monkeypatch.setattr(
+        "breos.optimization.calculate_pv_production_dc", lambda **kwargs: pd.Series([0.0, 1e3, 1e3, 0.0], index=idx)
+    )
+    # Every design scores the same, so the front never grows.
+    monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", lambda **kwargs: _PROJECTED_STUB)
+    config = _config(
+        simulation={"resolution": "h"},
+        constraints={"budget": 1e5, "max_area_m2": 100.0, "max_modules": 4, "max_battery_kwh": 3.0},
+        optimization={"early_stop": {"metric": "front_hypervolume", "period": 3, "min_gen": 1}},
+        battery={"temperature": 20.0},
+    )
+
+    result = optimize_system_multi_objective(
+        declare_instant_at_labels(pd.DataFrame({"temp_air": 15.0, "ghi": 0.0}, index=idx)),
+        pd.DataFrame({"Load": 500.0}, index=idx),
+        config,
+        pop_size=4,
+        n_gen=50,
+        seed=1,
+    )
+
+    assert result.iterations == 4
+    assert result.details["early_stop"] == {
+        "n_gen_cap": 50,
+        "metric": "front_hypervolume",
+        "ftol": 0.001,
+        "period": 3,
+        "min_gen": 1,
+    }
+
+
+def _polished(scored, record):
+    """The search's designs and the polish's, in the order simulated."""
+    designs = list(scored)
+    n = record["simulations"]
+    return designs[: len(designs) - n], designs[len(designs) - n :]
+
+
+def test_battery_polish_scores_battery_neighbours_of_the_front(monkeypatch):
+    plain, _ = _rugged_search(monkeypatch, "all_evaluated")
+    result, scored = _rugged_search(monkeypatch, "all_evaluated", polish="battery")
+
+    record = result.details["polish"]
+    assert record["genes"] == "battery"
+    assert record["rounds"] >= 1 and record["simulations"] > 0
+    assert result.details["provenance"]["polish"] == record
+    # Same search, then the polish's simulations on top.
+    counts, plain_counts = result.details["evaluation_counts"], plain.details["evaluation_counts"]
+    assert counts["simulations"] == plain_counts["simulations"] + record["simulations"]
+    assert counts["evaluations"] == plain_counts["evaluations"] + record["simulations"]
+    assert len(result.details["evaluated"]) == counts["simulations"]
+    assert result.iterations == plain.iterations
+
+    search, polished = _polished(scored, record)
+    for i, (modules, battery, tilt) in enumerate(polished):
+        earlier = set(search) | set(polished[:i])
+        assert (modules, battery - 1, tilt) in earlier or (modules, battery + 1, tilt) in earlier
+    # The table is still the front of every design scored, and it is at
+    # least as good as the unpolished one.
+    polished_points = _objective_points(result.details["pareto"])
+    assert polished_points == _non_dominated_points(list(scored.values()))
+    assert all(
+        any(q[0] >= p[0] and q[1] >= p[1] for q in polished_points) for p in _objective_points(plain.details["pareto"])
+    )
+
+
+def test_full_polish_steps_one_grid_step_in_any_gene(monkeypatch):
+    result, scored = _rugged_search(monkeypatch, "all_evaluated", polish="all")
+
+    record = result.details["polish"]
+    assert record["genes"] == "all" and record["simulations"] > 0
+    search, polished = _polished(scored, record)
+    steps = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 5), (0, 0, -5)]
+    for i, (modules, battery, tilt) in enumerate(polished):
+        earlier = set(search) | set(polished[:i])
+        assert any((modules + dm, battery + db, tilt + dt) in earlier for dm, db, dt in steps)
+    assert _objective_points(result.details["pareto"]) == _non_dominated_points(list(scored.values()))
+
+
+def test_polish_skips_neighbours_over_the_area_limit(monkeypatch):
+    probe, _ = _rugged_search(monkeypatch, "all_evaluated")
+    module_area = probe.details["problem"].module_area_m2
+    # Seven modules fit, eight do not. Independence rises with the module
+    # count, so the front ends at seven and its eight-module neighbour is
+    # skipped.
+    result, scored = _rugged_search(monkeypatch, "all_evaluated", polish="all", max_area_m2=7.5 * module_area)
+
+    record = result.details["polish"]
+    assert record["screened"] > 0
+    _, polished = _polished(scored, record)
+    assert polished and all(modules <= 7 for modules, _, _ in polished)
+
+
+def test_polish_is_off_by_default(monkeypatch):
+    result, _ = _rugged_search(monkeypatch, "all_evaluated")
+    assert result.details["polish"] is None
+    assert result.details["provenance"]["polish"] is None

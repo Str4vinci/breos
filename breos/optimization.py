@@ -41,6 +41,7 @@ from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.optimization_config import (
     DEFAULT_OBJECTIVE_BASIS,
     EARLY_STOP_DEFAULTS,
+    EARLY_STOP_FTOL,
     LAYOUTS,
     ORIENTATION_STEP_DEG,
     adjusted_max_tilt_deg,
@@ -385,6 +386,31 @@ def _projection_rates(fin_cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _design_costs(
+    *,
+    n_modules: int,
+    battery_kwh: float,
+    pv_params: PVModuleParams,
+    batt_spec: Mapping[str, Any],
+    costs_cfg: Mapping[str, Any],
+    fin_cfg: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """A design's cost record, as every scored candidate is priced."""
+    cost_params = cost_params_from_config(costs_cfg, fin_cfg)
+    return calculate_costs(
+        n_modules=n_modules,
+        module_power_w=pv_params.Mpp,
+        battery_capacity_wh=battery_kwh * 1000.0,
+        cost_params=cost_params,
+        # The App's price, unless battery.replacement_cost sets one (ADR 0003 E4).
+        replacement_cost_each=replacement_event_cost(
+            battery_kwh, cost_params.battery_cost_per_kwh, batt_spec.get("replacement_cost")
+        ),
+        battery_coupling=batt_spec.get("coupling", "dc"),
+        battery_inverter_ac_capacity_w=_battery_inverter_ac_capacity_w(batt_spec, battery_kwh),
+    )
+
+
 def _evaluate_projected_design_metrics(
     *,
     base_dc_power: Union[pd.Series, Sequence[pd.Series]],
@@ -445,19 +471,14 @@ def _evaluate_projected_design_metrics(
     if not 0.0 <= float(degradation_rate) < 1.0:
         raise ValueError("projected PV degradation rate must be between 0 and 1")
 
-    cost_params = cost_params_from_config(costs_cfg, fin_cfg)
     battery_inverter_w = _battery_inverter_ac_capacity_w(batt_spec, battery_kwh)
-    costs = calculate_costs(
+    costs = _design_costs(
         n_modules=n_modules,
-        module_power_w=pv_params.Mpp,
-        battery_capacity_wh=battery_kwh * 1000.0,
-        cost_params=cost_params,
-        # The App's price, unless battery.replacement_cost sets one (ADR 0003 E4).
-        replacement_cost_each=replacement_event_cost(
-            battery_kwh, cost_params.battery_cost_per_kwh, batt_spec.get("replacement_cost")
-        ),
-        battery_coupling=batt_spec.get("coupling", "dc"),
-        battery_inverter_ac_capacity_w=battery_inverter_w,
+        battery_kwh=battery_kwh,
+        pv_params=pv_params,
+        batt_spec=batt_spec,
+        costs_cfg=costs_cfg,
+        fin_cfg=fin_cfg,
     )
     has_battery = battery_kwh > 0.0
     # Checked by resolve_optimization_config.
@@ -1214,6 +1235,42 @@ try:
     from pymoo.core.repair import Repair
     from pymoo.core.termination import Termination
 
+    class _FrontHypervolumeTermination(Termination):
+        """Stop once the front of every design scored stops growing.
+
+        Each generation the front is the feasible non-dominated set of every
+        design the problem has scored so far. The search stops when its
+        hypervolume grew by at most ``tol`` (relative) over the last
+        ``period`` generations. Both fronts are measured in the current
+        front's own normalization, its ideal and nadir mapped to 0 and 1 and
+        the reference point at 1.1, so the rule needs no knowledge of the
+        true front. Defined at module level so an optimizer result that
+        stores it pickles.
+        """
+
+        def __init__(self, tol: float, period: int) -> None:
+            super().__init__()
+            self.tol = float(tol)
+            self.period = int(period)
+            self.front = np.empty((0, 2))
+            self.n_seen = 0
+            self.history: list[np.ndarray] = []
+
+        def _update(self, algorithm):
+            # problem.scored holds each design once, in the order first
+            # scored, so the designs past n_seen are the ones new since the
+            # last generation.
+            records = list(algorithm.problem.scored.values())[self.n_seen :]
+            self.n_seen += len(records)
+            if records:
+                objectives, feasible = _objectives_and_feasibility(records)
+                candidates = np.vstack([self.front, objectives[feasible]])
+                self.front = candidates[_non_dominated(candidates)]
+            self.history = [*self.history, self.front][-(self.period + 1) :]
+            if len(self.history) <= self.period or len(self.front) == 0:
+                return 0.0
+            return 1.0 if _relative_front_growth(self.history[0], self.front) <= self.tol else 0.0
+
     class _MinGenerationTermination(Termination):
         """Hold another termination's progress at zero until ``minimum`` generations.
 
@@ -1397,6 +1454,26 @@ try:
                 if out[name] is not None:
                     out[name] = np.array(out[name])
 
+        def exceeds_limits(self, x) -> bool:
+            """Whether a design breaks the budget or the area limit, known without simulating it.
+
+            The first two constraints of ``_evaluate``: CAPEX and area depend
+            only on the module count and the battery size.
+            """
+            constraints = self.config["constraints"]
+            n_modules = int(round(x[0]))
+            if n_modules * self.module_area_m2 > constraints["max_area_m2"]:
+                return True
+            costs = _design_costs(
+                n_modules=n_modules,
+                battery_kwh=float(int(round(x[1]))),
+                pv_params=self.study.pv_params,
+                batt_spec=self.config["battery"],
+                costs_cfg=self.config["costs"],
+                fin_cfg=self.config["financials"],
+            )
+            return float(costs["total_initial_cost"]) > constraints["budget"]
+
         def design_layout(self, x) -> str:
             """The layout a design vector encodes."""
             if self.layout_gene is None:
@@ -1440,8 +1517,57 @@ except ImportError as exc:
     _PYMOO_IMPORT_ERROR = exc
 
 
+def _objectives_and_feasibility(records: Sequence[Mapping[str, Any]]) -> Tuple[np.ndarray, np.ndarray]:
+    """The objective rows of scored ``out`` records, and whether each meets every constraint."""
+    objectives = np.array([record["F"] for record in records], dtype=float).reshape(len(records), -1)
+    constraints = np.array([record["G"] for record in records], dtype=float).reshape(len(records), -1)
+    return objectives, (constraints <= 0.0).all(axis=1)
+
+
+def _non_dominated(objectives: np.ndarray) -> np.ndarray:
+    """Which rows of a minimization objective matrix no other row dominates.
+
+    Equal rows do not dominate each other, so both are kept, as in pymoo's
+    non-dominated sorting.
+    """
+    if len(objectives) == 0:
+        return np.zeros(0, dtype=bool)
+    no_worse = (objectives[:, None, :] <= objectives[None, :, :]).all(axis=2)
+    better = (objectives[:, None, :] < objectives[None, :, :]).any(axis=2)
+    # dominated[i] when some row j is no worse than row i everywhere and better somewhere.
+    return ~(no_worse & better).any(axis=0)
+
+
+def _hypervolume_2d(front: np.ndarray, reference: np.ndarray) -> float:
+    """The area a two-objective minimization front dominates, up to ``reference``."""
+    points = front[np.all(front < reference, axis=1)]
+    if len(points) == 0:
+        return 0.0
+    points = points[np.lexsort((points[:, 1], points[:, 0]))]
+    area, best = 0.0, float(reference[1])
+    for x, y in points:
+        if y < best:
+            area += (reference[0] - x) * (best - y)
+            best = y
+    return float(area)
+
+
+def _relative_front_growth(previous: np.ndarray, current: np.ndarray) -> float:
+    """How much ``current`` adds to the hypervolume of ``previous``, relative to its own.
+
+    Both are scaled by the ideal and nadir of ``current``, with the reference
+    point at 1.1 in every objective.
+    """
+    low, high = current.min(axis=0), current.max(axis=0)
+    scale = np.where(high > low, high - low, 1.0)
+    reference = np.full(current.shape[1], 1.1)
+    now = _hypervolume_2d((current - low) / scale, reference)
+    before = _hypervolume_2d((previous - low) / scale, reference) if len(previous) else 0.0
+    return (now - before) / now if now > 0.0 else float("inf")
+
+
 def _build_multi_objective_termination(n_gen: int, early_stop: Any):
-    """Build the configured pymoo generation cap and objective-space stop from a resolved early_stop."""
+    """Build the configured pymoo generation cap and early stop from a resolved early_stop."""
     if early_stop in (None, False):
         return ("n_gen", n_gen), None
     settings = {**EARLY_STOP_DEFAULTS, "min_gen": min(20, n_gen), **({} if early_stop is True else early_stop)}
@@ -1453,21 +1579,20 @@ def _build_multi_objective_termination(n_gen: int, early_stop: Any):
     from pymoo.termination.max_gen import MaximumGenerationTermination
     from pymoo.termination.robust import RobustTermination
 
-    ftol = float(settings["ftol"])
-    period, n_skip, min_gen = settings["period"], settings["n_skip"], settings["min_gen"]
-    only_feasible = settings["only_feasible"]
-    objective_stop = RobustTermination(
-        MultiObjectiveSpaceTermination(tol=ftol, only_feas=only_feasible, n_skip=n_skip),
-        period=period,
-    )
-    metadata = {
-        "n_gen_cap": int(n_gen),
-        "ftol": ftol,
-        "period": period,
-        "n_skip": n_skip,
-        "min_gen": min_gen,
-        "only_feasible": only_feasible,
-    }
+    metric = settings["metric"]
+    ftol = float(settings.get("ftol", EARLY_STOP_FTOL[metric]))
+    period, min_gen = settings["period"], settings["min_gen"]
+    metadata: dict[str, Any] = {"n_gen_cap": int(n_gen), "metric": metric, "ftol": ftol, "period": period}
+    if metric == "front_hypervolume":
+        objective_stop = _FrontHypervolumeTermination(tol=ftol, period=period)
+    else:
+        n_skip, only_feasible = settings["n_skip"], settings["only_feasible"]
+        objective_stop = RobustTermination(
+            MultiObjectiveSpaceTermination(tol=ftol, only_feas=only_feasible, n_skip=n_skip),
+            period=period,
+        )
+        metadata.update(n_skip=n_skip, only_feasible=only_feasible)
+    metadata["min_gen"] = min_gen
     return (
         TerminationCollection(
             MaximumGenerationTermination(n_gen),
@@ -1580,6 +1705,81 @@ def _no_feasible_message(evaluated: pd.DataFrame) -> str:
     )
 
 
+def _scored_front(problem: Any) -> list[Tuple[float, ...]]:
+    """The feasible non-dominated designs among every design scored, in the order first scored.
+
+    A design is scored once per search, so it appears once however often
+    NSGA-II returned to it.
+    """
+    keys = list(problem.scored)
+    if not keys:
+        return []
+    objectives, feasible = _objectives_and_feasibility([problem.scored[key] for key in keys])
+    candidates = np.flatnonzero(feasible)
+    on_front = candidates[_non_dominated(objectives[candidates])]
+    return [keys[index] for index in on_front]
+
+
+def _grid_neighbours(problem: Any, x: Sequence[float], genes: Sequence[int]) -> list[np.ndarray]:
+    """The designs one grid step from ``x`` in one of ``genes``, inside the bounds."""
+    neighbours = []
+    for gene in genes:
+        step = problem.gene_steps[gene]
+        lowest = np.ceil(problem.xl[gene] / step) * step
+        highest = np.floor(problem.xu[gene] / step) * step
+        for delta in (-step, step):
+            value = x[gene] + delta
+            if lowest - 1e-9 <= value <= highest + 1e-9:
+                neighbour = np.array(x, dtype=float)
+                neighbour[gene] = value
+                neighbours.append(neighbour)
+    return neighbours
+
+
+def _polish_front(problem: Any, genes: Sequence[int]) -> dict[str, int]:
+    """Score the unscored grid neighbours of the front until it stops changing.
+
+    Each round scores every design one grid step, in one of ``genes``, from a
+    design on the front of everything scored so far. A neighbour over the
+    budget or the area limit is infeasible whatever it yields, so it is
+    skipped without a simulation. Polish ends when a round leaves the front
+    unchanged or has nothing left to score.
+    """
+    from pymoo.core.evaluator import Evaluator
+    from pymoo.core.population import Population
+
+    screened: set[Tuple[float, ...]] = set()
+    record = {"rounds": 0, "simulations": 0, "screened": 0}
+    front = _scored_front(problem)
+    while front:
+        candidates = [y for x in front for y in _grid_neighbours(problem, x, genes)]
+        if not candidates:
+            break
+        # The repair puts each neighbour on the grid the search scores, and
+        # sets the unread orientation genes of an East-West design, so such
+        # a neighbour is the design itself and is dropped as already scored.
+        candidates = DiscreteGridRepair()._do(problem, np.array(candidates))
+        to_score: dict[Tuple[float, ...], None] = {}
+        for y in candidates:
+            key = tuple(float(value) for value in y)
+            if key in problem.scored or key in screened or key in to_score:
+                continue
+            if problem.exceeds_limits(y):
+                screened.add(key)
+            else:
+                to_score[key] = None
+        record["screened"] = len(screened)
+        if not to_score:
+            break
+        Evaluator().eval(problem, Population.new("X", np.array(list(to_score), dtype=float)))
+        record["rounds"] += 1
+        record["simulations"] += len(to_score)
+        previous, front = front, _scored_front(problem)
+        if set(front) == set(previous):
+            break
+    return record
+
+
 def optimize_system_multi_objective(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -1638,7 +1838,12 @@ def optimize_system_multi_objective(
         :class:`OptimizationResult` whose ``details["pareto"]`` is a DataFrame
         with ``Modules``, ``Battery_kWh``, ``Tilt``, ``Azimuth``, ``Layout``,
         objective values, ZEB diagnostics, and the ``Projected_*`` fields. An
-        East-West row has the configured tilt and a NaN azimuth.
+        East-West row has the configured tilt and a NaN azimuth. It is the
+        feasible non-dominated part of NSGA-II's last population, or with
+        ``[optimization] pareto_front = "all_evaluated"`` of every design
+        scored; ``details["pareto_front"]`` names which. With
+        ``[optimization] polish``, ``details["polish"]`` records the
+        grid-neighbour polish run after NSGA-II, else it is ``None``.
         ``details["evaluated"]`` holds every design the search scored, with
         the same columns plus the constraint values, ``Feasible`` and
         ``Evaluations``. ``details["evaluation_counts"]`` gives the
@@ -1697,6 +1902,8 @@ def optimize_system_multi_objective(
         execution_backend=execution_backend,
     )
     termination, early_stop_metadata = _build_multi_objective_termination(n_gen, config["optimization"]["early_stop"])
+    pareto_front, polish = config["optimization"]["pareto_front"], config["optimization"]["polish"]
+    polish_record = None
     pool = None
     if n_procs > 1:
         from multiprocessing import Pool
@@ -1716,6 +1923,10 @@ def optimize_system_multi_objective(
             seed=seed,
             verbose=verbose,
         )
+        # Polish while the worker pool still exists: its simulations run there.
+        if polish != "off" and result.X is not None:
+            genes = (1,) if polish == "battery" else tuple(range(problem.n_var))
+            polish_record = {"genes": polish, **_polish_front(problem, genes)}
     finally:
         if pool is not None:
             pool.close()
@@ -1726,10 +1937,18 @@ def optimize_system_multi_objective(
         evaluated.attrs["currency"] = problem.study.pricing.currency
         raise NoFeasibleDesignError(_no_feasible_message(evaluated), evaluated)
 
-    # pymoo stores every ``out`` value on the evaluated individual, so the
-    # Pareto diagnostics are already available even when workers performed
-    # the scoring.
-    pareto = _design_table(problem, np.atleast_2d(result.X), [individual.data for individual in result.opt])
+    if pareto_front == "all_evaluated":
+        # The front of every design scored weakly dominates the final
+        # population's front, and costs no extra simulation.
+        front = _scored_front(problem)
+        pareto = _design_table(
+            problem, np.array(front, dtype=float).reshape(len(front), problem.n_var), [problem.scored[x] for x in front]
+        )
+    else:
+        # pymoo stores every ``out`` value on the evaluated individual, so the
+        # Pareto diagnostics are already available even when workers performed
+        # the scoring.
+        pareto = _design_table(problem, np.atleast_2d(result.X), [individual.data for individual in result.opt])
     evaluation_counts = {
         "evaluations": int(sum(problem.score_requests.values())),
         "simulations": len(problem.scored),
@@ -1744,6 +1963,8 @@ def optimize_system_multi_objective(
         constraints=dict(config["constraints"]),
         mode={**config["mode"], "layouts": list(config["mode"]["layouts"])},
         run_settings=settings,
+        pareto_front=pareto_front,
+        polish=None if polish_record is None else dict(polish_record),
         execution=execution,
     )
     pareto.attrs["currency"] = provenance["currency"]
@@ -1759,6 +1980,8 @@ def optimize_system_multi_objective(
             "objective_basis": problem.objective_basis,
             "objective_names": ["Projected_Grid_Independence_%", "Projected_NPV"],
             "early_stop": early_stop_metadata,
+            "pareto_front": pareto_front,
+            "polish": polish_record,
             "n_procs": n_procs,
             "battery_replacement_treatment": problem.battery_replacement_treatment,
             "provenance": provenance,
