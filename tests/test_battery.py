@@ -60,7 +60,7 @@ class TestBatteryConfig:
         assert cfg.eol_percentage == 0.70
         assert cfg.inverter_efficiency == 0.96
         assert cfg.thermal_resistance_k_per_w == 0.05
-        assert cfg.calendar_model == "naumann_lam_field_calibrated"
+        assert cfg.calendar_model == "naumann_lam_field_calibrated_v2"
 
     def test_eol_default_agrees_across_config_surfaces(self):
         # BatteryConfig, the App config DEFAULTS, and the optimizer's
@@ -174,23 +174,23 @@ class TestBatteryConfig:
 
         assert actual == expected
 
-    def test_field_calibrated_default_is_v1(self):
+    def test_unversioned_field_calibrated_name_is_v1(self):
         assert _get_degradation_params("naumann_lam_field_calibrated") == _get_degradation_params(
             "naumann_lam_field_calibrated_v1"
         )
 
     def test_field_calibrated_v2_uses_lam_fixed_params(self):
-        default_k0, default_ea, default_b, default_n = _get_degradation_params("naumann_lam_field_calibrated")
+        v1_k0, v1_ea, v1_b, v1_n = _get_degradation_params("naumann_lam_field_calibrated_v1")
         v2_k0, v2_ea, v2_b, v2_n = _get_degradation_params("naumann_lam_field_calibrated_v2")
 
         assert v2_k0 == pytest.approx(3.6244128958919006e-07)
-        assert v2_k0 != default_k0
+        assert v2_k0 != v1_k0
         assert v2_ea == LAM_EA_J_MOL
         assert v2_b == pytest.approx(0.7108636007561147)
-        assert v2_b != default_b
+        assert v2_b != v1_b
         assert v2_n == LAM_SOC_EXPONENT_N
-        assert v2_ea > default_ea
-        assert v2_n > default_n
+        assert v2_ea > v1_ea
+        assert v2_n > v1_n
 
 
 class TestResistanceToEfficiency:

@@ -4,6 +4,25 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- The default battery calendar model is now the v2 field fit,
+  `naumann_lam_field_calibrated_v2`, for the home battery and the vehicle.
+  The v1 fit's activation energy (11.9 kJ/mol) and state-of-charge exponent
+  (0.10) made calendar ageing almost insensitive to temperature and to the
+  state of charge the battery is held at. V2 fixes them at Lam's laboratory
+  values and fits the same field data almost as well. Results of a run that
+  does not set `calendar_model` change. In the residential cases checked, the
+  battery lasts longer under v2, by less in a hot place or at a high state of
+  charge: for one Porto household with a 10 kWh battery, first end of life
+  moved from 10.1 to 14.1 years, and for an outdoor battery in Seville from
+  10.3 to 13.4 years. A battery held at 35 °C ages faster under v2.
+  **Migration:** set `calendar_model = "naumann_lam_field_calibrated_v1"` to
+  keep earlier results. The unversioned `"naumann_lam_field_calibrated"` still
+  selects v1. The documentation now asks users to repeat a study with a
+  laboratory or BLAST model, which often predict no replacement where the
+  field fits predict one.
+
 ### Fixed
 
 - The optimizer entry points (`optimize_system_multi_objective`,

@@ -408,7 +408,7 @@
   "provenance.resolved_config.battery_temperature": "weather",
   "provenance.resolved_config.bifacial_model": "none",
   "provenance.resolved_config.blast_model": "nmc_gr_50ah_b1",
-  "provenance.resolved_config.calendar_model": "naumann_lam_field_calibrated",
+  "provenance.resolved_config.calendar_model": "naumann_lam_field_calibrated_v2",
   "provenance.resolved_config.cost_preset": "residential_pt",
   "provenance.resolved_config.cross_axis_tilt": 0.0,
   "provenance.resolved_config.currency": null,
@@ -641,11 +641,11 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "2a964f2e76a7f25ffc50263d9a8f68512a30eb65",
+  "breos_commit": "960137ab2545c8b0744e4d250397625e871ef6ab",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
-  "python": "3.13.14"
+  "python": "3.12.13"
  },
  "scenario": "blast_15min_replacement",
  "schema": "breos-app-golden-v1"

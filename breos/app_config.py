@@ -867,13 +867,14 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     "calendar_model": AppConfigField(
         affects_inputs=False,
-        default="naumann_lam_field_calibrated",
+        default="naumann_lam_field_calibrated_v2",
         cli_flags=("--calendar-model",),
         cli_help="Battery calendar aging model.",
         normalizer=_model_key,
         doc=(
-            "Battery calendar aging model. The default is the v1 field calibration; "
-            '`"naumann_lam_field_calibrated_v2"` is the v2 fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted'
+            "Battery calendar aging model. The default is the v2 field calibration, with Lam `Ea`/`n` fixed "
+            'and `k0`/`b` fitted; `"naumann_lam_field_calibrated_v1"` and the unversioned '
+            '`"naumann_lam_field_calibrated"` select v1, the default before 0.9.0'
         ),
         summary="battery.calendar_model",
     ),

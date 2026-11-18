@@ -67,10 +67,10 @@ CALENDAR_PARAMETERS: Mapping[str, Tuple[float, float, float, float]] = {
     "naumann": (NAUMANN_K0_PERCENT / 100.0, NAUMANN_EA_J_MOL, NAUMANN_EXPONENT_B, NAUMANN_SOC_EXPONENT_N),
     # Naumann cycle + Lam 2025 lab-derived calendar.
     "naumann_lam": (LAM_K0_FRAC, LAM_EA_J_MOL, LAM_EXPONENT_B, LAM_SOC_EXPONENT_N),
-    # The v1 field-calibrated fit, under its default alias and its own name.
+    # The v1 field-calibrated fit, under its own name and the unversioned one.
     "naumann_lam_field_calibrated": _FIELD_CALIBRATED_V1,
     "naumann_lam_field_calibrated_v1": _FIELD_CALIBRATED_V1,
-    # The v2 field-calibrated fit: Lam's Ea and n fixed, k0 and b fitted.
+    # The v2 field-calibrated fit, the default: Lam's Ea and n fixed, k0 and b fitted.
     "naumann_lam_field_calibrated_v2": (
         NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC,
         NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL,
