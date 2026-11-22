@@ -54,22 +54,24 @@ def test_simulate_energy_balance_battery_golden_output():
         {
             # Without an inverter rating, DC sent to the battery counts at its DC
             # value, as it does with a rating (#214); it used to be scaled by the
-            # inverter efficiency, which gave 22.272.
-            "Total PV [kWh]": 22.472847970810438,
+            # inverter efficiency, which gave 22.272. The 3 kWh pack's thermal
+            # resistance scales with its size since #492 (0.083 K/W, was 0.05 K/W),
+            # so it runs warmer, which moves the values in the sixth digit.
+            "Total PV [kWh]": 22.47284760148616,
             "Total Load [kWh]": 36.0,
-            "Sell [kWh]": 7.039648700549445,
-            "Import [kWh]": 19.061844833215137,
-            "Import [%]": 52.94956898115316,
-            "Grid Independence [%]": 47.05043101884684,
-            "Final SOH [%]": 99.75909416992017,
+            "Sell [kWh]": 7.039657564332179,
+            "Import [kWh]": 19.06185183283357,
+            "Import [%]": 52.949588424537694,
+            "Grid Independence [%]": 47.050411575462306,
+            "Final SOH [%]": 99.75855589237905,
             "N_Replacements": 0,
             "Replaced_Capacity_kWh": 0.0,
         },
     )
-    assert total_pv == pytest.approx(22472.84797081044)
+    assert total_pv == pytest.approx(22472.84760148616)
     assert n_replacements == 0
     assert len(degradation_df) == 2
-    assert results_df["Battery_Energy"].iloc[-1] == pytest.approx(298.067413343493)
+    assert results_df["Battery_Energy"].iloc[-1] == pytest.approx(298.06631691203495)
 
 
 def test_simulate_energy_balance_15min_golden_output():

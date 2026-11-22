@@ -586,7 +586,9 @@ def compute_cell_temperature(
         discharge_power_w: Power drawn from the battery this step (W, DC side)
         charge_eff: Charge efficiency (0-1)
         discharge_eff: Discharge efficiency (0-1)
-        thermal_resistance_k_per_w: Thermal resistance in K/W
+        thermal_resistance_k_per_w: The pack's thermal resistance to ambient in K/W.
+            The default describes a 5 kWh pack; ``BatteryConfig`` scales it
+            inversely with the pack's capacity.
 
     Returns:
         Cell temperature (C)
@@ -2264,7 +2266,7 @@ def _day_arguments(
         float(cap_discharge_wh),
         float(cap_wh),
         float(cap_stored_wh),
-        float(battery_config.thermal_resistance_k_per_w),
+        float(battery_config.thermal_resistance_k_per_w or 0.0),
         float(hours_per_step),
         float(battery_config.ac_output_scale),
         2.0,

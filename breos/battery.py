@@ -41,6 +41,7 @@ from breos.constants import (
     DEFAULT_STANDBY_LOSS_WH,
     DEFAULT_THERMAL_RESISTANCE_K_PER_W,
     SKIPPED_REPLACEMENT_ACTIONS,
+    THERMAL_RESISTANCE_REFERENCE_PACK_KWH,
 )
 from breos.degradation.native import (  # noqa: F401  -- the documented primitives stay importable here
     _get_degradation_params,
@@ -182,6 +183,12 @@ class BatteryConfig:
     charge, and the aging model still runs on it. A span that inherits a retired pack continues
     it retired from the returned degradation state, or takes
     ``battery_retired=True``.
+
+    ``thermal_resistance_k_per_w`` is the whole pack's resistance to ambient,
+    in K per W of heat loss. ``None`` (the default) scales it with the pack:
+    0.05 K/W for a 5 kWh pack, and inversely with nominal capacity, so packs
+    of any size heat by the same amount at the same C-rate. A value you set
+    is used as it is, whatever the capacity.
     """
 
     nominal_energy_wh: float  # Required — nominal capacity in Wh
@@ -211,7 +218,8 @@ class BatteryConfig:
     enable_resistance_fade: bool = False  # Enable Naumann resistance growth model
     initial_resistance_growth: float = 0.0  # Initial relative resistance growth (fraction, 0=new)
     # Thermal model
-    thermal_resistance_k_per_w: float = DEFAULT_THERMAL_RESISTANCE_K_PER_W  # K/W for lumped thermal model
+    # K/W for the lumped thermal model; None scales the default with the pack.
+    thermal_resistance_k_per_w: float | None = None
     inverter_efficiency: float = 0.96  # Inverter efficiency (for DC→AC conversion)
     # Inverter AC rating (W) shared by PV and battery discharge; AC output is
     # clipped to this each step. None disables clipping (legacy behavior).
@@ -276,6 +284,16 @@ class BatteryConfig:
         self.inverter_efficiency = _finite("inverter_efficiency", self.inverter_efficiency)
         self.standby_loss_wh = _finite("standby_loss_wh", self.standby_loss_wh)
         self.initial_resistance_growth = _finite("initial_resistance_growth", self.initial_resistance_growth)
+        if self.thermal_resistance_k_per_w is None:
+            # A pack with no capacity has no losses to heat it.
+            self.thermal_resistance_k_per_w = (
+                DEFAULT_THERMAL_RESISTANCE_K_PER_W
+                * THERMAL_RESISTANCE_REFERENCE_PACK_KWH
+                * 1000.0
+                / self.nominal_energy_wh
+                if self.nominal_energy_wh > 0.0
+                else 0.0
+            )
         self.thermal_resistance_k_per_w = _finite("thermal_resistance_k_per_w", self.thermal_resistance_k_per_w)
 
         if self.nominal_energy_wh < 0.0:
