@@ -18,6 +18,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   saved optimizer result shows whether `"auto"` chose the compiled or the
   Python backend. A search records no PV-only `dispatch_path`, since it mixes
   designs with and without a battery (#463).
+- The battery's default thermal resistance to ambient now scales with its
+  nominal capacity: 0.05 K/W for a 5 kWh pack, and inversely with size. It
+  was 0.05 K/W for every pack, so a pack's heating grew with its size: 60 kWh
+  ran 4 K warmer than a home pack and took an extra replacement, and a 60 MWh
+  pack ran at over 4000 °C and was replaced 511 times in 20 years. Results
+  for a 5 kWh pack are unchanged. Other home sizes move slightly; for example,
+  a 10 kWh pack in Porto ends 20 years at 71.3 % health instead of 71.1 %.
+  A `thermal_resistance_k_per_w` you set on `BatteryConfig` is used as it is
+  (#492).
 
 ## [0.8.0] - 2026-11-16
 
