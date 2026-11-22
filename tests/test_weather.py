@@ -1096,6 +1096,24 @@ def test_preload_weather_skips_a_year_whose_duplicate_hides_a_missing_step(tmp_p
     assert "2023 (timestamps do not match" in caplog.text
 
 
+def test_preload_weather_warns_with_the_original_label_of_a_bad_reading(tmp_path, caplog):
+    labels = pd.date_range("2018-01-01 01:00", periods=8760, freq="h", tz="UTC+01:00")
+    weather = pd.DataFrame({"ghi": 0.0}, index=labels.rename("date"))
+    weather.iloc[-1, 0] = np.inf
+    weather.attrs["breos_weather_metadata"] = {
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "right",
+    }
+    path = tmp_path / "historical.csv"
+    save_weather_csv(weather, path)
+
+    with caplog.at_level("WARNING", logger="breos.weather"):
+        assert preload_weather_by_year(str(path), target_year=2025) == {}
+
+    assert "2018 (non-finite weather readings, first in 'ghi' at 2019-01-01 00:00:00+01:00)" in caplog.text
+    assert "one step short" not in caplog.text
+
+
 @pytest.mark.parametrize("freq", ["h", "15min"])
 def test_preload_weather_fills_all_of_february_29_in_leap_targets(tmp_path, freq):
     index = pd.date_range("2025-01-01", "2026-01-01", inclusive="left", freq=freq, tz="UTC+01:00")

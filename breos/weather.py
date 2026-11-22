@@ -1534,7 +1534,8 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
     Right-labelled interval means are first moved to the start of their
     interval. 29 February is dropped, so a complete year has the step count of
     a non-leap year at the file's own step size. Each year must contain
-    every expected timestamp in order. Incomplete years are left out with a warning.
+    every expected timestamp in order and finite readings in its PV weather
+    columns. Incomplete years are left out with a warning.
 
     Returns:
         Tuple of (source year -> frame indexed by ``date``, file metadata)
@@ -1546,6 +1547,7 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
             "timestamp column named 'date', as `tools/fetch_weather.py historical` writes; a "
             "single-year TMY cannot be sampled by year."
         )
+    source_dates = df["date"].to_numpy()
     # The years are split on the file's own clock. Local times across a DST
     # change are put on the clock of their New Year offset, where every civil
     # year keeps its rows.
@@ -1559,7 +1561,10 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
     df.attrs[WEATHER_METADATA_KEY] = metadata
     df = relabel_right_labeled_interval_means(df)
     metadata = weather_metadata(df)
-    df = df[~((df.index.month == 2) & (df.index.day == 29))]
+    keep = ~((df.index.month == 2) & (df.index.day == 29))
+    df = df[keep]
+    # Keep the original CSV labels for diagnostics even if the index moved.
+    source_dates = source_dates[keep]
 
     step = df.index.to_series().diff().median()
     if len(df) < 2 or pd.isna(step) or step <= pd.Timedelta(0):
@@ -1567,13 +1572,25 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
         return {}, metadata
     expected_rows = int(round(pd.Timedelta(days=365) / step))
 
+    pv_columns = [column for column in df.columns if irradiance_component(column) is not None]
+    for quantity in ("temp_air", "wind_speed"):
+        if (column := find_met_column(df.columns, quantity)) is not None:
+            pv_columns.append(column)
+    # A malformed reading can make pandas read the whole column as text.
+    # Convert the good readings too so retained years can still be resampled.
+    for column in pv_columns:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+
     years = df.index.year
     complete: Dict[int, pd.DataFrame] = {}
     incomplete: List[str] = []
+    has_short_year = False
     for year in sorted({int(year) for year in years.dropna()}):
-        year_data = df[years == year]
+        in_year = years == year
+        year_data = df[in_year]
         if len(year_data) != expected_rows:
             incomplete.append(f"{year} ({len(year_data)} of {expected_rows} rows)")
+            has_short_year |= len(year_data) < expected_rows
             continue
         # Keep a regular file's label offset, such as hourly samples on the
         # half-hour, while checking both ends and every intervening step.
@@ -1590,10 +1607,17 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
         if not index.equals(expected):
             incomplete.append(f"{year} (timestamps do not match the expected {step} calendar grid)")
             continue
-        complete[int(year)] = year_data
+        bad = ~np.isfinite(year_data[pv_columns].to_numpy(dtype=float, na_value=np.nan))
+        bad_rows, bad_columns = np.nonzero(bad)
+        if bad_rows.size:
+            stamp = source_dates[in_year][bad_rows[0]]
+            column = pv_columns[bad_columns[0]]
+            incomplete.append(f"{year} (non-finite weather readings, first in {column!r} at {stamp})")
+            continue
+        complete[year] = year_data
     if incomplete:
         hint = ""
-        if metadata.get("source_timestamp_label_basis") == "right":
+        if has_short_year and metadata.get("source_timestamp_label_basis") == "right":
             hint = (
                 ". Right-labelled interval means end at the midnight after the last day;"
                 " a file without that label is one step short"
