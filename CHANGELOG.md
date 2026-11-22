@@ -25,6 +25,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   pack ran at over 4000 °C and was replaced 511 times in 20 years. Results
   for a 5 kWh pack are unchanged. Other home sizes move slightly; for example,
   a 10 kWh pack in Porto ends 20 years at 71.3 % health instead of 71.1 %.
+  Packs below 5 kWh now run slightly warmer than before: a 1 kWh pack gets
+  0.25 K/W, and in Porto runs about 0.3 K warmer and ends 0.2 points lower.
   A `thermal_resistance_k_per_w` you set on `BatteryConfig` is used as it is
   (#492).
 
