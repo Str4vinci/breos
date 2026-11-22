@@ -52,6 +52,16 @@ and scales inversely with nominal capacity, so packs of any size heat by the
 same amount at the same C-rate. Set `thermal_resistance_k_per_w` on
 `BatteryConfig` to use a fixed value instead; App configs have no key for it.
 
+`BatteryConfig` stores the resolved resistance, so resizing a config with
+`dataclasses.replace` keeps the old pack's value. Pass
+`thermal_resistance_k_per_w=None` with the new size to scale it again:
+
+```python
+from dataclasses import replace
+
+big = replace(cfg, nominal_energy_wh=200_000, thermal_resistance_k_per_w=None)
+```
+
 ```{eval-rst}
 .. autosummary::
    :toctree: generated/
