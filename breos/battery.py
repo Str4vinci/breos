@@ -187,7 +187,8 @@ class BatteryConfig:
     ``thermal_resistance_k_per_w`` is the whole pack's resistance to ambient,
     in K per W of heat loss. ``None`` (the default) scales it with the pack:
     0.05 K/W for a 5 kWh pack, and inversely with nominal capacity, so packs
-    of any size heat by the same amount at the same C-rate. A value you set
+    of any size heat by the same amount at the same C-rate and charge and
+    discharge efficiency. A value you set
     is used as it is, whatever the capacity.
     """
 
