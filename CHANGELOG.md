@@ -15,6 +15,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- Three configuration checks no longer let a bad value through:
+  - A `pv_arrays` entry that sets a model option (`temperature_model`, `gcr`,
+    `transposition_model`, `albedo`, `surface_type`, `model_perez`,
+    `bifacial_model`, `pvrow_height`, `pvrow_pitch`) or a mounting key to null
+    now inherits the top-level value, as a null tilt or azimuth already did,
+    and is checked as inherited. 0.8.0 accepted some of these nulls and then
+    failed inside `simulate()`, and refused others.
+  - `battery_indoor_model` with only `ceiling_c` or only `floor_c` is now
+    checked against the default of the other (15 °C floor, 35 °C ceiling).
+    0.8.0 accepted `{ ceiling_c = 10 }` and then held every battery
+    temperature at 15 °C. Rerun any study that set a ceiling below 15 °C or
+    a floor above 35 °C without the other bound.
+  - `smart_charging.mode = "DAILY_PERSISTENCE"`, in any case, is now refused
+    beside several inverters, as the lower-case spelling already was.
 - Weather that steps more than one hour apart (2-hourly, 3-hourly, daily)
   is now refused by name in App, Monte Carlo and the optimizer. At 15
   minutes the resampler read such rows as hourly; the run then stopped with a
@@ -125,8 +139,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   of filling the missing value with zero. Klucher now has a result (west-to-north
   ratio error `1.29%`); the other models move by at most `0.00134` percentage
   points. The validation page lists the five affected samples (#471).
-
-### Documentation
 
 - A new entry path for new users: the README, the docs landing page, the
   installation page and the quickstart are built around a first `breos run`
