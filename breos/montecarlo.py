@@ -85,7 +85,7 @@ from breos.pv.model_options import (
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
 from breos.tariffs import ResolvedTariff
-from breos.utils import package_version
+from breos.utils import find_irradiance_column, irradiance_component, package_version
 from breos.vehicle import VehicleConfig, VehicleSchedule, resolve_vehicle_schedule
 from breos.vehicle.households import (
     VehicleHouseholds,
@@ -307,6 +307,13 @@ def _load_weather_years(
     indexed_by_year: dict[int, pd.DataFrame] = {}
     for year, df in weather_by_year.items():
         weather = _index_weather(df)
+        # Simulate on the columns each irradiance component is read from; a
+        # blank spare alias, such as `shortwave_radiation` beside `ghi`, would
+        # stop the resampler although the year was kept for its readings.
+        used = {find_irradiance_column(weather.columns, c) for c in ("ghi", "dni", "dhi")}
+        weather = weather.drop(
+            columns=[c for c in weather.columns if irradiance_component(c) is not None and c not in used]
+        )
         require_hourly_weather_on_local_hours(weather, freq, resolved.timezone)
         input_frequency = weather_input_frequency(weather)
         weather = resample_hourly_weather(
