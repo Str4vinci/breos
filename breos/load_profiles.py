@@ -401,7 +401,8 @@ def load_profile(
         # Undated files and custom profiles are placed by position, after
         # offset-stamped rows are put on the local wall clock.
         if instants is not None:
-            df = _instants_to_wall_clock(df, instants, timezone, native_freq)
+            _check_profile_length(len(df), steps_per_hour, source.label)
+            df = _instants_to_wall_clock(df, instants, timezone, native_freq, source.label)
         df = _fit_profile_to_calendar(df, new_index, steps_per_hour, source.label)
     df.index = new_index
     df.index.name = "DateTime"
@@ -496,6 +497,19 @@ def _localize_rows(df: pd.DataFrame, timezone: str, freq: Any) -> pd.DataFrame:
     return localized
 
 
+def _check_profile_length(rows: int, steps_per_hour: int, source) -> None:
+    """Refuse a profile that does not hold exactly one common or leap year of rows."""
+    steps_per_day = 24 * steps_per_hour
+    common, leap = 365 * steps_per_day, 366 * steps_per_day
+    if rows not in (common, leap):
+        resolution = "hourly" if steps_per_hour == 1 else "15-minute"
+        raise ValueError(
+            f"Load profile {source} has {rows} data rows; a {resolution} profile must "
+            f"have {common} (common year) or {leap} (leap year). Rows are placed on the "
+            "calendar by position, so a shorter or longer file would shift the seasons."
+        )
+
+
 def _fit_profile_to_calendar(
     df: pd.DataFrame, new_index: pd.DatetimeIndex, steps_per_hour: int, source
 ) -> pd.DataFrame:
@@ -509,14 +523,8 @@ def _fit_profile_to_calendar(
     would shift the seasons without a message.
     """
     steps_per_day = 24 * steps_per_hour
-    common, leap = 365 * steps_per_day, 366 * steps_per_day
-    if len(df) not in (common, leap):
-        resolution = "hourly" if steps_per_hour == 1 else "15-minute"
-        raise ValueError(
-            f"Load profile {source} has {len(df)} data rows; a {resolution} profile must "
-            f"have {common} (common year) or {leap} (leap year). Rows are placed on the "
-            "calendar by position, so a shorter or longer file would shift the seasons."
-        )
+    common = 365 * steps_per_day
+    _check_profile_length(len(df), steps_per_hour, source)
     if len(df) == len(new_index):
         return df
     # Day 59 (0-based) is 29 February in a leap year and 1 March otherwise.
@@ -820,28 +828,62 @@ def _has_utc_offsets(timestamps: pd.Series) -> bool:
 
 
 def _instants_to_wall_clock(
-    df: pd.DataFrame, instants: pd.DatetimeIndex, timezone: Optional[str], freq: str
+    df: pd.DataFrame, instants: pd.DatetimeIndex, timezone: Optional[str], freq: str, source
 ) -> pd.DataFrame:
     """Put offset-stamped rows on ``timezone``'s wall clock for one calendar year.
 
     Rows stamped with UTC offsets are instants, evenly spaced in absolute
     time, so a DST file has no row at the skipped spring hour and two rows at
     the repeated autumn hour. Placing them by position would move every
-    summer row one hour. Each row is placed at its local clock time instead:
-    the two rows of a repeated hour are averaged, a skipped hour copies the
-    row before it, and rows that fall outside the calendar year of the middle
-    row (a file stamped in UTC starts at 23:00 local in Central Europe) wrap
-    to the other end of that year.
+    summer row one hour. Each row is read as the mean power over its own
+    interval and spread over the local clock's rows by the time it overlaps
+    them, so a zone with a half-hour offset keeps every reading. Rows that fall
+    outside the calendar year of the middle row (a file stamped in UTC starts
+    at 23:00 local in Central Europe) wrap to the other end of that year.
+
+    The repeated autumn hour holds the mean of its two readings. The skipped
+    spring hour holds that mean too, so the year's energy is unchanged and
+    both autumn hours read the mean again once the profile is pinned to the
+    zone. A row of the local clock that no reading covers, other than a
+    skipped DST time, raises: BREOS does not invent missing readings.
     """
-    wall = instants.tz_convert(timezone or "UTC").tz_localize(None)
+    tz = timezone or "UTC"
+    step = pd.Timedelta(pd.tseries.frequencies.to_offset(freq))
+    # Every zone's offset is a whole number of quarter hours.
+    sub = pd.Timedelta(minutes=15)
+    parts = max(1, step // sub)
+    utc = instants.tz_convert("UTC").tz_localize(None).to_numpy()
+    fine = (utc[:, None] + np.arange(parts)[None, :] * sub.to_timedelta64()).ravel()
+    wall = pd.DatetimeIndex(fine).tz_localize("UTC").tz_convert(tz).tz_localize(None)
     start = pd.Timestamp(year=wall[len(wall) // 2].year, month=1, day=1)
     end = start + pd.DateOffset(years=1)
     year = pd.DateOffset(years=1)
     wrapped = pd.DatetimeIndex(np.where(wall >= end, wall - year, np.where(wall < start, wall + year, wall)))
-    values = pd.Series(df[LOAD_COLUMN].to_numpy(dtype=float), index=wrapped).groupby(level=0).mean()
+    repeated_times = wrapped[wrapped.duplicated(keep=False)]
+    clash = repeated_times[~repeated_times.tz_localize(tz, ambiguous="NaT", nonexistent="NaT").isna()]
+    if len(clash):
+        raise ValueError(
+            f"Load profile {source} has two readings for {clash[0]} on the {tz} clock, which is not a "
+            "repeated DST time. Its rows must cover one calendar year once."
+        )
+    values = pd.Series(np.repeat(df[LOAD_COLUMN].to_numpy(dtype=float), parts), index=wrapped.floor(freq))
+    grouped = values.groupby(level=0)
     grid = pd.date_range(start=start, end=end, freq=freq, inclusive="left")
-    values = values.reindex(grid).ffill().bfill()
-    return pd.DataFrame({LOAD_COLUMN: values.to_numpy()})
+    means = grouped.mean().reindex(grid)
+    counts = grouped.size().reindex(grid, fill_value=0).to_numpy()
+    skipped = grid.tz_localize(tz, nonexistent="NaT", ambiguous=True).isna()
+    missing = np.flatnonzero((counts == 0) & ~skipped)
+    if missing.size:
+        raise ValueError(
+            f"Load profile {source} has no reading for {grid[missing[0]]} on the {tz} clock"
+            f"{f' or {missing.size - 1} other rows' if missing.size > 1 else ''}. Its rows must cover one "
+            "calendar year; BREOS does not invent missing readings."
+        )
+    gaps, repeated = np.flatnonzero(counts == 0), np.flatnonzero(counts > parts)
+    if gaps.size and gaps.size == repeated.size:
+        means.iloc[gaps] = means.iloc[repeated].to_numpy()
+    means = means.ffill().bfill()
+    return pd.DataFrame({LOAD_COLUMN: means.to_numpy()})
 
 
 def _parse_profile_timestamps(

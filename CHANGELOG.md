@@ -20,7 +20,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   hour. 0.8.0 placed these rows by position, so from the spring clock change
   to the autumn one each row sat one hour early: a 19:00 evening peak ran at
   18:00 for seven months, against PV and tariff windows. Rows are now placed
-  at their clock time in the study's timezone. Files with naive timestamps,
+  at their clock time in the study's timezone, each reading spread over the
+  local hours its interval overlaps, so a UTC file in a half-hour zone such
+  as `Asia/Kolkata` keeps every reading. Both readings of the repeated autumn
+  hour keep their mean, and the year's energy is unchanged. A file that does
+  not cover one calendar year exactly once is refused instead of filled.
+  Files with naive timestamps,
   undated files and E-REDES files are unchanged. Rerun any study that loaded
   an offset-stamped `custom` or external profile.
 - Annual App runs now refuse weather with rows outside the simulated year.
