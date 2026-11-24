@@ -378,11 +378,44 @@ def resample_hourly_weather(
     App, Monte Carlo and the optimizer call this, with ``resample`` normally
     :func:`breos.weather.resample_to_15min`. Weather that is not hourly, or a
     study that is not at 15 minutes, is returned unchanged.
+
+    Raises:
+        ValueError: If the weather steps more than one hour apart, at any
+            study resolution: the resampler would read such rows as hourly.
+            Or if hourly weather for a 15-minute study misses a row: the
+            resampler would fill the gap, where an hourly study refuses it.
     """
+    if not isinstance(weather.index, pd.DatetimeIndex) or len(weather.index) < 2:
+        return weather
+    if not weather.index.is_monotonic_increasing:
+        weather = weather.sort_index()
+    index = weather.index
+    gaps = index.to_series().diff().iloc[1:].reset_index(drop=True)
+    # The most common interval is the step, so neither a missing row nor one
+    # stray extra row changes it.
+    positive = gaps[gaps > pd.Timedelta(0)]
+    step = pd.Timedelta(cast(pd.Timedelta, positive.value_counts().idxmax())) if len(positive) else None
+    if step is not None and step > pd.Timedelta(hours=1):
+        raise ValueError(
+            f"Weather from {_weather_source_label(weather)} has steps of {step / pd.Timedelta(hours=1):g} "
+            "hours; BREOS reads hourly or 15-minute weather. Supply the source's hourly data instead."
+        )
     if freq != "15min":
         return weather
-    input_frequency = weather_input_frequency(weather)
-    if input_frequency and "h" in input_frequency.lower() and "15" not in input_frequency:
+    if step == pd.Timedelta(hours=1):
+        uneven = np.flatnonzero(gaps.to_numpy() != step.to_timedelta64())
+        if uneven.size:
+            row = int(uneven[0]) + 1
+            if index[row] == index[row - 1]:
+                raise ValueError(
+                    f"Hourly weather from {_weather_source_label(weather)} repeats the timestamp "
+                    f"{index[row]}. Remove the duplicate row before the run."
+                )
+            raise ValueError(
+                f"Hourly weather from {_weather_source_label(weather)} must step evenly: row {row} is "
+                f"{index[row]}, {index[row] - index[row - 1]} after the previous row. Fill or remove the "
+                "gap before the run; BREOS does not invent missing hours."
+            )
         return resample(
             weather,
             latitude=latitude,

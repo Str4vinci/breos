@@ -15,6 +15,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- Weather that steps more than one hour apart (2-hourly, 3-hourly, daily)
+  is now refused by name in App, Monte Carlo and the optimizer. At 15
+  minutes the resampler read such rows as hourly; the run then stopped with a
+  message that the weather did not cover the year, which named the trailing
+  hours rather than the step. Hourly weather that misses a row is now refused
+  at 15 minutes too, as it already was in an hourly run: 0.8.0 let the
+  15-minute resampler fill the missing hour without a message. Rerun any
+  15-minute study whose hourly weather file had a gap. The step is the most
+  common interval between rows, read after sorting them, so neither a missing
+  row nor a stray extra row changes it, and a repeated timestamp is named.
 - `App.revalue()` now replaces a tariff's `custom_schedule` whole. 0.8.0
   merged the new schedule into the old one key by key, so a rule or holiday
   list the new schedule left out was kept and priced the run on the old
