@@ -716,6 +716,128 @@ def test_offset_stamped_profiles_other_than_eredes_still_load(tmp_path, key):
     assert load.iloc[:, 0].sum() / 1000 == pytest.approx(1000)
 
 
+def _write_evening_peak(path, file_tz):
+    stamps = pd.date_range("2025-01-01", "2026-01-01", freq="h", inclusive="left", tz=file_tz)
+    peak = stamps.tz_convert("Europe/Berlin").hour == 19
+    lines = ["DateTime,Power [W]", *(f"{t.isoformat()},{1000 if p else 100}" for t, p in zip(stamps, peak))]
+    path.write_text("\n".join(lines) + "\n")
+
+
+@pytest.mark.parametrize("file_tz", ["Europe/Berlin", "UTC"])
+def test_offset_stamped_custom_profile_keeps_its_local_hour_all_year(tmp_path, file_tz):
+    # A DST file has 8760 instants but no row at the skipped spring hour, so
+    # placing its rows by position moved every summer row one hour earlier.
+    _write_evening_peak(tmp_path / "measured.csv", file_tz)
+
+    load = load_profile(
+        "custom",
+        1000,
+        start_date="2025-01-01",
+        timezone="Europe/Berlin",
+        profile_file=tmp_path / "measured.csv",
+        profile_unit="W",
+    )
+
+    local = load.iloc[:, 0].tz_convert("Europe/Berlin")
+    peaks = local.groupby(local.index.date).idxmax()
+    assert {t.hour for t in peaks} == {19}
+    assert local.sum() / 1000 == pytest.approx(1000)
+
+
+def test_offset_stamped_custom_profile_on_utc_keeps_its_instants(tmp_path):
+    _write_evening_peak(tmp_path / "measured.csv", "Europe/Berlin")
+
+    load = load_profile(
+        "custom", 1000, start_date="2025-01-01", profile_file=tmp_path / "measured.csv", profile_unit="W"
+    )
+
+    peaks = load.iloc[:, 0].groupby(load.index.date).idxmax()
+    summer = [t for t in peaks if pd.Timestamp("2025-04-01", tz="UTC") <= t < pd.Timestamp("2025-10-01", tz="UTC")]
+    assert {t.hour for t in summer} == {17}
+
+
+def _write_offset_rows(path, stamps, values):
+    lines = ["DateTime,Power [W]", *(f"{t.isoformat()},{v}" for t, v in zip(stamps, values))]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def test_a_utc_profile_in_a_half_hour_zone_keeps_every_reading(tmp_path):
+    # Local half hours missed the hourly grid, so every reading was dropped.
+    stamps = pd.date_range("2025-01-01", "2026-01-01", freq="h", inclusive="left", tz="UTC")
+    _write_offset_rows(tmp_path / "measured.csv", stamps, np.where(stamps.hour == 12, 1000, 100))
+
+    load = load_profile(
+        "custom",
+        1000,
+        start_date="2025-01-01",
+        timezone="Asia/Kolkata",
+        profile_file=tmp_path / "measured.csv",
+        profile_unit="W",
+    )
+
+    day = load.iloc[:, 0].tz_convert("Asia/Kolkata")["2025-06-10"].to_numpy()
+    assert day[17] == pytest.approx(day[18])
+    assert day[17] / day[3] == pytest.approx(5.5)
+
+
+def test_a_reading_off_the_hour_is_split_by_its_overlap(tmp_path):
+    # A reading for 12:07-13:07 covers 53 minutes of the 12:00 row.
+    stamps = pd.date_range("2025-01-01 00:07", "2026-01-01 00:07", freq="h", inclusive="left", tz="UTC")
+    _write_offset_rows(tmp_path / "measured.csv", stamps, np.where(stamps.hour == 12, 1000, 100))
+
+    load = load_profile(
+        "custom",
+        1000,
+        start_date="2025-01-01",
+        timezone="UTC",
+        profile_file=tmp_path / "measured.csv",
+        profile_unit="W",
+    )
+
+    day = load.iloc[:, 0]["2025-06-10"].to_numpy()
+    assert day[12] / day[3] == pytest.approx((53 * 1000 + 7 * 100) / 60 / 100)
+
+
+def test_both_readings_of_the_repeated_autumn_hour_keep_their_mean(tmp_path):
+    stamps = pd.date_range("2025-01-01", "2026-01-01", freq="h", inclusive="left", tz="Europe/Berlin")
+    autumn = (stamps.date == pd.Timestamp("2025-10-26").date()) & (stamps.hour == 2)
+    assert autumn.sum() == 2
+    _write_offset_rows(tmp_path / "measured.csv", stamps, np.where(autumn, 1000, 100))
+
+    load = load_profile(
+        "custom",
+        1000,
+        start_date="2025-01-01",
+        timezone="Europe/Berlin",
+        profile_file=tmp_path / "measured.csv",
+        profile_unit="W",
+    )
+
+    values = load.iloc[:, 0]
+    local = values.tz_convert("Europe/Berlin")
+    twice = values[(local.index.date == pd.Timestamp("2025-10-26").date()) & (local.index.hour == 2)]
+    assert len(twice) == 2
+    assert twice.iloc[0] == pytest.approx(twice.iloc[1])
+    assert twice.iloc[0] / values.iloc[0] == pytest.approx(10)
+    assert values.sum() == pytest.approx(1000 * 1000)
+
+
+@pytest.mark.parametrize(("periods", "match"), [(2, "data rows"), (8784, "two readings")])
+def test_an_offset_stamped_profile_must_cover_one_year_once(tmp_path, periods, match):
+    stamps = pd.date_range("2025-07-01", periods=periods, freq="h", tz="Europe/Berlin")
+    _write_offset_rows(tmp_path / "measured.csv", stamps, np.full(periods, 100))
+
+    with pytest.raises(ValueError, match=match):
+        load_profile(
+            "custom",
+            1000,
+            start_date="2025-01-01",
+            timezone="Europe/Berlin",
+            profile_file=tmp_path / "measured.csv",
+            profile_unit="W",
+        )
+
+
 def test_dated_custom_and_other_external_profiles_stay_positional(tmp_path):
     day = np.arange(8760) // 24
     _write_custom(tmp_path / "measured.csv", 100.0 + day)

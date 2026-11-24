@@ -95,7 +95,7 @@ E-REDES file must also start at 1 January 00:00. Its timestamps must be naive
 civil times with no UTC offset, and its year and the study year must be 2004
 or later (see [E-REDES profiles](../api/load-profiles.md#e-redes-profiles)).
 Other dated files can have offset timestamps; BREOS reads them as UTC
-instants. A file that breaks any of these rules raises `ValueError` when it
+instants and places each row at its clock time in the study's timezone. A file that breaks any of these rules raises `ValueError` when it
 loads.
 
 ## Practical rule
