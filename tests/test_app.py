@@ -887,6 +887,14 @@ class TestAppBifacialConfig:
 
         assert "pvrow_height" not in app._resolved.cfg["pv_arrays"][0]
 
+    def test_a_null_option_in_a_mapping_array_inherits_too(self):
+        from collections import UserDict
+
+        array = UserDict(modules=6, tilt=25, azimuth=180, module="Generic_600W_Bifacial", gcr=None)
+        app = App({**self._null_array(), "pv_arrays": [array]})
+
+        assert "gcr" not in app._resolved.cfg["pv_arrays"][0]
+
     def test_a_null_array_mounting_needs_no_electrical_topology(self):
         app = App(self._null_array(module="Generic_600W_Bifacial", mounting=None))
 

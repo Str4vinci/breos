@@ -2795,7 +2795,7 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
         # value, so every check below and the simulation see it as unset.
         inheriting = (*PER_ARRAY_MODEL_OPTION_KEYS, *_PV_ARRAY_MOUNTING_KEYS)
         cfg["pv_arrays"] = [
-            {k: v for k, v in arr.items() if not (k in inheriting and v is None)} if isinstance(arr, dict) else arr
+            {k: v for k, v in arr.items() if not (k in inheriting and v is None)} if isinstance(arr, Mapping) else arr
             for arr in cfg["pv_arrays"]
         ]
         for i, arr in enumerate(cfg["pv_arrays"]):
