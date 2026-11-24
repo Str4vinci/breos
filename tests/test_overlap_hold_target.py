@@ -288,12 +288,13 @@ def test_overlap_controller_carries_exact_instructions_across_the_year_seam(freq
 # order, at both resolutions. BLAST aging's float bits differ between
 # environments, so its default path is pinned by the App goldens instead.
 # Re-pinned once when calendar resistance growth started running from each
-# period's start (#436); the scenario enables resistance fade.
+# period's start (#436); the scenario enables resistance fade. Re-pinned
+# again when the default thermal resistance began to scale with the pack (#492).
 @pytest.mark.parametrize(
     ("name", "freq", "digest"),
     [
-        ("fixed_target", "h", "9f6dd243ba81c330bce9b452b8321026199783941480319ca7620c219600ab74"),
-        ("fixed_target", "15min", "e68060e3c6099bf5fcabaddbf7c0d66a791d498263c9c614ef60a8c8d21ffce5"),
+        ("fixed_target", "h", "413478829b1fea32e872bbb2ede9ce4cead904b11d8d91ac1c09ec24e12401a4"),
+        ("fixed_target", "15min", "b43e483d658b8378ed41287ecd8829a452c3da313206b530f57610501ca8b8f4"),
     ],
 )
 def test_default_reject_preserves_the_existing_ledger_bits(name, freq, digest):

@@ -15,6 +15,42 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- Annual App runs now refuse weather with rows outside the simulated year.
+  0.8.0 refused weather that missed rows at either end of the year but
+  accepted surplus rows: one extra day in a weather CSV gave 8784 hourly
+  steps, a 13th monthly row, 4012.73 kWh of demand for a 4000 kWh profile and
+  an extra day of fixed charges. The run now raises unless the weather
+  matches the year, to within one step at each end, on the file's clock, on
+  UTC or on the location's timezone. Duplicate timestamps are refused too.
+  Rerun any 0.8.0 study whose weather file held rows before 1 January or
+  after 31 December of its year; such files now need trimming first (#480).
+- Historical weather years must now contain every expected timestamp, in
+  order, on the file's clock. 0.8.0 checked only the row count, so a
+  duplicate timestamp could stand in for a missing reading. Such years are
+  now left out with a warning, so a Monte Carlo study over a file with one
+  may sample fewer years than before. `preload_weather_by_year` with a leap
+  target year now copies 28 February into 29 February, as Monte Carlo
+  already did, instead of leaving a 25-hour gap. Rerun a Monte Carlo study
+  if 0.8.1 logs skipped years for its historical file that 0.8.0 did not,
+  and any study that used `preload_weather_by_year` with a leap target
+  (#486).
+- `App.revalue()` and a repeated `App.simulate()` now use the PV equipment
+  the App resolved when it was built. In 0.8.0 they read the module catalogue
+  again, so registering a different module under the same name with
+  `add_module` changed the reported size and investment of a price-only
+  revaluation (4.40 to 3.96 kWp in one case) while the energy came from the
+  original run. A repeated simulation with `pv_arrays` also used the new
+  module. Only Python API runs that changed the catalogue between building
+  an App and revaluing or rerunning it are affected (#484).
+- `App.result()["pv_arrays"]` is now a deep copy. In 0.8.0 its shading
+  tables were shared with the App, so editing one changed the next
+  `simulate()` on the same App while provenance still showed the original
+  table. Only Python API code that edited a returned shading table and then
+  simulated again is affected (#482).
+- A `pv_arrays` entry with `tilt`, `azimuth` or `tracking` set to `None`
+  now inherits the system value, as an omitted key does. In 0.8.0 `tilt` and
+  `azimuth` raised `TypeError` and `tracking` failed during the simulation.
+  TOML has no null, so only Python API configs could set one (#488).
 - The optimizer entry points (`optimize_system_multi_objective`,
   `evaluate_projected_design` and `SolarDesignProblem`) now compare the weather
   and load timestamps before the PV model runs, and refuse a load with no value
@@ -27,6 +63,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   saved optimizer result shows whether `"auto"` chose the compiled or the
   Python backend. A search records no PV-only `dispatch_path`, since it mixes
   designs with and without a battery (#463).
+- The battery's default thermal resistance to ambient now scales with its
+  nominal capacity: 0.05 K/W for a 5 kWh pack, and inversely with size. It
+  was 0.05 K/W for every pack, so a pack's heating grew with its size: 60 kWh
+  ran 4 K warmer than a home pack and took an extra replacement, and a 60 MWh
+  pack ran at over 4000 °C and was replaced 511 times in 20 years. Results
+  for a 5 kWh pack are unchanged. Other home sizes move slightly; for example,
+  a 10 kWh pack in Porto ends 20 years at 71.3 % health instead of 71.1 %.
+  Packs below 5 kWh now run slightly warmer than before while they charge
+  and discharge (an idle pack stays at ambient either way): a 1 kWh pack gets
+  0.25 K/W, and in Porto runs about 0.3 K warmer and ends 0.2 points lower.
+  A `thermal_resistance_k_per_w` you set on `BatteryConfig` is used as it is
+  (#492).
+
+### Documentation
+
+- The DKA Solar Centre orientation-pair validation now excludes each civil day
+  with a missing global irradiance sample and positive diffuse irradiance, from
+  both modelled and measured energy and for every transposition model, instead
+  of filling the missing value with zero. Klucher now has a result (west-to-north
+  ratio error `1.29%`); the other models move by at most `0.00134` percentage
+  points. The validation page lists the five affected samples (#471).
 
 ### Documentation
 
