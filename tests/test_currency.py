@@ -301,6 +301,31 @@ def test_revalue_removes_the_costs_table_set_to_none():
     assert result_fields(revalued) == result_fields(fresh.result())
 
 
+def test_revalue_back_to_the_default_currency_removes_the_old_costs():
+    # The removed JPY costs were still counted as kept in the old currency.
+    scaled = _scaled_config({**BASE, "projection_years": 2}, K, "JPY")
+    base = _run(scaled)
+    weather_patch, load_patch = offline()
+    with weather_patch, load_patch:
+        revalued = base.revalue({"currency": None, "costs": None})
+    fresh = _run({key: value for key, value in scaled.items() if key not in ("costs", "currency")})
+
+    assert result_fields(revalued) == result_fields(fresh.result())
+
+
+@pytest.mark.parametrize("stated", [True, False])
+def test_revalue_checks_a_scalar_set_to_none_whether_the_run_stated_it_or_not(stated):
+    config = {**BASE, "projection_years": 2}
+    if stated:
+        config["discount_rate"] = 0.04
+    else:
+        config.pop("discount_rate", None)
+    base = _run(config)
+    weather_patch, load_patch = offline()
+    with weather_patch, load_patch, pytest.raises((TypeError, ValueError), match="discount_rate"):
+        base.revalue({"discount_rate": None})
+
+
 def test_revalue_into_another_currency_restates_every_tariff_amount():
     # A zero price list is zero in any currency and need not be restated.
     config = {

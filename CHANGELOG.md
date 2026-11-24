@@ -20,7 +20,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   list the new schedule left out was kept and priced the run on the old
   calendar without a message. `App.revalue({"costs": None})` now removes the
   `[costs]` table, as the currency-change error tells users to do; 0.8.0
-  raised `'costs' must be a table/dict`. Rerun any revaluation that changed a
+  raised `'costs' must be a table/dict`. Removed costs no longer count as an
+  amount kept in the old currency. A scalar set to None, such as
+  `{"discount_rate": None}`, is now checked whether or not the run set it;
+  0.8.0 ignored it without a message when the run had left it out. Rerun any
+  revaluation that changed a
   `custom_schedule`.
 - Annual App runs now refuse weather with rows outside the simulated year.
   0.8.0 refused weather that missed rows at either end of the year but

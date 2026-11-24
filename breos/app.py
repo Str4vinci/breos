@@ -28,6 +28,7 @@ import pandas as pd
 
 from breos.app_config import (
     APP_CONFIG_FIELDS,
+    NESTED_TABLE_SPECS,
     ResolvedAppConfig,
     normalize_config_keys,
     resolve_app_config,
@@ -61,9 +62,9 @@ def _revalued_config(config: dict[str, Any], changes: Mapping[str, Any]) -> dict
     merged = dict(config)
     for key, value in changes.items():
         current = merged.get(key)
-        # None removes a table, as it removes a key inside one; an unset key
-        # has nothing to remove.
-        if value is None and (key not in merged or isinstance(current, Mapping)):
+        # None removes a table, as it removes a key inside one. A scalar set
+        # to None is checked like any other value, whether the run set it or not.
+        if value is None and key in NESTED_TABLE_SPECS:
             merged.pop(key, None)
             continue
         if not isinstance(value, Mapping):
@@ -119,7 +120,9 @@ def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mappi
     if currency == old.currency:
         return
     move = f"revalue() moves the run from {old.currency} to {currency}"
-    kept = _kept_amounts(old.cfg.get("costs") or {}, changes.get("costs"), sorted(old.cfg.get("costs") or {}), "costs")
+    # Costs removed fall back to the default preset, whose own currency is checked when the config resolves.
+    costs = {} if "costs" in changes and changes["costs"] is None else old.cfg.get("costs") or {}
+    kept = _kept_amounts(costs, changes.get("costs"), sorted(costs), "costs")
     if old.cfg.get("battery_replacement_cost") and "battery_replacement_cost" not in changes:
         kept.append("battery_replacement_cost")
     for name in ("tariff", "reference_tariff"):
