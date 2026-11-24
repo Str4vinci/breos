@@ -15,7 +15,7 @@ the result; the tables below define them.
 | PV delivered (AC) | `usable_ac_system_production_kwh` | Year 1 PV output after the inverter that reached the house or the grid, directly or through the battery |
 | House load | `consumption_kwh` | Year 1 household demand |
 | Self-consumed PV | `self_consumption_kwh`, `self_consumption_pct` | PV used in the house, directly or through the battery; the percentage is of the usable AC production (`usable_ac_system_production_kwh`) |
-| Grid import | `grid_import_kwh`, `grid_independence_pct` | Energy bought; grid independence is the share of the load not bought |
+| Grid import | `grid_import_kwh`, `grid_independence_pct` | Energy bought, including any grid energy that charges the battery; grid independence is `1 − grid import / house load`, so grid charging lowers it |
 | Grid export | `grid_export_kwh` | Energy sold |
 | Health at the end | `degradation.final_soh_pct`, `degradation.replacement_events` | Battery state of health after the last year, and the years a battery was replaced |
 | Investment | `total_investment` | Total CAPEX |

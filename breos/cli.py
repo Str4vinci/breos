@@ -807,7 +807,7 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="Run a PV + battery simulation.",
         description="Run a PV + battery simulation. In a terminal it prints a short summary;\n"
-        "piped or with --json it prints the full JSON results.",
+        "piped or with --json it prints the full JSON results, unless --output writes them to a file.",
         usage="breos run [--config FILE] [--output FILE] [--json] [config flags]",
         epilog=_RUN_EXAMPLES,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -815,7 +815,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--config", type=Path, metavar="FILE", help="TOML or JSON file with App configuration.")
     run.add_argument("--output", type=Path, metavar="FILE", help="Write the JSON results to this file.")
     run.add_argument(
-        "--json", action="store_true", help="Print the JSON results on a terminal too, instead of the summary."
+        "--json",
+        action="store_true",
+        help="Print the JSON results on a terminal too, instead of the summary (not with --output).",
     )
     run.add_argument("--dry-run", action="store_true", help="Validate and print resolved config without simulation.")
     run.add_argument("--indent", type=int, default=2, help="JSON indentation. Use 0 for compact output.")
