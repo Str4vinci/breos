@@ -99,8 +99,11 @@ summer each row would move one hour from its civil time. Thus a file with an
 offset on any timestamp raises `ValueError`. This applies to one fixed offset
 (including `Z` or `+00:00`) and to offsets that change at DST. The converter
 writes naive civil timestamps. This rule is only for E-REDES files. Other
-dated profiles, including `custom`, can still have offsets. An undated
-E-REDES file is placed by position.
+dated profiles, including `custom`, can still have offsets. BREOS reads
+their rows as instants and places each one at its clock time in the study's
+timezone, so a measured file that follows DST keeps its summer rows at their
+local hour. The two rows of the repeated autumn hour are averaged. An
+undated E-REDES file is placed by position.
 
 To make the files from the E-REDES publication
 (`Perfil_Consumo_Injecao_E-REDES_<year>.csv`), use the converter in the

@@ -310,7 +310,10 @@ def load_profile(
         profile_file: An explicit CSV to read instead of the registry's
             filename pattern; relative paths are taken inside
             ``rlp_directory`` when it is set. Required for ``custom``. Its
-            resolution is taken from its row count.
+            resolution is taken from its row count. Timestamps with UTC
+            offsets (``2025-07-15T19:00+02:00``) are read as instants and
+            placed at their clock time in ``timezone``, so a file that
+            follows DST keeps its summer rows at their local hour.
         profile_column: For ``custom``, the column holding the load. Needed
             only when the file has more than one value column.
         profile_unit: For ``custom``, the unit of that column: ``W`` or
@@ -356,7 +359,7 @@ def load_profile(
     path_context = as_file(source.source) if source.packaged else nullcontext(source.source)
     with path_context as csv_file:
         csv_path = Path(csv_file)
-        df, native_freq, column, unit, source_start = _load_profile_csv(
+        df, native_freq, column, unit, source_start, instants = _load_profile_csv(
             csv_path, columns, default_unit, source.native_freq, naive_timestamps=is_eredes
         )
         sha256 = hashlib.sha256(csv_path.read_bytes()).hexdigest()
@@ -395,7 +398,10 @@ def load_profile(
     if day_type is not None and source_start is not None:
         df = _align_day_types(df, new_index, source_start.year, steps_per_hour, source.label, day_type)
     else:
-        # Undated files and custom profiles are placed by position.
+        # Undated files and custom profiles are placed by position, after
+        # offset-stamped rows are put on the local wall clock.
+        if instants is not None:
+            df = _instants_to_wall_clock(df, instants, timezone, native_freq)
         df = _fit_profile_to_calendar(df, new_index, steps_per_hour, source.label)
     df.index = new_index
     df.index.name = "DateTime"
@@ -677,7 +683,7 @@ def _load_profile_csv(
     native_freq: Optional[str],
     *,
     naive_timestamps: bool = False,
-) -> tuple[pd.DataFrame, str, str, str, pd.Timestamp | None]:
+) -> tuple[pd.DataFrame, str, str, str, pd.Timestamp | None, pd.DatetimeIndex | None]:
     """Read a profile CSV, convert its load column to W, and validate it.
 
     ``columns`` lists the accepted ``(column, unit)`` pairs in order; when it
@@ -689,7 +695,9 @@ def _load_profile_csv(
     the native resolution. With ``naive_timestamps`` (dated E-REDES files),
     a timestamp with a UTC offset is refused.
 
-    Returns the frame, its native resolution, and the column and unit read.
+    Returns the frame, its native resolution, the column and unit read, the
+    first timestamp (None for an undated file) and, when the timestamps carry
+    UTC offsets, every row's instant (otherwise None).
     """
     try:
         # Read without an index column so a blank row is blank in every
@@ -725,12 +733,15 @@ def _load_profile_csv(
             )
 
     df = raw[[column]].rename(columns={column: LOAD_COLUMN})
-    source_start = _validate_profile_rows(df, timestamps, native_freq, csv_file, naive_timestamps=naive_timestamps)
+    stamps = _validate_profile_rows(df, timestamps, native_freq, csv_file, naive_timestamps=naive_timestamps)
     if unit in _ENERGY_UNIT_TO_WH:
         df[LOAD_COLUMN] *= _ENERGY_UNIT_TO_WH[unit] / get_hours_per_step(native_freq)
     else:
         df[LOAD_COLUMN] *= _UNIT_TO_W[unit]
-    return df, native_freq, column, unit, source_start
+    if stamps is None:
+        return df, native_freq, column, unit, None, None
+    instants = pd.DatetimeIndex(stamps) if _has_utc_offsets(timestamps) else None
+    return df, native_freq, column, unit, stamps.iloc[0], instants
 
 
 def _is_row_label(column: pd.Series) -> bool:
@@ -753,8 +764,11 @@ def _validate_profile_rows(
     csv_file: Path,
     *,
     naive_timestamps: bool = False,
-) -> pd.Timestamp | None:
-    """Refuse non-numeric, non-finite, negative, or irregularly stamped rows."""
+) -> pd.Series | None:
+    """Refuse non-numeric, non-finite, negative, or irregularly stamped rows.
+
+    Returns the parsed timestamps as UTC, or None for an undated file.
+    """
     values = pd.to_numeric(df[LOAD_COLUMN], errors="coerce").to_numpy(dtype=float)
     bad = ~np.isfinite(values)
     if bad.any():
@@ -786,7 +800,7 @@ def _validate_profile_rows(
             f"Load profile {csv_file} is not evenly spaced at {native_freq}: data row {row} "
             f"({timestamps.iloc[row]}) follows {timestamps.iloc[row - 1]}."
         )
-    return stamps.iloc[0]
+    return stamps
 
 
 # An ISO 8601 date and clock time with a trailing UTC offset: Z, +01, +0100
@@ -794,6 +808,40 @@ def _validate_profile_rows(
 # 8601, so it flags exactly the rows read as offset-aware, and range labels
 # such as "01/01/2026 00:00-01:00" or "00:00-00:15" are not offsets.
 _UTC_OFFSET = re.compile(r"^\d{4}[-/\d]*[Tt ]\s*[\d:.,]+?\s*(?P<offset>[Zz]|[+-][\d:]+)$")
+
+
+def _utc_offsets(timestamps: pd.Series) -> pd.Series:
+    """The UTC offset written on each timestamp, or NaN where it has none."""
+    return timestamps.astype(str).str.strip().str.extract(_UTC_OFFSET)["offset"]
+
+
+def _has_utc_offsets(timestamps: pd.Series) -> bool:
+    return bool(_utc_offsets(timestamps).notna().any())
+
+
+def _instants_to_wall_clock(
+    df: pd.DataFrame, instants: pd.DatetimeIndex, timezone: Optional[str], freq: str
+) -> pd.DataFrame:
+    """Put offset-stamped rows on ``timezone``'s wall clock for one calendar year.
+
+    Rows stamped with UTC offsets are instants, evenly spaced in absolute
+    time, so a DST file has no row at the skipped spring hour and two rows at
+    the repeated autumn hour. Placing them by position would move every
+    summer row one hour. Each row is placed at its local clock time instead:
+    the two rows of a repeated hour are averaged, a skipped hour copies the
+    row before it, and rows that fall outside the calendar year of the middle
+    row (a file stamped in UTC starts at 23:00 local in Central Europe) wrap
+    to the other end of that year.
+    """
+    wall = instants.tz_convert(timezone or "UTC").tz_localize(None)
+    start = pd.Timestamp(year=wall[len(wall) // 2].year, month=1, day=1)
+    end = start + pd.DateOffset(years=1)
+    year = pd.DateOffset(years=1)
+    wrapped = pd.DatetimeIndex(np.where(wall >= end, wall - year, np.where(wall < start, wall + year, wall)))
+    values = pd.Series(df[LOAD_COLUMN].to_numpy(dtype=float), index=wrapped).groupby(level=0).mean()
+    grid = pd.date_range(start=start, end=end, freq=freq, inclusive="left")
+    values = values.reindex(grid).ffill().bfill()
+    return pd.DataFrame({LOAD_COLUMN: values.to_numpy()})
 
 
 def _parse_profile_timestamps(
@@ -813,7 +861,7 @@ def _parse_profile_timestamps(
     # offsets change at DST is evenly spaced; naive stamps are unchanged.
     iso = pd.to_datetime(timestamps, errors="coerce", utc=True, format="ISO8601")
     if naive_timestamps:
-        offsets = timestamps.astype(str).str.strip().str.extract(_UTC_OFFSET)["offset"].where(iso.notna())
+        offsets = _utc_offsets(timestamps).where(iso.notna())
         stamped = np.flatnonzero(offsets.notna().to_numpy())
         if stamped.size:
             row = int(stamped[0])
