@@ -15,6 +15,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- A `[period]` window that starts on a day whose local midnight does not
+  exist, such as Chile's spring-forward day, no longer stops the run with
+  "nonexistent time due to daylight savings time". The monthly results
+  now group on the wall clock (#507).
 - Three configuration checks no longer let a bad value through:
   - A `pv_arrays` entry that sets a model option (`temperature_model`, `gcr`,
     `transposition_model`, `albedo`, `surface_type`, `model_perez`,
