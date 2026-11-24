@@ -33,41 +33,20 @@ systems for buildings and reports their energy flows, battery ageing,
 economics and emissions over the project lifetime.
 ::::
 
-BREOS is designed for multi-year PV and storage studies where long-term
-dynamics govern feasibility: battery degradation and replacements over the
-project lifetime, optimal tariff selection under time-of-use pricing, and
-performance sensitivity across historical weather years. It ships with example
-presets, field-calibrated LFP degradation and documented
-[external validation](modeling/validation.md), while allowing every layer to
-be replaced with your own data: weather files, load profiles, PV modules,
-degradation coefficients, costs, and tariffs.
-
-## What BREOS does
-
-- **Lifetime simulation.** PV production through pvlib and battery dispatch
-  at 15-minute or hourly resolution, repeated over every project year with
-  the battery ageing as it goes, from native LFP fits or BLAST-Lite cell
-  models. See [Battery ageing](gallery/battery/plot_07_ageing.rst).
-- **Tariffs and battery control.** Flat and time-of-use prices, a separate
-  tariff for the household without the system, opt-in grid charging, and
-  battery replacements booked in the cash flow. See
-  [Which tariff](gallery/tariffs/plot_09_which_tariff.rst) and
-  [Replacement timing](gallery/battery/plot_08_replacement_timing.rst).
-- **Uncertainty.** Monte Carlo over historical weather years and annual
-  demand, reported as distributions of NPV, payback and battery health. See
-  [Monte Carlo](gallery/uncertainty/plot_13_montecarlo.rst).
-- **Sizing.** Parameter sweeps and multi-objective PV and battery sizing with
-  NSGA-II. See [NSGA-II front](gallery/uncertainty/plot_14_nsga2_front.rst).
-
-The documentation assumes working knowledge of Python and pandas. Studies can
-also run from a TOML file with the `breos` command line, without writing
-Python.
-
 ## Install and run
 
 ```bash
 pip install breos
+breos run --location porto \
+  --n-modules 10 \
+  --annual-consumption-kwh 4000 \
+  --battery-kwh 5 \
+  --cost-preset residential-pt \
+  --emissions-country pt
 ```
+
+The run fetches a typical weather year for Porto and prints a summary of
+energy, battery health and economics. The same run from Python:
 
 ```python
 import breos
@@ -88,9 +67,39 @@ print(f"Payback: {result['payback_year']} years")
 print(f"NPV savings: {result['npv_savings']:.0f} EUR")
 ```
 
-`result` is a plain JSON-serializable dict. The same study runs from a TOML
-file with `breos run --config config.toml`; the
-[quickstart](getting-started/quickstart.md) shows both.
+`result` is a plain JSON-serializable dict. The
+[quickstart](getting-started/quickstart.md) walks through both and shows how
+to save the setup in a config file.
+
+## What BREOS does
+
+BREOS is designed for multi-year PV and storage studies where long-term
+dynamics govern feasibility: battery degradation and replacements over the
+project lifetime, optimal tariff selection under time-of-use pricing, and
+performance sensitivity across historical weather years. It ships with example
+presets, field-calibrated LFP degradation and documented
+[external validation](modeling/validation.md), while allowing every layer to
+be replaced with your own data: weather files, load profiles, PV modules,
+degradation coefficients, costs, and tariffs.
+
+- **Lifetime simulation.** PV production through pvlib and battery dispatch
+  at 15-minute or hourly resolution, repeated over every project year with
+  the battery ageing as it goes, from native LFP fits or BLAST-Lite cell
+  models. See [Battery ageing](gallery/battery/plot_07_ageing.rst).
+- **Tariffs and battery control.** Flat and time-of-use prices, a separate
+  tariff for the household without the system, opt-in grid charging, and
+  battery replacements booked in the cash flow. See
+  [Which tariff](gallery/tariffs/plot_09_which_tariff.rst) and
+  [Replacement timing](gallery/battery/plot_08_replacement_timing.rst).
+- **Uncertainty.** Monte Carlo over historical weather years and annual
+  demand, reported as distributions of NPV, payback and battery health. See
+  [Monte Carlo](gallery/uncertainty/plot_13_montecarlo.rst).
+- **Sizing.** Parameter sweeps and multi-objective PV and battery sizing with
+  NSGA-II. See [NSGA-II front](gallery/uncertainty/plot_14_nsga2_front.rst).
+
+The `breos` command line runs single simulations, sweeps and Monte Carlo
+studies from flags or a TOML file. The Python API needs working knowledge of
+Python and pandas.
 
 ## Documentation
 
