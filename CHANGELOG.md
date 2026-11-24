@@ -25,7 +25,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   with a missing global irradiance sample and positive diffuse irradiance, from
   both modelled and measured energy and for every transposition model, instead
   of filling the missing value with zero. Klucher now has a result (west-to-north
-  ratio error `1.29%`); the other models move by at most `0.0013` percentage
+  ratio error `1.29%`); the other models move by at most `0.00134` percentage
   points. The validation page lists the five affected samples (#471).
 
 ## [0.8.0] - 2026-11-16

@@ -97,7 +97,7 @@ replay, checked step by step for Hay-Davies on both arrays.
 
 The earlier replay filled the missing global values with zero, so Klucher, whose
 diffuse model divides by global irradiance, could not run. For every other
-model, the exclusion changes the west-to-north ratio error by at most `0.0013`
+model, the exclusion changes the west-to-north ratio error by at most `0.00134`
 percentage points and each array's energy bias by at most `0.004` percentage
 points. The 2016 irradiance-only comparison has no such samples and is
 unchanged.
