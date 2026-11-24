@@ -631,3 +631,13 @@ def test_period_vehicle_holds_departure_target_when_charge_period_is_absent(tmp_
     assert (before_departure["Vehicle_AC_To_Load"] == 0.0).all()
     assert (before_departure["Grid_AC_To_Vehicle"] == 0.0).all()
     assert (before_departure["Vehicle_Energy"] == 32000.0).all()
+
+
+def test_vehicle_with_an_ac_cable_reports_the_cable_loss():
+    # The cable carries the PV AC the vehicle charger takes too. Adding it to
+    # the cable's delivered power in place failed on a read-only array.
+    cable = {"cross_section_mm2": 6.0, "length_m": 20.0, "phases": 1, "voltage_v": 230.0}
+    result = simulate_offline({**CONFIG, "ac_cable": cable}).result()
+
+    loss = result["pv_loss_waterfall"]["inverter"]["ac_cable"]["loss_kwh"]
+    assert loss > 0.0

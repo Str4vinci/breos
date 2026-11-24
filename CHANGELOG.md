@@ -15,6 +15,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- An App run with both `[vehicle]` and `[ac_cable]` no longer stops after
+  the simulation with "output array is read-only" while it reports the
+  cable's loss (#506).
 - Three configuration checks no longer let a bad value through:
   - A `pv_arrays` entry that sets a model option (`temperature_model`, `gcr`,
     `transposition_model`, `albedo`, `surface_type`, `model_perez`,
