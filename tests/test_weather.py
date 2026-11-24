@@ -1096,6 +1096,16 @@ def test_preload_weather_skips_a_year_whose_duplicate_hides_a_missing_step(tmp_p
     assert "2023 (timestamps do not match" in caplog.text
 
 
+def test_preload_weather_ignores_a_blank_spare_irradiance_column(tmp_path):
+    # A complete `ghi` is read; a blank `shortwave_radiation` beside it is not.
+    labels = pd.date_range("2018-01-01", periods=8760, freq="h", tz="UTC")
+    weather = pd.DataFrame({"ghi": 0.0, "shortwave_radiation": np.nan}, index=labels.rename("date"))
+    path = tmp_path / "historical.csv"
+    save_weather_csv(weather, path)
+
+    assert list(preload_weather_by_year(str(path), target_year=2025)) == [2018]
+
+
 def test_preload_weather_warns_with_the_original_label_of_a_bad_reading(tmp_path, caplog):
     labels = pd.date_range("2018-01-01 01:00", periods=8760, freq="h", tz="UTC+01:00")
     weather = pd.DataFrame({"ghi": 0.0}, index=labels.rename("date"))

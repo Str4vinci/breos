@@ -1572,7 +1572,13 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
         return {}, metadata
     expected_rows = int(round(pd.Timedelta(days=365) / step))
 
-    pv_columns = [column for column in df.columns if irradiance_component(column) is not None]
+    # Only the column each component is read from: a blank spare alias, such
+    # as `shortwave_radiation` beside a complete `ghi`, is never used.
+    pv_columns = [
+        column
+        for component in ("ghi", "dni", "dhi")
+        if (column := find_irradiance_column(df.columns, component)) is not None
+    ]
     for quantity in ("temp_air", "wind_speed"):
         if (column := find_met_column(df.columns, quantity)) is not None:
             pv_columns.append(column)
