@@ -780,6 +780,24 @@ def test_a_utc_profile_in_a_half_hour_zone_keeps_every_reading(tmp_path):
     assert day[17] / day[3] == pytest.approx(5.5)
 
 
+def test_a_reading_off_the_hour_is_split_by_its_overlap(tmp_path):
+    # A reading for 12:07-13:07 covers 53 minutes of the 12:00 row.
+    stamps = pd.date_range("2025-01-01 00:07", "2026-01-01 00:07", freq="h", inclusive="left", tz="UTC")
+    _write_offset_rows(tmp_path / "measured.csv", stamps, np.where(stamps.hour == 12, 1000, 100))
+
+    load = load_profile(
+        "custom",
+        1000,
+        start_date="2025-01-01",
+        timezone="UTC",
+        profile_file=tmp_path / "measured.csv",
+        profile_unit="W",
+    )
+
+    day = load.iloc[:, 0]["2025-06-10"].to_numpy()
+    assert day[12] / day[3] == pytest.approx((53 * 1000 + 7 * 100) / 60 / 100)
+
+
 def test_both_readings_of_the_repeated_autumn_hour_keep_their_mean(tmp_path):
     stamps = pd.date_range("2025-01-01", "2026-01-01", freq="h", inclusive="left", tz="Europe/Berlin")
     autumn = (stamps.date == pd.Timestamp("2025-10-26").date()) & (stamps.hour == 2)

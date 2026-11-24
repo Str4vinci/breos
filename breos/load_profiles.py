@@ -846,11 +846,20 @@ def _instants_to_wall_clock(
     both autumn hours read the mean again once the profile is pinned to the
     zone. A row of the local clock that no reading covers, other than a
     skipped DST time, raises: BREOS does not invent missing readings.
+
+    Two limits remain. A reading that straddles two local rows, such as an
+    hourly reading in a half-hour zone or one stamped at minute 7, is split
+    between them by its overlap: the profile holds no detail finer than its
+    own step. In a 15-minute profile, the first occurrence of the repeated
+    autumn hour holds that hour's mean in each quarter once pinned to the
+    zone, because the shared localisation spreads the energy evenly over the
+    rows it adds; the second occurrence keeps its quarters.
     """
     tz = timezone or "UTC"
     step = pd.Timedelta(pd.tseries.frequencies.to_offset(freq))
-    # Every zone's offset is a whole number of quarter hours.
-    sub = pd.Timedelta(minutes=15)
+    # One-minute pieces weight a reading by its overlap with each local row,
+    # whatever minute it is stamped on.
+    sub = pd.Timedelta(minutes=1)
     parts = max(1, step // sub)
     utc = instants.tz_convert("UTC").tz_localize(None).to_numpy()
     fine = (utc[:, None] + np.arange(parts)[None, :] * sub.to_timedelta64()).ravel()
