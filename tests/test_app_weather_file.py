@@ -238,3 +238,9 @@ def test_a_repeated_hourly_timestamp_is_named():
 
     with pytest.raises(ValueError, match="repeats the timestamp"):
         _check(repeated)
+
+
+def test_weather_without_a_datetime_index_is_returned_unchanged():
+    weather = pd.DataFrame({"ghi": [1.0, 2.0]}, index=pd.Index(["metadata", 1], dtype=object))
+
+    assert _check(weather) is weather

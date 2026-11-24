@@ -385,10 +385,10 @@ def resample_hourly_weather(
             Or if hourly weather for a 15-minute study misses a row: the
             resampler would fill the gap, where an hourly study refuses it.
     """
-    if not weather.index.is_monotonic_increasing:
-        weather = weather.sort_index()
     if not isinstance(weather.index, pd.DatetimeIndex) or len(weather.index) < 2:
         return weather
+    if not weather.index.is_monotonic_increasing:
+        weather = weather.sort_index()
     index = weather.index
     gaps = index.to_series().diff().iloc[1:].reset_index(drop=True)
     # The most common interval is the step, so neither a missing row nor one
