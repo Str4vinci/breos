@@ -489,11 +489,11 @@ def _health_fraction(q: float) -> float:
     """BLAST relative capacity as the pack's health, within [0, 1].
 
     Capacity extrapolations can dip below zero for cells aged far past their
-    data; a dead battery has zero usable capacity. Models with a capacity-gain
-    state (nmc_lto_10ah, lfp_gr_sonymurata_3ah, nmc111_gr_sanyo_2ah,
-    nmc111_gr_kokam_75ah) can rise slightly above their initial capacity while
-    the pack barely cycles; health is capped at nameplate, as the native
-    engine's is. The model's own states keep the gain.
+    data; a dead battery has zero usable capacity. Some models can rise
+    slightly above their initial capacity while the pack barely cycles:
+    nmc_lto_10ah through its capacity-gain state, and nmc622_gr_denso_50ah
+    too. Health is capped at nameplate, as the native engine's is. The
+    model's own states keep the gain.
     """
     return min(1.0, max(0.0, q))
 

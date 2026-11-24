@@ -15,12 +15,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
-- A BLAST battery's health is now capped at 100 %. Models with a
-  capacity-gain state can rise slightly above their initial capacity while
-  the pack barely cycles. `nmc_lto_10ah` did, and a multi-year run then
-  stopped in its second year with "initial_soh must be between 0 and 100",
-  which `breos run` reported like a configuration error. The vendored
-  model's own states keep the gain (#502).
+- A BLAST battery's health is now capped at 100 %. Some models can rise
+  slightly above their initial capacity while the pack barely cycles
+  (`nmc_lto_10ah` and `nmc622_gr_denso_50ah` did). A one-year run then
+  reported health above 100 %, and a multi-year run stopped in its second
+  year with "initial_soh must be between 0 and 100", which `breos run`
+  reported like a configuration error. The vendored model's own states keep
+  the gain (#502).
 - Three configuration checks no longer let a bad value through:
   - A `pv_arrays` entry that sets a model option (`temperature_model`, `gcr`,
     `transposition_model`, `albedo`, `surface_type`, `model_perez`,
