@@ -108,7 +108,7 @@ must cover one calendar year exactly once. Both occurrences of the repeated
 autumn hour hold the mean of its two readings; in a 15-minute profile the
 first occurrence holds that hour's mean in each quarter, and the second keeps
 its quarters. In a zone whose offset changes by half an hour at DST
-(`Australia/Lord_Howe`), every profile, dated or not, is smoothed over the
+(`Australia/Lord_Howe`), every hourly profile, dated or not, is smoothed over the
 half-hour shift for part of the year. An undated E-REDES file is placed by
 position.
 
