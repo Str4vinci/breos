@@ -102,8 +102,15 @@ writes naive civil timestamps. This rule is only for E-REDES files. Other
 dated profiles, including `custom`, can still have offsets. BREOS reads
 their rows as instants and places each one at its clock time in the study's
 timezone, so a measured file that follows DST keeps its summer rows at their
-local hour. The two rows of the repeated autumn hour are averaged. An
-undated E-REDES file is placed by position.
+local hour. A reading that overlaps two local rows, such as an hourly UTC
+reading in a half-hour zone, is split between them by its overlap. The file
+must cover one calendar year exactly once. Both occurrences of the repeated
+autumn hour hold the mean of its two readings; in a 15-minute profile the
+first occurrence holds that hour's mean in each quarter, and the second keeps
+its quarters. In a zone whose offset changes by half an hour at DST
+(`Australia/Lord_Howe`), every profile, dated or not, is smoothed over the
+half-hour shift for part of the year. An undated E-REDES file is placed by
+position.
 
 To make the files from the E-REDES publication
 (`Perfil_Consumo_Injecao_E-REDES_<year>.csv`), use the converter in the

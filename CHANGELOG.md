@@ -24,7 +24,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   local hours its interval overlaps, so a UTC file in a half-hour zone such
   as `Asia/Kolkata` keeps every reading. Both readings of the repeated autumn
   hour keep their mean, and the year's energy is unchanged. A file that does
-  not cover one calendar year exactly once is refused instead of filled.
+  not cover one calendar year exactly once is refused instead of filled. In a
+  15-minute profile, the first occurrence of the repeated autumn hour holds
+  that hour's mean in each quarter.
   Files with naive timestamps,
   undated files and E-REDES files are unchanged. Rerun any study that loaded
   an offset-stamped `custom` or external profile.
