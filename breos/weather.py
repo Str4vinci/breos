@@ -1579,8 +1579,6 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
         for component in ("ghi", "dni", "dhi")
         if (column := find_irradiance_column(df.columns, component)) is not None
     ]
-    # The spare columns are dropped, so resampling does not read them either.
-    df = df.drop(columns=[c for c in df.columns if irradiance_component(c) is not None and c not in pv_columns])
     for quantity in ("temp_air", "wind_speed"):
         if (column := find_met_column(df.columns, quantity)) is not None:
             pv_columns.append(column)

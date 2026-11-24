@@ -1106,7 +1106,7 @@ def test_preload_weather_ignores_a_blank_spare_irradiance_column(tmp_path):
     years = preload_weather_by_year(str(path), target_year=2025)
 
     assert list(years) == [2018]
-    assert "shortwave_radiation" not in years[2018].columns
+    assert "shortwave_radiation" in years[2018].columns
 
 
 def test_preload_weather_warns_with_the_original_label_of_a_bad_reading(tmp_path, caplog):

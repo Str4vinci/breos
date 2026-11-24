@@ -531,6 +531,22 @@ def test_summarize_keeps_payback_entry_when_no_run_pays_back():
     assert "final_soh_pct" not in summary
 
 
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+def test_run_montecarlo_ignores_a_blank_spare_irradiance_column(tmp_path, write_multiyear_weather, resolution):
+    # The year is kept for its `shortwave_radiation`; a blank spare GHI alias
+    # beside it stopped the 15-minute resampler.
+    weather = write_multiyear_weather(tmp_path / "multi.csv", years=(2018, 2019))
+    frame = pd.read_csv(weather)
+    frame["global_horizontal_irradiance"] = np.nan
+    frame.to_csv(weather, index=False)
+    write_instant_at_labels_sidecar(weather)
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=1, target_year=2025)
+
+    result = run_montecarlo({**_base_config(), "resolution": resolution}, settings)
+
+    assert result.available_years == [2018, 2019]
+
+
 @pytest.mark.parametrize(
     ("bounds", "message"),
     [
