@@ -44,6 +44,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   if 0.8.1 logs skipped years for its historical file that 0.8.0 did not,
   and any study that used `preload_weather_by_year` with a leap target
   (#486).
+- Monte Carlo skips historical weather years with missing or non-finite PV
+  weather readings. The warning reports the affected year, column and first
+  bad timestamp as written in the CSV. The study runs with the remaining
+  complete years. Only the column each irradiance component is read from is
+  checked, so a blank spare column such as `shortwave_radiation` beside a
+  complete `ghi` does not drop the year. A right-labelled file is still
+  relabelled as a whole before it is split, so a missing row in one of its
+  years stops the study instead of skipping that year.
 - `App.revalue()` and a repeated `App.simulate()` now use the PV equipment
   the App resolved when it was built. In 0.8.0 they read the module catalogue
   again, so registering a different module under the same name with
