@@ -15,6 +15,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- Weather that steps more than one hour apart (2-hourly, 3-hourly, daily)
+  is now refused by name in App, Monte Carlo and the optimizer. At 15
+  minutes the resampler read such rows as hourly; the run then stopped with a
+  message that the weather did not cover the year, which named the trailing
+  hours rather than the step. Hourly weather that misses a row is now refused
+  at 15 minutes too, as it already was in an hourly run: 0.8.0 let the
+  15-minute resampler fill the missing hour without a message. Rerun any
+  15-minute study whose hourly weather file had a gap.
 - Annual App runs now refuse weather with rows outside the simulated year.
   0.8.0 refused weather that missed rows at either end of the year but
   accepted surplus rows: one extra day in a weather CSV gave 8784 hourly

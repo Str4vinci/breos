@@ -168,3 +168,38 @@ def test_monte_carlo_refuses_the_app_weather_file(inputs, write_multiyear_weathe
 
     with pytest.raises(ValueError, match=r"\[montecarlo\]\.weather_file"):
         run_montecarlo({**BASE, "weather_file": "inputs/site_weather.csv"}, settings)
+
+
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+@pytest.mark.parametrize(("step", "hours"), [("2h", 2), ("3h", 3), ("D", 24)])
+def test_weather_coarser_than_hourly_is_refused(
+    tmp_path, monkeypatch, synthetic_weather, no_fetch, resolution, step, hours
+):
+    # Two-hourly rows were read as hourly at 15 minutes, stretching the year.
+    synthetic_weather.resample(step).mean().to_csv(tmp_path / "coarse.csv")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match=f"steps of {hours} hours"):
+        _run({**BASE, "resolution": resolution, "weather_file": "coarse.csv"})
+
+
+def test_an_hourly_file_missing_its_second_row_is_not_read_as_two_hourly(
+    tmp_path, monkeypatch, synthetic_weather, no_fetch
+):
+    synthetic_weather.drop(synthetic_weather.index[1]).to_csv(tmp_path / "gap.csv")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="must step evenly: row 1 is"):
+        _run({**BASE, "resolution": "15min", "weather_file": "gap.csv"})
+
+
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+def test_an_hourly_file_missing_a_row_is_refused_at_every_resolution(
+    tmp_path, monkeypatch, synthetic_weather, no_fetch, resolution
+):
+    # The 15-minute resampler filled the missing hour without a message.
+    synthetic_weather.drop(synthetic_weather.index[2000]).to_csv(tmp_path / "gap.csv")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="step evenly"):
+        _run({**BASE, "resolution": resolution, "weather_file": "gap.csv"})
