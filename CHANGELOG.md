@@ -15,6 +15,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- Three configuration checks no longer let a bad value through:
+  - A `pv_arrays` entry that sets `transposition_model`, `albedo`,
+    `surface_type`, `model_perez`, `bifacial_model` or a mounting key to null
+    now inherits the top-level value, as a null tilt or azimuth already did.
+    0.8.0 accepted the null and then failed inside `simulate()`.
+  - `battery_indoor_model` with only `ceiling_c` or only `floor_c` is now
+    checked against the default of the other (15 °C floor, 35 °C ceiling).
+    0.8.0 accepted `{ ceiling_c = 10 }` and then held every battery
+    temperature at 15 °C. Rerun any study that set a ceiling below 15 °C or
+    a floor above 35 °C without the other bound.
+  - `smart_charging.mode = "DAILY_PERSISTENCE"`, in any case, is now refused
+    beside several inverters, as the lower-case spelling already was.
 - Annual App runs now refuse weather with rows outside the simulated year.
   0.8.0 refused weather that missed rows at either end of the year but
   accepted surplus rows: one extra day in a weather CSV gave 8784 hourly

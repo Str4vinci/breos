@@ -66,3 +66,15 @@ def test_null_array_geometry_inherits_from_the_system(tracking):
     assert null["pv_arrays"][0]["tracking"] == tracking
     assert null["pv_arrays"][1]["tilt"] == 0
     assert null["pv_arrays"][1]["azimuth"] == 0
+
+
+def test_null_array_model_options_inherit_from_the_system():
+    # A null transposition_model passed validation, then failed in simulate().
+    config = {"tilt": 35, "azimuth": 170, "transposition_model": "perez", "albedo": 0.3}
+    explicit = {"modules": 4, "tilt": 20, "azimuth": 90}
+    omitted = _result(**config, pv_arrays=[{"modules": 4}, explicit])
+    nulls = dict.fromkeys(("transposition_model", "albedo", "surface_type", "model_perez", "bifacial_model"))
+    null = _result(**config, pv_arrays=[{"modules": 4, **nulls}, explicit])
+
+    assert null["pv_arrays"] == omitted["pv_arrays"]
+    assert null["pv_dc_generation_kwh"] == omitted["pv_dc_generation_kwh"]
