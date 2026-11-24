@@ -48,6 +48,7 @@ from breos.optimization_config import (
     resolve_run_settings,
 )
 from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years
+from breos.pv.decomposition import decompose_ghi
 from breos.pv.model_options import (
     DEFAULT_SOLAR_POSITION,
     configured_pv_model_kwargs,
@@ -693,13 +694,25 @@ def _site_location(location: dict[str, Any]) -> Any:
 
 
 def _prepare_study_weather(weather: pd.DataFrame, config: dict[str, Any], loc_obj: Any) -> pd.DataFrame:
-    """Resample hourly weather for a 15-minute study with App's helper and policy.
+    """Fill a GHI-only split and resample hourly weather, with App's helpers and policies.
+
+    With ``simulation.irradiance_decomposition`` set, GHI-only weather gets
+    DNI and DHI from that pvlib model first, at the weather's own resolution
+    and with the configured ``solar_position``, as App does.
 
     The site's altitude is passed through, so a configured ``location.altitude``
     sets the clear-sky model as it sets the PV model; without one it is the
     same pvlib lookup App's resampling makes. Weather already at the study
     resolution is returned unchanged.
     """
+    decomposition = config["simulation"].get("irradiance_decomposition")
+    if decomposition is not None:
+        weather = decompose_ghi(
+            weather,
+            loc_obj,
+            decomposition,
+            solar_position=config.get("solar_position", DEFAULT_SOLAR_POSITION),
+        )
     return resample_hourly_weather(
         weather,
         str(config["simulation"]["resolution"]),

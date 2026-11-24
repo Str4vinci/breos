@@ -31,6 +31,7 @@ from typing import Any, cast
 
 import numpy as np
 import pandas as pd
+from pvlib.location import Location
 
 from breos.app import App
 from breos.app_config import ResolvedAppConfig, resolve_app_config
@@ -75,6 +76,7 @@ from breos.projection import (
     value_projection,
 )
 from breos.pv._solver import SolverDiagnostics
+from breos.pv.decomposition import decompose_ghi
 from breos.pv.model_options import (
     DEFAULT_SOLAR_POSITION,
     resolve_solar_position_method,
@@ -315,6 +317,15 @@ def _load_weather_years(
             columns=[c for c in weather.columns if irradiance_component(c) is not None and c not in used]
         )
         require_hourly_weather_on_local_hours(weather, freq, resolved.timezone)
+        if cfg.get("irradiance_decomposition") is not None:
+            # On the restamped year at its own resolution, as App does: the
+            # resampler and the PV model both need the split.
+            weather = decompose_ghi(
+                weather,
+                Location(resolved.lat, resolved.lon, tz=resolved.timezone),
+                cfg["irradiance_decomposition"],
+                solar_position=cfg.get("solar_position", DEFAULT_SOLAR_POSITION),
+            )
         input_frequency = weather_input_frequency(weather)
         weather = resample_hourly_weather(
             weather,
@@ -445,6 +456,7 @@ def _weather_cache_key(
         "latitude": resolved.lat,
         "longitude": resolved.lon,
         "irradiance_resampling": cfg.get("irradiance_resampling", "auto"),
+        "irradiance_decomposition": cfg.get("irradiance_decomposition"),
         "solar_position": resolve_solar_position_method(cfg.get("solar_position", DEFAULT_SOLAR_POSITION)),
     }
 
@@ -475,11 +487,12 @@ class MonteCarloYearCache:
     restamped and resampled to the study resolution. It is keyed on the
     weather file's absolute path, its SHA-256 and that of its metadata
     sidecar, the year window and target year, the resolution, the
-    coordinates, ``irradiance_resampling`` and the solar-position
-    method, and a study whose weather key differs is refused. The PV layer
-    is each year's DC production and battery temperature. It is keyed on the
-    resolved config without :data:`YEAR_CACHE_INDEPENDENT_KEYS`, such as the
-    battery sizing and dispatch, inverter, cost and demand settings, and on
+    coordinates, ``irradiance_resampling``, ``irradiance_decomposition``
+    and the solar-position method, and a study whose weather key differs is
+    refused. The PV layer is each year's DC production and battery
+    temperature. It is keyed on the resolved config without
+    :data:`YEAR_CACHE_INDEPENDENT_KEYS`, such as the battery sizing and
+    dispatch, inverter, cost and demand settings, and on
     the contents of a ``battery_temperature`` CSV. A study with another PV
     key, such as another module count or battery temperature, builds the PV
     layer again from the cached weather and keeps it in place of the old

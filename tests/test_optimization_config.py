@@ -48,6 +48,7 @@ def test_every_default_is_filled_in_by_name():
         "resolution": "h",
         "years_projection": DEFAULTS["projection_years"],
         "irradiance_resampling": "auto",
+        "irradiance_decomposition": None,
     }
     assert resolved["pv"] == {"module": default_module_key(), "degradation_rate": DEFAULTS["pv_degradation_rate"]}
     assert resolved["inverter_efficiency"] == DEFAULTS["inverter_efficiency"]
@@ -196,7 +197,12 @@ def test_run_settings_come_from_the_argument_or_the_config():
 
 def test_whole_numbers_may_be_written_as_floats():
     resolved = resolve_optimization_config({**MINIMAL, "simulation": {"years_projection": 20.0, "resolution": "H"}})
-    assert resolved["simulation"] == {"years_projection": 20, "resolution": "h", "irradiance_resampling": "auto"}
+    assert resolved["simulation"] == {
+        "years_projection": 20,
+        "resolution": "h",
+        "irradiance_resampling": "auto",
+        "irradiance_decomposition": None,
+    }
     with pytest.raises(ValueError, match="simulation.years_projection' must be a whole number"):
         resolve_optimization_config({**MINIMAL, "simulation": {"years_projection": 20.5}})
 

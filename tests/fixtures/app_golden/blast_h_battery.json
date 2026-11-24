@@ -421,6 +421,7 @@
   "provenance.resolved_config.inverter_efficiency": 0.96,
   "provenance.resolved_config.inverter_loading_ratio": 1.25,
   "provenance.resolved_config.inverters": null,
+  "provenance.resolved_config.irradiance_decomposition": null,
   "provenance.resolved_config.irradiance_resampling": "auto",
   "provenance.resolved_config.load_profile": "demandlib_h0",
   "provenance.resolved_config.load_profile_column": null,

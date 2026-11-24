@@ -33,6 +33,12 @@ because it divides DHI by GHI. Very small nonzero GHI can still amplify this
 ratio; passing the consistency tolerances does not establish suitability for
 Klucher. Choose the transposition model for your prepared measurements.
 
+Weather with GHI alone, such as a pyranometer or inverter-logger series, is
+refused unless `irradiance_decomposition` names a pvlib model that estimates
+DNI and DHI from it; see
+[Weather with GHI only](../how-to/offline-weather.md#weather-with-ghi-only).
+The estimated split passes the checks above by construction.
+
 ## Load profiles
 
 BREOS bundles only the demandlib-derived H0 example profile. It is suitable

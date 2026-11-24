@@ -4,6 +4,25 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- GHI-only weather can be run. `irradiance_decomposition` names a pvlib
+  model (`erbs_driesse`, recommended, `erbs`, `dirint`, `disc`, `dirindex`,
+  `boland`, `orgill_hollands` or `louche`) that estimates DNI and DHI from GHI
+  when the weather has GHI alone; DHI is taken from closure so the split
+  always adds up. It only fills the gap: weather with DNI and DHI is used as
+  supplied, and weather with only one of them is refused. It runs on the
+  restamped weather at its own resolution, with the run's `solar_position`,
+  before 15-minute resampling (any `irradiance_resampling`, including
+  `"quadrature"`) and `horizon_profile`, and the irradiance checks see the
+  full split. `breos run` and `breos montecarlo` take
+  `--irradiance-decomposition`, the optimizer reads
+  `[simulation].irradiance_decomposition`, and
+  `provenance.weather.irradiance_decomposition` records the model.
+  `breos.decompose_ghi` does the same for a DataFrame. Without the key,
+  GHI-only weather now fails with an error that names it. Unset, every
+  result is unchanged.
+
 ### Changed
 
 - `breos run --help` groups the configuration flags by subject (location and

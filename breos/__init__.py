@@ -85,6 +85,7 @@ from breos.optimization import (
     evaluate_projected_design,
     optimize_system_multi_objective,
 )
+from breos.pv.decomposition import decompose_ghi
 from breos.pv_modules import (
     get_module,
     get_module_info,
@@ -126,6 +127,7 @@ __all__ = [
     # Weather
     "load_weather",
     "fetch_tmy_weather_data",
+    "decompose_ghi",
     "fetch_weather_data",
     "fetch_forecast_archive",
     "fetch_satellite_weather",

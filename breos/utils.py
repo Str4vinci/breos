@@ -282,6 +282,24 @@ def find_irradiance_column(columns, component: str) -> str | None:
     return None
 
 
+def ghi_only_hint(columns) -> str:
+    """The sentence a missing-irradiance error appends for weather with GHI alone, else ``""``.
+
+    Weather that holds GHI but neither DNI nor DHI can be run by estimating
+    the split (:func:`breos.pv.decomposition.decompose_ghi`); the hint names
+    the config key that does it.
+    """
+    columns = list(columns)
+    if find_irradiance_column(columns, "ghi") is None:
+        return ""
+    if find_irradiance_column(columns, "dni") is not None or find_irradiance_column(columns, "dhi") is not None:
+        return ""
+    return (
+        ". The weather has GHI only: set 'irradiance_decomposition' ([simulation].irradiance_decomposition "
+        "for the optimizer), or call breos.decompose_ghi, to estimate DNI and DHI from it"
+    )
+
+
 # Air-temperature and wind-speed column names, in order of preference: pvlib
 # (PVGIS TMY), Open-Meteo, then generic spellings. Matched exactly.
 MET_COLUMN_ALIASES = {
