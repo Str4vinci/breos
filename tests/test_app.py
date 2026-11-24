@@ -867,6 +867,31 @@ class TestAppBifacialConfig:
         assert app._resolved.cfg["pv_arrays"][0]["bifacial_model"] == "infinite_sheds"
         assert app._resolved.cfg["pv_arrays"][0]["pvrow_height"] == 1.5
 
+    def _null_array(self, **array):
+        return {
+            "location": "porto",
+            "annual_consumption_kwh": 3000,
+            "bifacial_model": "infinite_sheds",
+            "pvrow_height": 1.5,
+            "pvrow_pitch": 6.0,
+            "pv_arrays": [{"modules": 6, "tilt": 25, "azimuth": 180, **array}],
+        }
+
+    def test_a_null_array_bifacial_model_inherits_the_system_one(self):
+        # Validation read the null as "none" and let a monofacial module through.
+        with pytest.raises(ValueError, match="requires bifaciality metadata"):
+            App(self._null_array(module="Generic_400W", bifacial_model=None))
+
+    def test_a_null_array_row_height_inherits_the_system_one(self):
+        app = App(self._null_array(module="Generic_600W_Bifacial", pvrow_height=None))
+
+        assert "pvrow_height" not in app._resolved.cfg["pv_arrays"][0]
+
+    def test_a_null_array_mounting_needs_no_electrical_topology(self):
+        app = App(self._null_array(module="Generic_600W_Bifacial", mounting=None))
+
+        assert "mounting" not in app._resolved.cfg["pv_arrays"][0]
+
     def test_infinite_sheds_runs_through_app_and_adds_generation(self, _patch_weather):
         common = self._config(projection_years=1, albedo=0.3)
         front_only = App(common)

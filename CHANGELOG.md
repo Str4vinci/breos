@@ -16,10 +16,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Fixed
 
 - Three configuration checks no longer let a bad value through:
-  - A `pv_arrays` entry that sets `transposition_model`, `albedo`,
-    `surface_type`, `model_perez`, `bifacial_model` or a mounting key to null
-    now inherits the top-level value, as a null tilt or azimuth already did.
-    0.8.0 accepted the null and then failed inside `simulate()`.
+  - A `pv_arrays` entry that sets a model option (`temperature_model`, `gcr`,
+    `transposition_model`, `albedo`, `surface_type`, `model_perez`,
+    `bifacial_model`, `pvrow_height`, `pvrow_pitch`) or a mounting key to null
+    now inherits the top-level value, as a null tilt or azimuth already did,
+    and is checked as inherited. 0.8.0 accepted some of these nulls and then
+    failed inside `simulate()`, and refused others.
   - `battery_indoor_model` with only `ceiling_c` or only `floor_c` is now
     checked against the default of the other (15 °C floor, 35 °C ceiling).
     0.8.0 accepted `{ ceiling_c = 10 }` and then held every battery
