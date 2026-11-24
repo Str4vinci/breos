@@ -46,10 +46,11 @@ reported as `Capacity_Window_Loss`; they are not silently discarded or folded
 into standby loss. Resistance calendar aging uses daily mean cell temperature
 and daily mean absolute SOC.
 
-Cell temperature is ambient plus the pack's heat loss times its thermal
-resistance to ambient. By default that resistance is 0.05 K/W for a 5 kWh pack
-and scales inversely with nominal capacity, so packs of any size heat by the
-same amount at the same C-rate. Set `thermal_resistance_k_per_w` on
+Cell temperature is ambient plus the pack's heat loss in watts times its
+thermal resistance to ambient in K/W. By default that resistance is 0.05 K/W
+for a 5 kWh pack and scales inversely with nominal capacity, so packs of any
+size heat by the same amount at the same charge and discharge power per
+nominal kWh and the same charge and discharge efficiencies. Set `thermal_resistance_k_per_w` on
 `BatteryConfig` to use a fixed value instead; App configs have no key for it.
 
 `BatteryConfig` stores the resolved resistance, so resizing a config with
