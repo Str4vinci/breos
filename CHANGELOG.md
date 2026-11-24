@@ -140,8 +140,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   ratio error `1.29%`); the other models move by at most `0.00134` percentage
   points. The validation page lists the five affected samples (#471).
 
-### Documentation
-
 - A new entry path for new users: the README, the docs landing page, the
   installation page and the quickstart are built around a first `breos run`
   and the summary it prints, and the interpreting-results page maps each
