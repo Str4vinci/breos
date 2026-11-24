@@ -16,7 +16,7 @@ from breos.economics import default_amount_cost_keys, find_payback_year_interpol
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
 from tests.conftest import declare_instant_at_labels
-from tests.offline_app import offline
+from tests.offline_app import offline, result_fields
 from tools.generate_app_golden import SCENARIOS
 from tools.parity.app_parity import flatten
 
@@ -284,6 +284,21 @@ def test_revalue_into_another_currency_restates_every_cost():
     assert "other_costs" not in same["provenance"]["resolved_config"]["costs"]
     assert revalued["provenance"]["currency"] == "USD"
     assert revalued["total_investment"] == pytest.approx(K * base.result()["total_investment"], abs=0.005 * (K + 1))
+
+
+def test_revalue_removes_the_costs_table_set_to_none():
+    # The currency check tells users to set a table to None to remove it.
+    config = {**BASE, "projection_years": 2}
+    base = _run(config)
+    weather_patch, load_patch = offline()
+    with weather_patch, load_patch:
+        revalued = base.revalue({"costs": None})
+    fresh = _run({key: value for key, value in config.items() if key != "costs"})
+
+    assert revalued["provenance"]["revaluation"]["changed_keys"] == ["costs"]
+    assert "costs" not in revalued["provenance"]["resolved_config"]
+    assert revalued["total_investment"] != base.result()["total_investment"]
+    assert result_fields(revalued) == result_fields(fresh.result())
 
 
 def test_revalue_into_another_currency_restates_every_tariff_amount():

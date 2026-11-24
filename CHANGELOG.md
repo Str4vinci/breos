@@ -15,6 +15,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- `App.revalue()` now replaces a tariff's `custom_schedule` whole. 0.8.0
+  merged the new schedule into the old one key by key, so a rule or holiday
+  list the new schedule left out was kept and priced the run on the old
+  calendar without a message. `App.revalue({"costs": None})` now removes the
+  `[costs]` table, as the currency-change error tells users to do; 0.8.0
+  raised `'costs' must be a table/dict`. Rerun any revaluation that changed a
+  `custom_schedule`.
 - Annual App runs now refuse weather with rows outside the simulated year.
   0.8.0 refused weather that missed rows at either end of the year but
   accepted surplus rows: one extra day in a weather CSV gave 8784 hourly

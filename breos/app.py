@@ -43,8 +43,16 @@ from breos.weather import build_battery_temperature_series, fetch_tmy_weather_da
 
 # Nested tables App.revalue replaces whole: the entries of a price list
 # belong together, so a change must not keep a period it leaves out.
+# A custom schedule is one published document, so a change must not keep a
+# rule or holiday list the new one leaves out.
 _REPLACED_TABLES = frozenset(
-    {("tariff", "import_prices"), ("tariff", "export_prices"), ("reference_tariff", "import_prices")}
+    {
+        ("tariff", "import_prices"),
+        ("tariff", "export_prices"),
+        ("tariff", "custom_schedule"),
+        ("reference_tariff", "import_prices"),
+        ("reference_tariff", "custom_schedule"),
+    }
 )
 
 
@@ -53,6 +61,11 @@ def _revalued_config(config: dict[str, Any], changes: Mapping[str, Any]) -> dict
     merged = dict(config)
     for key, value in changes.items():
         current = merged.get(key)
+        # None removes a table, as it removes a key inside one; an unset key
+        # has nothing to remove.
+        if value is None and (key not in merged or isinstance(current, Mapping)):
+            merged.pop(key, None)
+            continue
         if not isinstance(value, Mapping):
             merged[key] = deepcopy(value)
             continue
@@ -199,9 +212,11 @@ class App:
 
         ``changes`` holds configuration keys. A nested table such as
         ``costs`` or ``tariff`` changes only the keys it sets, and a key set
-        to ``None`` in it is removed; ``{"tariff": None}`` removes the table.
-        A price list (``tariff.import_prices``, ``tariff.export_prices``,
-        ``reference_tariff.import_prices``) replaces the old one whole. Only
+        to ``None`` in it is removed; ``{"tariff": None}`` or
+        ``{"costs": None}`` removes the table. A price list
+        (``tariff.import_prices``, ``tariff.export_prices``,
+        ``reference_tariff.import_prices``) and a ``custom_schedule`` replace
+        the old one whole. Only
         the economics keys in :data:`REVALUATION_KEYS` may change: ``costs``,
         ``cost_preset``, ``currency``, ``tariff``, ``reference_tariff``, the
         discount rate, the escalators, ``battery_replacement_cost`` and
