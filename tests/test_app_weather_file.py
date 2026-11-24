@@ -3,12 +3,13 @@
 import hashlib
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from breos import cli
 from breos.app import App
-from breos.app_inputs import input_configuration_key
+from breos.app_inputs import input_configuration_key, resample_hourly_weather
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
 # The weather CSVs these tests write carry no metadata sidecar, so the sun
@@ -203,3 +204,37 @@ def test_an_hourly_file_missing_a_row_is_refused_at_every_resolution(
 
     with pytest.raises(ValueError, match="step evenly"):
         _run({**BASE, "resolution": resolution, "weather_file": "gap.csv"})
+
+
+def _hourly(n=48):
+    index = pd.date_range("2023-01-01", periods=n, freq="h", tz="UTC")
+    return pd.DataFrame({"ghi": np.arange(n, dtype=float)}, index=index)
+
+
+def _check(weather, freq="15min"):
+    return resample_hourly_weather(weather, freq, latitude=41.0, longitude=-8.0, resample=lambda w, **_: w.iloc[:0])
+
+
+def test_hourly_weather_out_of_order_is_sorted_before_its_step_is_checked():
+    weather = _hourly()
+    swapped = weather.iloc[[0, 1, 3, 2, *range(4, len(weather))]]
+
+    assert _check(swapped).empty
+
+
+def test_one_stray_row_does_not_hide_a_two_hourly_step():
+    weather = _hourly(96).iloc[::2]
+    stray = _hourly(96).iloc[[10]].set_axis(weather.index[[5]] + pd.Timedelta("30min"))
+    mixed = pd.concat([weather, stray]).sort_index()
+
+    for freq in ("h", "15min"):
+        with pytest.raises(ValueError, match="steps of 2 hours"):
+            _check(mixed, freq)
+
+
+def test_a_repeated_hourly_timestamp_is_named():
+    weather = _hourly()
+    repeated = pd.concat([weather, weather.iloc[[7]]]).sort_index()
+
+    with pytest.raises(ValueError, match="repeats the timestamp"):
+        _check(repeated)

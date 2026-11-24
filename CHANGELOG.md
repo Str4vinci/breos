@@ -22,7 +22,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   hours rather than the step. Hourly weather that misses a row is now refused
   at 15 minutes too, as it already was in an hourly run: 0.8.0 let the
   15-minute resampler fill the missing hour without a message. Rerun any
-  15-minute study whose hourly weather file had a gap.
+  15-minute study whose hourly weather file had a gap. The step is the most
+  common interval between rows, read after sorting them, so neither a missing
+  row nor a stray extra row changes it, and a repeated timestamp is named.
 - Annual App runs now refuse weather with rows outside the simulated year.
   0.8.0 refused weather that missed rows at either end of the year but
   accepted surplus rows: one extra day in a weather CSV gave 8784 hourly
