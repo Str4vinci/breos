@@ -187,8 +187,12 @@ class BatteryConfig:
     ``thermal_resistance_k_per_w`` is the whole pack's resistance to ambient,
     in K per W of heat loss. ``None`` (the default) scales it with the pack:
     0.05 K/W for a 5 kWh pack, and inversely with nominal capacity, so packs
-    of any size heat by the same amount at the same C-rate. A value you set
-    is used as it is, whatever the capacity.
+    of any size heat by the same amount at the same C-rate and charge and
+    discharge efficiency. A value you set is used as it is, whatever the
+    capacity. The resolved value is stored in this field, so a copy made with
+    ``dataclasses.replace(cfg, nominal_energy_wh=...)`` keeps the old pack's
+    resistance; pass ``thermal_resistance_k_per_w=None`` in the same call to
+    scale it to the new size.
     """
 
     nominal_energy_wh: float  # Required — nominal capacity in Wh

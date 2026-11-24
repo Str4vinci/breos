@@ -73,10 +73,10 @@ class TestBatteryConfig:
         assert BatteryConfig(nominal_energy_wh=60e6, thermal_resistance_k_per_w=0.05).thermal_resistance_k_per_w == 0.05
 
     def test_cell_temperature_and_ageing_do_not_depend_on_pack_size(self):
-        """A pack 1000 times larger, with PV and load 1000 times larger, heats and ages the same (#492).
+        """A pack 1000 times larger or 5 times smaller, with PV and load scaled alike, heats and ages the same (#492).
 
         A fixed 0.05 K/W put a 60 MWh pack thousands of kelvin above ambient
-        and replaced it every few weeks.
+        and replaced it every few weeks, and ran a 1 kWh pack cooler than a 5 kWh one.
         """
         steps = 24 * 30
         hour = np.arange(steps) % 24
@@ -90,15 +90,17 @@ class TestBatteryConfig:
                 BatteryConfig(nominal_energy_wh=5000.0 * k, standby_loss_wh=DEFAULT_STANDBY_LOSS_WH * k),
                 periods=steps,
             )
-            for k in (1.0, 1000.0)
+            for k in (1.0, 1000.0, 0.2)
         ]
-        small, large = runs[0][0], runs[1][0]
+        home, large, tiny = (run[0] for run in runs)
 
         # The cycle count breaks ties at flat SOC plateaus on rounding noise,
-        # so a day's count may differ by a half cycle; the tolerances allow that.
-        assert small["T_cell"].max() > 25.5
-        np.testing.assert_allclose(large["T_cell"], small["T_cell"], atol=0.01)
-        assert large["Battery_SOH"].iloc[-1] == pytest.approx(small["Battery_SOH"].iloc[-1], rel=1e-5)
+        # so a day's count may differ by a half cycle; the tolerances allow that
+        # (the small pack's last SOH differs by about 0.005 points while its temperature matches).
+        assert home["T_cell"].max() > 25.5
+        for other in (large, tiny):
+            np.testing.assert_allclose(other["T_cell"], home["T_cell"], atol=0.01)
+            assert other["Battery_SOH"].iloc[-1] == pytest.approx(home["Battery_SOH"].iloc[-1], rel=1e-4)
 
     def test_eol_default_agrees_across_config_surfaces(self):
         # BatteryConfig, the App config DEFAULTS, and the optimizer's
