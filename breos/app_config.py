@@ -3523,12 +3523,19 @@ def resolve_app_revaluation(
     cfg = dict(original.cfg)
     for key in price_keys:
         field = APP_CONFIG_FIELDS[key]
+        if key not in config:
+            # A table the changes removed falls back to its default.
+            if field.has_default:
+                cfg[key] = field.default
+            else:
+                cfg.pop(key, None)
+            continue
         value = config[key]
         cfg[key] = field.normalizer(value) if field.normalizer is not None else value
     _refuse_dc_battery_inverter_keys(cfg)
     for key in price_keys:
         check = APP_CONFIG_FIELDS[key].check
-        if check is not None:
+        if check is not None and key in config:
             check(cfg[key], key)
     tariff, reference_tariff, currency = _validate_pricing(cfg, original.timezone)
     smart_charging, vehicle = _validate_tariff_controls(cfg, tariff)

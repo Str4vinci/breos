@@ -15,6 +15,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- `App.revalue()` now replaces a tariff's `custom_schedule` whole. 0.8.0
+  merged the new schedule into the old one key by key, so a rule or holiday
+  list the new schedule left out was kept and priced the run on the old
+  calendar without a message. `App.revalue({"costs": None})` now removes the
+  `[costs]` table, as the currency-change error tells users to do; 0.8.0
+  raised `'costs' must be a table/dict`. Removed costs no longer count as an
+  amount kept in the old currency. Rerun any revaluation that changed a
+  `custom_schedule`.
 - A load profile CSV whose timestamps carry UTC offsets that change at DST,
   such as a measured `Europe/Berlin` file, now keeps every row at its local
   hour. 0.8.0 placed these rows by position, so from the spring clock change

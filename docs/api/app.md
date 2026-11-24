@@ -29,9 +29,10 @@ the economics keys: `costs`, `cost_preset`, `currency`, `tariff`, `reference_tar
 `projection_years`, raises `ValueError`; build a new `App` for it.
 
 A nested table changes only the keys it sets, and a key set to `None` in it
-is removed; `{"tariff": None}` removes the table. A price list
-(`tariff.import_prices`, `tariff.export_prices`,
-`reference_tariff.import_prices`) replaces the old one whole.
+is removed; `{"tariff": None}` or `{"costs": None}` removes the table. A
+price list (`tariff.import_prices`, `tariff.export_prices`,
+`reference_tariff.import_prices`) and a `custom_schedule` replace the old
+one whole.
 
 ```python
 from breos import App
