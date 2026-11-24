@@ -485,6 +485,19 @@ class NativeDegradationAdapter:
         return {}
 
 
+def _health_fraction(q: float) -> float:
+    """BLAST relative capacity as the pack's health, within [0, 1].
+
+    Capacity extrapolations can dip below zero for cells aged far past their
+    data; a dead battery has zero usable capacity. Models with a capacity-gain
+    state (nmc_lto_10ah, lfp_gr_sonymurata_3ah, nmc111_gr_sanyo_2ah,
+    nmc111_gr_kokam_75ah) can rise slightly above their initial capacity while
+    the pack barely cycles; health is capped at nameplate, as the native
+    engine's is. The model's own states keep the gain.
+    """
+    return min(1.0, max(0.0, q))
+
+
 class BlastDegradationAdapter:
     """Lifecycle adapter around the vendored BLAST engine wrapper."""
 
@@ -505,9 +518,9 @@ class BlastDegradationAdapter:
         self._engine: BlastEngine = (
             BlastEngine.from_snapshot(model_key, engine_snapshot) if engine_snapshot else BlastEngine(model_key)
         )
-        # Floored as each step floors it, so a pack continued at zero health
-        # cannot start a span below zero.
-        self._soh = max(0.0, self._engine.soh())
+        # Bounded as each step bounds it, so a continued pack cannot start a
+        # span below zero or above nameplate.
+        self._soh = _health_fraction(self._engine.soh())
         self._fec = float(initial_fec)
         self._calendar_seconds = float(initial_calendar_seconds)
 
@@ -520,9 +533,7 @@ class BlastDegradationAdapter:
             start_soc=day.start_soc,
             start_temperature_c=day.start_temperature_c,
         )
-        # BLAST capacity extrapolations can dip below zero for cells aged far
-        # past their data; a dead battery has zero usable capacity.
-        self._soh = max(0.0, self._engine.step(t_secs, soc, temperature_c))
+        self._soh = _health_fraction(self._engine.step(t_secs, soc, temperature_c))
         self._fec = float(self._engine.model.stressors["efc"][-1])
         self._calendar_seconds += len(day.soc) * day.step_seconds
         return DegradationStep(
