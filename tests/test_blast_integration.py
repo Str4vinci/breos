@@ -464,3 +464,18 @@ def test_blast_capacity_gain_above_nameplate_carries_into_the_next_year(monkeypa
     assert first_year_soh.max() == 100.0  # capped, not 100.005
     assert len(years) == 3
     assert all(0.0 <= soh <= 100.0 for soh in artifacts.yearly_df["Battery_SOH_%"])
+
+
+def test_blast_continued_above_nameplate_starts_at_nameplate():
+    # A pack carried into the next span with its capacity above nameplate
+    # starts that span at 100 % health. The model's own state keeps the gain.
+    from breos.degradation.protocol import BlastDegradationAdapter
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        state = BlastDegradationAdapter("nmc_lto_10ah").snapshot(day_start_soc=0.5, day_start_temperature_c=25.0)
+        state["blast_engine"]["outputs"]["q"][-1] = 1.002
+        continued = BlastDegradationAdapter("nmc_lto_10ah", initial_state=state)
+
+    assert continued.soh() == 1.0
+    assert continued._engine.soh() == pytest.approx(1.002)
