@@ -318,7 +318,7 @@ def _inverter_model_fields(
                 surplus.to_numpy(dtype=float), first_year_results_df["Inverter_Night_Consumption"].to_numpy(dtype=float)
             )
         if resolved.vehicle is not None:
-            # Not in place: to_numpy can return a read-only view of the frame.
+            # Not in place: the array to_numpy returned can be read-only.
             delivered = delivered + first_year_results_df["PV_AC_To_Vehicle"].to_numpy(dtype=float)
         root = np.sqrt(np.clip(1.0 - 4.0 * k * delivered, 0.0, None))
         gross = 2.0 * delivered / (1.0 + root)

@@ -634,10 +634,15 @@ def test_period_vehicle_holds_departure_target_when_charge_period_is_absent(tmp_
 
 
 def test_vehicle_with_an_ac_cable_reports_the_cable_loss():
-    # The cable carries the PV AC the vehicle charger takes too. Adding it to
-    # the cable's delivered power in place failed on a read-only array.
+    # The cable carries the PV AC the vehicle charger takes too, so its loss
+    # is the one without the vehicle. Adding that AC to the cable's delivered
+    # power in place failed on a read-only array.
     cable = {"cross_section_mm2": 6.0, "length_m": 20.0, "phases": 1, "voltage_v": 230.0}
-    result = simulate_offline({**CONFIG, "ac_cable": cable}).result()
+    without_vehicle = {key: value for key, value in CONFIG.items() if key != "vehicle"}
 
-    loss = result["pv_loss_waterfall"]["inverter"]["ac_cable"]["loss_kwh"]
+    def cable_loss(config):
+        return simulate_offline({**config, "ac_cable": cable}).result()["pv_loss_waterfall"]["inverter"]["ac_cable"]
+
+    loss = cable_loss(CONFIG)["loss_kwh"]
     assert loss > 0.0
+    assert loss == pytest.approx(cable_loss(without_vehicle)["loss_kwh"])
