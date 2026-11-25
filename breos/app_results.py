@@ -86,7 +86,11 @@ def monthly_to_dicts(
         columns += ["PV_Origin_Vehicle_AC_To_Load", "PV_AC_To_Vehicle", "Grid_AC_To_Vehicle", "Vehicle_AC_To_Load"]
     if irradiance is not None:
         columns += ["GHI", "POA_STC_DC"]
-    monthly = df[columns].resample("ME").sum()
+    # Group on the wall clock: resampling a zone-aware index normalises its
+    # first step to local midnight, which does not exist where the clocks
+    # move forward at midnight (Chile, for one).
+    wall_clock = df.index.tz_localize(None) if df.index.tz is not None else df.index
+    monthly = df[columns].set_axis(wall_clock).resample("ME").sum()
     monthly = monthly * hours_per_step / 1000
 
     rows = []

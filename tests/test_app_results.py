@@ -108,3 +108,16 @@ def test_monthly_grid_independence_with_a_vehicle_counts_the_charging_at_home():
 
     expected = round(100.0 * (1.0 - 1000.0 / (1500.0 + 300.0 + 600.0 - 200.0)), 2)
     assert [row["grid_independence_pct"] for row in rows] == [expected] * 12
+
+
+def test_monthly_rows_of_a_window_that_starts_on_a_midnight_dst_change():
+    # Chile moves its clocks forward at local midnight: 3 September 2023 has no
+    # 00:00. A [period] window from that day starts at 01:00, and grouping by
+    # month normalised that to the missing midnight and raised.
+    index = pd.date_range("2023-09-03 01:00", "2023-11-30 23:00", freq="h", tz="America/Santiago")
+    frame = _constant_year("UTC").iloc[: len(index)].drop(columns="Datetime").set_index(index)
+
+    rows = monthly_to_dicts(frame, "h", timezone="America/Santiago")
+
+    assert [row["month"] for row in rows] == ["Sep", "Oct", "Nov"]
+    assert [row["usable_ac_system_production_kwh"] for row in rows] == pytest.approx([671.0, 744.0, 720.0])

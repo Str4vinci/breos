@@ -401,3 +401,29 @@ def test_energy_plots_read_dst_csvs_loaded_with_load_results(battery_run, tmp_pa
 
     call(load_results(path), str(tmp_path))
     _assert_written(tmp_path, expected)
+
+
+@pytest.mark.parametrize(
+    "plot", ["yearly_graphs", "plot_cell_temperature", "plot_monthly_comparison", "plot_monthly_balance"]
+)
+def test_calendar_plots_of_a_window_that_starts_on_a_midnight_dst_change(plot):
+    # 3 September 2023 has no 00:00 in Santiago; grouping a zone-aware index
+    # by month or year normalised the 01:00 start to that missing midnight.
+    from breos import plotting
+
+    index = pd.date_range("2023-09-03 01:00", "2023-11-30 23:00", freq="h", tz="America/Santiago")
+    frame = pd.DataFrame(
+        {
+            "Datetime": index,
+            "PV_Production": 1000.0,
+            "Houseload": 500.0,
+            "Import_From_Grid": 100.0,
+            "PV_AC_Export": 600.0,
+            "T_cell": 25.0,
+        }
+    )
+
+    figure = getattr(plotting, plot)(frame)
+
+    assert figure is not None
+    plt.close(figure)
