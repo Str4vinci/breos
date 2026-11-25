@@ -105,4 +105,4 @@ def test_monthly_rows_of_a_window_that_starts_on_a_midnight_dst_change():
     rows = monthly_to_dicts(frame, "h", timezone="America/Santiago")
 
     assert [row["month"] for row in rows] == ["Sep", "Oct", "Nov"]
-    assert sum(row["usable_ac_system_production_kwh"] for row in rows) == pytest.approx(len(index) * 1.0)
+    assert [row["usable_ac_system_production_kwh"] for row in rows] == pytest.approx([671.0, 744.0, 720.0])
