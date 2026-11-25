@@ -22,7 +22,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   home, less the vehicle's energy returned to the house. This changes
   `grid_independence_pct` (top level, yearly and monthly),
   `Grid_Independence_%` and the Monte Carlo grid independence of vehicle
-  runs only. `breos run` shows it again for vehicle runs (#503).
+  runs only. `breos run` shows it again for vehicle runs. With no demand
+  at all, the `simulate_energy_balance` summary now reports 0 % like the
+  other results, not 100 % (#503).
 - Three configuration checks no longer let a bad value through:
   - A `pv_arrays` entry that sets a model option (`temperature_model`, `gcr`,
     `transposition_model`, `albedo`, `surface_type`, `model_perez`,

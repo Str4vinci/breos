@@ -1776,7 +1776,7 @@ def _build_summary_row(
         "Sell [kWh]": total_sell / 1000.0,
         "Import [kWh]": total_import / 1000.0,
         "Import [%]": percentage_imported,
-        "Grid Independence [%]": 100 - percentage_imported,
+        "Grid Independence [%]": 100 - percentage_imported if demand > 0 else 0.0,
         "Final SOH [%]": final_soh_percent,
         "N_Replacements": n_replacements,
         "Replaced_Capacity_kWh": replaced_capacity_wh / 1000.0,
