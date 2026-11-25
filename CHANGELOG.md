@@ -15,6 +15,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- Grid independence with a `[vehicle]` divided the home's grid import,
+  which includes the vehicle's charging, by the house load alone, so it
+  could go far below zero (−1641 % in one case). It now divides by the
+  demand at the home meter: the house load, plus the vehicle's charging at
+  home, less the vehicle's energy returned to the house. This changes
+  `grid_independence_pct` (top level, yearly and monthly),
+  `Grid_Independence_%` and the Monte Carlo grid independence of vehicle
+  runs only. `breos run` shows it again for vehicle runs. With no demand
+  at all, the `simulate_energy_balance` summary now reports 0 % like the
+  other results, not 100 % (#503).
 - An App run with both `[vehicle]` and `[ac_cable]` no longer stops after
   the simulation with "output array is read-only" while it reports the
   cable's loss (#506).
