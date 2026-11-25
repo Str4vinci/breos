@@ -18,6 +18,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - An App run with both `[vehicle]` and `[ac_cable]` no longer stops after
   the simulation with "output array is read-only" while it reports the
   cable's loss (#506).
+- A BLAST battery's health is now capped at 100 %. Some models can rise
+  slightly above their initial capacity while the pack barely cycles
+  (`nmc_lto_10ah` and `nmc622_gr_denso_50ah` did). A one-year run then
+  reported health above 100 %, and a multi-year run stopped in its second
+  year with "initial_soh must be between 0 and 100", which `breos run`
+  reported like a configuration error. The vendored model's own states keep
+  the gain (#502). Two limits remain. While a model's capacity is above
+  nameplate, BLAST still counts cycles against that capacity, so it counts
+  the same small fraction more cycles than the dispatch made. And
+  `nmc622_gr_denso_50ah` can gain capacity when it is stored at a very low
+  state of charge, where its calendar-ageing fit is extrapolated below the
+  10 % its storage data start at.
 - Three configuration checks no longer let a bad value through:
   - A `pv_arrays` entry that sets a model option (`temperature_model`, `gcr`,
     `transposition_model`, `albedo`, `surface_type`, `model_perez`,
