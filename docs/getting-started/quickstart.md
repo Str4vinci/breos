@@ -1,30 +1,53 @@
 # Quickstart
 
-The fastest way to run a BREOS simulation is the {py:class}`~breos.App`
-facade. It takes a single config dict, runs the full PV + battery +
-economics + emissions pipeline, and returns a plain JSON-serializable
-result dict.
+Run one simulation of a 10-module PV system with a 5 kWh battery for a house
+in Porto, read the summary, then save the setup in a config file. You need
+BREOS [installed](installation.md) and internet access: the run fetches a
+typical weather year for Porto from PVGIS.
 
-The example uses packaged defaults and public weather access. For real
-projects, review [Required Inputs](inputs.md) before interpreting results.
-
-## Verify the installation without network access
-
-Before creating a config file, run a complete configuration dry run:
+## Run your first simulation
 
 ```bash
-breos run --location porto --n-modules 10 \
-  --annual-consumption-kwh 4000 --dry-run
+breos run --location porto \
+  --n-modules 10 \
+  --annual-consumption-kwh 4000 \
+  --battery-kwh 5 \
+  --cost-preset residential-pt \
+  --emissions-country pt
 ```
 
-This validates the installation and prints the resolved location, PV sizing,
-inverter, load, battery, economics, emissions, and loss assumptions. It does
-not fetch weather or start a simulation. If it fails, see
-[Troubleshooting](troubleshooting.md).
+After a few seconds the terminal shows a summary of the run. Below a header
+line with the BREOS version, the location and the weather source, it reads:
 
-## A 10-minute first run
+```text
+System: 5.5 kWp PV (10 modules), 4.4 kW inverter, 5 kWh battery (DC)
 
-Create a small `quickstart.toml` config:
+Year 1 energy
+  PV delivered (AC)             8143 kWh
+  House load                    4000 kWh
+  Self-consumed PV              3153 kWh       38.7 % of delivered PV
+  Grid import                    843 kWh       78.9 % grid independence
+  Grid export                   4991 kWh
+
+Battery over 20 years
+  Health at the end             70.5 %         replaced in year 11
+
+Economics, 20 years, EUR, 3 % discount rate
+  Investment                    7789 EUR
+  Net present value             4717 EUR
+  Discounted payback              13 years
+  LCOE                         0.102 EUR/kWh
+```
+
+Your last digits can differ: PVGIS updates its typical year from time to
+time. [Interpreting results](interpreting-results.md) explains each line.
+Results of BREOS 0.6.2 and earlier are not directly comparable; see
+[Migrating from BREOS 0.6.2](interpreting-results.md#migrating-from-breos-062).
+
+## Save the setup in a config file
+
+Put the same inputs in `quickstart.toml`, with the defaults the command above
+used written out:
 
 ```toml
 location = "porto"
@@ -38,62 +61,37 @@ projection_years = 20
 resolution = "h"
 ```
 
-Then validate it, inspect the resolved defaults, and run the simulation:
+Check the file, then run it and keep the full results:
 
 ```bash
 breos validate-config quickstart.toml
-breos run --config quickstart.toml --dry-run
-breos run --config quickstart.toml --output result.json
+breos run --config quickstart.toml \
+  --output result.json
 ```
 
-`validate-config` checks required keys and prints the resolved choices without
-fetching weather or running a simulation. `--dry-run` writes the same resolved
-configuration summary as JSON, with every config key grouped by section:
-its configured value after defaults, or the value BREOS derives from it
-(tilt, azimuth, module, inverter AC rating). A successful dry run shows the location,
-timezone, module count, PV size, inverter AC rating, load profile, battery
-capacity, cost preset, emissions preset, and resolved static PVWatts loss
-components. The loss block applies any `pv_loss_overrides` and reports the
-combined percentage, so you can verify shading/soiling/wiring assumptions before
-fetching weather.
-
-The final command runs the full simulation and writes a JSON object with
-scalar headline keys plus `yearly`, `monthly`, and `financial` detail blocks.
-It may fetch PVGIS TMY weather data and needs internet access unless a matching
-local weather cache is present.
-
-Source checkouts also include the same example at
+`validate-config` checks the keys and prints the resolved choices without
+fetching weather. `--output` writes every result to `result.json`: the
+headline values, plus `yearly`, `monthly` and `financial` detail. The terminal
+still shows the summary. Source checkouts include this file as
 `configs/examples/quickstart.toml`.
 
-A representative run with BREOS 0.7.0 and a fresh PVGIS TMY for Porto
-(PVGIS-SARAH3 radiation and ERA5 meteorology, 2005–2023) produces these
-top-level values:
+To see every default BREOS fills in (module, tilt, inverter rating, losses),
+add `--dry-run`. It prints the resolved configuration as JSON and does not
+simulate.
 
-```json
-{
-  "n_modules": 10,
-  "pv_kwp": 5.5,
-  "battery_kwh": 5.0,
-  "usable_ac_system_production_kwh": 8152.05,
-  "grid_independence_pct": 79.0,
-  "self_consumption_pct": 38.71,
-  "total_investment": 7788.85,
-  "payback_year": 13,
-  "npv_savings": 4735.24,
-  "battery_soh_end_pct": 70.46,
-  "co2_avoided_total_lifetime_kg": 19932.17
-}
+To print the full results instead of the summary, pipe the command or add
+`--json`:
+
+```bash
+breos run --config quickstart.toml \
+  | jq .npv_savings
+breos run --config quickstart.toml --json
 ```
 
-Exact numbers shift with the PVGIS TMY vintage and dependency versions, but a
-plausible first run lands in the same neighborhood: roughly 8 MWh/yr of
-usable AC production and 75–85% grid independence for this config. Results
-of BREOS 0.6.2 and earlier are not directly comparable; see
-[Migrating from BREOS 0.6.2](interpreting-results.md#migrating-from-breos-062).
-If your values are far off, use the dry-run summary and
-[Required Inputs](inputs.md) to check which defaults your run actually used.
+## Try other inputs
 
-To discover packaged option keys:
+The packaged locations, modules, cost presets, grid-emission countries and
+load profiles are listed by:
 
 ```bash
 breos list locations
@@ -106,7 +104,7 @@ breos list load-profiles
 The same lists, with full details, live on the
 [packaged options](options.md) page.
 
-## A minimal Python example
+## The same run in Python
 
 ```python
 import breos
@@ -123,11 +121,11 @@ app = breos.App({
 app.simulate()
 result = app.result()
 
-print(f"Grid independence: {result['grid_independence_pct']:.1f}%")
-print(f"Usable AC production: {result['usable_ac_system_production_kwh']:,.0f} kWh")
+print(f"Grid independence: {result['grid_independence_pct']:.1f} %")
+print(f"Usable AC production: {result['usable_ac_system_production_kwh']:.0f} kWh")
 print(f"Payback: {result['payback_year']} years")
-print(f"NPV savings: {result['npv_savings']:,.0f} EUR")
-print(f"CO2 avoided: {result['co2_avoided_total_lifetime_kg']:,.0f} kg")
+print(f"NPV savings: {result['npv_savings']:.0f} EUR")
+print(f"CO2 avoided: {result['co2_avoided_total_lifetime_kg'] / 1000:.1f} t")
 ```
 
 What just happened, end-to-end:
@@ -149,39 +147,6 @@ What just happened, end-to-end:
    LCOE / payback computed over the projection horizon.
 7. **Emissions** — CO2 savings computed against the Portuguese grid
    intensity.
-
-## Running from the command line
-
-The same simulation can be run without writing Python:
-
-```bash
-breos run \
-  --location porto \
-  --n-modules 10 \
-  --annual-consumption-kwh 4000 \
-  --battery-kwh 5.0 \
-  --cost-preset residential-pt \
-  --emissions-country pt \
-  --output result.json
-```
-
-Or with a TOML or JSON config file:
-
-```bash
-breos run --config quickstart.toml --output result.json
-```
-
-The CLI writes the same JSON-serializable dict that `App.result()` returns.
-
-In a terminal, `breos run` also prints a short summary: the system, the
-year 1 energy, the battery's health at the end and the lifetime economics.
-Without `--output` the summary is all it prints. When you pipe or redirect
-the command, or add `--json`, it prints the full JSON instead:
-
-```bash
-breos run --config quickstart.toml | jq .npv_savings
-breos run --config quickstart.toml --json
-```
 
 ## Next steps
 

@@ -408,8 +408,8 @@ def _compute_irradiance_and_cell_temp_detail(
         ground_kwargs["surface_type"] = model_options.surface_type
 
     # apparent_zenith (refraction-corrected) everywhere, matching pvlib's
-    # ModelChain; aoi above uses it too. Mixing true and apparent zenith in
-    # one transposition call was an inconsistency fixed in 0.3.4.
+    # ModelChain; aoi above uses it too. True and apparent zenith must not be
+    # mixed in one transposition call.
     if model_options.transposition_model == "klucher":
         bad = (ghi == 0) & (dhi > 0)
         if bad.any():
@@ -1504,7 +1504,14 @@ def _sum_pv_breakdowns(breakdowns: list[PVProductionBreakdown]) -> PVProductionB
     )
 
 
-def _configured_array(index: int, arr: Mapping[str, Any], location: Location, defaults: Mapping[str, Any]) -> _PVArray:
+def _configured_array(
+    index: int,
+    arr: Mapping[str, Any],
+    location: Location,
+    defaults: Mapping[str, Any],
+    *,
+    pv_params: PVModuleParams | None = None,
+) -> _PVArray:
     """The model of one ``arrays`` entry, as :func:`calculate_multi_array_production` reads it.
 
     ``defaults`` is the function-level model-option block without
@@ -1518,7 +1525,8 @@ def _configured_array(index: int, arr: Mapping[str, Any], location: Location, de
     for chosen, other in (("albedo", "surface_type"), ("surface_type", "albedo")):
         if arr.get(chosen) is not None and arr.get(other) is None and other in options:
             options[other] = None
-    pv_params = get_module(arr.get("module", _DEFAULT_MODULE))
+    if pv_params is None:
+        pv_params = get_module(arr.get("module", _DEFAULT_MODULE))
     tracking = arr.get("tracking", "fixed")
     shading = arr.get("shading")
     if tracking == "fixed":

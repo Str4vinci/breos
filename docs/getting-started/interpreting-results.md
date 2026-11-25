@@ -5,6 +5,26 @@ pandas or numpy types. The same dict is written by the CLI's `--output`
 flag. For the step-by-step flows of the first year, use
 [`App.timeseries()`](../api/app.md).
 
+## Reading the run summary
+
+`breos run` prints a summary in the terminal. Each line comes from one key of
+the result; the tables below define them.
+
+| Summary line | Result key | Meaning |
+|---|---|---|
+| PV delivered (AC) | `usable_ac_system_production_kwh` | Year 1 PV output after the inverter that reached the house or the grid, directly or through the battery |
+| House load | `consumption_kwh` | Year 1 household demand |
+| Self-consumed PV | `self_consumption_kwh`, `self_consumption_pct` | PV used in the house, directly or through the battery; the percentage is of the usable AC production (`usable_ac_system_production_kwh`) |
+| Grid import | `grid_import_kwh`, `grid_independence_pct` | Energy bought, including any grid energy that charges the battery; grid independence is `1 − grid import / demand at the home meter`, so grid charging lowers it. Without a vehicle the demand is the house load; with one it also counts the vehicle's charging at home, less what the vehicle returned to the house |
+| Grid export | `grid_export_kwh` | Energy sold |
+| Health at the end | `degradation.final_soh_pct`, `degradation.replacement_events` | Battery state of health after the last year, and the years a battery was replaced |
+| Investment | `total_investment` | Total CAPEX |
+| Net present value | `npv_savings` | Discounted savings against the same household without the system, over the horizon |
+| Discounted payback | `payback_year` | First year from which the cumulative discounted savings stay at zero or above |
+| LCOE | `lcoe_per_kwh` | Lifetime cost of the system per kWh it produces |
+
+Money is in the currency named in the economics line (`provenance.currency`).
+
 ## Top-level keys
 
 | Key | Description |
@@ -22,7 +42,7 @@ flag. For the step-by-step flows of the first year, use
 | `self_consumption_kwh` | Direct PV AC plus PV-origin stationary/vehicle AC delivered to the house |
 | `grid_import_kwh` | Year 1 energy bought from the grid |
 | `grid_export_kwh` | Year 1 energy sold to the grid |
-| `grid_independence_pct` | Year 1 grid independence ratio |
+| `grid_independence_pct` | Year 1 grid independence: `1 − grid import / demand at the home meter` (house load, plus vehicle charging at home, less vehicle energy returned to the house) |
 | `self_consumption_pct` | Year 1 self-consumption ratio |
 | `global_horizontal_kwh_m2` | Year 1 global horizontal irradiation (PVsyst's GlobHor) |
 | `global_incident_kwh_m2` | Year 1 global irradiation in the plane of the arrays, before near shading and incidence-angle losses, weighted by array STC power (PVsyst's GlobInc) |
@@ -197,8 +217,12 @@ Away purchases enter household money and grid emissions but never
 both households' away purchases. PV-origin energy used for driving is
 reported separately; it is not house self-consumption. PV-origin vehicle
 AC delivered to the house does join house self-consumption. Home imports
-include vehicle charging, so grid independence should be read alongside
-the vehicle energy and driving totals.
+include vehicle charging, so grid independence divides them by the demand
+at the home meter: the house load, plus the vehicle's charging at home
+(from PV and from the grid), less the vehicle's energy returned to the
+house, which the house load already holds. Energy charged away from home
+and returned to the house raises it; read it alongside the vehicle energy
+and driving totals.
 
 `provenance.vehicle` is null without a vehicle. With one it records the
 configuration, resolved schedule hash, rounding policy and household modes.

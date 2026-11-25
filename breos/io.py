@@ -68,7 +68,6 @@ def export_results(
     """
     os.makedirs(results_directory, exist_ok=True)
 
-    # Build filename
     parts = [p for p in [prefix, "results", suffix] if p]
     filename = "_".join(parts) + f".{format}"
     filepath = os.path.join(results_directory, filename)
@@ -150,7 +149,6 @@ def load_results(filepath: Union[str, os.PathLike], parse_dates: Union[bool, Lis
     else:
         df = pd.read_csv(filepath, parse_dates=parse_dates)
 
-    # Try to set Datetime as index if present
     if "Datetime" in df.columns:
         raw = df["Datetime"]
         df["Datetime"] = local_datetime_index(raw)

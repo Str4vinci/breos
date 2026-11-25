@@ -48,7 +48,6 @@ from breos.pv.model_options import (
     warn_solar_position_fallback,
 )
 from breos.pv.shading import CIRCUMSOLAR_MODELS, as_shading_table
-from breos.pv_modules import get_module
 from breos.smart_charging import (
     PLANNER_MODES,
     FixedTargetDayController,
@@ -222,10 +221,10 @@ def _bifacial_summary(
 
     rows: list[dict[str, Any]] = []
     models: set[str] = set()
-    for index, array in enumerate(arrays):
+    modules = resolved.pv_array_modules or (resolved.pv_params,)
+    for index, (array, module) in enumerate(zip(arrays, modules, strict=True)):
         model = str(array.get("bifacial_model", default_model)).strip().lower()
         module_key = array["module"]
-        module = get_module(module_key)
         models.add(model)
         row: dict[str, Any] = {
             "array_index": index,
@@ -319,7 +318,8 @@ def _inverter_model_fields(
                 surplus.to_numpy(dtype=float), first_year_results_df["Inverter_Night_Consumption"].to_numpy(dtype=float)
             )
         if resolved.vehicle is not None:
-            delivered += first_year_results_df["PV_AC_To_Vehicle"].to_numpy(dtype=float)
+            # Not in place: the array to_numpy returned can be read-only.
+            delivered = delivered + first_year_results_df["PV_AC_To_Vehicle"].to_numpy(dtype=float)
         root = np.sqrt(np.clip(1.0 - 4.0 * k * delivered, 0.0, None))
         gross = 2.0 * delivered / (1.0 + root)
         loss = pd.Series(gross - delivered, index=first_year_results_df.index)

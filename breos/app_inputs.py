@@ -28,7 +28,7 @@ from breos.pv import _solver
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs, solar_position_warning_scope
 from breos.pv.shading import ModuleMeanShading
-from breos.pv_modules import catalogue_snapshot, get_module
+from breos.pv_modules import get_module
 from breos.solar import (
     PVProductionBreakdown,
     _array_breakdown,
@@ -194,7 +194,8 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
     The simulation calendar runs from the first to the last weather row, so
     weather missing its first or last days would quietly simulate a shorter
     year against a full year of economics. A gap in the middle is already an
-    error in the PV model; this rejects missing leading and trailing rows.
+    error in the PV model. Reject duplicate timestamps and missing or
+    surplus rows at either end.
 
     The year may be read on three clocks: the weather index's own, UTC, and
     the location's ``timezone``. A PVGIS TMY covers one fixed-offset year,
@@ -206,23 +207,27 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
     index = weather.index
     if not isinstance(index, pd.DatetimeIndex) or index.empty:
         raise ValueError(f"Weather from {_weather_source_label(weather)} has no timestamped rows")
+    if not index.is_unique:
+        duplicate = index[index.duplicated()][0]
+        raise ValueError(f"Weather from {_weather_source_label(weather)} has a duplicate timestamp at {duplicate}")
     step = pd.Timedelta(hours=get_hours_per_step(freq))
     first, last = index.min(), index.max()
 
-    shortfalls = []
+    differences = []
     clocks = {str(clock): clock for clock in (index.tz, "UTC", timezone)}
     for clock in clocks.values():
         # Start each civil year at its first real instant, even if midnight is skipped or repeated.
         year_start = pd.Timestamp(f"{year}-01-01").tz_localize(clock, nonexistent="shift_forward", ambiguous=True)
         year_end = pd.Timestamp(f"{year + 1}-01-01").tz_localize(clock, nonexistent="shift_forward", ambiguous=True)
-        leading = max(first - year_start, pd.Timedelta(0))
-        trailing = max(year_end - (last + step), pd.Timedelta(0))
-        if leading < step and trailing < step:
+        leading = first - year_start
+        trailing = year_end - (last + step)
+        difference = max(abs(leading), abs(trailing))
+        if difference < step:
             return
-        shortfalls.append((max(leading, trailing), leading, trailing, year_start, year_end))
+        differences.append((difference, leading, trailing, year_start, year_end))
 
     # Report on the clock the weather comes closest to covering.
-    _, leading, trailing, year_start, year_end = min(shortfalls, key=lambda item: item[0])
+    _, leading, trailing, year_start, year_end = min(differences, key=lambda item: item[0])
     missing = []
     if leading >= step:
         missing.append(
@@ -234,11 +239,25 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
             f"the trailing {trailing} ({int(trailing // step)} steps, "
             f"{last.tz_convert(year_end.tz) + step} to {year_end - step})"
         )
+    surplus = []
+    if leading <= -step:
+        surplus.append(f"{int(-leading // step)} steps before {year_start}")
+    if trailing <= -step:
+        surplus.append(f"{int(-trailing // step)} steps after the last expected step at {year_end - step}")
+    problems = []
+    if surplus:
+        problems.append(f"it has surplus weather ({' and '.join(surplus)})")
+    if missing:
+        problems.append(f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing")
+    advice = (
+        "supply weather for the full year, or fill the missing rows explicitly."
+        if missing
+        else "supply weather for that year only."
+    )
     raise ValueError(
-        f"Weather from {_weather_source_label(weather)} does not cover the simulated year {year}: "
-        f"after restamping onto {year} it runs from {first} to {last}, so {' and '.join(missing)} "
-        f"{'is' if len(missing) == 1 else 'are'} missing. The App simulates the whole calendar year "
-        "of start_date; supply weather for the full year, or fill the missing rows explicitly."
+        f"Weather from {_weather_source_label(weather)} does not {'match' if surplus else 'cover'} the simulated "
+        f"year {year}: after restamping onto {year} it runs from {first} to {last}, so {' and '.join(problems)}. "
+        f"The App simulates the whole calendar year of start_date; {advice}"
     )
 
 
@@ -359,11 +378,44 @@ def resample_hourly_weather(
     App, Monte Carlo and the optimizer call this, with ``resample`` normally
     :func:`breos.weather.resample_to_15min`. Weather that is not hourly, or a
     study that is not at 15 minutes, is returned unchanged.
+
+    Raises:
+        ValueError: If the weather steps more than one hour apart, at any
+            study resolution: the resampler would read such rows as hourly.
+            Or if hourly weather for a 15-minute study misses a row: the
+            resampler would fill the gap, where an hourly study refuses it.
     """
+    if not isinstance(weather.index, pd.DatetimeIndex) or len(weather.index) < 2:
+        return weather
+    if not weather.index.is_monotonic_increasing:
+        weather = weather.sort_index()
+    index = weather.index
+    gaps = index.to_series().diff().iloc[1:].reset_index(drop=True)
+    # The most common interval is the step, so neither a missing row nor one
+    # stray extra row changes it.
+    positive = gaps[gaps > pd.Timedelta(0)]
+    step = pd.Timedelta(cast(pd.Timedelta, positive.value_counts().idxmax())) if len(positive) else None
+    if step is not None and step > pd.Timedelta(hours=1):
+        raise ValueError(
+            f"Weather from {_weather_source_label(weather)} has steps of {step / pd.Timedelta(hours=1):g} "
+            "hours; BREOS reads hourly or 15-minute weather. Supply the source's hourly data instead."
+        )
     if freq != "15min":
         return weather
-    input_frequency = weather_input_frequency(weather)
-    if input_frequency and "h" in input_frequency.lower() and "15" not in input_frequency:
+    if step == pd.Timedelta(hours=1):
+        uneven = np.flatnonzero(gaps.to_numpy() != step.to_timedelta64())
+        if uneven.size:
+            row = int(uneven[0]) + 1
+            if index[row] == index[row - 1]:
+                raise ValueError(
+                    f"Hourly weather from {_weather_source_label(weather)} repeats the timestamp "
+                    f"{index[row]}. Remove the duplicate row before the run."
+                )
+            raise ValueError(
+                f"Hourly weather from {_weather_source_label(weather)} must step evenly: row {row} is "
+                f"{index[row]}, {index[row] - index[row - 1]} after the previous row. Fill or remove the "
+                "gap before the run; BREOS does not invent missing hours."
+            )
         return resample(
             weather,
             latitude=latitude,
@@ -538,7 +590,10 @@ def _build_pv_production_breakdown(
     grid = _prepare_solarpos_and_weather(weather, location, cfg["resolution"], options.pop("solar_position"))
     if resolved.pv_arrays:
         models = [
-            _configured_array(i, arr, location, options) for i, arr in enumerate(arrays_with_module_shading(resolved))
+            _configured_array(i, arr, location, options, pv_params=module)
+            for i, (arr, module) in enumerate(
+                zip(arrays_with_module_shading(resolved), resolved.pv_array_modules, strict=True)
+            )
         ]
     else:
         models = [
@@ -735,7 +790,7 @@ def build_inverter_units(
     assert pv_breakdown.inverter_dc_voltage is not None
     index = pd.DatetimeIndex(pv_breakdown.dc_after_losses.index)
     total = pv_breakdown.dc_after_losses.to_numpy(dtype=float)
-    modules = [get_module(arr["module"]) for arr in resolved.pv_arrays] or [resolved.pv_params]
+    modules = resolved.pv_array_modules or (resolved.pv_params,)
     ambient = None
     conversions, shares, derates, rows = [], {}, {}, {}
     for number, inverter in enumerate(electrical.inverters):
@@ -933,7 +988,9 @@ def reuse_prepared_inputs() -> Iterator[None]:
         _PREPARED_INPUTS_CACHE.reset(token)
 
 
-def config_cache_key(cfg: dict[str, Any], independent_keys: frozenset[str]) -> str | None:
+def config_cache_key(
+    cfg: dict[str, Any], independent_keys: frozenset[str], *, module_catalogue: str | None = None
+) -> str | None:
     """A resolved config without ``independent_keys``, as canonical JSON, with the parameters of its modules.
 
     A module is named by its catalogue key, and a registered module's
@@ -943,7 +1000,8 @@ def config_cache_key(cfg: dict[str, Any], independent_keys: frozenset[str]) -> s
     """
     relevant = {key: value for key, value in cfg.items() if key not in independent_keys}
     try:
-        return json.dumps([relevant, _module_parameters(cfg)], sort_keys=True)
+        modules = _module_parameters(cfg) if module_catalogue is None else module_catalogue
+        return json.dumps([relevant, modules], sort_keys=True)
     except (TypeError, ValueError):
         return None
 
@@ -966,17 +1024,11 @@ def _module_parameters(cfg: dict[str, Any]) -> list[Any]:
 def _input_cache_key(cfg: dict[str, Any], resolved: ResolvedAppConfig | None = None) -> str | None:
     """The resolved config without the input-independent keys, as canonical JSON, or None.
 
-    ``resolved`` carries what an App took from the module catalogue when it
-    was built, which preparation uses even if the catalogue changed since:
-    each array's module, the bypass diodes its shading is bound to, and the
-    inverter curve's row for steps without PV. The catalogue as it was then
-    stands for all of them, and the catalogue now for the modules
-    preparation reads again by those names.
+    Preparation uses the catalogue captured when the App was resolved.
     """
-    key = config_cache_key(cfg, INPUT_INDEPENDENT_KEYS)
-    if key is None or resolved is None:
-        return key
-    return json.dumps([key, resolved.module_catalogue, catalogue_snapshot()], sort_keys=True)
+    return config_cache_key(
+        cfg, INPUT_INDEPENDENT_KEYS, module_catalogue=resolved.module_catalogue if resolved is not None else None
+    )
 
 
 def input_configuration_key(config: dict[str, Any]) -> str | None:

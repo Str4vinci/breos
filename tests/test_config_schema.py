@@ -96,7 +96,18 @@ def test_where_renames_a_table_inside_a_list():
     ("config", "error", "message"),
     [
         ({"costs": {"storage_cost_per_kwh": -1}}, ValueError, r"'costs\.storage_cost_per_kwh' must be >= 0"),
-        ({"battery_indoor_model": {"floor_c": 30, "ceiling_c": 10}}, ValueError, r"floor_c' must not exceed"),
+        ({"battery_indoor_model": {"floor_c": 30, "ceiling_c": 10}}, ValueError, r"floor_c' \(30\) must not exceed"),
+        # A bound left out takes its default: 15 °C floor, 35 °C ceiling.
+        (
+            {"battery_indoor_model": {"ceiling_c": 10}},
+            ValueError,
+            r"the default floor_c \(15\) must not exceed 'battery_indoor_model\.ceiling_c' \(10\)",
+        ),
+        (
+            {"battery_indoor_model": {"floor_c": 40}},
+            ValueError,
+            r"'battery_indoor_model\.floor_c' \(40\) must not exceed the default ceiling_c \(35\)",
+        ),
         (
             {"battery_indoor_model": {"enabled": "yes"}},
             TypeError,

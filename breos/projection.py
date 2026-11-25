@@ -311,6 +311,9 @@ def build_year_row(
     pv_origin_battery_ac_kwh = kwh("PV_Origin_Battery_AC_To_Load")
     total_load = (sums_w["Houseload"] / 1000) * hours_per_step
     total_import = (sums_w["Import_From_Grid"] / 1000) * hours_per_step
+    site_demand = total_load
+    if "PV_AC_To_Vehicle" in sums_w:
+        site_demand += kwh("PV_AC_To_Vehicle") + kwh("Grid_AC_To_Vehicle") - kwh("Vehicle_AC_To_Load")
     total_export = (sums_w["PV_AC_Export"] / 1000) * hours_per_step
     row: dict[str, Any] = {
         "Year": year_idx + 1,
@@ -328,7 +331,7 @@ def build_year_row(
         "Load_kWh": total_load,
         "Import_kWh": total_import,
         "Export_kWh": total_export,
-        "Grid_Independence_%": (1 - total_import / total_load) * 100 if total_load > 0 else 0,
+        "Grid_Independence_%": (1 - total_import / site_demand) * 100 if site_demand > 0 else 0,
         "Battery_SOH_%": carry.soh_pct if has_battery else None,
         "Battery_Cumulative_FEC": carry.fec,
         "Battery_Cumulative_Calendar_Seconds": carry.calendar_seconds,
@@ -398,6 +401,23 @@ _PRICED_FLOWS: dict[str, tuple[str, str]] = {
 }
 # The frame columns those flows are summed from, once each.
 _PRICED_FLOW_COLUMNS = tuple(dict.fromkeys(column for column, _kind in _PRICED_FLOWS.values()))
+
+
+def site_demand_kwh(yearly: pd.DataFrame) -> pd.Series:
+    """Each year's demand on the home meter, the base of ``Grid_Independence_%``.
+
+    The house load, plus a vehicle's charging at home, less what the vehicle
+    returned to the house: that energy is already in the house load.
+    """
+    demand = yearly["Load_kWh"].astype(float)
+    if "PV_AC_To_Vehicle_kWh" in yearly.columns:
+        demand = (
+            demand
+            + yearly["PV_AC_To_Vehicle_kWh"]
+            + yearly["Grid_AC_To_Vehicle_kWh"]
+            - yearly["Vehicle_AC_To_Load_kWh"]
+        )
+    return demand
 
 
 def _step_total(sum_w: float, hours_per_step: float) -> float:
@@ -1151,7 +1171,9 @@ def project_years(
     and a ``ProjectionYear.vehicle_schedule`` on each year's calendar.
     On-board energy, origins and the last plug state carry independently of
     a stationary battery on both frame and aligned-summary paths.
-    App runs these projections independently for R0, R1 and R2.
+    App runs these projections independently for the no-system household
+    (R0), the reference household (R1) and the studied household (R2) of
+    ADR 0005 V8.
     ``year_inputs(year_idx)`` supplies each year, and ``battery_config(soh)``
     builds the battery at the carried SOH. The rainflow residue is counted
     once, at the end of the last year. ``observe_jit_per_year`` records the
@@ -1546,8 +1568,9 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         terminal = terminal_health_credit(
             final_soh_fraction=run.carry.soh_pct / 100 if config_has_battery(cfg) else None,
             threshold=cfg["battery_eol_percentage"],
-            # The pack alone, whatever battery_replacement_cost prices a
-            # replacement at (ADR 0004 C9 amends ADR 0003 E10).
+            # The terminal credit values the pack alone at battery_cost_per_kwh,
+            # whatever battery_replacement_cost prices a replacement at; no
+            # inverter is credited (ADR 0004 C9 amends ADR 0003 E10).
             replacement_cost_each=replacement_event_cost(cfg["battery_kwh"], resolved.cost_params.battery_cost_per_kwh),
             inflation_rate=cfg["inflation_rate"],
             replacement_cost_learning=cfg.get("replacement_cost_learning", 0.0),

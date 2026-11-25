@@ -5,11 +5,11 @@ may charge it. It does not simulate the battery: the canonical dispatch step
 applies its :class:`~breos.dispatch_instructions.DispatchInstructions` under
 every physical limit.
 
-``fixed_target`` is the supported first strategy. On a step whose tariff
-period is a charge period the grid may charge the battery toward
-``target_usable_fraction`` of that step's usable window (A7). On a step whose
-period is a discharge period the battery may discharge. A step in neither
-set does neither; PV may charge the battery on every step.
+``fixed_target`` is the supported first strategy. On a step whose tariff period
+is a charge period the grid may charge the battery toward
+``target_usable_fraction`` of that step's usable window (ADR 0002 A7). On a
+step whose period is a discharge period the battery may discharge. A step in
+neither set does neither; PV may charge the battery on every step.
 With ``overlap_policy = "hold_target"`` a period in both sets keeps the grid
 target as its discharge floor: above it discharge is allowed, below it grid
 charging is allowed. The default ``reject`` requires disjoint periods.
@@ -29,10 +29,10 @@ the fixed-target layout but chooses each day's target at runtime: a private
 controller (``breos._daily_persistence``) re-plans every civil day from a
 forecast that repeats the last complete observed day. It has no static
 instructions, so :func:`resolve_instructions` refuses it. It also takes
-``hold_target`` (A18): on a period in both sets the floor is each day's
-planned target. With ``decision_boundary = "charge_window_start"`` (A19) it
-decides one target at the start of each charge window instead of each civil
-day, held until the next window starts.
+``hold_target`` (ADR 0002 A18): on a period in both sets the floor is each
+day's planned target. With ``decision_boundary = "charge_window_start"`` (ADR
+0002 A19) it decides one target at the start of each charge window instead of
+each civil day, held until the next window starts.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ from breos.tariffs import ResolvedTariff
 
 SMART_CHARGING_MODES = ("disabled", "fixed_target", "daily_persistence", "discharge_only")
 OVERLAP_POLICIES = ("reject", "hold_target")
-# The modes with a grid-charge target that ``hold_target`` can hold (A14, A18).
+# The modes with a grid-charge target that ``hold_target`` can hold (ADR 0002 A14, A18).
 HOLD_TARGET_MODES = ("fixed_target", "daily_persistence")
 # The modes that plan targets at runtime; they take the planner settings.
 PLANNER_MODES = ("daily_persistence",)
@@ -262,7 +262,7 @@ class SmartChargingSpec:
         check_period_overlap(self.charge_periods, self.discharge_periods, self.overlap_policy)
 
     def _check_forecast(self) -> None:
-        """Fill and check the forecast settings of a planner spec (A20); check_mode_settings pairs them."""
+        """Fill and check the forecast settings of a planner spec (ADR 0002 A20); check_mode_settings pairs them."""
         forecast = "persistence" if self.forecast is None else self.forecast
         if forecast not in FORECASTS:
             raise ValueError(f"'smart_charging.{FORECAST_KEY}' must be one of: {', '.join(FORECASTS)}")
@@ -342,7 +342,7 @@ def period_layout(spec: SmartChargingSpec, period_labels: Any, target_usable_fra
     reserve is zero except on overlapping steps under ``hold_target``, where
     it equals the target. ``daily_persistence`` plans on this layout, and
     :func:`breos._daily_targets.daily_target_instructions` moves the target
-    and that reserve together to each day's target (A18).
+    and that reserve together to each day's target (ADR 0002 A18).
     """
     # None for an AC-coupled battery, whose own inverter converts grid charge.
     assert spec.grid_charge_efficiency is not None or spec.battery_coupling == "ac"

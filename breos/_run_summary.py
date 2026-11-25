@@ -121,12 +121,9 @@ def _energy_block(result: dict[str, Any]) -> list[str]:
         lines.append(_row("Vehicle charging at home", _number(charge), "kWh", f"{_number(pv_charge)} kWh from PV"))
     self_note = _percent_note(result, "self_consumption_pct", self_words)
     lines += _metric_row(result, self_label, "self_consumption_kwh", "kWh", note=self_note)
-    # Grid independence compares the import with the house load alone, so it
-    # says nothing useful once the import also charges a vehicle.
-    if vehicle_year is None:
-        import_note = _percent_note(result, "grid_independence_pct", "grid independence")
-    else:
-        import_note = "house and vehicle"
+    import_note = _percent_note(result, "grid_independence_pct", "grid independence")
+    if vehicle_year is not None:
+        import_note = f"house and vehicle, {import_note}" if import_note else "house and vehicle"
     lines += _metric_row(result, "Grid import", "grid_import_kwh", "kWh", note=import_note)
     lines += _metric_row(result, "Grid export", "grid_export_kwh", "kWh")
     period = result.get("period") or {}
@@ -138,7 +135,7 @@ def _energy_block(result: dict[str, Any]) -> list[str]:
 
 
 def _vehicle_study_year1(result: dict[str, Any]) -> dict[str, Any] | None:
-    """Year 1 of the studied household (R2) in a vehicle run, else None."""
+    """Year 1 of the studied household (R2, ADR 0005 V8) in a vehicle run, else None."""
     households = (result.get("vehicle") or {}).get("households") or {}
     yearly = (households.get("R2") or {}).get("yearly") or []
     return yearly[0] if yearly else None

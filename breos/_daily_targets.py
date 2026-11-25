@@ -28,10 +28,10 @@ the efficiencies fixed over its whole window, as the legacy tool held them
 over a project year.
 
 Days are civil days (ADR 0002 A1), given as the resolved tariff's
-``day_starts``, or charge windows (A19): a "day" then runs from the start of
-one charge window to the start of the next (:func:`charge_window_day_starts`).
-The planner only needs a partition of the steps. The legacy tool used
-positional ``steps_per_day`` windows.
+``day_starts``, or charge windows (ADR 0002 A19): a "day" then runs from the
+start of one charge window to the start of the next
+(:func:`charge_window_day_starts`).
+The planner only needs a partition of the steps.
 Production still advances health on positional degradation windows, so a
 closed-loop controller that plans civil days will run a degradation window
 in two ``_dispatch_day`` calls when a civil day starts inside it. Carrying

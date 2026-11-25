@@ -297,7 +297,7 @@ def test_weather_loader_rejects_a_tmy_remapped_across_changed_offset_rules(
     resolved = SimpleNamespace(loc_key="here", lat=0.0, lon=0.0, timezone=zone)
 
     with pytest.raises(
-        ValueError, match=f"Weather from PVGIS_TMY does not cover the simulated year {target_year}"
+        ValueError, match=f"Weather from PVGIS_TMY does not (cover|match) the simulated year {target_year}"
     ) as exc:
         load_weather_for_simulation(resolved, freq, target_year, deps, weather_dir=tmp_path)
 

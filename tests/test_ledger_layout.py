@@ -1,5 +1,7 @@
 """The per-step ledger is laid out once: one name per column, one row per name."""
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -64,3 +66,18 @@ def test_summary_reports_the_ledger_schema_version():
         pv_dc=pv, houseload=load, battery_config=BatteryConfig(nominal_energy_wh=5000.0), freq="h"
     )
     assert summary.ledger_schema_version == LEDGER_SCHEMA_VERSION == "3.1"
+
+
+# The per-step frame columns each ledger schema version publishes, as a count
+# and a SHA-256 of the names joined by newlines, in order.
+_PUBLISHED_FRAME_COLUMNS = {
+    "3.1": (93, "42426cd86972b8116e4ff1e7a72c4071a24d85f2c3855bfb4c2e004016d78981"),
+}
+
+
+def test_a_change_to_the_frame_columns_bumps_the_ledger_schema_version():
+    digest = hashlib.sha256("\n".join(_FRAME_COLUMNS).encode()).hexdigest()
+    assert _PUBLISHED_FRAME_COLUMNS.get(LEDGER_SCHEMA_VERSION) == (len(_FRAME_COLUMNS), digest), (
+        "the per-step ledger columns changed: bump LEDGER_SCHEMA_VERSION in breos/_dispatch.py "
+        "and record the new columns here under the new version"
+    )

@@ -28,7 +28,7 @@ and the ``.png`` extension, for example ``"breakeven_cumulative"``.
 import math
 import os
 import warnings
-from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, List, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
 import numpy as np
 import pandas as pd
@@ -133,6 +133,22 @@ def _result_instants(results_df: pd.DataFrame) -> pd.DatetimeIndex:
         return pd.DatetimeIndex(pd.to_datetime(values))
     except ValueError:
         return pd.DatetimeIndex(pd.to_datetime(values, utc=True))
+
+
+_Frame = TypeVar("_Frame", pd.DataFrame, pd.Series)
+
+
+def _on_wall_clock(frame: _Frame) -> _Frame:
+    """``frame`` with its index on the wall clock, for calendar grouping.
+
+    Resampling a zone-aware index normalises its first step to local
+    midnight, which does not exist where the clocks move forward at
+    midnight (Chile, for one).
+    """
+    index = frame.index
+    if isinstance(index, pd.DatetimeIndex) and index.tz is not None:
+        return frame.set_axis(index.tz_localize(None))
+    return frame
 
 
 def _local_time_indexed(results_df: pd.DataFrame) -> pd.DataFrame:
@@ -768,7 +784,7 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: Optional[str] = N
 
     columns = [c for c in _ENERGY_LABELS if c in df.columns]
 
-    yearly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("YE").sum()
+    yearly = _on_wall_clock(_power_frame_to_energy_kwh(df[columns], _result_instants(results_df))).resample("YE").sum()
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -805,7 +821,6 @@ def weekly_graphs(
     """
     df = _local_time_indexed(results_df)
 
-    # Filter to specific week
     df["Week"] = df.index.isocalendar().week
     week_data = df[df["Week"] == week_number]
 
@@ -891,12 +906,10 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: Optional[
 
     x = _degradation_x(degradation_df)
 
-    # 1. SOH over time
     figures["battery_degradation_soh"] = _line_figure(
         x, degradation_df["SOH"], "b-", "SOH (%)", results_directory, "battery_degradation_soh.png"
     )
 
-    # 2. Degradation components for the active battery inventory.
     def _plot_degradation_components(cycle_data, calendar_data, filename, ylabel):
         if cycle_data is None and calendar_data is None:
             return
@@ -924,7 +937,6 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: Optional[
             cum_cyc, cum_cal, "battery_degradation_components_per_battery.png", "Per-Battery Cumulative Degradation (%)"
         )
 
-    # 3. FEC
     if "Cumulative_FEC" in degradation_df.columns:
         figures["battery_degradation_fec"] = _line_figure(
             x,
@@ -935,7 +947,6 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: Optional[
             "battery_degradation_fec.png",
         )
 
-    # 4. Resistance growth and RTE (if available)
     if "Resistance_Growth" in degradation_df.columns:
         figures.update(plot_resistance_and_efficiency(degradation_df, results_directory))
     return figures
@@ -963,7 +974,6 @@ def plot_resistance_and_efficiency(
 
     x = _degradation_x(degradation_df)
 
-    # Resistance growth plot
     figures["battery_resistance_growth"] = _line_figure(
         x,
         degradation_df["Resistance_Growth"] * 100,
@@ -973,7 +983,6 @@ def plot_resistance_and_efficiency(
         "battery_resistance_growth.png",
     )
 
-    # Effective RTE plot
     if "Effective_RTE" in degradation_df.columns:
         figures["battery_effective_rte"] = _line_figure(
             x,
@@ -1010,10 +1019,10 @@ def plot_cell_temperature(
 
     df = _local_time_indexed(results_df)
 
-    # Monthly aggregation
-    monthly_mean = df["T_cell"].resample("ME").mean()
-    monthly_min = df["T_cell"].resample("ME").min()
-    monthly_max = df["T_cell"].resample("ME").max()
+    t_cell = _on_wall_clock(df["T_cell"])
+    monthly_mean = t_cell.resample("ME").mean()
+    monthly_min = t_cell.resample("ME").min()
+    monthly_max = t_cell.resample("ME").max()
 
     # Group by month number (handles multi-year data)
     mean_by_month = monthly_mean.groupby(monthly_mean.index.month).mean()
@@ -1103,7 +1112,6 @@ def plot_breakeven(
 
     years = cost_projection["Year"]
 
-    # Try NPV columns first, fall back to nominal
     if "Cost_No_Sys_Cumulative_NPV" in cost_projection.columns:
         no_sys = cost_projection["Cost_No_Sys_Cumulative_NPV"]
         with_sys = cost_projection["Cost_System_Cumulative_NPV"]
@@ -1126,15 +1134,12 @@ def plot_breakeven(
         be_months = int((be_year_interpolated - be_years) * 12)
         be_text = f"{be_years} years {be_months} months"
 
-    # =========================================================================
-    # GRAPH 1: Cumulative costs comparison
-    # =========================================================================
+    # First panel: cumulative costs
     fig1, ax1 = plt.subplots(figsize=(12, 6))
 
     ax1.plot(years, no_sys, "r-", linewidth=2.5, marker="o", markersize=4, label=f"No System{label_suffix}")
     ax1.plot(years, with_sys, "g-", linewidth=2.5, marker="s", markersize=4, label=f"PV System{label_suffix}")
 
-    # Mark break-even point
     if be_year_interpolated is not None:
         # Interpolate the cost at break-even, from the year-0 investment when
         # the break-even falls inside the first year.
@@ -1162,9 +1167,7 @@ def plot_breakeven(
     fig1.tight_layout()
     _finish(fig1, results_directory, f"breakeven_cumulative{suffix}.png")
 
-    # =========================================================================
-    # GRAPH 2: Annual savings
-    # =========================================================================
+    # Second panel: annual savings
     fig2, ax2 = plt.subplots(figsize=(12, 6))
 
     annual_savings = no_sys.diff().fillna(no_sys.iloc[0]) - with_sys.diff().fillna(with_sys.iloc[0])
@@ -1246,11 +1249,9 @@ def plot_battery_soh_timeseries(
 
     ax.plot(df.index, df["Battery_SOH"], "b-", linewidth=1.5, label="SOH")
 
-    # Add reference lines
     ax.axhline(y=100, color="green", linestyle="--", alpha=0.5, label="Initial (100%)")
     ax.axhline(y=eol_pct, color="red", linestyle="--", alpha=0.5, label=f"End of Life ({eol_pct:g}%)")
 
-    # Fill degradation region
     ax.fill_between(df.index, df["Battery_SOH"], 100, alpha=0.2, color="red")
 
     ax.set_xlabel("Date", fontsize=12)
@@ -1285,10 +1286,9 @@ def plot_monthly_comparison(
 
     df = _local_time_indexed(results_df)
 
-    # Monthly aggregation
     columns = [c for c in _ENERGY_LABELS if c in df.columns]
 
-    monthly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("ME").sum()
+    monthly = _on_wall_clock(_power_frame_to_energy_kwh(df[columns], _result_instants(results_df))).resample("ME").sum()
     monthly["Month"] = monthly.index.strftime("%b")
 
     fig, ax = plt.subplots(figsize=(14, 7))
@@ -1321,7 +1321,6 @@ def plot_monthly_comparison(
     ax.legend(loc="upper right", fontsize=10)
     ax.grid(True, alpha=0.3, axis="y")
 
-    # Add value labels on top of bars
     for i, col in enumerate(columns):
         for j, val in enumerate(monthly[col]):
             if val > 0:
@@ -1360,12 +1359,15 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: Optional[s
         raise ValueError(f"Missing energy-balance column(s): {', '.join(missing)}")
 
     # Convert power to interval energy before monthly aggregation.
-    monthly = _power_frame_to_energy_kwh(df[energy_columns], _result_instants(results_df)).resample("ME").sum()
+    monthly = (
+        _on_wall_clock(_power_frame_to_energy_kwh(df[energy_columns], _result_instants(results_df)))
+        .resample("ME")
+        .sum()
+    )
 
     # Group by month (1-12) to aggregate multi-year data
     monthly_avg = monthly.groupby(monthly.index.month).mean()
 
-    # Ensure all 12 months present
     monthly_avg = monthly_avg.reindex(np.arange(1, 13), fill_value=0.0)
 
     months = np.arange(1, 13)
@@ -1373,7 +1375,6 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: Optional[s
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Plot bars
     width = 0.35
 
     # Positives
@@ -1406,7 +1407,6 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: Optional[s
     ax.grid(True, alpha=0.3, axis="y")
     ax.legend(loc="upper right", ncol=2)
 
-    # Reduce margins
     fig.tight_layout()
     return _finish(fig, results_directory, "monthly_balance.png")
 
@@ -1606,7 +1606,6 @@ def plot_breakeven_distribution(
 
     fig, ax = plt.subplots(figsize=(12, 8))
 
-    # Create histogram with 0.1 year bins
     bin_width = 0.1
     min_be = float(paid_back.min())
     max_be = float(paid_back.max())
@@ -1614,7 +1613,6 @@ def plot_breakeven_distribution(
 
     n, bins, patches = ax.hist(paid_back, bins=bins, color="skyblue", edgecolor="black", alpha=0.7, linewidth=1)
 
-    # Stats box
     achieved = len(paid_back)
     mean_val = np.mean(paid_back)
     median_val = np.median(paid_back)
@@ -1643,7 +1641,6 @@ def plot_breakeven_distribution(
     ax.set_ylabel("Number of Runs", fontsize=12)
     ax.grid(True, alpha=0.3, axis="y")
 
-    # Add value labels
     for i in range(len(n)):
         if n[i] > 0:
             ax.text((bins[i] + bins[i + 1]) / 2, n[i] + 0.1, int(n[i]), ha="center", va="bottom", fontsize=8)
@@ -1852,10 +1849,6 @@ def plot_montecarlo_final_soh_distribution(
     )
 
 
-# =========================================================================
-# TMY VS HISTORICAL WEATHER
-# =========================================================================
-
 # Name and unit of each weather variable the comparison plots draw. Irradiance
 # is summed to an energy total, temperature averaged.
 _WEATHER_VARIABLES = {
@@ -2030,10 +2023,8 @@ def plot_weather_monthly_comparison(
         label="Monthly maximum",
     )
 
-    # 95% CI shaded band
     ax.fill_between(x, hist_ci_low, hist_ci_high, color="steelblue", alpha=0.25, label="95% CI of the mean")
 
-    # Historical mean line
     ax.plot(
         x,
         hist_mean,
@@ -2045,7 +2036,6 @@ def plot_weather_monthly_comparison(
         label=f"Historical mean ({len(historical_years)} years)",
     )
 
-    # TMY line (on top)
     ax.plot(x, tmy_vals, color="darkorange", linewidth=2.5, marker="D", markersize=6, zorder=6, label=tmy_label)
 
     ax.set_xlabel("Month")
@@ -2281,10 +2271,6 @@ def plot_breakeven_comparison(
     fig.tight_layout()
     return _finish(fig, results_directory, filename, bbox_inches="tight")
 
-
-# =========================================================================
-# SWEEP RESULTS
-# =========================================================================
 
 # Axis labels of the sweep and optimizer columns BREOS writes, without their
 # ``param_`` or ``resolved_`` prefix; an optimizer ``Projected_`` or
@@ -2583,7 +2569,6 @@ def plot_sweep_heatmap(
     fig, ax = plt.subplots(figsize=(10, 5))
     im = ax.imshow(data, aspect="auto", cmap=cmap, norm=norm, origin="lower")
 
-    # Axis labels from pivot index/columns
     ax.set_xticks(range(len(values.columns)))
     ax.set_xticklabels([_tick_text(c) for c in values.columns])
     ax.set_yticks(range(len(values.index)))
@@ -2752,11 +2737,6 @@ def plot_orientation_landscape(
 
     fig.tight_layout()
     return _finish(fig, results_directory, filename, bbox_inches="tight")
-
-
-# =========================================================================
-# PARETO ANALYSIS
-# =========================================================================
 
 
 def _pareto_mask(x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -2931,9 +2911,7 @@ def plot_co2_savings(
 
     bar_width = 0.35
 
-    # =========================================================================
-    # GRAPH 1: Yearly CO2 avoided (bars)
-    # =========================================================================
+    # First panel: yearly CO2 avoided, as bars
     fig, ax = plt.subplots(figsize=(12, 6))
 
     x = np.arange(len(years))
@@ -2950,9 +2928,7 @@ def plot_co2_savings(
     fig.tight_layout()
     yearly_fig = _finish(fig, results_directory, f"co2_avoided_yearly{suffix}.png", bbox_inches="tight")
 
-    # =========================================================================
-    # GRAPH 2: Cumulative CO2 avoided (lines)
-    # =========================================================================
+    # Second panel: cumulative CO2 avoided, as lines
     fig, ax = plt.subplots(figsize=(12, 6))
 
     ax.plot(years, co2_total_cum / 1000, "b-", linewidth=2.5, marker="o", markersize=4, label="Total PV Production")

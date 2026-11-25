@@ -158,8 +158,8 @@ class PlannerForecast:
     def leads(self, start: int, count: int) -> np.ndarray:
         """The lead day of each of ``count`` steps planned at calendar step ``start``; 0 is persistence.
 
-        A step past the calendar's end replays the calendar's start (A2): its
-        weather is older in source time, so its calendar age decides.
+        A step past the calendar's end replays the calendar's start (ADR 0002
+        A2): its weather is older in source time, so its calendar age decides.
         """
         assert self.pv_dc_by_lead_w is not None
         assert self.support_source_s is not None and self.decision_source_s is not None

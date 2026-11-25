@@ -52,6 +52,22 @@ class TestCostDefaultsSingleSource:
             pv_degradation_rate=0.005,
         )
 
+    def test_app_and_the_lower_level_helper_resolve_every_cost_key_alike(self):
+        from breos import app_config
+        from breos.economics import COST_CONFIG_KEY_TO_PARAM
+
+        # A distinct value per key, so a key mapped to the wrong field shows.
+        costs = {key: 1.0 + index for index, key in enumerate(COST_CONFIG_KEY_TO_PARAM)}
+        financials = {"inflation_rate": 0.02, "sell_price_inflation": 0.01, "discount_rate": 0.04}
+        financials["pv_degradation_rate"] = 0.006
+        cfg = {"cost_preset": None, "costs": costs, "inverter_loading_ratio": 1.3, **financials}
+
+        from_app = app_config.resolve_costs(cfg)
+        from_helper = cost_params_from_config({**costs, "dc_ac_ratio": 1.3}, financials)
+
+        assert from_app == from_helper
+        assert app_config.COST_OVERRIDE_KEYS == set(COST_CONFIG_KEY_TO_PARAM)
+
     def test_app_cost_overrides_layer_over_preset_and_defaults(self, monkeypatch):
         from breos import app_config
 

@@ -32,7 +32,7 @@ window, the replayed cost and the plan's stage cost differ only by that.
 
 Days are the tariff's civil days (ADR 0002 A1), or with
 ``decision_boundary = "charge_window_start"`` (``--decision-boundary``) the
-charge windows of the layout (A19): each window's target is chosen at its
+charge windows of the layout (ADR 0002 A19): each window's target is chosen at its
 start and holds until the next window starts, as ``daily_persistence``
 decides under the same boundary. A plan covers one project year, so in both
 planning modes the window that crosses the year seam is cut there. Its
@@ -56,9 +56,9 @@ default, the plan is the one the planner makes without it.
 Two planning modes:
 
 - ``first_year`` (the default) plans the first project year from a new
-  battery. Every project year replays those instructions (A2); the costs
+  battery. Every project year replays those instructions (ADR 0002 A2); the costs
   compared are the first year's.
-- ``yearly`` plans each project year as it begins (A16). Year ``y`` is
+- ``yearly`` plans each project year as it begins (ADR 0002 A16). Year ``y`` is
   planned on that year's PV, with its degradation applied, its load and
   temperature, from the battery state the production replay of years
   ``1..y-1`` reached: stored energy, state of health and efficiencies. The

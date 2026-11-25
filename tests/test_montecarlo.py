@@ -157,6 +157,39 @@ def test_run_montecarlo_filters_weather_sampling_pool(tmp_path, write_multiyear_
     assert set(result.yearly["Weather_Year"]) == {2021}
 
 
+@pytest.mark.parametrize(
+    ("resolution", "column", "bad_reading"),
+    [("h", "shortwave_radiation", np.nan), ("15min", "temperature_2m", "unavailable")],
+)
+def test_run_montecarlo_skips_weather_year_with_missing_readings(
+    tmp_path, write_multiyear_weather, caplog, resolution, column, bad_reading
+):
+    weather = write_multiyear_weather(tmp_path / "multi.csv", years=(2018, 2019))
+    frame = pd.read_csv(weather)
+    if isinstance(bad_reading, str):
+        frame[column] = frame[column].astype(str)
+    frame.loc[frame["date"].str.startswith("2018-05-30"), column] = bad_reading
+    frame.to_csv(weather, index=False)
+    write_instant_at_labels_sidecar(weather)
+    settings = MonteCarloSettings(
+        weather_file=str(weather), n_runs=1, years_per_run=1, seed=1, target_year=2025, collect_yearly=True
+    )
+
+    with caplog.at_level("WARNING", logger="breos.weather"):
+        result = run_montecarlo({**_base_config(), "resolution": resolution}, settings)
+
+    assert result.available_years == [2019]
+    assert result.yearly is not None
+    assert result.yearly["Weather_Year"].tolist() == [2019]
+    assert any(
+        record.levelname == "WARNING"
+        and "Skipping" in record.message
+        and "2018-05-30" in record.message
+        and column in record.message
+        for record in caplog.records
+    )
+
+
 def test_run_montecarlo_builds_the_load_on_the_target_year_calendar(tmp_path, monkeypatch, write_multiyear_weather):
     # start_date 2023 and target_year 2025 put a 2023 Sunday on Wednesday
     # 8 January 2025 when the load is shifted by position (#302).
@@ -496,6 +529,22 @@ def test_summarize_keeps_payback_entry_when_no_run_pays_back():
 
     assert summary["payback_year"] == {"count": 0, "n_runs": 2, "payback_probability": 0.0}
     assert "final_soh_pct" not in summary
+
+
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+def test_run_montecarlo_ignores_a_blank_spare_irradiance_column(tmp_path, write_multiyear_weather, resolution):
+    # The year is kept for its `shortwave_radiation`; a blank spare GHI alias
+    # beside it stopped the 15-minute resampler.
+    weather = write_multiyear_weather(tmp_path / "multi.csv", years=(2018, 2019))
+    frame = pd.read_csv(weather)
+    frame["global_horizontal_irradiance"] = np.nan
+    frame.to_csv(weather, index=False)
+    write_instant_at_labels_sidecar(weather)
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=1, target_year=2025)
+
+    result = run_montecarlo({**_base_config(), "resolution": resolution}, settings)
+
+    assert result.available_years == [2018, 2019]
 
 
 @pytest.mark.parametrize(

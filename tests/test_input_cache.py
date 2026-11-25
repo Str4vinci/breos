@@ -382,7 +382,7 @@ def test_a_second_modules_diodes_are_part_of_the_cache_key(monkeypatch):
     assert _input_cache_key(first.cfg, first) != _input_cache_key(second.cfg, second)
 
 
-def test_a_module_an_app_inherited_before_a_reorder_is_read_as_it_is_now(monkeypatch):
+def test_an_inherited_array_module_uses_the_original_cache_key_after_catalogue_changes():
     config = {
         **{k: v for k, v in BASE.items() if k != "n_modules"},
         "pv_arrays": [{"modules": 4, "module": "Generic_400W"}, {"modules": 4, "azimuth": 90}],
@@ -400,4 +400,4 @@ def test_a_module_an_app_inherited_before_a_reorder_is_read_as_it_is_now(monkeyp
         MODULES.clear()
         MODULES.update(saved)
     assert inherited != "Erlangen_445W"
-    assert before != after
+    assert before == after

@@ -310,7 +310,10 @@ def load_profile(
         profile_file: An explicit CSV to read instead of the registry's
             filename pattern; relative paths are taken inside
             ``rlp_directory`` when it is set. Required for ``custom``. Its
-            resolution is taken from its row count.
+            resolution is taken from its row count. Timestamps with UTC
+            offsets (``2025-07-15T19:00+02:00``) are read as instants and
+            placed at their clock time in ``timezone``, so a file that
+            follows DST keeps its summer rows at their local hour.
         profile_column: For ``custom``, the column holding the load. Needed
             only when the file has more than one value column.
         profile_unit: For ``custom``, the unit of that column: ``W`` or
@@ -356,7 +359,7 @@ def load_profile(
     path_context = as_file(source.source) if source.packaged else nullcontext(source.source)
     with path_context as csv_file:
         csv_path = Path(csv_file)
-        df, native_freq, column, unit, source_start = _load_profile_csv(
+        df, native_freq, column, unit, source_start, instants = _load_profile_csv(
             csv_path, columns, default_unit, source.native_freq, naive_timestamps=is_eredes
         )
         sha256 = hashlib.sha256(csv_path.read_bytes()).hexdigest()
@@ -395,7 +398,11 @@ def load_profile(
     if day_type is not None and source_start is not None:
         df = _align_day_types(df, new_index, source_start.year, steps_per_hour, source.label, day_type)
     else:
-        # Undated files and custom profiles are placed by position.
+        # Undated files and custom profiles are placed by position, after
+        # offset-stamped rows are put on the local wall clock.
+        if instants is not None:
+            _check_profile_length(len(df), steps_per_hour, source.label)
+            df = _instants_to_wall_clock(df, instants, timezone, native_freq, source.label)
         df = _fit_profile_to_calendar(df, new_index, steps_per_hour, source.label)
     df.index = new_index
     df.index.name = "DateTime"
@@ -406,7 +413,6 @@ def load_profile(
 
     df = _localize_wall_clock_index(df, timezone, native_freq)
 
-    # Resample if needed (hourly to 15-min)
     if freq == "15min" and native_freq == "h":
         df = _resample_load_to_15min(df)
     elif freq == "h" and native_freq == "15min":
@@ -491,6 +497,19 @@ def _localize_rows(df: pd.DataFrame, timezone: str, freq: Any) -> pd.DataFrame:
     return localized
 
 
+def _check_profile_length(rows: int, steps_per_hour: int, source) -> None:
+    """Refuse a profile that does not hold exactly one common or leap year of rows."""
+    steps_per_day = 24 * steps_per_hour
+    common, leap = 365 * steps_per_day, 366 * steps_per_day
+    if rows not in (common, leap):
+        resolution = "hourly" if steps_per_hour == 1 else "15-minute"
+        raise ValueError(
+            f"Load profile {source} has {rows} data rows; a {resolution} profile must "
+            f"have {common} (common year) or {leap} (leap year). Rows are placed on the "
+            "calendar by position, so a shorter or longer file would shift the seasons."
+        )
+
+
 def _fit_profile_to_calendar(
     df: pd.DataFrame, new_index: pd.DatetimeIndex, steps_per_hour: int, source
 ) -> pd.DataFrame:
@@ -504,14 +523,8 @@ def _fit_profile_to_calendar(
     would shift the seasons without a message.
     """
     steps_per_day = 24 * steps_per_hour
-    common, leap = 365 * steps_per_day, 366 * steps_per_day
-    if len(df) not in (common, leap):
-        resolution = "hourly" if steps_per_hour == 1 else "15-minute"
-        raise ValueError(
-            f"Load profile {source} has {len(df)} data rows; a {resolution} profile must "
-            f"have {common} (common year) or {leap} (leap year). Rows are placed on the "
-            "calendar by position, so a shorter or longer file would shift the seasons."
-        )
+    common = 365 * steps_per_day
+    _check_profile_length(len(df), steps_per_hour, source)
     if len(df) == len(new_index):
         return df
     # Day 59 (0-based) is 29 February in a leap year and 1 March otherwise.
@@ -678,7 +691,7 @@ def _load_profile_csv(
     native_freq: Optional[str],
     *,
     naive_timestamps: bool = False,
-) -> tuple[pd.DataFrame, str, str, str, pd.Timestamp | None]:
+) -> tuple[pd.DataFrame, str, str, str, pd.Timestamp | None, pd.DatetimeIndex | None]:
     """Read a profile CSV, convert its load column to W, and validate it.
 
     ``columns`` lists the accepted ``(column, unit)`` pairs in order; when it
@@ -690,7 +703,9 @@ def _load_profile_csv(
     the native resolution. With ``naive_timestamps`` (dated E-REDES files),
     a timestamp with a UTC offset is refused.
 
-    Returns the frame, its native resolution, and the column and unit read.
+    Returns the frame, its native resolution, the column and unit read, the
+    first timestamp (None for an undated file) and, when the timestamps carry
+    UTC offsets, every row's instant (otherwise None).
     """
     try:
         # Read without an index column so a blank row is blank in every
@@ -726,12 +741,15 @@ def _load_profile_csv(
             )
 
     df = raw[[column]].rename(columns={column: LOAD_COLUMN})
-    source_start = _validate_profile_rows(df, timestamps, native_freq, csv_file, naive_timestamps=naive_timestamps)
+    stamps = _validate_profile_rows(df, timestamps, native_freq, csv_file, naive_timestamps=naive_timestamps)
     if unit in _ENERGY_UNIT_TO_WH:
         df[LOAD_COLUMN] *= _ENERGY_UNIT_TO_WH[unit] / get_hours_per_step(native_freq)
     else:
         df[LOAD_COLUMN] *= _UNIT_TO_W[unit]
-    return df, native_freq, column, unit, source_start
+    if stamps is None:
+        return df, native_freq, column, unit, None, None
+    instants = pd.DatetimeIndex(stamps) if _has_utc_offsets(timestamps) else None
+    return df, native_freq, column, unit, stamps.iloc[0], instants
 
 
 def _is_row_label(column: pd.Series) -> bool:
@@ -754,8 +772,11 @@ def _validate_profile_rows(
     csv_file: Path,
     *,
     naive_timestamps: bool = False,
-) -> pd.Timestamp | None:
-    """Refuse non-numeric, non-finite, negative, or irregularly stamped rows."""
+) -> pd.Series | None:
+    """Refuse non-numeric, non-finite, negative, or irregularly stamped rows.
+
+    Returns the parsed timestamps as UTC, or None for an undated file.
+    """
     values = pd.to_numeric(df[LOAD_COLUMN], errors="coerce").to_numpy(dtype=float)
     bad = ~np.isfinite(values)
     if bad.any():
@@ -787,7 +808,7 @@ def _validate_profile_rows(
             f"Load profile {csv_file} is not evenly spaced at {native_freq}: data row {row} "
             f"({timestamps.iloc[row]}) follows {timestamps.iloc[row - 1]}."
         )
-    return stamps.iloc[0]
+    return stamps
 
 
 # An ISO 8601 date and clock time with a trailing UTC offset: Z, +01, +0100
@@ -795,6 +816,83 @@ def _validate_profile_rows(
 # 8601, so it flags exactly the rows read as offset-aware, and range labels
 # such as "01/01/2026 00:00-01:00" or "00:00-00:15" are not offsets.
 _UTC_OFFSET = re.compile(r"^\d{4}[-/\d]*[Tt ]\s*[\d:.,]+?\s*(?P<offset>[Zz]|[+-][\d:]+)$")
+
+
+def _utc_offsets(timestamps: pd.Series) -> pd.Series:
+    """The UTC offset written on each timestamp, or NaN where it has none."""
+    return timestamps.astype(str).str.strip().str.extract(_UTC_OFFSET)["offset"]
+
+
+def _has_utc_offsets(timestamps: pd.Series) -> bool:
+    return bool(_utc_offsets(timestamps).notna().any())
+
+
+def _instants_to_wall_clock(
+    df: pd.DataFrame, instants: pd.DatetimeIndex, timezone: Optional[str], freq: str, source
+) -> pd.DataFrame:
+    """Put offset-stamped rows on ``timezone``'s wall clock for one calendar year.
+
+    Rows stamped with UTC offsets are instants, evenly spaced in absolute
+    time, so a DST file has no row at the skipped spring hour and two rows at
+    the repeated autumn hour. Placing them by position would move every
+    summer row one hour. Each row is read as the mean power over its own
+    interval and spread over the local clock's rows by the time it overlaps
+    them, so a zone with a half-hour offset keeps every reading. Rows that fall
+    outside the calendar year of the middle row (a file stamped in UTC starts
+    at 23:00 local in Central Europe) wrap to the other end of that year.
+
+    The repeated autumn hour holds the mean of its two readings. The skipped
+    spring hour holds that mean too, so the year's energy is unchanged and
+    both autumn hours read the mean again once the profile is pinned to the
+    zone. A row of the local clock that no reading covers, other than a
+    skipped DST time, raises: BREOS does not invent missing readings.
+
+    Two limits remain. A reading that straddles two local rows, such as an
+    hourly reading in a half-hour zone or one stamped at minute 7, is split
+    between them by its overlap: the profile holds no detail finer than its
+    own step. In a 15-minute profile, the first occurrence of the repeated
+    autumn hour holds that hour's mean in each quarter once pinned to the
+    zone, because the shared localisation spreads the energy evenly over the
+    rows it adds; the second occurrence keeps its quarters.
+    """
+    tz = timezone or "UTC"
+    step = pd.Timedelta(pd.tseries.frequencies.to_offset(freq))
+    # One-minute pieces weight a reading by its overlap with each local row,
+    # whatever minute it is stamped on.
+    sub = pd.Timedelta(minutes=1)
+    parts = max(1, step // sub)
+    utc = instants.tz_convert("UTC").tz_localize(None).to_numpy()
+    fine = (utc[:, None] + np.arange(parts)[None, :] * sub.to_timedelta64()).ravel()
+    wall = pd.DatetimeIndex(fine).tz_localize("UTC").tz_convert(tz).tz_localize(None)
+    start = pd.Timestamp(year=wall[len(wall) // 2].year, month=1, day=1)
+    end = start + pd.DateOffset(years=1)
+    year = pd.DateOffset(years=1)
+    wrapped = pd.DatetimeIndex(np.where(wall >= end, wall - year, np.where(wall < start, wall + year, wall)))
+    repeated_times = wrapped[wrapped.duplicated(keep=False)]
+    clash = repeated_times[~repeated_times.tz_localize(tz, ambiguous="NaT", nonexistent="NaT").isna()]
+    if len(clash):
+        raise ValueError(
+            f"Load profile {source} has two readings for {clash[0]} on the {tz} clock, which is not a "
+            "repeated DST time. Its rows must cover one calendar year once."
+        )
+    values = pd.Series(np.repeat(df[LOAD_COLUMN].to_numpy(dtype=float), parts), index=wrapped.floor(freq))
+    grouped = values.groupby(level=0)
+    grid = pd.date_range(start=start, end=end, freq=freq, inclusive="left")
+    means = grouped.mean().reindex(grid)
+    counts = grouped.size().reindex(grid, fill_value=0).to_numpy()
+    skipped = grid.tz_localize(tz, nonexistent="NaT", ambiguous=True).isna()
+    missing = np.flatnonzero((counts == 0) & ~skipped)
+    if missing.size:
+        raise ValueError(
+            f"Load profile {source} has no reading for {grid[missing[0]]} on the {tz} clock"
+            f"{f' or {missing.size - 1} other rows' if missing.size > 1 else ''}. Its rows must cover one "
+            "calendar year; BREOS does not invent missing readings."
+        )
+    gaps, repeated = np.flatnonzero(counts == 0), np.flatnonzero(counts > parts)
+    if gaps.size and gaps.size == repeated.size:
+        means.iloc[gaps] = means.iloc[repeated].to_numpy()
+    means = means.ffill().bfill()
+    return pd.DataFrame({LOAD_COLUMN: means.to_numpy()})
 
 
 def _parse_profile_timestamps(
@@ -814,7 +912,7 @@ def _parse_profile_timestamps(
     # offsets change at DST is evenly spaced; naive stamps are unchanged.
     iso = pd.to_datetime(timestamps, errors="coerce", utc=True, format="ISO8601")
     if naive_timestamps:
-        offsets = timestamps.astype(str).str.strip().str.extract(_UTC_OFFSET)["offset"].where(iso.notna())
+        offsets = _utc_offsets(timestamps).where(iso.notna())
         stamped = np.flatnonzero(offsets.notna().to_numpy())
         if stamped.size:
             row = int(stamped[0])
@@ -854,9 +952,7 @@ def scale_to_annual_consumption(
         annual_consumption_kwh: Target annual consumption in kWh
         column: Name of the consumption column
     """
-    # Determine hours per step
     if isinstance(load_df.index, pd.DatetimeIndex):
-        # Infer from index frequency
         if len(load_df) > 1:
             diff = (load_df.index[1] - load_df.index[0]).total_seconds() / 3600
             hours_per_step = diff
@@ -868,7 +964,6 @@ def scale_to_annual_consumption(
     # Current annual in Wh (power * hours_per_step)
     current_annual_wh = load_df[column].sum() * hours_per_step
 
-    # Target in Wh
     target_annual_wh = annual_consumption_kwh * 1000
 
     if current_annual_wh <= 0:

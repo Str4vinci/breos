@@ -380,7 +380,8 @@ def run(name: str, backend: str = "python", freq: str = FREQ):
         temperature_series=temp,
         **kwargs,
     )
-    # A tree before ADR 0003 E4 also returned the replacement money, fourth.
+    # A tree from before ADR 0003 E4, where the economics took over pricing
+    # replacements, also returned the replacement money, fourth.
     if len(output) == 6:
         output = (*output[:3], *output[4:])
     results_df, total_pv, summary_df, n_rep, deg_df = output

@@ -26,7 +26,14 @@ from typing import Any
 
 import pandas as pd
 
-from breos.app_config import APP_CONFIG_FIELDS, ResolvedAppConfig, normalize_config_keys, resolve_app_config
+from breos.app_config import (
+    APP_CONFIG_FIELDS,
+    NESTED_TABLE_SPECS,
+    ResolvedAppConfig,
+    normalize_config_keys,
+    resolve_app_config,
+    resolve_app_revaluation,
+)
 from breos.app_inputs import AppRuntimeDependencies
 from breos.app_results import build_result as build_app_result
 from breos.load_profiles import load_profile
@@ -37,8 +44,16 @@ from breos.weather import build_battery_temperature_series, fetch_tmy_weather_da
 
 # Nested tables App.revalue replaces whole: the entries of a price list
 # belong together, so a change must not keep a period it leaves out.
+# A custom schedule is one published document, so a change must not keep a
+# rule or holiday list the new one leaves out.
 _REPLACED_TABLES = frozenset(
-    {("tariff", "import_prices"), ("tariff", "export_prices"), ("reference_tariff", "import_prices")}
+    {
+        ("tariff", "import_prices"),
+        ("tariff", "export_prices"),
+        ("tariff", "custom_schedule"),
+        ("reference_tariff", "import_prices"),
+        ("reference_tariff", "custom_schedule"),
+    }
 )
 
 
@@ -47,6 +62,11 @@ def _revalued_config(config: dict[str, Any], changes: Mapping[str, Any]) -> dict
     merged = dict(config)
     for key, value in changes.items():
         current = merged.get(key)
+        # None removes a table, as it removes a key inside one. A scalar set
+        # to None is checked like any other value, whether the run set it or not.
+        if value is None and key in NESTED_TABLE_SPECS:
+            merged.pop(key, None)
+            continue
         if not isinstance(value, Mapping):
             merged[key] = deepcopy(value)
             continue
@@ -100,7 +120,9 @@ def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mappi
     if currency == old.currency:
         return
     move = f"revalue() moves the run from {old.currency} to {currency}"
-    kept = _kept_amounts(old.cfg.get("costs") or {}, changes.get("costs"), sorted(old.cfg.get("costs") or {}), "costs")
+    # Costs removed fall back to the default preset, whose own currency is checked when the config resolves.
+    costs = {} if "costs" in changes and changes["costs"] is None else old.cfg.get("costs") or {}
+    kept = _kept_amounts(costs, changes.get("costs"), sorted(costs), "costs")
     if old.cfg.get("battery_replacement_cost") and "battery_replacement_cost" not in changes:
         kept.append("battery_replacement_cost")
     for name in ("tariff", "reference_tariff"):
@@ -193,9 +215,11 @@ class App:
 
         ``changes`` holds configuration keys. A nested table such as
         ``costs`` or ``tariff`` changes only the keys it sets, and a key set
-        to ``None`` in it is removed; ``{"tariff": None}`` removes the table.
-        A price list (``tariff.import_prices``, ``tariff.export_prices``,
-        ``reference_tariff.import_prices``) replaces the old one whole. Only
+        to ``None`` in it is removed; ``{"tariff": None}`` or
+        ``{"costs": None}`` removes the table. A price list
+        (``tariff.import_prices``, ``tariff.export_prices``,
+        ``reference_tariff.import_prices``) and a ``custom_schedule`` replace
+        the old one whole. Only
         the economics keys in :data:`REVALUATION_KEYS` may change: ``costs``,
         ``cost_preset``, ``currency``, ``tariff``, ``reference_tariff``, the
         discount rate, the escalators, ``battery_replacement_cost`` and
@@ -260,7 +284,7 @@ class App:
                 f"revalue() changes prices only, and {', '.join(outside)} is not a price key. "
                 f"Build a new App for it. Keys revalue() accepts: {', '.join(sorted(REVALUATION_KEYS))}."
             )
-        resolved = resolve_app_config(config)
+        resolved = resolve_app_revaluation(self._resolved, config, sorted(changes.keys() & REVALUATION_KEYS))
         if "vehicle" in changed:
 
             def physical(config):

@@ -10,12 +10,12 @@ import threading
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 import pandas as pd
 
-from breos.app_inputs import resample_hourly_weather
+from breos.app_inputs import require_hourly_weather_on_local_hours, resample_hourly_weather
 from breos.battery import AlignedSimulationInputs, BatteryConfig, align_simulation_inputs
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
@@ -30,6 +30,9 @@ from breos.economics import (
 from breos.emissions import EmissionsParams
 from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
+    aggregate_jit_cache_states,
+    backend_provenance,
+    is_pv_only_dispatch,
     limit_worker_threads,
     require_backend,
     resolve_execution_backend,
@@ -44,7 +47,7 @@ from breos.optimization_config import (
     resolve_optimization_config,
     resolve_run_settings,
 )
-from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years
+from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years, site_demand_kwh
 from breos.pv.model_options import (
     DEFAULT_SOLAR_POSITION,
     configured_pv_model_kwargs,
@@ -144,10 +147,6 @@ def _resolve_max_tilt_deg(constraints: Dict[str, Any], latitude: float) -> float
         return adjusted_max_tilt_deg(latitude, constraints["tilt_margin_deg"])
     return float(value)
 
-
-# ==========================================
-# 2. HELPER FUNCTIONS
-# ==========================================
 
 # Constants for defaults (can be overridden by config)
 DEFAULT_MODULE_AREA = 1.134 * 2.278
@@ -349,7 +348,8 @@ def _summarize_projected_lifetime_metrics(yearly_summary_df: pd.DataFrame) -> Di
     )
 
     return {
-        "Projected_Grid_Independence_%": 100.0 * (1.0 - _safe_ratio(imports.sum(), load.sum())),
+        "Projected_Grid_Independence_%": 100.0
+        * (1.0 - _safe_ratio(imports.sum(), site_demand_kwh(yearly_summary_df).sum())),
         "Projected_Grid_Independence_Year1_%": float(annual_gi.iloc[0]),
         "Projected_Grid_Independence_FinalYear_%": float(annual_gi.iloc[-1]),
         "Projected_Grid_Independence_Mean_%": float(annual_gi.mean()),
@@ -510,6 +510,8 @@ def _evaluate_projected_design_metrics(
         tariff=tariff,
         instructions=instructions if has_battery else None,
         reference_tariff=reference_tariff,
+        # A one-design evaluation reports its compile cost, as an App run does.
+        observe_jit_per_year=return_tables,
     )
     # Priced here, as App and Monte Carlo price theirs (ADR 0003 E4, E7).
     yearly_summary_df = price_year_rows(projection.yearly_df, costs)
@@ -569,6 +571,7 @@ def _evaluate_projected_design_metrics(
     if return_tables:
         metrics["_yearly_summary_df"] = yearly_summary_df
         metrics["_cost_projection_df"] = cost_projection
+        metrics["_jit_cache_states"] = list(projection.jit_cache_states)
     return metrics
 
 
@@ -706,6 +709,51 @@ def _prepare_study_weather(weather: pd.DataFrame, config: dict[str, Any], loc_ob
         resample=resample_to_15min,
         irradiance_resampling=config["simulation"]["irradiance_resampling"],
         altitude=loc_obj.altitude,
+    )
+
+
+def _seconds_into_hour(index: pd.DatetimeIndex, timezone: Optional[str] = None) -> np.ndarray:
+    """The distinct seconds past the whole hour of the stamps, on the UTC clock or on ``timezone``'s.
+
+    A naive stamp counts as UTC, as the energy balance reads it.
+    """
+    aware = index if index.tz is not None else index.tz_localize("UTC")
+    wall = aware.tz_convert(timezone or "UTC").tz_localize(None)
+    return np.unique(np.asarray((wall - pd.Timestamp(0)) // pd.Timedelta(seconds=1), np.int64) % 3600)
+
+
+def _require_load_on_weather_steps(
+    tmy_data: pd.DataFrame, grid: pd.DatetimeIndex, houseload: pd.DataFrame, config: dict[str, Any]
+) -> None:
+    """Refuse a load profile that has no value at some of the weather's steps, before any PV model run.
+
+    The energy balance looks the load up at each weather step, after moving it
+    onto the simulated year by whole years, which keeps every stamp's position
+    within its UTC hour. A step whose position no load stamp shares can never
+    find a value, so the run would fail at the first scored design. Loads
+    stamped on whole local hours are App's load, and get App's refusal.
+    """
+    if not isinstance(houseload.index, pd.DatetimeIndex) or not isinstance(grid, pd.DatetimeIndex):
+        return
+    if not len(houseload.index) or not len(grid):
+        return
+    missing = np.setdiff1d(_seconds_into_hour(grid), _seconds_into_hour(houseload.index))
+    if not missing.size:
+        return
+    timezone = str(config["location"]["timezone"])
+    if _seconds_into_hour(houseload.index, timezone).tolist() == [0]:
+        # App's check reads a timezone-aware index; a naive weather stamp counts as UTC.
+        weather_index = cast(pd.DatetimeIndex, tmy_data.index)
+        if weather_index.tz is None:
+            weather_index = weather_index.tz_localize("UTC")
+        require_hourly_weather_on_local_hours(
+            pd.DataFrame(index=weather_index), str(config["simulation"]["resolution"]), timezone
+        )
+    past = ", ".join(f"{seconds // 60}:{seconds % 60:02d}" for seconds in missing[:6].tolist())
+    raise ValueError(
+        f"The weather has steps at {past} (minutes:seconds) past each UTC hour, where the load profile "
+        "has no value, so the load cannot be aligned with the weather. "
+        "Supply a load profile stamped on the weather's steps."
     )
 
 
@@ -857,6 +905,8 @@ class _DesignStudy:
         if weather_by_year is not None:
             frames = tuple(_prepare_study_weather(frame, config, location) for frame in weather_by_year)
         grid = frames[0].index if frames else weather.index
+        houseload = houseload.to_frame(name="Load") if isinstance(houseload, pd.Series) else houseload
+        _require_load_on_weather_steps(tmy_data, grid, houseload, config)
         pricing = _resolve_optimization_tariff(config, grid, battery_kwh, battery_key)
         years = config["simulation"]["years_projection"]
         if frames is not None and len(frames) != years:
@@ -888,7 +938,7 @@ class _DesignStudy:
             # Load alignment (timezone- and DST-aware year remapping) happens
             # inside the energy balance, the code path the App uses, so the
             # load keeps its own timestamps.
-            houseload=houseload.to_frame(name="Load") if isinstance(houseload, pd.Series) else houseload,
+            houseload=houseload,
             pricing=pricing,
             pv_params=pv_params,
             module_area_m2=_module_area_from_dimensions(_dimensions_from_section(pv_cfg)),
@@ -900,8 +950,7 @@ class _DesignStudy:
             emissions_params=EmissionsParams(**config["emissions"]) if config["emissions"] else None,
             # A weather sequence keeps the representative year's temperatures,
             # so they are restamped onto the sequence's calendar year rather
-            # than reindexed across years, which found no match and used to
-            # fall back to 25 C.
+            # than reindexed across years, where no stamp would match.
             temperature_series=build_battery_temperature_series(
                 battery["temperature"],
                 grid,
@@ -1074,6 +1123,13 @@ def evaluate_projected_design(
             its temperatures are restamped onto the calendar year of the
             first sequence frame.
             The sequence length must equal the projected horizon.
+        execution_backend: ``"auto"``, ``"python"`` or ``"numba"``. The
+            provenance's ``execution`` record holds the backend that ran
+            (``execution_backend``) and this request
+            (``requested_execution_backend``), as an App run's does. A design
+            without a dispatchable battery
+            (:func:`breos.execution.is_pv_only_dispatch`) also records the
+            PV-only ``dispatch_path``.
 
     Returns:
         Projected metrics, yearly simulation ledger, and financial ledger.
@@ -1094,8 +1150,10 @@ def evaluate_projected_design(
 
     # Before the PV production model runs, not after it. Computing a year of
     # irradiance and then failing on a missing import wastes the expensive part
-    # and reports the cheap problem late.
-    execution_backend = require_backend(execution_backend)
+    # and reports the cheap problem late. The request is kept for the
+    # provenance: "auto" names neither backend.
+    requested_backend = execution_backend
+    execution_backend = require_backend(requested_backend)
 
     study = _DesignStudy.resolve(
         tmy_data,
@@ -1105,9 +1163,20 @@ def evaluate_projected_design(
         execution_backend=execution_backend,
         weather_by_year=weather_by_year,
     )
+    # Asked of the battery the dispatch is handed, so the record and the
+    # dispatch cannot disagree about whether the design ran PV-only.
+    battery = _build_battery_config_from_spec(study.config["battery"], nominal_energy_wh=float(battery_kwh) * 1000.0)
+    execution = backend_provenance(
+        execution_backend,
+        pv_only=is_pv_only_dispatch(battery.nominal_energy_wh, battery.max_soc, battery.min_soc),
+        requested=requested_backend,
+    )
     raw_metrics = study.score(arrays, n_modules=int(n_modules), battery_kwh=float(battery_kwh), return_tables=True)
     yearly = raw_metrics.pop("_yearly_summary_df")
     financial = raw_metrics.pop("_cost_projection_df")
+    jit_cache_states = raw_metrics.pop("_jit_cache_states", [])
+    if "jit_cache" in execution:
+        execution["jit_cache"] = aggregate_jit_cache_states(jit_cache_states)
     metrics = {
         "Modules": int(n_modules),
         "Battery_kWh": float(battery_kwh),
@@ -1117,12 +1186,9 @@ def evaluate_projected_design(
         "Layout": layout,
         **raw_metrics,
     }
-    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=study.provenance())
-
-
-# ==========================================
-# 3. PYMOO OPTIMIZATION CLASSES
-# ==========================================
+    return ProjectedDesignResult(
+        metrics=metrics, yearly=yearly, financial=financial, provenance=study.provenance(execution=execution)
+    )
 
 
 def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, upper: float) -> np.ndarray:
@@ -1225,7 +1291,6 @@ try:
             self.layouts = tuple(config["mode"]["layouts"])
             self.east_west_tilt_deg = float(config["mode"]["east_west_tilt_deg"])
 
-            # --- Dynamic Variable Setup ---
             # x[0]: n_modules (1-max_modules)
             # x[1]: battery_kwh (0-max_battery_kwh)
             lower = [1, 0.0]
@@ -1559,6 +1624,16 @@ def optimize_system_multi_objective(
         verbose: Print pymoo progress.
         n_procs: Candidate-evaluation worker processes. The default ``1``
             preserves serial behavior.
+        execution_backend: ``"auto"``, ``"python"`` or ``"numba"``.
+            ``details["provenance"]["execution"]`` holds the backend that ran
+            (``execution_backend``) and this request
+            (``requested_execution_backend``). A search scores designs with
+            and without a battery, so the record carries no PV-only
+            ``dispatch_path``: a design took the PV-only balance when its
+            ``Battery_kWh`` and the configured SOC window leave nothing to
+            dispatch (:func:`breos.execution.is_pv_only_dispatch`). Its
+            ``jit_cache`` stays ``"unknown"``, since worker processes score
+            designs out of the search's sight.
 
     Returns:
         :class:`OptimizationResult` whose ``details["pareto"]`` is a DataFrame
@@ -1609,8 +1684,11 @@ def optimize_system_multi_objective(
 
     # Before the worker pool exists. An NSGA-II run is long and a missing
     # optional dependency should not surface as a traceback from inside a pool
-    # that then has to be torn down.
-    execution_backend = require_backend(execution_backend)
+    # that then has to be torn down. The request is kept for the provenance.
+    requested_backend = execution_backend
+    execution_backend = require_backend(requested_backend)
+    # No PV-only claim: the search mixes designs with and without a battery.
+    execution = backend_provenance(execution_backend, requested=requested_backend)
 
     # Invalid tariffs must fail before a worker pool is created.
     problem = SolarDesignProblem(
@@ -1667,6 +1745,7 @@ def optimize_system_multi_objective(
         constraints=dict(config["constraints"]),
         mode={**config["mode"], "layouts": list(config["mode"]["layouts"])},
         run_settings=settings,
+        execution=execution,
     )
     pareto.attrs["currency"] = provenance["currency"]
     evaluated.attrs["currency"] = provenance["currency"]

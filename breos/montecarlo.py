@@ -71,6 +71,7 @@ from breos.projection import (
     build_pv_only_battery_config,
     first_end_of_life_metrics,
     run_projection,
+    site_demand_kwh,
     tariff_records,
     value_projection,
 )
@@ -85,7 +86,7 @@ from breos.pv.model_options import (
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
 from breos.tariffs import ResolvedTariff
-from breos.utils import package_version
+from breos.utils import find_irradiance_column, irradiance_component, package_version
 from breos.vehicle import VehicleConfig, VehicleSchedule, resolve_vehicle_schedule
 from breos.vehicle.households import (
     VehicleHouseholds,
@@ -307,6 +308,13 @@ def _load_weather_years(
     indexed_by_year: dict[int, pd.DataFrame] = {}
     for year, df in weather_by_year.items():
         weather = _index_weather(df)
+        # Simulate on the columns each irradiance component is read from; a
+        # blank spare alias, such as `shortwave_radiation` beside `ghi`, would
+        # stop the resampler although the year was kept for its readings.
+        used = {find_irradiance_column(weather.columns, c) for c in ("ghi", "dni", "dhi")}
+        weather = weather.drop(
+            columns=[c for c in weather.columns if irradiance_component(c) is not None and c not in used]
+        )
         require_hourly_weather_on_local_hours(weather, freq, resolved.timezone)
         input_frequency = weather_input_frequency(weather)
         weather = resample_hourly_weather(
@@ -982,7 +990,7 @@ def _simulate_trajectory(
     npv_savings = float(cost_projection["Savings_Cumulative_NPV"].iloc[-1])
 
     trajectory = yearly_df.merge(cost_projection, on="Year", how="left", suffixes=("", "_Financial"))
-    lifetime_load = float(yearly_df["Load_kWh"].sum())
+    lifetime_load = float(site_demand_kwh(yearly_df).sum())
     lifetime_import = float(yearly_df["Import_kWh"].sum())
     lifetime_gi = 100.0 * (1.0 - lifetime_import / lifetime_load) if lifetime_load > 0.0 else 0.0
 

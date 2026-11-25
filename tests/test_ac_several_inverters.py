@@ -326,9 +326,10 @@ def test_fixed_target_runs_and_the_planner_is_refused_beside_several_inverters(t
     }
     frame, _ = timeseries({**TWO_INVERTERS, **APP_AC, "tariff": TOU, "smart_charging": fixed})
     assert frame["Grid_AC_To_Battery"].sum() > 0.0
-    planner = {"mode": "daily_persistence", "charge_periods": ["off_peak"], "discharge_periods": ["peak"]}
-    with pytest.raises(ValueError, match="plans with one PV inverter, not 2"):
-        resolve_app_config({**TWO_INVERTERS, **APP_AC, "tariff": TOU, "smart_charging": planner})
+    for mode in ("daily_persistence", " DAILY_PERSISTENCE "):
+        planner = {"mode": mode, "charge_periods": ["off_peak"], "discharge_periods": ["peak"]}
+        with pytest.raises(ValueError, match="plans with one PV inverter, not 2"):
+            resolve_app_config({**TWO_INVERTERS, **APP_AC, "tariff": TOU, "smart_charging": planner})
 
 
 def test_app_refuses_a_dc_battery_beside_several_inverters(trina):

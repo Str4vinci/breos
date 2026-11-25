@@ -147,8 +147,8 @@ def _config_hash(site: ResolvedAppConfig | HouseholdConfig) -> str:
 
 
 def _meter_balances(import_w: np.ndarray, export_w: np.ndarray) -> MeterBalances:
-    # A4: dispatch powers become interval energies exactly once. Do not net
-    # imports/exports or remove inverter draw or grid charging here.
+    # ADR 0006 A4: dispatch powers become interval energies exactly once. Do
+    # not net imports/exports or remove inverter draw or grid charging here.
     return MeterBalances(import_w * 0.25, export_w * 0.25)
 
 

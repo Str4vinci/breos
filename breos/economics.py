@@ -163,7 +163,7 @@ def cost_params_from_config(
         param_key: costs_config.get(config_key, getattr(defaults, param_key))
         for config_key, param_key in COST_CONFIG_KEY_TO_PARAM.items()
     }
-    # Historical lower-level callers can supply the two energy prices through
+    # Lower-level callers can also supply the two energy prices through
     # ``financials_config``; an explicit costs value still takes precedence.
     for key in ("electricity_cost", "electricity_sold_cost"):
         if key not in costs_config:
@@ -265,10 +265,8 @@ def calculate_costs(
         inverter_power_kw = total_power_kw
     has_battery = battery_capacity_wh > 1
 
-    # PV module costs
     pv_cost = cost_params.module_cost_per_w * module_power_w * n_modules
 
-    # Installation costs
     installation_cost = cost_params.installation_cost_per_module * n_modules
     if has_battery:
         installation_cost += cost_params.battery_installation_cost
@@ -306,17 +304,14 @@ def calculate_costs(
             "battery_inverter_ac_capacity_w prices an AC-coupled battery's inverter; this one is DC-coupled"
         )
 
-    # Other costs
     other_costs = (cost_params.other_cost_per_module * n_modules) + cost_params.other_cost_fixed
 
-    # Maintenance
     annual_operation_cost = (
         cost_params.maintenance_cost_per_panel * n_modules
         + cost_params.maintenance_cost_fixed
         + cost_params.operation_cost
     )
 
-    # Total CAPEX
     total_initial_cost = (
         pv_cost + inverter_cost + battery_cost + installation_cost + cost_params.land_cost + other_costs
     )
@@ -585,7 +580,7 @@ def projection_rates_record(cfg: Dict[str, Any]) -> Dict[str, float]:
 def _replacement_outlay(base: np.ndarray, exponents: np.ndarray, inflation_rate: float, learning: float) -> np.ndarray:
     """``C0 × (1 + inflation)^t × (1 − learning)^t`` at each swap instant ``t`` (ADR 0003 E2)."""
     outlay = base * (1 + inflation_rate) ** exponents
-    # Without learning the result is the pre-E2 expression, the same floats.
+    # Without learning, skipping the factor keeps the floats of plain inflation.
     return outlay if learning == 0.0 else outlay * (1 - learning) ** exponents
 
 

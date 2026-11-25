@@ -42,7 +42,7 @@ What the program keeps exactly, per step:
   limits, and the inverter AC rating, with ``ac_output_scale``. Grid charge
   shares the AC rating with the PV output, as it does in the dispatch.
 - The usable window's ceiling, ``max_soc`` of the capacity at the step's
-  temperature (A7), and the start at max SOC.
+  temperature (ADR 0002 A7), and the start at max SOC.
 
 What it relaxes, so that the bound claim holds:
 

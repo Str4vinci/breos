@@ -753,18 +753,48 @@ def _montecarlo(args: argparse.Namespace) -> int:
     return 0
 
 
+_RUN_FLAG_GROUPS = {
+    "location": "location and simulation",
+    "simulation": "location and simulation",
+    "pv": "PV array",
+    "inverter": "inverter",
+    "load": "household load",
+    "battery": "battery",
+    "economics": "economics",
+    "emissions": "emissions",
+}
+
+_RUN_EXAMPLES = """\
+examples:
+  breos run --location porto --n-modules 10 --annual-consumption-kwh 4000
+  breos run --config quickstart.toml --output result.json
+  breos run --config quickstart.toml --battery-kwh 10 --json | jq .npv_savings
+
+Flags override the same keys in --config. Every key, with its default:
+https://breos.readthedocs.io/en/latest/getting-started/configuration.html
+"""
+
+
 def _add_run_config_arguments(parser: argparse.ArgumentParser) -> None:
-    """Generate App config override flags from the field registry."""
+    """Generate App config override flags from the field registry, grouped by section."""
+    groups = {title: parser.add_argument_group(title) for title in dict.fromkeys(_RUN_FLAG_GROUPS.values())}
     for key, field in APP_CONFIG_FIELDS.items():
         if not field.cli_flags:
             continue
 
+        title = _RUN_FLAG_GROUPS.get((field.summary or "").split(".")[0], "other")
+        if title not in groups:
+            groups[title] = parser.add_argument_group(title)
         kwargs: dict[str, Any] = {"dest": key, "help": field.cli_help}
         if field.cli_type is not None:
             kwargs["type"] = field.cli_type
         if field.cli_choices is not None:
             kwargs["choices"] = field.cli_choices
-        parser.add_argument(*field.cli_flags, **kwargs)
+            choices = ", ".join(str(choice) for choice in field.cli_choices)
+            if len(choices) > 30:
+                kwargs["metavar"] = key.split("_")[-1].upper()
+                kwargs["help"] = f"{field.cli_help} One of: {choices}."
+        groups[title].add_argument(*field.cli_flags, **kwargs)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -773,15 +803,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run = subparsers.add_parser("run", help="Run a PV + battery simulation.")
-    run.add_argument("--config", type=Path, help="TOML or JSON file with App configuration.")
-    _add_run_config_arguments(run)
-    run.add_argument("--output", type=Path, help="Write JSON results to this file instead of stdout.")
-    run.add_argument("--indent", type=int, default=2, help="JSON indentation. Use 0 for compact output.")
-    run.add_argument("--dry-run", action="store_true", help="Validate and print resolved config without simulation.")
-    run.add_argument(
-        "--json", action="store_true", help="Print the JSON results on a terminal too, instead of the summary."
+    run = subparsers.add_parser(
+        "run",
+        help="Run a PV + battery simulation.",
+        description="Run a PV + battery simulation. In a terminal it prints a short summary;\n"
+        "piped or with --json it prints the full JSON results, unless --output writes them to a file.",
+        usage="breos run [--config FILE] [--output FILE] [--json] [config flags]",
+        epilog=_RUN_EXAMPLES,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    run.add_argument("--config", type=Path, metavar="FILE", help="TOML or JSON file with App configuration.")
+    run.add_argument("--output", type=Path, metavar="FILE", help="Write the JSON results to this file.")
+    run.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the JSON results on a terminal too, instead of the summary (not with --output).",
+    )
+    run.add_argument("--dry-run", action="store_true", help="Validate and print resolved config without simulation.")
+    run.add_argument("--indent", type=int, default=2, help="JSON indentation. Use 0 for compact output.")
+    _add_run_config_arguments(run)
     run.set_defaults(func=_run)
 
     list_parser = subparsers.add_parser("list", help="List packaged option keys.")
