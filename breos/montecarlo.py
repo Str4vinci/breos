@@ -71,6 +71,7 @@ from breos.projection import (
     build_pv_only_battery_config,
     first_end_of_life_metrics,
     run_projection,
+    site_demand_kwh,
     tariff_records,
     value_projection,
 )
@@ -989,7 +990,7 @@ def _simulate_trajectory(
     npv_savings = float(cost_projection["Savings_Cumulative_NPV"].iloc[-1])
 
     trajectory = yearly_df.merge(cost_projection, on="Year", how="left", suffixes=("", "_Financial"))
-    lifetime_load = float(yearly_df["Load_kWh"].sum())
+    lifetime_load = float(site_demand_kwh(yearly_df).sum())
     lifetime_import = float(yearly_df["Import_kWh"].sum())
     lifetime_gi = 100.0 * (1.0 - lifetime_import / lifetime_load) if lifetime_load > 0.0 else 0.0
 

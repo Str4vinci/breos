@@ -15,7 +15,7 @@ the result; the tables below define them.
 | PV delivered (AC) | `usable_ac_system_production_kwh` | Year 1 PV output after the inverter that reached the house or the grid, directly or through the battery |
 | House load | `consumption_kwh` | Year 1 household demand |
 | Self-consumed PV | `self_consumption_kwh`, `self_consumption_pct` | PV used in the house, directly or through the battery; the percentage is of the usable AC production (`usable_ac_system_production_kwh`) |
-| Grid import | `grid_import_kwh`, `grid_independence_pct` | Energy bought, including any grid energy that charges the battery; grid independence is `1 − grid import / house load`, so grid charging lowers it |
+| Grid import | `grid_import_kwh`, `grid_independence_pct` | Energy bought, including any grid energy that charges the battery; grid independence is `1 − grid import / demand at the home meter`, so grid charging lowers it. Without a vehicle the demand is the house load; with one it also counts the vehicle's charging at home, less what the vehicle returned to the house |
 | Grid export | `grid_export_kwh` | Energy sold |
 | Health at the end | `degradation.final_soh_pct`, `degradation.replacement_events` | Battery state of health after the last year, and the years a battery was replaced |
 | Investment | `total_investment` | Total CAPEX |
@@ -42,7 +42,7 @@ Money is in the currency named in the economics line (`provenance.currency`).
 | `self_consumption_kwh` | Direct PV AC plus PV-origin stationary/vehicle AC delivered to the house |
 | `grid_import_kwh` | Year 1 energy bought from the grid |
 | `grid_export_kwh` | Year 1 energy sold to the grid |
-| `grid_independence_pct` | Year 1 grid independence ratio |
+| `grid_independence_pct` | Year 1 grid independence: `1 − grid import / demand at the home meter` (house load, plus vehicle charging at home, less vehicle energy returned to the house) |
 | `self_consumption_pct` | Year 1 self-consumption ratio |
 | `global_horizontal_kwh_m2` | Year 1 global horizontal irradiation (PVsyst's GlobHor) |
 | `global_incident_kwh_m2` | Year 1 global irradiation in the plane of the arrays, before near shading and incidence-angle losses, weighted by array STC power (PVsyst's GlobInc) |
@@ -217,8 +217,12 @@ Away purchases enter household money and grid emissions but never
 both households' away purchases. PV-origin energy used for driving is
 reported separately; it is not house self-consumption. PV-origin vehicle
 AC delivered to the house does join house self-consumption. Home imports
-include vehicle charging, so grid independence should be read alongside
-the vehicle energy and driving totals.
+include vehicle charging, so grid independence divides them by the demand
+at the home meter: the house load, plus the vehicle's charging at home
+(from PV and from the grid), less the vehicle's energy returned to the
+house, which the house load already holds. Energy charged away from home
+and returned to the house raises it; read it alongside the vehicle energy
+and driving totals.
 
 `provenance.vehicle` is null without a vehicle. With one it records the
 configuration, resolved schedule hash, rounding policy and household modes.

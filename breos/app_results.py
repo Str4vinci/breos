@@ -83,7 +83,7 @@ def monthly_to_dicts(
         "PV_DC_Curtailed",
     ]
     if vehicle:
-        columns.append("PV_Origin_Vehicle_AC_To_Load")
+        columns += ["PV_Origin_Vehicle_AC_To_Load", "PV_AC_To_Vehicle", "Grid_AC_To_Vehicle", "Vehicle_AC_To_Load"]
     if irradiance is not None:
         columns += ["GHI", "POA_STC_DC"]
     monthly = df[columns].resample("ME").sum()
@@ -101,6 +101,12 @@ def monthly_to_dicts(
         consumption = float(row["Houseload"])
         export = float(row["PV_AC_Export"])
         imported = float(row["Import_From_Grid"])
+        demand = consumption
+        if vehicle:
+            # The home meter also serves the vehicle charger (#503).
+            demand += (
+                float(row["PV_AC_To_Vehicle"]) + float(row["Grid_AC_To_Vehicle"]) - float(row["Vehicle_AC_To_Load"])
+            )
         self_consumption = direct + battery
         if vehicle:
             self_consumption += vehicle_pv
@@ -116,7 +122,7 @@ def monthly_to_dicts(
                 "self_consumption_kwh": round(self_consumption, 2),
                 "grid_import_kwh": round(imported, 2),
                 "grid_export_kwh": round(export, 2),
-                "grid_independence_pct": round((1 - imported / consumption) * 100, 2) if consumption > 0 else 0.0,
+                "grid_independence_pct": round((1 - imported / demand) * 100, 2) if demand > 0 else 0.0,
                 **irradiance_fields(
                     usable_pv,
                     float(row["GHI"]) if irradiance is not None else None,

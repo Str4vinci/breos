@@ -112,11 +112,11 @@ def test_numbers_have_no_commas(value, decimals, text):
     assert _number(value, decimals) == text
 
 
-def test_vehicle_rows_replace_grid_independence():
+def test_vehicle_rows_show_grid_independence_at_the_home_meter():
     result = {
         "consumption_kwh": 4000.0,
         "grid_import_kwh": 4202.4,
-        "grid_independence_pct": -5.06,
+        "grid_independence_pct": 48.94,
         "npv_savings": -6497.6,
         "payback_year": None,
         "npv_savings_household_adjusted": -6498.9,
@@ -134,8 +134,7 @@ def test_vehicle_rows_replace_grid_independence():
     shown = format_run_summary(result)
 
     assert "Vehicle charging at home      4244 kWh       758 kWh from PV" in shown
-    assert "house and vehicle" in shown
-    assert "grid independence" not in shown
+    assert "house and vehicle, 48.9 % grid independence" in shown
     assert "Discounted payback        not within 3 years" in shown
     assert "V2H benefit vs V1G           -2497 EUR       not comparable" in shown
 
