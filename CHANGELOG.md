@@ -30,7 +30,8 @@ changes results says which studies to rerun.
   `Grid_Independence_%` and the Monte Carlo grid independence of vehicle
   runs only. `breos run` shows it again for vehicle runs. With no demand
   at all, the `simulate_energy_balance` summary now reports 0 % like the
-  other results, not 100 % (#503).
+  other results, not 100 %. Rerun any vehicle study that reports grid
+  independence (#503).
 - An App run with both `[vehicle]` and `[ac_cable]` no longer stops after
   the simulation with "output array is read-only" while it reports the
   cable's loss (#506).
@@ -50,12 +51,13 @@ changes results says which studies to rerun.
   the same small fraction more cycles than the dispatch made. And
   `nmc622_gr_denso_50ah` can gain capacity when it is stored at a very low
   state of charge, where its calendar-ageing fit is extrapolated below the
-  10 % its storage data start at.
+  10 % its storage data start at. Rerun any one-year study with these two
+  models that reported health above 100 %.
 - Three configuration checks no longer let a bad value through:
   - A `pv_arrays` entry that sets a model option (`temperature_model`, `gcr`,
     `transposition_model`, `albedo`, `surface_type`, `model_perez`,
     `bifacial_model`, `pvrow_height`, `pvrow_pitch`) or a mounting key to null
-    now inherits the top-level value, as a null tilt or azimuth already did,
+    now inherits the top-level value, as a null tilt or azimuth now does,
     and is checked as inherited. 0.8.0 accepted some of these nulls and then
     failed inside `simulate()`, and refused others.
   - `battery_indoor_model` with only `ceiling_c` or only `floor_c` is now
@@ -165,7 +167,8 @@ changes results says which studies to rerun.
   Packs below 5 kWh now run slightly warmer than before while they charge
   and discharge (an idle pack stays at ambient either way): a 1 kWh pack gets
   0.25 K/W, and in Porto runs about 0.3 K warmer and ends 0.2 points lower.
-  A `thermal_resistance_k_per_w` you set on `BatteryConfig` is used as it is
+  A `thermal_resistance_k_per_w` you set on `BatteryConfig` is used as it is.
+  Rerun any study with a battery other than 5 kWh that did not set it
   (#492).
 
 ### Documentation
