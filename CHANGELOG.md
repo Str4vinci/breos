@@ -25,6 +25,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   runs only. `breos run` shows it again for vehicle runs. With no demand
   at all, the `simulate_energy_balance` summary now reports 0 % like the
   other results, not 100 % (#503).
+- An App run with both `[vehicle]` and `[ac_cable]` no longer stops after
+  the simulation with "output array is read-only" while it reports the
+  cable's loss (#506).
 - A `[period]` window that starts on a day whose local midnight does not
   exist, such as Chile's spring-forward day, no longer stops the run with
   "nonexistent time due to daylight savings time". The monthly results,

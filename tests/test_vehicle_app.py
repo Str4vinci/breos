@@ -655,3 +655,18 @@ def test_vehicle_grid_independence_counts_the_charging_at_home():
     monthly_import = sum(month["grid_import_kwh"] for month in result["monthly"])
     assert all(0.0 <= month["grid_independence_pct"] <= 100.0 for month in result["monthly"])
     assert monthly_import == pytest.approx(year["grid_import_kwh"], abs=0.5)
+
+
+def test_vehicle_with_an_ac_cable_reports_the_cable_loss():
+    # The cable carries the PV AC the vehicle charger takes too, so its loss
+    # is the one without the vehicle. Adding that AC to the cable's delivered
+    # power in place failed on a read-only array.
+    cable = {"cross_section_mm2": 6.0, "length_m": 20.0, "phases": 1, "voltage_v": 230.0}
+    without_vehicle = {key: value for key, value in CONFIG.items() if key != "vehicle"}
+
+    def cable_loss(config):
+        return simulate_offline({**config, "ac_cable": cable}).result()["pv_loss_waterfall"]["inverter"]["ac_cable"]
+
+    loss = cable_loss(CONFIG)["loss_kwh"]
+    assert loss > 0.0
+    assert loss == pytest.approx(cable_loss(without_vehicle)["loss_kwh"])
