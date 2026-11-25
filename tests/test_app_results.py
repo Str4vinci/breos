@@ -93,3 +93,18 @@ def test_monthly_rows_without_irradiance_have_no_irradiance_keys():
     rows = monthly_to_dicts(_constant_year("UTC"), "h")
 
     assert not {"global_horizontal_kwh_m2", "global_incident_kwh_m2", "performance_ratio_pct"} & set(rows[0])
+
+
+def test_monthly_grid_independence_with_a_vehicle_counts_the_charging_at_home():
+    # House load 1500 W, import 1000 W; the vehicle charges 300 W from PV and
+    # 600 W from the grid and returns 200 W to the house (#503).
+    frame = _constant_year("UTC")
+    frame["PV_Origin_Vehicle_AC_To_Load"] = 50.0
+    frame["PV_AC_To_Vehicle"] = 300.0
+    frame["Grid_AC_To_Vehicle"] = 600.0
+    frame["Vehicle_AC_To_Load"] = 200.0
+
+    rows = monthly_to_dicts(frame, "h", vehicle=True)
+
+    expected = round(100.0 * (1.0 - 1000.0 / (1500.0 + 300.0 + 600.0 - 200.0)), 2)
+    assert [row["grid_independence_pct"] for row in rows] == [expected] * 12

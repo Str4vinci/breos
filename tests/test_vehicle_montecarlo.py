@@ -101,6 +101,20 @@ def test_no_noise_trajectory_matches_all_app_households(weather, monkeypatch, ba
     assert row["npv_savings"] == app._artifacts.cost_projection.attrs["final_npv_savings"]
     assert row["npv_savings_household_adjusted"] == captured[0]["household_adjusted_npv"]["npv"]
     assert row["vehicle_benefit_npv"] == captured[0]["vehicle_benefit"]["npv"]
+    # Grid independence divides the home import by the house load plus the
+    # vehicle's charging at home, less its energy returned to the house (#503).
+    yearly = app._artifacts.yearly_df
+    demand = (
+        yearly["Load_kWh"]
+        + yearly["PV_AC_To_Vehicle_kWh"]
+        + yearly["Grid_AC_To_Vehicle_kWh"]
+        - yearly["Vehicle_AC_To_Load_kWh"]
+    )
+    annual = 100.0 * (1.0 - yearly["Import_kWh"] / demand)
+    assert row["lifetime_grid_independence_pct"] == pytest.approx(
+        100.0 * (1.0 - yearly["Import_kWh"].sum() / demand.sum())
+    )
+    assert row["mean_grid_independence_pct"] == pytest.approx(annual.mean())
     for key, household in captured[0]["households"].items():
         prefix = f"vehicle_{key.lower()}_"
         for name, amount in household["totals"].items():

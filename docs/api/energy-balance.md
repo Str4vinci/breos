@@ -379,7 +379,10 @@ Self-consumed PV is `PV_AC_To_Load + PV_Origin_Battery_AC_To_Load`, plus
 `PV_Origin_Vehicle_AC_To_Load` with a vehicle. PV-origin driving is reported
 separately, not counted as house self-consumption. Usable system AC
 generation is self-consumed PV plus `PV_AC_Export`. Grid independence is
-`1 − Import_From_Grid / Houseload`.
+`1 − Import_From_Grid / Houseload`, and with a vehicle
+`1 − Import_From_Grid / (Houseload + PV_AC_To_Vehicle + Grid_AC_To_Vehicle − Vehicle_AC_To_Load)`:
+the home meter also serves the vehicle charger, and the house load already
+holds what the vehicle returns.
 
 The ledger enforces PV routing, AC load, battery state-transition, inverter
 sub-balances, and whole-system conservation at each timestep and annually,
