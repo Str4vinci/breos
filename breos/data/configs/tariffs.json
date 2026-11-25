@@ -749,6 +749,900 @@
           }
         }
       ]
+    },
+    "pt_mainland_2026_daily_four": {
+      "version": "2026",
+      "timezone": "Europe/Lisbon",
+      "cycle": "daily",
+      "periods": [
+        "super_off_peak",
+        "off_peak",
+        "mid_peak",
+        "peak"
+      ],
+      "source_url": "https://files.diariodarepublica.pt/2s/2026/01/004000000/0018600288.pdf",
+      "source": "Diretiva ERSE n.º 1/2026 (Diário da República, 2.ª série, n.º 4, 2026-01-07), Art. 45.º n.º 9-11",
+      "effective_to": "2027-12-31",
+      "note": "Four periods: super_off_peak is super vazio, off_peak vazio normal, mid_peak cheias and peak ponta. A two- or three-period price gives super_off_peak the off_peak price. BTN and BTE only. Replaced by the 2027 schedule on 2027-04-01 for MAT, AT, MT and BTE (Diretiva ERSE n.º 3/2026, Art. 3.º n.º 1), and for each BTN installation when its meter is reparametrised, between 2027-07-01 and 2027-12-31 (Art. 3.º n.º 3).",
+      "rules": [
+        {
+          "days": "all",
+          "season": "standard",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "08:00"
+              ],
+              [
+                "22:00",
+                "24:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "08:00",
+                "09:00"
+              ],
+              [
+                "10:30",
+                "18:00"
+              ],
+              [
+                "20:30",
+                "22:00"
+              ]
+            ],
+            "peak": [
+              [
+                "09:00",
+                "10:30"
+              ],
+              [
+                "18:00",
+                "20:30"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "all",
+          "season": "dst",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "08:00"
+              ],
+              [
+                "22:00",
+                "24:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "08:00",
+                "10:30"
+              ],
+              [
+                "13:00",
+                "19:30"
+              ],
+              [
+                "21:00",
+                "22:00"
+              ]
+            ],
+            "peak": [
+              [
+                "10:30",
+                "13:00"
+              ],
+              [
+                "19:30",
+                "21:00"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    "pt_mainland_2026_weekly_four": {
+      "version": "2026",
+      "timezone": "Europe/Lisbon",
+      "cycle": "weekly",
+      "periods": [
+        "super_off_peak",
+        "off_peak",
+        "mid_peak",
+        "peak"
+      ],
+      "source_url": "https://files.diariodarepublica.pt/2s/2026/01/004000000/0018600288.pdf",
+      "source": "Diretiva ERSE n.º 1/2026 (Diário da República, 2.ª série, n.º 4, 2026-01-07), Art. 45.º n.º 4 and n.º 10-11",
+      "effective_to": "2027-12-31",
+      "note": "Four periods: super_off_peak is super vazio, off_peak vazio normal, mid_peak cheias and peak ponta. A two- or three-period price gives super_off_peak the off_peak price. BTN and BTE; Holidays are ordinary days, as for BTN and BTE. MAT, AT and MT use pt_mainland_2026_weekly_four_mt. Replaced by the 2027 schedule on 2027-04-01 for MAT, AT, MT and BTE (Diretiva ERSE n.º 3/2026, Art. 3.º n.º 1), and for each BTN installation when its meter is reparametrised, between 2027-07-01 and 2027-12-31 (Art. 3.º n.º 3).",
+      "rules": [
+        {
+          "days": "weekday",
+          "season": "standard",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "07:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "07:00",
+                "09:30"
+              ],
+              [
+                "12:00",
+                "18:30"
+              ],
+              [
+                "21:00",
+                "24:00"
+              ]
+            ],
+            "peak": [
+              [
+                "09:30",
+                "12:00"
+              ],
+              [
+                "18:30",
+                "21:00"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "weekday",
+          "season": "dst",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "07:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "07:00",
+                "09:15"
+              ],
+              [
+                "12:15",
+                "24:00"
+              ]
+            ],
+            "peak": [
+              [
+                "09:15",
+                "12:15"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "standard",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "09:30"
+              ],
+              [
+                "13:00",
+                "18:30"
+              ],
+              [
+                "22:00",
+                "24:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "09:30",
+                "13:00"
+              ],
+              [
+                "18:30",
+                "22:00"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "dst",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "09:00"
+              ],
+              [
+                "14:00",
+                "20:00"
+              ],
+              [
+                "22:00",
+                "24:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "09:00",
+                "14:00"
+              ],
+              [
+                "20:00",
+                "22:00"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "sunday",
+          "season": "all",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "24:00"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    "pt_mainland_2026_weekly_four_mt": {
+      "version": "2026",
+      "timezone": "Europe/Lisbon",
+      "cycle": "weekly",
+      "periods": [
+        "super_off_peak",
+        "off_peak",
+        "mid_peak",
+        "peak"
+      ],
+      "source_url": "https://files.diariodarepublica.pt/2s/2026/01/004000000/0018600288.pdf",
+      "source": "Diretiva ERSE n.º 1/2026 (Diário da República, 2.ª série, n.º 4, 2026-01-07), Art. 45.º n.º 4 and n.º 10-12",
+      "effective_to": "2027-12-31",
+      "note": "Four periods: super_off_peak is super vazio, off_peak vazio normal, mid_peak cheias and peak ponta. A two- or three-period price gives super_off_peak the off_peak price. MAT, AT and MT on the weekly cycle; national holidays take the Sunday hours. Replaced by the 2027 schedule on 2027-04-01 for MAT, AT, MT and BTE (Diretiva ERSE n.º 3/2026, Art. 3.º n.º 1), and for each BTN installation when its meter is reparametrised, between 2027-07-01 and 2027-12-31 (Art. 3.º n.º 3).",
+      "rules": [
+        {
+          "days": "weekday",
+          "season": "standard",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "07:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "07:00",
+                "09:30"
+              ],
+              [
+                "12:00",
+                "18:30"
+              ],
+              [
+                "21:00",
+                "24:00"
+              ]
+            ],
+            "peak": [
+              [
+                "09:30",
+                "12:00"
+              ],
+              [
+                "18:30",
+                "21:00"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "weekday",
+          "season": "dst",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "07:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "07:00",
+                "09:15"
+              ],
+              [
+                "12:15",
+                "24:00"
+              ]
+            ],
+            "peak": [
+              [
+                "09:15",
+                "12:15"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "standard",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "09:30"
+              ],
+              [
+                "13:00",
+                "18:30"
+              ],
+              [
+                "22:00",
+                "24:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "09:30",
+                "13:00"
+              ],
+              [
+                "18:30",
+                "22:00"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "dst",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "09:00"
+              ],
+              [
+                "14:00",
+                "20:00"
+              ],
+              [
+                "22:00",
+                "24:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "09:00",
+                "14:00"
+              ],
+              [
+                "20:00",
+                "22:00"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "sunday",
+          "season": "all",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:00",
+                "06:00"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:00"
+              ],
+              [
+                "06:00",
+                "24:00"
+              ]
+            ]
+          }
+        }
+      ],
+      "holidays": {
+        "day_type": "sunday",
+        "calendar": "pt_national",
+        "source": "Diretiva ERSE n.º 1/2026, Art. 45.º n.º 12: national holidays as Sundays for MAT, AT and MT on the weekly cycle; mandatory holidays of the Labour Code, Art. 234.º"
+      }
+    },
+    "pt_mainland_2027_daily_four": {
+      "version": "2027",
+      "timezone": "Europe/Lisbon",
+      "cycle": "daily",
+      "periods": [
+        "super_off_peak",
+        "off_peak",
+        "mid_peak",
+        "peak"
+      ],
+      "source_url": "https://files.diariodarepublica.pt/2s/2026/08/160000000/0020300209.pdf",
+      "source": "Diretiva ERSE n.º 3/2026, de 19 de agosto (Diário da República, 2.ª série, n.º 160, pp. 203-209), Art. 2.º n.º 7-9",
+      "effective_from": "2027-04-01",
+      "note": "Four periods: super_off_peak is super vazio, off_peak vazio normal, mid_peak cheias and peak ponta. A two- or three-period price gives super_off_peak the off_peak price. BTN and BTE only. Applies to MAT, AT, MT and BTE from 2027-04-01 (Art. 3.º n.º 1), and to each BTN installation from its meter reparametrisation between 2027-07-01 and 2027-12-31 (Art. 3.º n.º 3). Selecting it for another year needs an explicit study_date.",
+      "rules": [
+        {
+          "days": "all",
+          "season": "all",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:30",
+                "06:30"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:30"
+              ],
+              [
+                "06:30",
+                "08:30"
+              ],
+              [
+                "22:30",
+                "24:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "08:30",
+                "17:30"
+              ],
+              [
+                "21:30",
+                "22:30"
+              ]
+            ],
+            "peak": [
+              [
+                "17:30",
+                "21:30"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    "pt_mainland_2027_weekly_four": {
+      "version": "2027",
+      "timezone": "Europe/Lisbon",
+      "cycle": "weekly",
+      "periods": [
+        "super_off_peak",
+        "off_peak",
+        "mid_peak",
+        "peak"
+      ],
+      "source_url": "https://files.diariodarepublica.pt/2s/2026/08/160000000/0020300209.pdf",
+      "source": "Diretiva ERSE n.º 3/2026, de 19 de agosto (Diário da República, 2.ª série, n.º 160, pp. 203-209), Art. 2.º n.º 4 and n.º 8-9",
+      "effective_from": "2027-04-01",
+      "note": "Four periods: super_off_peak is super vazio, off_peak vazio normal, mid_peak cheias and peak ponta. A two- or three-period price gives super_off_peak the off_peak price. BTN and BTE; Holidays are ordinary days, as for BTN and BTE. MAT, AT and MT use pt_mainland_2027_weekly_four_mt. Applies to MAT, AT, MT and BTE from 2027-04-01 (Art. 3.º n.º 1), and to each BTN installation from its meter reparametrisation between 2027-07-01 and 2027-12-31 (Art. 3.º n.º 3). Selecting it for another year needs an explicit study_date.",
+      "rules": [
+        {
+          "days": "weekday",
+          "season": "standard",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:30",
+                "06:30"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:30",
+                "02:30"
+              ],
+              [
+                "06:30",
+                "07:30"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "00:00",
+                "00:30"
+              ],
+              [
+                "07:30",
+                "17:00"
+              ],
+              [
+                "22:00",
+                "24:00"
+              ]
+            ],
+            "peak": [
+              [
+                "17:00",
+                "22:00"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "weekday",
+          "season": "dst",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:30",
+                "06:30"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:30",
+                "02:30"
+              ],
+              [
+                "06:30",
+                "07:30"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "00:00",
+                "00:30"
+              ],
+              [
+                "07:30",
+                "19:30"
+              ],
+              [
+                "22:30",
+                "24:00"
+              ]
+            ],
+            "peak": [
+              [
+                "19:30",
+                "22:30"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "all",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:30",
+                "06:30"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:30"
+              ],
+              [
+                "06:30",
+                "17:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "17:00",
+                "24:00"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "sunday",
+          "season": "all",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:30",
+                "06:30"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:30"
+              ],
+              [
+                "06:30",
+                "24:00"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    "pt_mainland_2027_weekly_four_mt": {
+      "version": "2027",
+      "timezone": "Europe/Lisbon",
+      "cycle": "weekly",
+      "periods": [
+        "super_off_peak",
+        "off_peak",
+        "mid_peak",
+        "peak"
+      ],
+      "source_url": "https://files.diariodarepublica.pt/2s/2026/08/160000000/0020300209.pdf",
+      "source": "Diretiva ERSE n.º 3/2026, de 19 de agosto (Diário da República, 2.ª série, n.º 160, pp. 203-209), Art. 2.º n.º 4 and n.º 8-10",
+      "effective_from": "2027-04-01",
+      "note": "Four periods: super_off_peak is super vazio, off_peak vazio normal, mid_peak cheias and peak ponta. A two- or three-period price gives super_off_peak the off_peak price. MAT, AT and MT on the weekly cycle; national holidays take the Sunday hours. Applies to MAT, AT, MT and BTE from 2027-04-01 (Art. 3.º n.º 1), and to each BTN installation from its meter reparametrisation between 2027-07-01 and 2027-12-31 (Art. 3.º n.º 3). Selecting it for another year needs an explicit study_date.",
+      "rules": [
+        {
+          "days": "weekday",
+          "season": "standard",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:30",
+                "06:30"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:30",
+                "02:30"
+              ],
+              [
+                "06:30",
+                "07:30"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "00:00",
+                "00:30"
+              ],
+              [
+                "07:30",
+                "17:00"
+              ],
+              [
+                "22:00",
+                "24:00"
+              ]
+            ],
+            "peak": [
+              [
+                "17:00",
+                "22:00"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "weekday",
+          "season": "dst",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:30",
+                "06:30"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:30",
+                "02:30"
+              ],
+              [
+                "06:30",
+                "07:30"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "00:00",
+                "00:30"
+              ],
+              [
+                "07:30",
+                "19:30"
+              ],
+              [
+                "22:30",
+                "24:00"
+              ]
+            ],
+            "peak": [
+              [
+                "19:30",
+                "22:30"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "all",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:30",
+                "06:30"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:30"
+              ],
+              [
+                "06:30",
+                "17:00"
+              ]
+            ],
+            "mid_peak": [
+              [
+                "17:00",
+                "24:00"
+              ]
+            ]
+          }
+        },
+        {
+          "days": "sunday",
+          "season": "all",
+          "intervals": {
+            "super_off_peak": [
+              [
+                "02:30",
+                "06:30"
+              ]
+            ],
+            "off_peak": [
+              [
+                "00:00",
+                "02:30"
+              ],
+              [
+                "06:30",
+                "24:00"
+              ]
+            ]
+          }
+        }
+      ],
+      "holidays": {
+        "day_type": "sunday",
+        "calendar": "pt_national",
+        "source": "Diretiva ERSE n.º 3/2026, Art. 2.º n.º 10: national holidays as Sundays for MAT, AT and MT on the weekly cycle; mandatory holidays of the Labour Code, Art. 234.º"
+      }
     }
   }
 }

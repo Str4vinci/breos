@@ -82,13 +82,19 @@ the no-system baseline separately. It never drives dispatch (A13).
 
 Schedules are checked against primary sources, not against earlier code:
 
-- The Portuguese 2026 periods cite Diretiva ERSE n.º 1/2026. BTN tri-hourly
-  has three periods; there is no fourth `super_off_peak` period.
+- The Portuguese 2026 periods cite Diretiva ERSE n.º 1/2026. The bi- and
+  tri-hourly options merge super vazio into vazio (`off_peak`), as Art. 45.º
+  n.º 10 does. The `_four` schedules keep the four ERSE periods, with
+  `super_off_peak` for super vazio, for BTE and for MAT, AT and MT on the
+  weekly cycle; the `_four_mt` variants bill national holidays as Sundays
+  (n.º 12) from the built-in `pt_national` holiday calendar. The optional
+  weekly cycle and the weekly cycle by seasons for MAT, AT and MT are not
+  bundled.
 - The 2027 periods cite
   [Diretiva n.º 3/2026, de 19 de agosto](https://diariodarepublica.pt/dr/detalhe/diretiva/3-2026-1159784501),
   Article 2. The directive with the same number dated 26 June concerns gas
-  tariffs. Article 3 phases BTN meter changes in from 1 July through
-  31 December 2027. A user selects a 2027 schedule explicitly, with a
+  tariffs. Article 3 moves MAT, AT, MT and BTE on 1 April 2027 and phases
+  BTN meter changes in from 1 July through 31 December 2027. A user selects a 2027 schedule explicitly, with a
   `study_date` when the simulated year is outside its effective window. The
   calendar never switches schedules on its own.
 - Spain's 2.0TD cites CNMC Circular 3/2020, not Royal Decree 446/2023, which

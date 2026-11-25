@@ -26,6 +26,12 @@ so a UTC, fixed-offset, or local index resolves to the same periods.
 | `pt_mainland_2027_daily_tri` | off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
 | `pt_mainland_2027_weekly_bi` | off_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
 | `pt_mainland_2027_weekly_tri` | off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
+| `pt_mainland_2026_daily_four` | super_off_peak, off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 1/2026, Art. 45.º |
+| `pt_mainland_2026_weekly_four` | super_off_peak, off_peak, mid_peak, peak | 15 min | Diretiva ERSE n.º 1/2026, Art. 45.º |
+| `pt_mainland_2026_weekly_four_mt` | super_off_peak, off_peak, mid_peak, peak | 15 min | Diretiva ERSE n.º 1/2026, Art. 45.º |
+| `pt_mainland_2027_daily_four` | super_off_peak, off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
+| `pt_mainland_2027_weekly_four` | super_off_peak, off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
+| `pt_mainland_2027_weekly_four_mt` | super_off_peak, off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
 | `es_2_0td` | off_peak (P3), mid_peak (P2), peak (P1) | 60 min | CNMC Circular 3/2020, Art. 7.3 |
 
 The Portuguese schedules are the low-voltage (BTN) access cycles for mainland
@@ -34,6 +40,17 @@ bi-hourly `fora de vazio` is `peak`. The 2027 schedules replace the 2026 ones
 for each installation between 1 July and 31 December 2027, as its meter is
 reparametrised. They are never chosen by date: select one explicitly, and pass
 a `study_date` in its effective window when the simulated year is earlier.
+
+The `_four` schedules keep the four ERSE periods that the bi- and tri-hourly
+options merge: `super_off_peak` is super vazio and `off_peak` vazio normal.
+They are for commercial and industrial supplies priced on four periods: BTE
+on the daily or weekly cycle, and MAT, AT and MT on the weekly cycle, which
+use the `_four_mt` schedules because they bill national holidays as Sundays.
+BTN and BTE bill holidays as ordinary days. The 2027 four-period schedules
+apply to MAT, AT, MT and BTE from 1 April 2027. Pricing `super_off_peak` at
+the `off_peak` price gives the same prices as the three-period schedule. The
+optional weekly cycle and the weekly cycle by seasons for MAT, AT and MT are
+not bundled; define them as a custom schedule.
 `es_2_0td` is the Spanish Peninsula 2.0TD access tariff (up to 15 kW); its
 weekends and national holidays are `off_peak` all day. BREOS carries the
 national holidays for 2026 only, so a simulated year without a holiday

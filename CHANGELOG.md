@@ -4,6 +4,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- Four-period Portuguese schedules for commercial and industrial supplies:
+  `pt_mainland_2026_daily_four`, `pt_mainland_2026_weekly_four`,
+  `pt_mainland_2026_weekly_four_mt` and their 2027 counterparts. They keep
+  super vazio as its own `super_off_peak` period, which the bi- and
+  tri-hourly schedules merge into `off_peak`. The `_four_mt` schedules are
+  for MAT, AT and MT on the weekly cycle and bill national holidays as
+  Sundays. Source: Diretiva ERSE n.º 1/2026, Art. 45.º, and n.º 3/2026,
+  Art. 2.º.
+- A schedule's holidays may name a built-in calendar instead of listing
+  dates: `calendar = "pt_national"` gives Portugal's mandatory national
+  holidays for any year from 2004, in bundled and custom schedules.
+
 ### Changed
 
 - `breos run --help` groups the configuration flags by subject (location and
