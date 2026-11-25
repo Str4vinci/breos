@@ -18,6 +18,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - An App run with both `[vehicle]` and `[ac_cable]` no longer stops after
   the simulation with "output array is read-only" while it reports the
   cable's loss (#506).
+- A `[period]` window that starts on a day whose local midnight does not
+  exist, such as Chile's spring-forward day, no longer stops the run with
+  "nonexistent time due to daylight savings time". The monthly results,
+  and the yearly, monthly and cell-temperature plots, now group on the
+  wall clock (#507).
 - A BLAST battery's health is now capped at 100 %. Some models can rise
   slightly above their initial capacity while the pack barely cycles
   (`nmc_lto_10ah` and `nmc622_gr_denso_50ah` did). A one-year run then

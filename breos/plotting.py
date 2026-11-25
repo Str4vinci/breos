@@ -28,7 +28,7 @@ and the ``.png`` extension, for example ``"breakeven_cumulative"``.
 import math
 import os
 import warnings
-from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, List, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
 import numpy as np
 import pandas as pd
@@ -133,6 +133,22 @@ def _result_instants(results_df: pd.DataFrame) -> pd.DatetimeIndex:
         return pd.DatetimeIndex(pd.to_datetime(values))
     except ValueError:
         return pd.DatetimeIndex(pd.to_datetime(values, utc=True))
+
+
+_Frame = TypeVar("_Frame", pd.DataFrame, pd.Series)
+
+
+def _on_wall_clock(frame: _Frame) -> _Frame:
+    """``frame`` with its index on the wall clock, for calendar grouping.
+
+    Resampling a zone-aware index normalises its first step to local
+    midnight, which does not exist where the clocks move forward at
+    midnight (Chile, for one).
+    """
+    index = frame.index
+    if isinstance(index, pd.DatetimeIndex) and index.tz is not None:
+        return frame.set_axis(index.tz_localize(None))
+    return frame
 
 
 def _local_time_indexed(results_df: pd.DataFrame) -> pd.DataFrame:
@@ -768,7 +784,7 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: Optional[str] = N
 
     columns = [c for c in _ENERGY_LABELS if c in df.columns]
 
-    yearly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("YE").sum()
+    yearly = _on_wall_clock(_power_frame_to_energy_kwh(df[columns], _result_instants(results_df))).resample("YE").sum()
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -1003,9 +1019,10 @@ def plot_cell_temperature(
 
     df = _local_time_indexed(results_df)
 
-    monthly_mean = df["T_cell"].resample("ME").mean()
-    monthly_min = df["T_cell"].resample("ME").min()
-    monthly_max = df["T_cell"].resample("ME").max()
+    t_cell = _on_wall_clock(df["T_cell"])
+    monthly_mean = t_cell.resample("ME").mean()
+    monthly_min = t_cell.resample("ME").min()
+    monthly_max = t_cell.resample("ME").max()
 
     # Group by month number (handles multi-year data)
     mean_by_month = monthly_mean.groupby(monthly_mean.index.month).mean()
@@ -1271,7 +1288,7 @@ def plot_monthly_comparison(
 
     columns = [c for c in _ENERGY_LABELS if c in df.columns]
 
-    monthly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("ME").sum()
+    monthly = _on_wall_clock(_power_frame_to_energy_kwh(df[columns], _result_instants(results_df))).resample("ME").sum()
     monthly["Month"] = monthly.index.strftime("%b")
 
     fig, ax = plt.subplots(figsize=(14, 7))
@@ -1342,7 +1359,11 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: Optional[s
         raise ValueError(f"Missing energy-balance column(s): {', '.join(missing)}")
 
     # Convert power to interval energy before monthly aggregation.
-    monthly = _power_frame_to_energy_kwh(df[energy_columns], _result_instants(results_df)).resample("ME").sum()
+    monthly = (
+        _on_wall_clock(_power_frame_to_energy_kwh(df[energy_columns], _result_instants(results_df)))
+        .resample("ME")
+        .sum()
+    )
 
     # Group by month (1-12) to aggregate multi-year data
     monthly_avg = monthly.groupby(monthly.index.month).mean()
