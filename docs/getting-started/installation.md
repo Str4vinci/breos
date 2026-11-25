@@ -30,7 +30,7 @@ pip install "breos @ git+https://github.com/Str4vinci/breos.git@vX.Y.Z"
 breos --version
 ```
 
-It prints the installed version, for example `breos 0.8.0`. Then run your
+It prints the installed version, for example `breos 0.8.1`. Then run your
 first simulation in the [Quickstart](quickstart.md). See
 [Troubleshooting](troubleshooting.md) if a command fails or a simulation
 cannot reach its weather source.

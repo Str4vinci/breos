@@ -2,7 +2,13 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.8.1] - 2026-11-25
+
+BREOS 0.8.1 fixes wrong results and crashes found after 0.8.0, mostly in
+weather and load-profile handling, vehicle runs and battery temperature. No
+configuration key or CLI flag is added, renamed or removed. Some results
+change and some inputs that 0.8.0 accepted are now refused; each entry below
+says which studies to rerun.
 
 ### Changed
 
