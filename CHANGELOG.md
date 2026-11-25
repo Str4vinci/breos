@@ -7,8 +7,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 BREOS 0.8.1 fixes wrong results and crashes found after 0.8.0, mostly in
 weather and load-profile handling, vehicle runs and battery temperature. No
 configuration key or CLI flag is added, renamed or removed. Some results
-change and some inputs that 0.8.0 accepted are now refused; each entry below
-says which studies to rerun.
+change and some inputs that 0.8.0 accepted are now refused; each entry that
+changes results says which studies to rerun.
 
 ### Changed
 
@@ -94,9 +94,8 @@ says which studies to rerun.
   hour keep their mean, and the year's energy is unchanged. A file that does
   not cover one calendar year exactly once is refused instead of filled. In a
   15-minute profile, the first occurrence of the repeated autumn hour holds
-  that hour's mean in each quarter.
-  Files with naive timestamps,
-  undated files and E-REDES files are unchanged. Rerun any study that loaded
+  that hour's mean in each quarter. Files with naive timestamps, undated
+  files and E-REDES files are unchanged. Rerun any study that loaded
   an offset-stamped `custom` or external profile.
 - Annual App runs now refuse weather with rows outside the simulated year.
   0.8.0 refused weather that missed rows at either end of the year but
@@ -106,7 +105,9 @@ says which studies to rerun.
   matches the year, to within one step at each end, on the file's clock, on
   UTC or on the location's timezone. Duplicate timestamps are refused too.
   Rerun any 0.8.0 study whose weather file held rows before 1 January or
-  after 31 December of its year; such files now need trimming first (#480).
+  after 31 December of its year; such files now need those rows removed
+  first. A right-labelled file keeps its 00:00 row of the next 1 January,
+  which holds the year's last hour (#480).
 - Historical weather years must now contain every expected timestamp, in
   order, on the file's clock. 0.8.0 checked only the row count, so a
   duplicate timestamp could stand in for a missing reading. Such years are
@@ -175,7 +176,6 @@ says which studies to rerun.
   of filling the missing value with zero. Klucher now has a result (west-to-north
   ratio error `1.29%`); the other models move by at most `0.00134` percentage
   points. The validation page lists the five affected samples (#471).
-
 - A new entry path for new users: the README, the docs landing page, the
   installation page and the quickstart are built around a first `breos run`
   and the summary it prints, and the interpreting-results page maps each
