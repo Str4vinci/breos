@@ -91,13 +91,42 @@ def test_weather_timezone_spelling_does_not_change_results(synthetic_weather, tz
     assert respelled == reference
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#180: monthly rows group on the weather index's own clock, so a UTC year spelled in "
-    "Berlin time ends in a 13th row holding the last UTC hour",
-)
 def test_monthly_rows_do_not_depend_on_the_weather_timezone_spelling(synthetic_weather):
+    # A UTC year spelled in Berlin time covers the year on UTC, so its months
+    # are cut on UTC, as for the UTC spelling (#180, #514).
     reference, _ = _run(synthetic_weather, "UTC")
     respelled, _ = _run(synthetic_weather, "Europe/Berlin")
 
     assert respelled["monthly"] == reference["monthly"]
+
+
+def test_annual_monthly_rows_follow_the_civil_year_of_local_time_weather(tmp_path, monkeypatch, no_fetch):
+    # Local-time weather across a DST change is saved with two UTC offsets and
+    # read back as UTC. It covers the year on the location's clock, so its
+    # months are cut there: twelve rows, not a thirteenth holding the first
+    # hours of the next year in UTC (#514).
+    from tests.conftest import _build_open_meteo_weather
+
+    zone = "America/Punta_Arenas"
+    index = pd.date_range("2013-01-01", "2014-01-01", freq="h", inclusive="left", tz=zone)
+    _build_open_meteo_weather(index).to_csv(tmp_path / "local.csv")
+    monkeypatch.chdir(tmp_path)
+    app = App(
+        {
+            "location": {"latitude": -53.1638, "longitude": -70.9171, "timezone": zone},
+            "n_modules": 6,
+            "annual_consumption_kwh": 4000,
+            "projection_years": 1,
+            "start_date": "2013-01-01",
+            "weather_file": "local.csv",
+            "solar_position": "interval-start",
+        }
+    )
+    app.simulate()
+    result = app.result()
+    months = result["monthly"]
+
+    assert [row["month"] for row in months] == list(pd.date_range("2013-01", periods=12, freq="MS").strftime("%b"))
+    assert sum(row["consumption_kwh"] for row in months) == pytest.approx(result["consumption_kwh"], abs=0.1)
+    january_kwh = app.timeseries().set_index("Datetime").tz_convert(zone).loc["2013-01", "Houseload"].sum() / 1000
+    assert months[0]["consumption_kwh"] == pytest.approx(january_kwh, abs=0.01)

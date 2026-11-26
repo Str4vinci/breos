@@ -25,6 +25,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   result value is unchanged; `provenance.resolved_config` records the key as
   `null`, like other unset keys.
 
+### Fixed
+
+- An annual run now cuts its monthly table on the clock its weather covers
+  the year on. It used the weather index's own clock, which can differ: local
+  weather saved with two UTC offsets (across DST) is read as UTC but covers
+  the local civil year, and a UTC year can be spelled in a local zone. Both
+  gave 13 monthly rows, the last holding the first hours of the next year,
+  with every month edge shifted by the UTC offset. Annual totals, the yearly
+  table and the timeseries are unchanged. Rerun monthly results of annual
+  runs on local-time weather in a zone with DST, or on weather given in a
+  zone other than the one its year is cut on (#514, #180).
+
 ## [0.8.1] - 2026-11-25
 
 BREOS 0.8.1 fixes wrong results and crashes found after 0.8.0, mostly in

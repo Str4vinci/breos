@@ -11,6 +11,7 @@ from typing import Any, cast
 import pandas as pd
 
 from breos.app_config import ResolvedAppConfig
+from breos.app_inputs import full_year_clock
 from breos.battery import LEDGER_SCHEMA_VERSION, resistance_to_efficiency
 from breos.economics import projection_rates_record
 from breos.electrical import electrical_result
@@ -42,10 +43,34 @@ def irradiance_fields(
     }
 
 
+def _monthly_clock(artifacts: SimulationArtifacts, resolved: ResolvedAppConfig, cfg: Mapping[str, Any]) -> Any:
+    """The clock to cut the monthly table on, or ``None`` for the results' own.
+
+    A [period] run groups its window by the location's civil months. An
+    annual run groups by the clock on which its weather covered the year:
+    local-time weather whose UTC offset changes during the year is parsed to
+    UTC, but covers the year on the location's clock, so cutting its months
+    on UTC would shift every boundary and add a thirteenth row (#514).
+    """
+    if artifacts.period is not None:
+        return resolved.timezone
+    frame = artifacts.first_year_results_df
+    if isinstance(frame.index, pd.DatetimeIndex):
+        index = frame.index
+    elif "Datetime" in frame.columns:
+        index = local_datetime_index(frame["Datetime"])
+    else:
+        return None
+    if index.tz is None or index.empty:
+        return None
+    clock = full_year_clock(index, pd.Timestamp(cfg["start_date"]).year, cfg["resolution"], resolved.timezone)
+    return None if clock is None or str(clock) == str(index.tz) else clock
+
+
 def monthly_to_dicts(
     results_df: pd.DataFrame,
     freq: str,
-    timezone: str | None = None,
+    timezone: Any = None,
     *,
     vehicle: bool = False,
     irradiance: pd.DataFrame | None = None,
@@ -527,7 +552,7 @@ def build_result(
         "monthly": monthly_to_dicts(
             artifacts.first_year_results_df,
             cfg["resolution"],
-            timezone=resolved.timezone if artifacts.period is not None else None,
+            timezone=_monthly_clock(artifacts, resolved, cfg),
             vehicle=resolved.vehicle is not None,
             irradiance=artifacts.irradiance,
             system_kwp=resolved.system_kwp,
