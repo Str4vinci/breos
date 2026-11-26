@@ -86,12 +86,13 @@ LFP_CAP_DERATE_PER_C_COLD = 0.010  # fraction/°C below 0°C  (steeper derating)
 
 # === Lumped Thermal Model ===
 # Quasi-steady-state thermal resistance from pack to ambient.
-# For a residential home battery pack (3-10 kWh), the effective
-# pack-to-ambient resistance is much lower than a single cell due
-# to large surface area and (often) forced ventilation.
-# Range: 0.01-0.10 K/W.  0.05 K/W gives ~1-3°C rise above ambient
-# during typical 0.3C charging of a 5 kWh pack.
-DEFAULT_THERMAL_RESISTANCE_K_PER_W = 0.05  # K per W of heat dissipation
+# 0.05 K/W gives ~1-3°C rise above ambient during typical 0.3C charging
+# of a 5 kWh home pack. Heat loss grows with the pack, and so does the
+# surface that sheds it, so BatteryConfig scales the default inversely
+# with nominal capacity: 0.05 K/W x 5 kWh / capacity. A fixed 0.05 K/W
+# put a 60 MWh pack thousands of kelvin above ambient (#492).
+DEFAULT_THERMAL_RESISTANCE_K_PER_W = 0.05  # K per W of heat dissipation, for the reference pack
+THERMAL_RESISTANCE_REFERENCE_PACK_KWH = 5.0  # pack size the default resistance describes
 
 # === Indoor Temperature Model ===
 # Residential batteries are installed indoors (garage, utility room) where

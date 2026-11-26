@@ -17,6 +17,7 @@ from breos.projection import ProjectionYear, run_projection
 from breos.runners.app import run_app_simulation
 from breos.smart_charging import SmartChargingSpec, resolve_instructions
 from breos.tariffs import ScheduleDefinition
+from tests.offline_app import result_fields, revalue_offline, simulate_offline
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 3}
 TOU = {
@@ -521,3 +522,19 @@ def test_montecarlo_accepts_custom_schedule_with_explicit_calendar(tmp_path, wri
     assert result.provenance["tariff"]["schedule"] == "example_supplier_2023"
     recorded = result.provenance["resolved_config"]["tariff"]["custom_schedule"]
     assert recorded["identifier"] == "example_supplier_2023"
+
+
+def test_revalue_replaces_a_custom_schedule_whole():
+    # A schedule is one document: a holiday list the new one leaves out must
+    # not survive from the old one.
+    config = {**BASE, "start_date": "2023-01-01", "projection_years": 1}
+    without_holidays = deepcopy(CUSTOM_TARIFF)
+    del without_holidays["custom_schedule"]["holidays"]
+    without_holidays["custom_schedule"]["identifier"] = "example_supplier_2023_no_holidays"
+    app = simulate_offline({**config, "tariff": CUSTOM_TARIFF})
+
+    revalued = revalue_offline(app, {"tariff": without_holidays})
+
+    recorded = revalued["provenance"]["resolved_config"]["tariff"]["custom_schedule"]
+    assert "holidays" not in recorded
+    assert result_fields(revalued) == result_fields(simulate_offline({**config, "tariff": without_holidays}).result())

@@ -3,12 +3,13 @@
 import hashlib
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from breos import cli
 from breos.app import App
-from breos.app_inputs import input_configuration_key
+from breos.app_inputs import input_configuration_key, resample_hourly_weather
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
 # The weather CSVs these tests write carry no metadata sidecar, so the sun
@@ -168,3 +169,78 @@ def test_monte_carlo_refuses_the_app_weather_file(inputs, write_multiyear_weathe
 
     with pytest.raises(ValueError, match=r"\[montecarlo\]\.weather_file"):
         run_montecarlo({**BASE, "weather_file": "inputs/site_weather.csv"}, settings)
+
+
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+@pytest.mark.parametrize(("step", "hours"), [("2h", 2), ("3h", 3), ("D", 24)])
+def test_weather_coarser_than_hourly_is_refused(
+    tmp_path, monkeypatch, synthetic_weather, no_fetch, resolution, step, hours
+):
+    # Two-hourly rows were read as hourly at 15 minutes, stretching the year.
+    synthetic_weather.resample(step).mean().to_csv(tmp_path / "coarse.csv")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match=f"steps of {hours} hours"):
+        _run({**BASE, "resolution": resolution, "weather_file": "coarse.csv"})
+
+
+def test_an_hourly_file_missing_its_second_row_is_not_read_as_two_hourly(
+    tmp_path, monkeypatch, synthetic_weather, no_fetch
+):
+    synthetic_weather.drop(synthetic_weather.index[1]).to_csv(tmp_path / "gap.csv")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="must step evenly: row 1 is"):
+        _run({**BASE, "resolution": "15min", "weather_file": "gap.csv"})
+
+
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+def test_an_hourly_file_missing_a_row_is_refused_at_every_resolution(
+    tmp_path, monkeypatch, synthetic_weather, no_fetch, resolution
+):
+    # The 15-minute resampler filled the missing hour without a message.
+    synthetic_weather.drop(synthetic_weather.index[2000]).to_csv(tmp_path / "gap.csv")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="step evenly"):
+        _run({**BASE, "resolution": resolution, "weather_file": "gap.csv"})
+
+
+def _hourly(n=48):
+    index = pd.date_range("2023-01-01", periods=n, freq="h", tz="UTC")
+    return pd.DataFrame({"ghi": np.arange(n, dtype=float)}, index=index)
+
+
+def _check(weather, freq="15min"):
+    return resample_hourly_weather(weather, freq, latitude=41.0, longitude=-8.0, resample=lambda w, **_: w.iloc[:0])
+
+
+def test_hourly_weather_out_of_order_is_sorted_before_its_step_is_checked():
+    weather = _hourly()
+    swapped = weather.iloc[[0, 1, 3, 2, *range(4, len(weather))]]
+
+    assert _check(swapped).empty
+
+
+def test_one_stray_row_does_not_hide_a_two_hourly_step():
+    weather = _hourly(96).iloc[::2]
+    stray = _hourly(96).iloc[[10]].set_axis(weather.index[[5]] + pd.Timedelta("30min"))
+    mixed = pd.concat([weather, stray]).sort_index()
+
+    for freq in ("h", "15min"):
+        with pytest.raises(ValueError, match="steps of 2 hours"):
+            _check(mixed, freq)
+
+
+def test_a_repeated_hourly_timestamp_is_named():
+    weather = _hourly()
+    repeated = pd.concat([weather, weather.iloc[[7]]]).sort_index()
+
+    with pytest.raises(ValueError, match="repeats the timestamp"):
+        _check(repeated)
+
+
+def test_weather_without_a_datetime_index_is_returned_unchanged():
+    weather = pd.DataFrame({"ghi": [1.0, 2.0]}, index=pd.Index(["metadata", 1], dtype=object))
+
+    assert _check(weather) is weather

@@ -20,7 +20,7 @@ from breos.battery import (
     update_battery_resistance_cyclewise,
     update_battery_soh_cyclewise,
 )
-from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
+from breos.constants import DEFAULT_STANDBY_LOSS_WH, LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
 from breos.degradation.engine import BlastEngine
 from breos.degradation.native import (
     _detect_cycles_rainflow_arrays,
@@ -61,6 +61,46 @@ class TestBatteryConfig:
         assert cfg.inverter_efficiency == 0.96
         assert cfg.thermal_resistance_k_per_w == 0.05
         assert cfg.calendar_model == "naumann_lam_field_calibrated_v2"
+
+    @pytest.mark.parametrize(
+        ("nominal_energy_wh", "expected"), [(5000.0, 0.05), (10000.0, 0.025), (60e6, 0.05 / 12000), (0.0, 0.0)]
+    )
+    def test_default_thermal_resistance_scales_with_the_pack(self, nominal_energy_wh, expected):
+        cfg = BatteryConfig(nominal_energy_wh=nominal_energy_wh)
+        assert cfg.thermal_resistance_k_per_w == pytest.approx(expected, rel=1e-12)
+
+    def test_a_set_thermal_resistance_is_kept_at_any_capacity(self):
+        assert BatteryConfig(nominal_energy_wh=60e6, thermal_resistance_k_per_w=0.05).thermal_resistance_k_per_w == 0.05
+
+    def test_cell_temperature_and_ageing_do_not_depend_on_pack_size(self):
+        """A pack 1000 times larger or 5 times smaller, with PV and load scaled alike, heats and ages the same (#492).
+
+        A fixed 0.05 K/W put a 60 MWh pack thousands of kelvin above ambient
+        and replaced it every few weeks, and ran a 1 kWh pack cooler than a 5 kWh one.
+        """
+        steps = 24 * 30
+        hour = np.arange(steps) % 24
+        pv_w = np.clip(np.sin((hour - 6) / 12 * np.pi), 0.0, None) * 4000.0
+        load_w = np.full(steps, 700.0)
+        runs = [
+            _simulate(
+                pv_w * k,
+                load_w * k,
+                # Standby loss is a fixed draw, not a share of the pack, so it is scaled here by hand.
+                BatteryConfig(nominal_energy_wh=5000.0 * k, standby_loss_wh=DEFAULT_STANDBY_LOSS_WH * k),
+                periods=steps,
+            )
+            for k in (1.0, 1000.0, 0.2)
+        ]
+        home, large, tiny = (run[0] for run in runs)
+
+        # The cycle count breaks ties at flat SOC plateaus on rounding noise,
+        # so a day's count may differ by a half cycle; the tolerances allow that
+        # (the small pack's last SOH differs by about 0.005 points while its temperature matches).
+        assert home["T_cell"].max() > 25.5
+        for other in (large, tiny):
+            np.testing.assert_allclose(other["T_cell"], home["T_cell"], atol=0.01)
+            assert other["Battery_SOH"].iloc[-1] == pytest.approx(home["Battery_SOH"].iloc[-1], rel=1e-4)
 
     def test_eol_default_agrees_across_config_surfaces(self):
         # BatteryConfig, the App config DEFAULTS, and the optimizer's

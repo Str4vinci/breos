@@ -416,3 +416,66 @@ def test_blast_continued_from_its_state_counts_on_from_the_carried_counters():
     second_span = second_degradation["Cumulative_FEC_All_Packs"].iloc[-1]
     assert second_span == pytest.approx(continuous["fec_cum"] - first["fec_cum"], rel=1e-12)
     assert first_span + second_span == pytest.approx(continuous["fec_cum"], rel=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Test: a capacity-gain model whose health rises above nameplate
+# ---------------------------------------------------------------------------
+
+
+def test_blast_capacity_gain_above_nameplate_carries_into_the_next_year(monkeypatch):
+    """nmc_lto_10ah gains capacity while it barely cycles; its health stays capped at 100 %.
+
+    Its q passes 1.0 in the first year. Before the cap, the next projection year
+    built its battery with initial_soh above 100 and BatteryConfig rejected it.
+    """
+    idx = pd.date_range("2025-01-01 00:00", periods=8760, freq="h", tz="UTC")
+    hour = idx.hour.to_numpy()
+    # A little midday PV the house uses almost entirely: the pack barely cycles.
+    pv = pd.Series(np.where((hour >= 11) & (hour < 14), 600.0, 0.0), index=idx)
+    load = pd.DataFrame({"Load": np.full(len(idx), 5000.0)}, index=idx)
+    inputs = PreparedSimulationInputs(
+        weather=pd.DataFrame(index=idx),
+        dc_system_base=pv,
+        load_data=load,
+        temperature_series=pd.Series(22.0, index=idx),
+        pv_breakdown=_pv_breakdown(pv),
+    )
+    monkeypatch.setattr("breos.app_inputs.prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
+    resolved = resolve_app_config(
+        {
+            "location": "porto",
+            "n_modules": 2,
+            "annual_consumption_kwh": 43800,
+            "battery_kwh": 1.5,
+            "projection_years": 3,
+            "degradation_engine": "blast",
+            "blast_model": "nmc_lto_10ah",
+        }
+    )
+
+    with warnings.catch_warnings(), monkeypatch.context() as patch:
+        warnings.simplefilter("ignore")
+        keep_every_frame(patch)
+        years = record_project_years(patch)
+        artifacts = app_runner.run_app_simulation(resolved, deps=SimpleNamespace())
+
+    first_year_soh = years[0].degradation_df["SOH"]
+    assert first_year_soh.max() == 100.0  # capped, not 100.005
+    assert len(years) == 3
+    assert all(0.0 <= soh <= 100.0 for soh in artifacts.yearly_df["Battery_SOH_%"])
+
+
+def test_blast_continued_above_nameplate_starts_at_nameplate():
+    # A pack carried into the next span with its capacity above nameplate
+    # starts that span at 100 % health. The model's own state keeps the gain.
+    from breos.degradation.protocol import BlastDegradationAdapter
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        state = BlastDegradationAdapter("nmc_lto_10ah").snapshot(day_start_soc=0.5, day_start_temperature_c=25.0)
+        state["blast_engine"]["outputs"]["q"][-1] = 1.002
+        continued = BlastDegradationAdapter("nmc_lto_10ah", initial_state=state)
+
+    assert continued.soh() == 1.0
+    assert continued._engine.soh() == pytest.approx(1.002)

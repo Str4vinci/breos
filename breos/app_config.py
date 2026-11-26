@@ -1353,9 +1353,20 @@ COSTS_TABLE = TableSpec(
 
 
 def _check_indoor_temperature_band(model: dict[str, Any], where: str) -> None:
+    # A bound left out takes its default, which the other must respect too.
     floor, ceiling = model.get("floor_c"), model.get("ceiling_c")
-    if floor is not None and ceiling is not None and floor > ceiling:
-        raise ValueError(f"'{where}.floor_c' must not exceed '{where}.ceiling_c'")
+    floor_text = (
+        f"'{where}.floor_c' ({floor:g})" if floor is not None else f"the default floor_c ({DEFAULT_INDOOR_FLOOR_C:g})"
+    )
+    ceiling_text = (
+        f"'{where}.ceiling_c' ({ceiling:g})"
+        if ceiling is not None
+        else f"the default ceiling_c ({DEFAULT_INDOOR_CEILING_C:g})"
+    )
+    floor = DEFAULT_INDOOR_FLOOR_C if floor is None else floor
+    ceiling = DEFAULT_INDOOR_CEILING_C if ceiling is None else ceiling
+    if floor > ceiling:
+        raise ValueError(f"{floor_text} must not exceed {ceiling_text}")
 
 
 INDOOR_MODEL_TABLE = TableSpec(
@@ -2781,6 +2792,13 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
     if has_arrays:
         if not isinstance(cfg["pv_arrays"], list):
             raise TypeError("'pv_arrays' must be a list")
+        # A model option or mounting key set to None inherits the top-level
+        # value, so every check below and the simulation see it as unset.
+        inheriting = (*PER_ARRAY_MODEL_OPTION_KEYS, *_PV_ARRAY_MOUNTING_KEYS)
+        cfg["pv_arrays"] = [
+            {k: v for k, v in arr.items() if not (k in inheriting and v is None)} if isinstance(arr, Mapping) else arr
+            for arr in cfg["pv_arrays"]
+        ]
         for i, arr in enumerate(cfg["pv_arrays"]):
             PV_ARRAY_TABLE.validate(arr, f"pv_arrays[{i}]")
             if "modules" not in arr:
@@ -3130,8 +3148,9 @@ def normalise_pv_arrays(
             for key in _TRACKER_GEOMETRY_KEYS:
                 value = arr.get(key)
                 entry[key] = tracker_defaults[key] if value is None else value
+        # A key set to None inherits the top-level value, as tilt does.
         for key in (*PER_ARRAY_MODEL_OPTION_KEYS, *_PV_ARRAY_MOUNTING_KEYS):
-            if key in arr:
+            if arr.get(key) is not None:
                 entry[key] = arr[key]
         if "shading" in arr:
             entry["shading"] = _plain_shading(arr["shading"])
@@ -3524,12 +3543,19 @@ def resolve_app_revaluation(
     cfg = dict(original.cfg)
     for key in price_keys:
         field = APP_CONFIG_FIELDS[key]
+        if key not in config:
+            # A table the changes removed falls back to its default.
+            if field.has_default:
+                cfg[key] = field.default
+            else:
+                cfg.pop(key, None)
+            continue
         value = config[key]
         cfg[key] = field.normalizer(value) if field.normalizer is not None else value
     _refuse_dc_battery_inverter_keys(cfg)
     for key in price_keys:
         check = APP_CONFIG_FIELDS[key].check
-        if check is not None:
+        if check is not None and key in config:
             check(cfg[key], key)
     tariff, reference_tariff, currency = _validate_pricing(cfg, original.timezone)
     smart_charging, vehicle = _validate_tariff_controls(cfg, tariff)
@@ -3679,7 +3705,9 @@ def _resolve_electrical(
                 "DC-coupled battery sits behind one hybrid inverter"
             )
         smart_charging = cfg.get("smart_charging") or {}
-        if len(inverters) > 1 and config_has_battery(cfg) and smart_charging.get("mode") in PLANNER_MODES:
+        # The mode is not yet normalised here; "DAILY_PERSISTENCE" is the same mode.
+        mode = str(smart_charging.get("mode")).strip().lower()
+        if len(inverters) > 1 and config_has_battery(cfg) and mode in PLANNER_MODES:
             # The planner converts one forecast through one PV inverter (ADR 0004 M7).
             problems.append(
                 f"smart_charging.mode = '{smart_charging['mode']}' plans with one PV inverter, not "
