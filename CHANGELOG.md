@@ -2,22 +2,7 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.8.1] - 2026-11-25
-
-BREOS 0.8.1 fixes wrong results and crashes found after 0.8.0, mostly in
-weather and load-profile handling, vehicle runs and battery temperature. No
-configuration key or CLI flag is added, renamed or removed. Some results
-change and some inputs that 0.8.0 accepted are now refused; each entry that
-changes results says which studies to rerun.
-
-### Changed
-
-- `breos run --help` groups the configuration flags by subject (location and
-  simulation, PV array, inverter, household load, battery, economics,
-  emissions), lists the output flags first, shortens the usage line and ends
-  with example commands and a link to the configuration reference. Flags with
-  long choice lists show the choices in their help text. No flag is added,
-  removed or renamed (#464).
+## [Unreleased]
 
 ### Changed
 
@@ -37,6 +22,23 @@ changes results says which studies to rerun.
   selects v1. The documentation now asks users to repeat a study with a
   laboratory or BLAST model, which often predict no replacement where the
   field fits predict one.
+
+## [0.8.1] - 2026-11-25
+
+BREOS 0.8.1 fixes wrong results and crashes found after 0.8.0, mostly in
+weather and load-profile handling, vehicle runs and battery temperature. No
+configuration key or CLI flag is added, renamed or removed. Some results
+change and some inputs that 0.8.0 accepted are now refused; each entry that
+changes results says which studies to rerun.
+
+### Changed
+
+- `breos run --help` groups the configuration flags by subject (location and
+  simulation, PV array, inverter, household load, battery, economics,
+  emissions), lists the output flags first, shortens the usage line and ends
+  with example commands and a link to the configuration reference. Flags with
+  long choice lists show the choices in their help text. No flag is added,
+  removed or renamed (#464).
 
 ### Fixed
 
