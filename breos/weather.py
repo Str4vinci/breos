@@ -794,7 +794,11 @@ def _openmeteo_hourly(url: str, request: dict[str, Any], names: Sequence[str]) -
     retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
     cache_session.mount("https://", HTTPAdapter(max_retries=retries))
     cache_session.mount("http://", HTTPAdapter(max_retries=retries))
-    hourly = openmeteo_requests.Client(session=cache_session).weather_api(url, params=request, timeout=_OPENMETEO_TIMEOUT_S)[0].Hourly()
+    hourly = (
+        openmeteo_requests.Client(session=cache_session)
+        .weather_api(url, params=request, timeout=_OPENMETEO_TIMEOUT_S)[0]
+        .Hourly()
+    )
     index = pd.date_range(
         start=pd.to_datetime(hourly.Time(), unit="s"),
         end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
