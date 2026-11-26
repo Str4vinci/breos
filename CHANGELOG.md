@@ -25,6 +25,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   result value is unchanged; `provenance.resolved_config` records the key as
   `null`, like other unset keys.
 
+### Fixed
+
+- A right-labelled weather year (Open-Meteo preceding-hour means) without
+  29 February now runs: the App fills the day from 28 February, as it does
+  for a TMY. It used to stop with "right-labeled interval weather requires a
+  regular index". Any other gap in right-labelled weather is still refused,
+  and the message now names the rows around it and how many steps are
+  missing (#516).
+
 ## [0.8.1] - 2026-11-25
 
 BREOS 0.8.1 fixes wrong results and crashes found after 0.8.0, mostly in
