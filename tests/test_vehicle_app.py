@@ -631,3 +631,42 @@ def test_period_vehicle_holds_departure_target_when_charge_period_is_absent(tmp_
     assert (before_departure["Vehicle_AC_To_Load"] == 0.0).all()
     assert (before_departure["Grid_AC_To_Vehicle"] == 0.0).all()
     assert (before_departure["Vehicle_Energy"] == 32000.0).all()
+
+
+def test_vehicle_grid_independence_counts_the_charging_at_home():
+    # The home import includes the vehicle's charging, so the base is the
+    # demand at the home meter: house load, plus charging at home, less the
+    # vehicle's energy returned to the house (#503).
+    result = simulate_offline(dict(CONFIG)).result()
+    year = result["yearly"][0]
+    vehicle = year["vehicle"]
+    demand = (
+        year["consumption_kwh"]
+        + vehicle["pv_ac_charge_kwh"]
+        + vehicle["grid_ac_charge_kwh"]
+        - vehicle["ac_to_load_kwh"]
+    )
+
+    assert year["grid_import_kwh"] > year["consumption_kwh"]
+    expected = 100.0 * (1.0 - year["grid_import_kwh"] / demand)
+    assert year["grid_independence_pct"] == pytest.approx(expected, abs=0.05)
+    assert result["grid_independence_pct"] == year["grid_independence_pct"]
+    assert 0.0 < year["grid_independence_pct"] < 100.0
+    monthly_import = sum(month["grid_import_kwh"] for month in result["monthly"])
+    assert all(0.0 <= month["grid_independence_pct"] <= 100.0 for month in result["monthly"])
+    assert monthly_import == pytest.approx(year["grid_import_kwh"], abs=0.5)
+
+
+def test_vehicle_with_an_ac_cable_reports_the_cable_loss():
+    # The cable carries the PV AC the vehicle charger takes too, so its loss
+    # is the one without the vehicle. Adding that AC to the cable's delivered
+    # power in place failed on a read-only array.
+    cable = {"cross_section_mm2": 6.0, "length_m": 20.0, "phases": 1, "voltage_v": 230.0}
+    without_vehicle = {key: value for key, value in CONFIG.items() if key != "vehicle"}
+
+    def cable_loss(config):
+        return simulate_offline({**config, "ac_cable": cable}).result()["pv_loss_waterfall"]["inverter"]["ac_cable"]
+
+    loss = cable_loss(CONFIG)["loss_kwh"]
+    assert loss > 0.0
+    assert loss == pytest.approx(cable_loss(without_vehicle)["loss_kwh"])

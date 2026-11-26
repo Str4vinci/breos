@@ -1758,8 +1758,17 @@ def _build_summary_row(
     total_load = np.sum(buffers.columns["Houseload"]) * hours_per_step
     total_sell = np.sum(buffers.columns["PV_AC_Export"]) * hours_per_step
     total_import = np.sum(buffers.columns["Import_From_Grid"]) * hours_per_step
+    # The home meter also serves a vehicle charger; what the vehicle returns
+    # to the house is already in the house load (#503).
+    demand = total_load
+    if "PV_AC_To_Vehicle" in buffers.columns:
+        demand = demand + hours_per_step * (
+            np.sum(buffers.columns["PV_AC_To_Vehicle"])
+            + np.sum(buffers.columns["Grid_AC_To_Vehicle"])
+            - np.sum(buffers.columns["Vehicle_AC_To_Load"])
+        )
 
-    percentage_imported = (total_import / total_load * 100) if total_load > 0 else 0
+    percentage_imported = (total_import / demand * 100) if demand > 0 else 0
 
     summary = {
         "Total PV [kWh]": total_pv / 1000.0,
@@ -1767,7 +1776,7 @@ def _build_summary_row(
         "Sell [kWh]": total_sell / 1000.0,
         "Import [kWh]": total_import / 1000.0,
         "Import [%]": percentage_imported,
-        "Grid Independence [%]": 100 - percentage_imported,
+        "Grid Independence [%]": 100 - percentage_imported if demand > 0 else 0.0,
         "Final SOH [%]": final_soh_percent,
         "N_Replacements": n_replacements,
         "Replaced_Capacity_kWh": replaced_capacity_wh / 1000.0,

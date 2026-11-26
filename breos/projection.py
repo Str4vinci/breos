@@ -311,6 +311,9 @@ def build_year_row(
     pv_origin_battery_ac_kwh = kwh("PV_Origin_Battery_AC_To_Load")
     total_load = (sums_w["Houseload"] / 1000) * hours_per_step
     total_import = (sums_w["Import_From_Grid"] / 1000) * hours_per_step
+    site_demand = total_load
+    if "PV_AC_To_Vehicle" in sums_w:
+        site_demand += kwh("PV_AC_To_Vehicle") + kwh("Grid_AC_To_Vehicle") - kwh("Vehicle_AC_To_Load")
     total_export = (sums_w["PV_AC_Export"] / 1000) * hours_per_step
     row: dict[str, Any] = {
         "Year": year_idx + 1,
@@ -328,7 +331,7 @@ def build_year_row(
         "Load_kWh": total_load,
         "Import_kWh": total_import,
         "Export_kWh": total_export,
-        "Grid_Independence_%": (1 - total_import / total_load) * 100 if total_load > 0 else 0,
+        "Grid_Independence_%": (1 - total_import / site_demand) * 100 if site_demand > 0 else 0,
         "Battery_SOH_%": carry.soh_pct if has_battery else None,
         "Battery_Cumulative_FEC": carry.fec,
         "Battery_Cumulative_Calendar_Seconds": carry.calendar_seconds,
@@ -398,6 +401,23 @@ _PRICED_FLOWS: dict[str, tuple[str, str]] = {
 }
 # The frame columns those flows are summed from, once each.
 _PRICED_FLOW_COLUMNS = tuple(dict.fromkeys(column for column, _kind in _PRICED_FLOWS.values()))
+
+
+def site_demand_kwh(yearly: pd.DataFrame) -> pd.Series:
+    """Each year's demand on the home meter, the base of ``Grid_Independence_%``.
+
+    The house load, plus a vehicle's charging at home, less what the vehicle
+    returned to the house: that energy is already in the house load.
+    """
+    demand = yearly["Load_kWh"].astype(float)
+    if "PV_AC_To_Vehicle_kWh" in yearly.columns:
+        demand = (
+            demand
+            + yearly["PV_AC_To_Vehicle_kWh"]
+            + yearly["Grid_AC_To_Vehicle_kWh"]
+            - yearly["Vehicle_AC_To_Load_kWh"]
+        )
+    return demand
 
 
 def _step_total(sum_w: float, hours_per_step: float) -> float:

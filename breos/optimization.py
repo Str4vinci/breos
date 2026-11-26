@@ -47,7 +47,7 @@ from breos.optimization_config import (
     resolve_optimization_config,
     resolve_run_settings,
 )
-from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years
+from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years, site_demand_kwh
 from breos.pv.decomposition import decompose_ghi
 from breos.pv.model_options import (
     DEFAULT_SOLAR_POSITION,
@@ -349,7 +349,8 @@ def _summarize_projected_lifetime_metrics(yearly_summary_df: pd.DataFrame) -> Di
     )
 
     return {
-        "Projected_Grid_Independence_%": 100.0 * (1.0 - _safe_ratio(imports.sum(), load.sum())),
+        "Projected_Grid_Independence_%": 100.0
+        * (1.0 - _safe_ratio(imports.sum(), site_demand_kwh(yearly_summary_df).sum())),
         "Projected_Grid_Independence_Year1_%": float(annual_gi.iloc[0]),
         "Projected_Grid_Independence_FinalYear_%": float(annual_gi.iloc[-1]),
         "Projected_Grid_Independence_Mean_%": float(annual_gi.mean()),
