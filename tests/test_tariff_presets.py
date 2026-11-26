@@ -383,6 +383,7 @@ def test_the_four_period_cutover_on_1_april_2027(schedule, day, accepted):
 
 
 def test_a_named_calendar_refuses_even_an_hour_of_a_year_it_does_not_cover():
-    index = pd.date_range("2003-12-25 10:00", periods=1, freq="h", tz=LISBON)
+    # Four quarter-hours: shorter than a day, which the old check let through.
+    index = pd.date_range("2003-12-25 10:00", periods=4, freq="15min", tz=LISBON)
     with pytest.raises(ValueError, match="starts in 2004"):
         classify_tariff_periods(index, "pt_mainland_2026_weekly_four_mt", timezone=LISBON, study_date=date(2026, 6, 1))

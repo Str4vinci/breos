@@ -48,11 +48,13 @@ on the daily or weekly cycle, and MAT, AT and MT on the weekly cycle, which
 use the `_four_mt` schedules because they bill national holidays as Sundays.
 BTN and BTE bill holidays as ordinary days. The 2027 four-period schedules
 apply to MAT, AT, MT and BTE from 1 April 2027, and the 2026 `_four_mt`
-schedule ends on 31 March 2027. The 2026 BTN and BTE schedules stay valid to
-the end of 2027, because a BTN meter keeps the 2026 hours until it is
-reparametrised, between July and December 2027; a BTE study after 31 March
-2027 must name the 2027 schedule. Pricing `super_off_peak` at
-the `off_peak` price gives the same prices as the three-period schedule. The
+schedule ends on 31 March 2027. BTE changes on 1 April 2027 as well, but
+BTN changes when its meter is reparametrised, between July and December
+2027, so BREOS accepts the shared 2026 BTN and BTE schedules up to the end
+of 2027. For a BTE supply after 31 March 2027, name the 2027 schedule.
+Pricing `super_off_peak` at the `off_peak` price gives the same prices as
+the three-period schedule of the same cycle, except on national holidays
+under a `_four_mt` schedule, which bills them as Sundays. The
 optional weekly cycle and the weekly cycle by seasons for MAT, AT and MT are
 not bundled; define them as a custom schedule.
 `es_2_0td` is the Spanish Peninsula 2.0TD access tariff (up to 15 kW); its
