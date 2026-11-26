@@ -40,6 +40,7 @@ from breos.utils import (
     find_irradiance_column,
     find_met_column,
     get_hours_per_step,
+    ghi_only_hint,
     irradiance_component,
     is_leap_year,
     normalise_frequency,
@@ -1399,7 +1400,9 @@ def resample_to_15min(
         missing = [component for component in ("ghi", "dni", "dhi") if component not in irrad_col_map.values()]
         if missing:
             raise ValueError(
-                "irradiance_resampling='quadrature' requires GHI, DNI and DHI columns; missing: " + ", ".join(missing)
+                "irradiance_resampling='quadrature' requires GHI, DNI and DHI columns; missing: "
+                + ", ".join(missing)
+                + ghi_only_hint(df_hourly.columns)
             )
         _require_regular_hourly_index(df_hourly, resolved_policy)
         quadrature_columns, quadrature_record = _quadrature_irradiance(

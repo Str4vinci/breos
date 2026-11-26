@@ -49,6 +49,7 @@ from breos.config_schema import (
 from breos.constants import BATTERY_COUPLINGS, DEGRADATION_ENGINES, RESOLUTIONS, SKIPPED_REPLACEMENT_ACTIONS
 from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE, PANEL_WP_REMOVED
 from breos.emissions import EmissionsParams
+from breos.pv.decomposition import DECOMPOSITION_MODELS
 from breos.pv.model_options import PV_MODEL_CONFIG_KEYS
 from breos.smart_charging import PLANNER_MODES
 from breos.tariffs import DEFAULT_CURRENCY, check_currency, run_currency
@@ -361,6 +362,7 @@ SIMULATION_TABLE = TableSpec(
         "resolution": choice(RESOLUTIONS),
         "years_projection": _integer(1),
         "irradiance_resampling": choice(IRRADIANCE_RESAMPLING_POLICIES),
+        "irradiance_decomposition": _optional(choice(DECOMPOSITION_MODELS)),
     },
 )
 INVERTER_TABLE = TableSpec("inverter", keys={"efficiency": number(minimum=0, maximum=1, min_exclusive=True)})
@@ -582,6 +584,7 @@ def resolve_optimization_config(config: Mapping[str, Any], *, battery_kwh: float
 
     simulation.setdefault("resolution", DEFAULT_RESOLUTION)
     simulation.setdefault("irradiance_resampling", DEFAULTS["irradiance_resampling"])
+    simulation.setdefault("irradiance_decomposition", DEFAULTS["irradiance_decomposition"])
     # simulation.years_projection, else financials.project_lifespan.
     simulation["years_projection"] = _first_set(
         simulation.get("years_projection"), financials.get("project_lifespan"), default=DEFAULTS["projection_years"]

@@ -63,7 +63,13 @@ from breos.pv.model_options import (
 from breos.pv.shading import CIRCUMSOLAR_MODELS, ArrayShading, ModuleMeanShading, ShadingTable, as_shading_table
 from breos.pv.temperature import calculate_cell_temperature
 from breos.pv_modules import PVModuleParams, get_module
-from breos.utils import IRRADIANCE_COLUMN_ALIASES, MET_COLUMN_ALIASES, find_irradiance_column, find_met_column
+from breos.utils import (
+    IRRADIANCE_COLUMN_ALIASES,
+    MET_COLUMN_ALIASES,
+    find_irradiance_column,
+    find_met_column,
+    ghi_only_hint,
+)
 from breos.weather import validate_weather_irradiance
 
 # The module an entry point models when it is given none.
@@ -1386,7 +1392,10 @@ def _extract_irradiance(weather_df: pd.DataFrame):
     for component in ("dni", "ghi", "dhi"):
         column = find_irradiance_column(weather_df.columns, component)
         if column is None:
-            raise KeyError(f"Could not find column. Tried: {list(IRRADIANCE_COLUMN_ALIASES[component])}")
+            raise KeyError(
+                f"Could not find column. Tried: {list(IRRADIANCE_COLUMN_ALIASES[component])}"
+                + ghi_only_hint(weather_df.columns)
+            )
         irradiance[column] = pd.to_numeric(weather_df[column], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
     validate_weather_irradiance(weather_df, irradiance)
     return tuple(irradiance.values())

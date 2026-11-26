@@ -83,6 +83,7 @@ from breos.execution import (
 )
 from breos.inverter import AcCable, InverterConversion, inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
+from breos.pv.decomposition import DECOMPOSITION_MODELS
 from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.mismatch import DEFAULT_BYPASS_DIODE_VOLTAGE_V
 from breos.pv.model_options import PER_ARRAY_MODEL_OPTION_KEYS, is_valid_albedo, normalise_model_name
@@ -637,6 +638,19 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "into quarter-hours, conserving interval-mean DNI and DHI"
         ),
         summary="simulation.irradiance_resampling",
+    ),
+    "irradiance_decomposition": AppConfigField(
+        check=optional(choice(DECOMPOSITION_MODELS)),
+        default=None,
+        cli_flags=("--irradiance-decomposition",),
+        cli_choices=DECOMPOSITION_MODELS,
+        cli_help="Estimate DNI/DHI from GHI with this pvlib model when the weather has GHI only.",
+        doc=(
+            "pvlib model that estimates DNI and DHI from GHI when the weather has GHI only; DHI follows from "
+            'closure. `"erbs_driesse"` is the recommended choice. Weather that already has DNI and DHI is used as '
+            "supplied; unset, GHI-only weather is an error"
+        ),
+        summary="simulation.irradiance_decomposition",
     ),
     "solar_position": AppConfigField(
         check=choice(SOLAR_POSITION_METHODS),
@@ -2868,6 +2882,9 @@ def _validate_shading_table(value: Any, where: str) -> None:
 def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
     """Validate simulation horizon, resolution, and solar-model selections."""
     cfg["irradiance_resampling"] = validate_irradiance_resampling(cfg["irradiance_resampling"])
+    cfg["irradiance_decomposition"] = optional(choice(DECOMPOSITION_MODELS))(
+        cfg["irradiance_decomposition"], "irradiance_decomposition"
+    )
     _validate_weather_source(cfg)
     _validate_weather_file(cfg)
     cfg["horizon_profile"] = normalise_horizon_profile(cfg["horizon_profile"])

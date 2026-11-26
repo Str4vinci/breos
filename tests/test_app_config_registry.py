@@ -31,6 +31,7 @@ EXPECTED_DEFAULTS = {
     "model_perez": "allsitescomposite1990",
     "solar_position": "auto",
     "irradiance_resampling": "auto",
+    "irradiance_decomposition": None,
     "iam_model": "ashrae",
     "diffuse_iam": "none",
     "temperature_model": "faiman",
@@ -103,6 +104,7 @@ EXPECTED_DEFAULTS = {
 RUN_FLAGS: list[tuple[str, list[str], str, object]] = [
     ("--location", ["PORTO"], "location", "porto"),
     ("--irradiance-resampling", ["clear_sky"], "irradiance_resampling", "clear_sky"),
+    ("--irradiance-decomposition", ["erbs_driesse"], "irradiance_decomposition", "erbs_driesse"),
     ("--weather-file", ["tmy.csv"], "weather_file", "tmy.csv"),
     ("--weather-source", ["pvgis"], "weather_source", "pvgis"),
     ("--execution-backend", ["numba"], "execution_backend", "numba"),
