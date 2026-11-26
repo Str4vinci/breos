@@ -58,7 +58,7 @@ blast_model = "lfp_gr_sonymurata_3ah"      # or "lfp_gr_250ah_prismatic"
 ```
 
 For one Porto household with a 10 kWh battery, the default reached end of life
-after 14.1 years and needed one replacement; `naumann` and both LFP BLAST
+after 14.4 years and needed one replacement; `naumann` and both LFP BLAST
 models needed none. The
 [degradation policy](https://github.com/Str4vinci/breos/blob/main/design/architecture/battery-degradation-policy.md)
 gives the full comparison. No model in BREOS has a late-life knee or failures

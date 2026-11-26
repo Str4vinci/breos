@@ -955,7 +955,7 @@
   }
  },
  "provenance": {
-  "breos_version": "0.7.0",
+  "breos_version": "0.8.1",
   "ledger_schema_version": "3.1",
   "currency": "EUR",
   "resolved_config": {
@@ -1137,7 +1137,7 @@
   "execution": {
    "execution_backend": "python",
    "requested_execution_backend": "python",
-   "python": "3.12.13",
+   "python": "3.13.14",
    "numpy": "2.4.6",
    "pandas": "3.0.5"
   },

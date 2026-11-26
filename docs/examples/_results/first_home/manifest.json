@@ -1,10 +1,10 @@
 {
  "case": "first_home",
  "title": "PV and battery system in Porto",
- "breos_version": "0.7.0",
- "git_describe": "v0.8.0-30-g960137a-dirty",
- "generated_utc": "2026-11-18T22:56:00+00:00",
- "runtime_s": 2.3,
+ "breos_version": "0.8.1",
+ "git_describe": "v0.8.0-103-ga1d8681",
+ "generated_utc": "2026-11-26T00:54:44+00:00",
+ "runtime_s": 1.9,
  "cheap": true,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
@@ -16,7 +16,7 @@
   }
  },
  "dependencies": {
-  "python": "3.12.13",
+  "python": "3.13.14",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
@@ -31,7 +31,7 @@
   "summer": 27
  },
  "files": {
-  "result.json": "2cc0fc5a6759a8b2978777e74121a76194c1fadc908fbcdeec4830baf0286bb2",
+  "result.json": "b3e7b6a8d20539689106e1545496bcd53bec9d8e644b1a43448fdd5ff178507c",
   "week_winter.csv": "d820f596884981c39d0e74e24db42b8253699f699a68dc84bdc3449f575a2faa",
   "week_summer.csv": "16a24458bb966c77517bdd7327e6ed3b1db923a335b80a9eafdf302203d9cde4"
  }

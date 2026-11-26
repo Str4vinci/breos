@@ -55,11 +55,11 @@ storage systems in the field data set, over 3 to 8 years, with about
 
 | Model | SOH year 8 | First end of life | Replacements | SOH year 20 | NPV of savings |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Native v1 | 74.6 % | 10.1 years | 1 | 70.5 % | 2495 EUR |
-| Native v2 | 79.2 % | 14.1 years | 1 | 83.0 % | 2698 EUR |
-| Native `naumann` (laboratory) | 84.7 % | not reached | 0 | 75.9 % | 7058 EUR |
-| Native `naumann_lam` (laboratory) | 89.3 % | not reached | 0 | 80.8 % | 7141 EUR |
-| BLAST `lfp_gr_sonymurata_3ah` | 90.0 % | not reached | 0 | 83.3 % | 7160 EUR |
+| Native v1 | 74.7 % | 10.2 years | 1 | 70.7 % | 2498 EUR |
+| Native v2 | 79.5 % | 14.4 years | 1 | 83.4 % | 2707 EUR |
+| Native `naumann` (laboratory) | 84.8 % | not reached | 0 | 76.0 % | 7060 EUR |
+| Native `naumann_lam` (laboratory) | 89.4 % | not reached | 0 | 81.0 % | 7143 EUR |
+| BLAST `lfp_gr_sonymurata_3ah` | 90.1 % | not reached | 0 | 83.5 % | 7163 EUR |
 | BLAST `lfp_gr_250ah_prismatic` | 91.9 % | not reached | 0 | 84.4 % | 7187 EUR |
 
 Both field fits lose capacity faster than the field average over the observed

@@ -15,8 +15,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   does not set `calendar_model` change. In the residential cases checked, the
   battery lasts longer under v2, by less in a hot place or at a high state of
   charge: for one Porto household with a 10 kWh battery, first end of life
-  moved from 10.1 to 14.1 years, and for an outdoor battery in Seville from
-  10.3 to 13.4 years. A battery held at 35 °C ages faster under v2.
+  moved from 10.2 to 14.4 years, and for an outdoor battery in Seville from
+  10.4 to 13.6 years. A battery held at 35 °C ages faster under v2.
   **Migration:** set `calendar_model = "naumann_lam_field_calibrated_v1"` to
   keep earlier results. The unversioned `"naumann_lam_field_calibrated"` still
   selects v1. The documentation now asks users to repeat a study with a
