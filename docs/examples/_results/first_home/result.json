@@ -955,7 +955,7 @@
   }
  },
  "provenance": {
-  "breos_version": "0.8.0",
+  "breos_version": "0.8.1",
   "ledger_schema_version": "3.1",
   "currency": "EUR",
   "resolved_config": {
