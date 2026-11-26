@@ -1,0 +1,5 @@
+# Long-run studies: generated data and outputs stay local
+*/data/
+*/output/
+_shared/data/
+**/.cache.sqlite
