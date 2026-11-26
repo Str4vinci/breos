@@ -12,7 +12,7 @@ import pandas as pd
 from pvlib.location import Location
 
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, solar_position_at_labels
-from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column
+from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column, ghi_only_hint
 from breos.weather import WEATHER_METADATA_KEY, validate_weather_irradiance
 
 
@@ -73,7 +73,10 @@ def _weather_column(weather: pd.DataFrame, component: str) -> str:
     column = find_irradiance_column(weather.columns, component)
     if column is None:
         names = ", ".join(repr(alias) for alias in IRRADIANCE_COLUMN_ALIASES[component])
-        raise ValueError(f"weather_data must contain a {component.upper()} column ({names}, in any case)")
+        raise ValueError(
+            f"weather_data must contain a {component.upper()} column ({names}, in any case)"
+            + ghi_only_hint(weather.columns)
+        )
     return column
 
 
