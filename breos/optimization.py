@@ -48,7 +48,7 @@ from breos.optimization_config import (
     resolve_run_settings,
 )
 from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years, site_demand_kwh
-from breos.pv.decomposition import decompose_ghi
+from breos.pv.decomposition import decompose_ghi, needs_decomposition, weather_step
 from breos.pv.model_options import (
     DEFAULT_SOLAR_POSITION,
     configured_pv_model_kwargs,
@@ -712,11 +712,14 @@ def _prepare_study_weather(weather: pd.DataFrame, config: dict[str, Any], loc_ob
     resolution is returned unchanged.
     """
     decomposition = config["simulation"].get("irradiance_decomposition")
-    if decomposition is not None:
-        # Relabel right-labelled interval means to their interval starts
-        # first, as App does, so the decomposition places the sun where the
-        # transposition will.
-        weather = relabel_right_labeled_interval_means(weather)
+    if decomposition is not None and needs_decomposition(weather):
+        # The 15-minute resampler moves right-labelled hourly means to their
+        # interval starts, where the PV model then places the sun. Relabel
+        # first in that case, as App does, so the decomposition uses the
+        # same sun; weather that is not resampled keeps its labels.
+        resampled = str(config["simulation"]["resolution"]) == "15min" and isinstance(weather.index, pd.DatetimeIndex)
+        if resampled and weather_step(cast(pd.DatetimeIndex, weather.index)) == pd.Timedelta(hours=1):
+            weather = relabel_right_labeled_interval_means(weather)
         weather = decompose_ghi(
             weather,
             loc_obj,

@@ -16,7 +16,7 @@ the sun is within each step.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -65,15 +65,30 @@ def resolve_decomposition_model(model: str) -> str:
     return normalise_model_name(model)
 
 
-def _weather_step(index: pd.DatetimeIndex) -> str:
-    """The weather's own step as a frequency string, for the sun-position offset.
+def weather_step(index: pd.DatetimeIndex) -> pd.Timedelta | None:
+    """The most common interval between the sorted stamps, or None.
 
-    Read from the sorted stamps, so rows in any order give the same step.
+    The most common interval, as the resampler reads it, so rows in any
+    order, a missing row or a gap before a ``[period]`` window leave it
+    unchanged.
     """
-    if len(index) < 2:
+    gaps = index.sort_values().to_series().diff().iloc[1:]
+    positive = gaps[gaps > pd.Timedelta(0)]
+    return pd.Timedelta(cast(pd.Timedelta, positive.value_counts().idxmax())) if len(positive) else None
+
+
+def needs_decomposition(weather: pd.DataFrame) -> bool:
+    """Whether the weather has GHI and neither DNI nor DHI."""
+    columns = {component: find_irradiance_column(weather.columns, component) for component in ("ghi", "dni", "dhi")}
+    return columns["ghi"] is not None and columns["dni"] is None and columns["dhi"] is None
+
+
+def _weather_step(index: pd.DatetimeIndex) -> str:
+    """The weather's own step as a frequency string, for the sun-position offset."""
+    step = weather_step(index) if len(index) >= 2 else None
+    if step is None:
         raise ValueError("irradiance decomposition needs at least two timestamped weather rows")
-    ordered = index.sort_values()
-    return pd.tseries.frequencies.to_offset(ordered[1] - ordered[0]).freqstr
+    return pd.tseries.frequencies.to_offset(step).freqstr
 
 
 def _dni(model: str, ghi: pd.Series, sun: pd.DataFrame, location: Location) -> pd.Series:
@@ -153,13 +168,20 @@ def decompose_ghi(
     if not isinstance(weather.index, pd.DatetimeIndex):
         raise ValueError("Irradiance decomposition needs weather with a DatetimeIndex")
 
-    index = weather.index
+    # DIRINT and DIRINDEX read the neighbouring rows, so model the rows in
+    # time order and return them in the order they came.
+    order = np.argsort(weather.index.to_numpy(), kind="stable")
+    restore = np.argsort(order, kind="stable")
+    source = weather
+    weather = weather.iloc[order]
+    index = cast(pd.DatetimeIndex, weather.index)
     sun, method = solar_position_at_labels(location, index, weather, _weather_step(index), solar_position)
     zenith = sun["zenith"]
-    # A negative reading is a sensor offset, not energy: zero it in the
-    # returned GHI as well, so the split still adds up to the GHI the PV
-    # model reads.
-    ghi = weather[columns["ghi"]].astype(float).clip(lower=0.0)
+    # A finite negative reading is a sensor offset, not energy: zero it in
+    # the returned GHI as well, so the split still adds up to the GHI the PV
+    # model reads. A non-finite one stays for the input checks to refuse.
+    ghi = weather[columns["ghi"]].astype(float)
+    ghi = ghi.mask(np.isfinite(ghi) & (ghi < 0.0), 0.0)
 
     dni_values = np.asarray(_dni(model, ghi, sun, location), dtype=float)
     ghi_values = ghi.to_numpy(dtype=float)
@@ -180,15 +202,16 @@ def decompose_ghi(
     dni = pd.Series(dni_values, index=index)
     dhi = pd.Series(np.maximum(np.nan_to_num(dhi_values, nan=0.0), 0.0), index=index)
     # A missing GHI stays missing rather than becoming a zero split.
-    missing = ghi.isna()
+    missing = ~np.isfinite(ghi)
     dni[missing] = np.nan
     dhi[missing] = np.nan
 
     result = weather.copy()
-    result[columns["ghi"]] = ghi
-    result["dni"] = dni
-    result["dhi"] = dhi
-    existing = weather.attrs.get(WEATHER_METADATA_KEY)
+    result[columns["ghi"]] = ghi.to_numpy()
+    result["dni"] = dni.to_numpy()
+    result["dhi"] = dhi.to_numpy()
+    result = result.iloc[restore]
+    existing = source.attrs.get(WEATHER_METADATA_KEY)
     metadata: dict[str, Any] = deepcopy(existing) if isinstance(existing, dict) else {}
     metadata["irradiance_decomposition"] = {
         "model": model,
@@ -197,6 +220,6 @@ def decompose_ghi(
         "solar_position": method,
         "pvlib_version": pvlib.__version__,
     }
-    result.attrs = deepcopy(weather.attrs)
+    result.attrs = deepcopy(source.attrs)
     result.attrs[WEATHER_METADATA_KEY] = metadata
     return result

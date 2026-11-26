@@ -22,7 +22,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `provenance.weather.irradiance_decomposition` records the model.
   `breos.decompose_ghi` does the same for a DataFrame. Without the key,
   GHI-only weather now fails with an error that names it. Unset, every
-  result is unchanged.
+  result value is unchanged; `provenance.resolved_config` records the key as
+  `null`, like other unset keys.
 
 ### Changed
 

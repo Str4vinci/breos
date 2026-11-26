@@ -363,13 +363,31 @@ def test_negative_ghi_is_zeroed_and_the_split_still_closes():
     np.testing.assert_allclose(_closure_residual(result), 0.0, atol=1e-9)
 
 
-def test_rows_in_any_order_give_the_same_split():
+@pytest.mark.parametrize("model", ["erbs_driesse", "dirint", "dirindex"])
+def test_rows_in_any_order_give_the_same_split(model):
+    # DIRINT and DIRINDEX read the neighbouring rows, so order matters to them.
     weather = _ghi_only(_clear_sky_year())
     shuffled = weather.sample(frac=1.0, random_state=7)
-    expected = decompose_ghi(weather, PORTO, solar_position="mid-interval")
-    result = decompose_ghi(shuffled, PORTO, solar_position="mid-interval")
+    expected = decompose_ghi(weather, PORTO, model, solar_position="mid-interval")
+    result = decompose_ghi(shuffled, PORTO, model, solar_position="mid-interval")
 
+    pd.testing.assert_index_equal(result.index, shuffled.index)
     pd.testing.assert_frame_equal(result.sort_index(), expected, check_freq=False)
+
+
+def test_a_gap_does_not_change_the_step():
+    weather = _ghi_only(_clear_sky_year())
+    gapped = weather.drop(weather.index[1:48])
+    result = decompose_ghi(gapped, PORTO, solar_position="mid-interval")
+    np.testing.assert_allclose(_closure_residual(result, "mid-interval"), 0.0, atol=1e-9)
+
+
+def test_non_finite_ghi_is_left_for_the_input_checks():
+    weather = _ghi_only(_clear_sky_year())
+    weather.iloc[100, weather.columns.get_loc("ghi")] = -np.inf
+    result = decompose_ghi(weather, PORTO)
+    assert result.ghi.iloc[100] == -np.inf
+    assert np.isnan(result.dni.iloc[100]) and np.isnan(result.dhi.iloc[100])
 
 
 def test_dirindex_falls_back_to_dirint_where_its_clear_sky_reference_vanishes():
@@ -417,3 +435,21 @@ def test_optimizer_decomposes_right_labelled_weather_on_interval_starts():
     expected = optimization._prepare_study_weather(starts, config, location)
     np.testing.assert_allclose(prepared.dni.to_numpy(), expected.dni.to_numpy())
     np.testing.assert_allclose(prepared.dhi.to_numpy(), expected.dhi.to_numpy())
+
+
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+def test_optimizer_leaves_a_supplied_split_as_it_was(resolution):
+    location_config = {"latitude": 41.1579, "longitude": -8.6291}
+    with_key = resolve_optimization_config(
+        {"location": location_config, "simulation": {"irradiance_decomposition": "erbs", "resolution": resolution}}
+    )
+    without_key = resolve_optimization_config({"location": location_config, "simulation": {"resolution": resolution}})
+    weather = _clear_sky_year()
+    weather.index = weather.index + pd.Timedelta(hours=1)
+    weather.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"}
+    location = optimization._site_location(with_key["location"])
+
+    pd.testing.assert_frame_equal(
+        optimization._prepare_study_weather(weather, with_key, location),
+        optimization._prepare_study_weather(weather, without_key, location),
+    )
