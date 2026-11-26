@@ -2,13 +2,7 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.8.1] - 2026-11-25
-
-BREOS 0.8.1 fixes wrong results and crashes found after 0.8.0, mostly in
-weather and load-profile handling, vehicle runs and battery temperature. No
-configuration key or CLI flag is added, renamed or removed. Some results
-change and some inputs that 0.8.0 accepted are now refused; each entry that
-changes results says which studies to rerun.
+## [Unreleased]
 
 ### Added
 
@@ -23,6 +17,14 @@ changes results says which studies to rerun.
 - A schedule's holidays may name a built-in calendar instead of listing
   dates: `calendar = "pt_national"` gives Portugal's mandatory national
   holidays for any year from 2004, in bundled and custom schedules.
+
+## [0.8.1] - 2026-11-25
+
+BREOS 0.8.1 fixes wrong results and crashes found after 0.8.0, mostly in
+weather and load-profile handling, vehicle runs and battery temperature. No
+configuration key or CLI flag is added, renamed or removed. Some results
+change and some inputs that 0.8.0 accepted are now refused; each entry that
+changes results says which studies to rerun.
 
 ### Changed
 
