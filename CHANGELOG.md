@@ -25,6 +25,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   result value is unchanged; `provenance.resolved_config` records the key as
   `null`, like other unset keys.
 
+### Removed
+
+- `fetch_weather_data` no longer takes `tilt` and `azimuth`. They only set
+  the plane of Open-Meteo's `global_tilted_irradiance`, which BREOS never
+  read, and that field is no longer requested or saved. Drop the two
+  arguments from calls; saved files lose the unused column (#515).
+
+### Fixed
+
+- Open-Meteo requests now time out after 120 s without a response, as the
+  PVGIS request does. A server that accepted the connection and never
+  answered used to hang `fetch_weather_data`, `fetch_forecast_archive` and
+  `fetch_satellite_weather` forever (#515).
+
 ## [0.8.1] - 2026-11-25
 
 BREOS 0.8.1 fixes wrong results and crashes found after 0.8.0, mostly in

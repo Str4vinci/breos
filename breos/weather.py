@@ -770,6 +770,10 @@ FORECAST_ARCHIVE_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 SATELLITE_ARCHIVE_URL = "https://satellite-api.open-meteo.com/v1/archive"
 HISTORICAL_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
+# Seconds to wait for the server to connect or to send the next bytes. Without
+# it, a server that accepts the connection and never answers hangs the caller.
+_OPENMETEO_TIMEOUT_S = 120
+
 
 _OPENMETEO_IMPORT_HINT = (
     "openmeteo_requests is required to fetch Open-Meteo weather. Install with: pip install 'breos[weather]'"
@@ -781,7 +785,8 @@ def _openmeteo_hourly(url: str, request: dict[str, Any], names: Sequence[str]) -
 
     The client caches responses in ``.cache.sqlite`` in the working directory
     for 30 days, so a bad response is not served forever, and retries server
-    errors.
+    errors. A request that stalls for ``_OPENMETEO_TIMEOUT_S`` seconds fails
+    instead of waiting forever.
     """
     if not HAS_OPENMETEO:
         raise ImportError(_OPENMETEO_IMPORT_HINT)
@@ -789,7 +794,7 @@ def _openmeteo_hourly(url: str, request: dict[str, Any], names: Sequence[str]) -
     retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
     cache_session.mount("https://", HTTPAdapter(max_retries=retries))
     cache_session.mount("http://", HTTPAdapter(max_retries=retries))
-    hourly = openmeteo_requests.Client(session=cache_session).weather_api(url, params=request)[0].Hourly()
+    hourly = openmeteo_requests.Client(session=cache_session).weather_api(url, params=request, timeout=_OPENMETEO_TIMEOUT_S)[0].Hourly()
     index = pd.date_range(
         start=pd.to_datetime(hourly.Time(), unit="s"),
         end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
@@ -805,8 +810,6 @@ def fetch_weather_data(
     longitude: float,
     start_date: str,
     end_date: str,
-    tilt: float,
-    azimuth: float,
     freq: str = "h",
     save_to_file: bool = True,
     location_name: Optional[str] = None,
@@ -828,8 +831,6 @@ def fetch_weather_data(
         longitude: Longitude of the location
         start_date: Start date in format 'YYYY-MM-DD'
         end_date: End date in format 'YYYY-MM-DD'
-        tilt: Tilt of the PV panel (degrees)
-        azimuth: Azimuth of the PV system (0° S, -90° E, 90° W, 180° N)
         freq: Output frequency ('h' for hourly, '15min' for 15-minute)
         save_to_file: Whether to save the data to CSV
         location_name: Location name for filename (e.g., 'porto'). If None, uses lat/lon.
@@ -862,7 +863,6 @@ def fetch_weather_data(
         (f"direct_radiation{radiation_suffix}", "direct_radiation"),
         (f"diffuse_radiation{radiation_suffix}", "diffuse_radiation"),
         (f"direct_normal_irradiance{radiation_suffix}", "direct_normal_irradiance"),
-        (f"global_tilted_irradiance{radiation_suffix}", "global_tilted_irradiance"),
         (f"terrestrial_radiation{radiation_suffix}", "terrestrial_radiation"),
     )
 
@@ -883,8 +883,6 @@ def fetch_weather_data(
         "hourly": [provider_name for provider_name, _output_name in hourly_fields],
         "wind_speed_unit": "ms",
         "timezone": "GMT",
-        "tilt": tilt,
-        "azimuth": azimuth,
     }
     hourly_dataframe = _openmeteo_hourly(
         HISTORICAL_ARCHIVE_URL, params, [output_name for _provider_name, output_name in hourly_fields]
