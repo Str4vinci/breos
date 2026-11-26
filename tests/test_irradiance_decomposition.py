@@ -490,3 +490,16 @@ def test_optimizer_accepts_right_labelled_rows_in_any_order():
     expected = optimization._prepare_study_weather(weather, config, location)
     for reordered in (weather.iloc[::-1], weather.sample(frac=1.0, random_state=3)):
         pd.testing.assert_frame_equal(optimization._prepare_study_weather(reordered, config, location), expected)
+
+
+@pytest.mark.parametrize("model", ["dirint", "dirindex"])
+def test_a_missing_reading_is_not_a_neighbour(model):
+    weather = _ghi_only(_clear_sky_year())
+    noon = int(np.argmax(weather.ghi.to_numpy()[:48]))
+    with_gap = weather.copy()
+    with_gap.iloc[noon, with_gap.columns.get_loc("ghi")] = np.nan
+    np.testing.assert_allclose(
+        decompose_ghi(with_gap, PORTO, model).dni.iloc[noon + 1 :],
+        decompose_ghi(weather.iloc[noon + 1 :], PORTO, model).dni,
+        atol=1e-9,
+    )

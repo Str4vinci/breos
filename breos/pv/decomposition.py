@@ -202,12 +202,16 @@ def decompose_ghi(
     # model reads. A non-finite one stays for the input checks to refuse.
     ghi = weather[columns["ghi"]].astype(float)
     ghi = ghi.mask(np.isfinite(ghi) & (ghi < 0.0), 0.0)
-    missing = ~np.isfinite(ghi)
-    # The models see zero in place of a missing reading; its row is set
+    readings: np.ndarray = np.isfinite(ghi.to_numpy(dtype=float))
+    missing = ~readings
+    # The models see only the readings, so a missing row also breaks the
+    # stretches DIRINT and DIRINDEX compare neighbours over; its row is set
     # back to missing below.
-    model_ghi = ghi.where(~missing, 0.0)
-
-    dni_values = np.asarray(_dni(model, model_ghi, sun, location, step), dtype=float)
+    model_ghi = ghi.where(readings, 0.0)
+    dni_values = np.zeros(len(ghi))
+    if readings.any():
+        estimate = _dni(model, model_ghi.iloc[readings], sun.iloc[readings], location, step)
+        dni_values[readings] = estimate.to_numpy(dtype=float)
     ghi_values = model_ghi.to_numpy(dtype=float)
     cos_zenith = np.cos(np.radians(zenith.to_numpy(dtype=float)))
     # No beam with the sun at or below the horizon, and no non-finite values:
