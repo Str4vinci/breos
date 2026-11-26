@@ -719,7 +719,7 @@ def _prepare_study_weather(weather: pd.DataFrame, config: dict[str, Any], loc_ob
         # same sun; weather that is not resampled keeps its labels.
         resampled = str(config["simulation"]["resolution"]) == "15min" and isinstance(weather.index, pd.DatetimeIndex)
         if resampled and weather_step(cast(pd.DatetimeIndex, weather.index)) == pd.Timedelta(hours=1):
-            weather = relabel_right_labeled_interval_means(weather)
+            weather = relabel_right_labeled_interval_means(weather.sort_index())
         weather = decompose_ghi(
             weather,
             loc_obj,

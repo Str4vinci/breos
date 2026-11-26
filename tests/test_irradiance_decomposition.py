@@ -453,3 +453,40 @@ def test_optimizer_leaves_a_supplied_split_as_it_was(resolution):
         optimization._prepare_study_weather(weather, with_key, location),
         optimization._prepare_study_weather(weather, without_key, location),
     )
+
+
+@pytest.mark.parametrize("model", ["dirint", "dirindex"])
+def test_neighbour_models_do_not_reach_across_a_gap(model):
+    weather = _ghi_only(_clear_sky_year())
+    after = weather.iloc[200:]
+    gapped = pd.concat([weather.iloc[[80]], after])  # one daytime reading days before the rest
+    np.testing.assert_allclose(
+        decompose_ghi(gapped, PORTO, model).dni.iloc[1:], decompose_ghi(after, PORTO, model).dni, atol=1e-9
+    )
+
+
+def test_daytime_infinite_ghi_raises_no_floating_point_error():
+    weather = _ghi_only(_clear_sky_year())
+    noon = int(np.argmax(weather.ghi.to_numpy()))
+    weather.iloc[noon, weather.columns.get_loc("ghi")] = -np.inf
+    with np.errstate(all="raise"):
+        result = decompose_ghi(weather, PORTO, "erbs_driesse", solar_position="interval-start")
+    assert np.isnan(result.dni.iloc[noon])
+
+
+def test_optimizer_accepts_right_labelled_rows_in_any_order():
+    config = resolve_optimization_config(
+        {
+            "location": {"latitude": 41.1579, "longitude": -8.6291},
+            "simulation": {"irradiance_decomposition": "erbs", "resolution": "15min"},
+            "solar_position": "mid-interval",
+        }
+    )
+    weather = _ghi_only(_clear_sky_year())
+    weather.index = weather.index + pd.Timedelta(hours=1)
+    weather.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"}
+    location = optimization._site_location(config["location"])
+
+    expected = optimization._prepare_study_weather(weather, config, location)
+    for reordered in (weather.iloc[::-1], weather.sample(frac=1.0, random_state=3)):
+        pd.testing.assert_frame_equal(optimization._prepare_study_weather(reordered, config, location), expected)

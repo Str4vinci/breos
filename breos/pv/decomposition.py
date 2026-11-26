@@ -83,16 +83,29 @@ def needs_decomposition(weather: pd.DataFrame) -> bool:
     return columns["ghi"] is not None and columns["dni"] is None and columns["dhi"] is None
 
 
-def _weather_step(index: pd.DatetimeIndex) -> str:
-    """The weather's own step as a frequency string, for the sun-position offset."""
-    step = weather_step(index) if len(index) >= 2 else None
-    if step is None:
-        raise ValueError("irradiance decomposition needs at least two timestamped weather rows")
-    return pd.tseries.frequencies.to_offset(step).freqstr
+def _runs(index: pd.DatetimeIndex, step: pd.Timedelta) -> list[slice]:
+    """Slices of the sorted ``index`` over which the rows follow one another at ``step``."""
+    breaks = np.flatnonzero(np.asarray(index[1:] - index[:-1]) != step.to_timedelta64()) + 1
+    edges = [0, *breaks.tolist(), len(index)]
+    return [slice(start, stop) for start, stop in zip(edges[:-1], edges[1:], strict=True)]
 
 
-def _dni(model: str, ghi: pd.Series, sun: pd.DataFrame, location: Location) -> pd.Series:
-    """Run one pvlib model and return its DNI estimate."""
+def _dni(model: str, ghi: pd.Series, sun: pd.DataFrame, location: Location, step: pd.Timedelta) -> pd.Series:
+    """Run one pvlib model and return its DNI estimate.
+
+    DIRINT and DIRINDEX compare each row with its neighbours, so they run on
+    each stretch of consecutive rows on its own; a row with no neighbour
+    goes without that comparison.
+    """
+    if model in ("dirint", "dirindex"):
+        index = cast(pd.DatetimeIndex, ghi.index)
+        runs = _runs(index, step)
+        if len(runs) > 1:
+            return pd.concat([_dni_run(model, ghi.iloc[run], sun.iloc[run], location) for run in runs])
+    return _dni_run(model, ghi, sun, location)
+
+
+def _dni_run(model: str, ghi: pd.Series, sun: pd.DataFrame, location: Location) -> pd.Series:
     times = ghi.index
     zenith = sun["zenith"]  # pvlib's decomposition models take the true (unrefracted) zenith
     if model in _DIFFUSE_FRACTION_MODELS:
@@ -103,13 +116,16 @@ def _dni(model: str, ghi: pd.Series, sun: pd.DataFrame, location: Location) -> p
     pressure = pvlib.atmosphere.alt2pres(location.altitude)
     if model == "disc":
         return pvlib.irradiance.disc(ghi, zenith, times, pressure=pressure)["dni"]
+    neighbours = len(ghi) > 1
     if model == "dirint":
-        return pvlib.irradiance.dirint(ghi, zenith, times, pressure=pressure)
+        return pvlib.irradiance.dirint(ghi, zenith, times, pressure=pressure, use_delta_kt_prime=neighbours)
     # dirindex scales DIRINT by a clear-sky reference. It divides by the
     # clear-sky DIRINT, which reaches zero at low sun; there DIRINT stands in.
     clearsky = location.get_clearsky(times, model="ineichen", solar_position=sun)
-    dirindex = pvlib.irradiance.dirindex(ghi, clearsky["ghi"], clearsky["dni"], zenith, times, pressure=pressure)
-    dirint = pvlib.irradiance.dirint(ghi, zenith, times, pressure=pressure)
+    dirindex = pvlib.irradiance.dirindex(
+        ghi, clearsky["ghi"], clearsky["dni"], zenith, times, pressure=pressure, use_delta_kt_prime=neighbours
+    )
+    dirint = pvlib.irradiance.dirint(ghi, zenith, times, pressure=pressure, use_delta_kt_prime=neighbours)
     return dirindex.where(np.isfinite(dirindex), dirint)
 
 
@@ -175,16 +191,24 @@ def decompose_ghi(
     source = weather
     weather = weather.iloc[order]
     index = cast(pd.DatetimeIndex, weather.index)
-    sun, method = solar_position_at_labels(location, index, weather, _weather_step(index), solar_position)
+    step = weather_step(index) if len(index) >= 2 else None
+    if step is None:
+        raise ValueError("irradiance decomposition needs at least two timestamped weather rows")
+    freq = pd.tseries.frequencies.to_offset(step).freqstr
+    sun, method = solar_position_at_labels(location, index, weather, freq, solar_position)
     zenith = sun["zenith"]
     # A finite negative reading is a sensor offset, not energy: zero it in
     # the returned GHI as well, so the split still adds up to the GHI the PV
     # model reads. A non-finite one stays for the input checks to refuse.
     ghi = weather[columns["ghi"]].astype(float)
     ghi = ghi.mask(np.isfinite(ghi) & (ghi < 0.0), 0.0)
+    missing = ~np.isfinite(ghi)
+    # The models see zero in place of a missing reading; its row is set
+    # back to missing below.
+    model_ghi = ghi.where(~missing, 0.0)
 
-    dni_values = np.asarray(_dni(model, ghi, sun, location), dtype=float)
-    ghi_values = ghi.to_numpy(dtype=float)
+    dni_values = np.asarray(_dni(model, model_ghi, sun, location, step), dtype=float)
+    ghi_values = model_ghi.to_numpy(dtype=float)
     cos_zenith = np.cos(np.radians(zenith.to_numpy(dtype=float)))
     # No beam with the sun at or below the horizon, and no non-finite values:
     # dirindex divides by a clear-sky DIRINT that reaches zero at low sun.
@@ -196,13 +220,12 @@ def decompose_ghi(
     dni_values = np.minimum(dni_values, dni_extra)
     # Cap the horizontal beam at GHI so the diffuse part is never negative,
     # then take DHI by closure.
-    beam_horizontal = np.minimum(dni_values * np.where(daylight, cos_zenith, 0.0), np.nan_to_num(ghi_values))
+    beam_horizontal = np.minimum(dni_values * np.where(daylight, cos_zenith, 0.0), ghi_values)
     dni_values = np.divide(beam_horizontal, cos_zenith, out=np.zeros_like(dni_values), where=daylight)
     dhi_values = ghi_values - beam_horizontal
     dni = pd.Series(dni_values, index=index)
-    dhi = pd.Series(np.maximum(np.nan_to_num(dhi_values, nan=0.0), 0.0), index=index)
+    dhi = pd.Series(np.maximum(dhi_values, 0.0), index=index)
     # A missing GHI stays missing rather than becoming a zero split.
-    missing = ~np.isfinite(ghi)
     dni[missing] = np.nan
     dhi[missing] = np.nan
 
