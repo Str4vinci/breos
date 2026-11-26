@@ -358,3 +358,31 @@ def test_a_named_holiday_calendar_refuses_years_it_does_not_cover():
     index = pd.date_range("2003-06-01", periods=192, freq="15min", tz="UTC")
     with pytest.raises(ValueError, match="pt_mainland_2026_weekly_four_mt.*starts in 2004"):
         classify_tariff_periods(index, "pt_mainland_2026_weekly_four_mt", timezone=LISBON, study_date=date(2026, 6, 1))
+
+
+@pytest.mark.parametrize(
+    ("schedule", "day", "accepted"),
+    [
+        ("pt_mainland_2026_weekly_four_mt", "2027-03-31", True),
+        ("pt_mainland_2026_weekly_four_mt", "2027-04-01", False),
+        ("pt_mainland_2027_weekly_four_mt", "2027-03-31", False),
+        ("pt_mainland_2027_weekly_four_mt", "2027-04-01", True),
+        ("pt_mainland_2027_daily_four", "2027-03-31", False),
+        ("pt_mainland_2027_daily_four", "2027-04-01", True),
+        # A BTN meter keeps the 2026 hours until it is reparametrised in late 2027.
+        ("pt_mainland_2026_daily_four", "2027-04-01", True),
+    ],
+)
+def test_the_four_period_cutover_on_1_april_2027(schedule, day, accepted):
+    index = pd.date_range(day, periods=96, freq="15min", tz=LISBON)
+    if accepted:
+        assert len(classify_tariff_periods(index, schedule, timezone=LISBON)) == len(index)
+    else:
+        with pytest.raises(ValueError, match="not effective"):
+            classify_tariff_periods(index, schedule, timezone=LISBON)
+
+
+def test_a_named_calendar_refuses_even_an_hour_of_a_year_it_does_not_cover():
+    index = pd.date_range("2003-12-25 10:00", periods=1, freq="h", tz=LISBON)
+    with pytest.raises(ValueError, match="starts in 2004"):
+        classify_tariff_periods(index, "pt_mainland_2026_weekly_four_mt", timezone=LISBON, study_date=date(2026, 6, 1))

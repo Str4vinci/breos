@@ -47,7 +47,11 @@ They are for commercial and industrial supplies priced on four periods: BTE
 on the daily or weekly cycle, and MAT, AT and MT on the weekly cycle, which
 use the `_four_mt` schedules because they bill national holidays as Sundays.
 BTN and BTE bill holidays as ordinary days. The 2027 four-period schedules
-apply to MAT, AT, MT and BTE from 1 April 2027. Pricing `super_off_peak` at
+apply to MAT, AT, MT and BTE from 1 April 2027, and the 2026 `_four_mt`
+schedule ends on 31 March 2027. The 2026 BTN and BTE schedules stay valid to
+the end of 2027, because a BTN meter keeps the 2026 hours until it is
+reparametrised, between July and December 2027; a BTE study after 31 March
+2027 must name the 2027 schedule. Pricing `super_off_peak` at
 the `off_peak` price gives the same prices as the three-period schedule. The
 optional weekly cycle and the weekly cycle by seasons for MAT, AT and MT are
 not bundled; define them as a custom schedule.
@@ -133,8 +137,21 @@ only as an interval end.
 Holiday dates are never inferred or fetched. `holidays.dates` maps years to
 explicit date lists, and each date must belong to its mapped year. Include the
 complete calendar you intend for every simulated tariff year; resolving a
-year absent from the map raises an error. Omit the `holidays` table when the
-schedule has no separate holiday classification.
+year absent from the map raises an error. Instead of `dates`, a schedule can
+name a built-in calendar: `calendar = "pt_national"` gives Portugal's
+mandatory national holidays for any year from 2004, including the moveable
+feasts and the holidays suspended from 2013 to 2015. A run that touches a
+year the calendar does not cover raises. `calendar` and `dates` cannot both
+be set:
+
+```toml
+[tariff.custom_schedule.holidays]
+day_type = "sunday"
+calendar = "pt_national"
+```
+
+Omit the `holidays` table when the schedule has no separate holiday
+classification.
 
 ## Month seasons
 

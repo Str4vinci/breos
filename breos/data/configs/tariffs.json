@@ -1082,8 +1082,8 @@
       ],
       "source_url": "https://files.diariodarepublica.pt/2s/2026/01/004000000/0018600288.pdf",
       "source": "Diretiva ERSE n.º 1/2026 (Diário da República, 2.ª série, n.º 4, 2026-01-07), Art. 45.º n.º 4 and n.º 10-12",
-      "effective_to": "2027-12-31",
-      "note": "Four periods: super_off_peak is super vazio, off_peak vazio normal, mid_peak cheias and peak ponta. A two- or three-period price gives super_off_peak the off_peak price. MAT, AT and MT on the weekly cycle; national holidays take the Sunday hours. Replaced by the 2027 schedule on 2027-04-01 for MAT, AT, MT and BTE (Diretiva ERSE n.º 3/2026, Art. 3.º n.º 1), and for each BTN installation when its meter is reparametrised, between 2027-07-01 and 2027-12-31 (Art. 3.º n.º 3).",
+      "effective_to": "2027-03-31",
+      "note": "Four periods: super_off_peak is super vazio, off_peak vazio normal, mid_peak cheias and peak ponta. A two- or three-period price gives super_off_peak the off_peak price. MAT, AT and MT on the weekly cycle; national holidays take the Sunday hours. Replaced by the 2027 schedule on 2027-04-01 (Diretiva ERSE n.º 3/2026, Art. 3.º n.º 1).",
       "rules": [
         {
           "days": "weekday",

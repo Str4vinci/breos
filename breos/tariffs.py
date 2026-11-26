@@ -913,13 +913,14 @@ def _holiday_dates(
         dates_of_year = NAMED_HOLIDAY_CALENDARS[holidays.calendar]
         found: set[date] = set()
         for year in sorted(touched):
+            # A named calendar computes any year it covers, so even a few
+            # hours in a year it does not cover are refused.
             try:
                 found |= dates_of_year(year)
             except ValueError as exc:
-                if year in years:
-                    raise ValueError(
-                        f"Schedule {identifier!r} treats national holidays as {holidays.day_type}s: {exc}"
-                    ) from exc
+                raise ValueError(
+                    f"Schedule {identifier!r} treats national holidays as {holidays.day_type}s: {exc}"
+                ) from exc
         return frozenset(found)
     if holidays.years is not None:
         missing = sorted(years - holidays.years)
