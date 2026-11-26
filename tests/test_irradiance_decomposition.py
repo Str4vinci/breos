@@ -330,3 +330,90 @@ def test_optimizer_rejects_an_unknown_model():
         resolve_optimization_config(
             {"location": {"latitude": 41.15, "longitude": -8.61}, "simulation": {"irradiance_decomposition": "nope"}}
         )
+
+
+# --------------------------------------------------------------------------- physical limits and input shapes
+
+
+def _overcast_low_sun_year():
+    """GHI-only weather with diffuse light at every daylight step, low sun included."""
+    weather = _ghi_only(_clear_sky_year())
+    zenith = PORTO.get_solarposition(weather.index).zenith
+    weather["ghi"] = np.where(zenith < 90, 120.0, 0.0)
+    return weather
+
+
+@pytest.mark.parametrize("model", DECOMPOSITION_MODELS)
+def test_dni_never_exceeds_the_extraterrestrial_irradiance(model):
+    for weather in (_clear_sky_year(), _overcast_low_sun_year()):
+        result = decompose_ghi(_ghi_only(weather) if "dni" in weather else weather, PORTO, model)
+        dni_extra = pvlib.irradiance.get_extra_radiation(result.index).to_numpy()
+        assert np.all(result.dni.to_numpy() <= dni_extra + 1e-9)
+        np.testing.assert_allclose(_closure_residual(result), 0.0, atol=1e-9)
+
+
+def test_negative_ghi_is_zeroed_and_the_split_still_closes():
+    weather = _ghi_only(_clear_sky_year())
+    night = weather.index[weather.ghi.to_numpy() == 0][:5]
+    weather.loc[night, "ghi"] = -4.0
+    result = decompose_ghi(weather, PORTO)
+
+    assert (result.loc[night, ["ghi", "dni", "dhi"]].to_numpy() == 0.0).all()
+    assert (weather.loc[night, "ghi"] == -4.0).all()  # the input is not mutated
+    np.testing.assert_allclose(_closure_residual(result), 0.0, atol=1e-9)
+
+
+def test_rows_in_any_order_give_the_same_split():
+    weather = _ghi_only(_clear_sky_year())
+    shuffled = weather.sample(frac=1.0, random_state=7)
+    expected = decompose_ghi(weather, PORTO, solar_position="mid-interval")
+    result = decompose_ghi(shuffled, PORTO, solar_position="mid-interval")
+
+    pd.testing.assert_frame_equal(result.sort_index(), expected, check_freq=False)
+
+
+def test_dirindex_falls_back_to_dirint_where_its_clear_sky_reference_vanishes():
+    weather = _overcast_low_sun_year()
+    sun = PORTO.get_solarposition(weather.index)
+    clearsky = PORTO.get_clearsky(weather.index, model="ineichen", solar_position=sun)
+    pressure = pvlib.atmosphere.alt2pres(PORTO.altitude)
+    raw = pvlib.irradiance.dirindex(
+        weather.ghi, clearsky.ghi, clearsky.dni, sun.zenith, weather.index, pressure=pressure
+    )
+    fallback = ~np.isfinite(raw) & (sun.zenith < 90)
+    assert fallback.any()
+
+    result = decompose_ghi(weather, PORTO, "dirindex", solar_position="interval-start")
+    dirint = decompose_ghi(weather, PORTO, "dirint", solar_position="interval-start")
+    np.testing.assert_allclose(result.dni[fallback], dirint.dni[fallback])
+    assert result.dni[fallback].gt(0).any()
+
+
+def test_stamps_off_the_hour_use_their_own_sun():
+    weather = _ghi_only(_clear_sky_year())
+    weather.index = weather.index + pd.Timedelta(minutes=10)
+    result = decompose_ghi(weather, PORTO, solar_position="interval-start")
+    np.testing.assert_allclose(_closure_residual(result), 0.0, atol=1e-9)
+
+
+def test_optimizer_decomposes_right_labelled_weather_on_interval_starts():
+    config = resolve_optimization_config(
+        {
+            "location": {"latitude": 41.1579, "longitude": -8.6291},
+            "simulation": {"irradiance_decomposition": "erbs", "resolution": "15min"},
+            "solar_position": "mid-interval",
+        }
+    )
+    weather = _ghi_only(_clear_sky_year())
+    weather.index = weather.index + pd.Timedelta(hours=1)
+    weather.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"}
+    location = optimization._site_location(config["location"])
+
+    prepared = optimization._prepare_study_weather(weather, config, location)
+
+    starts = weather.copy()
+    starts.index = starts.index - pd.Timedelta(hours=1)
+    starts.attrs[WEATHER_METADATA_KEY] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
+    expected = optimization._prepare_study_weather(starts, config, location)
+    np.testing.assert_allclose(prepared.dni.to_numpy(), expected.dni.to_numpy())
+    np.testing.assert_allclose(prepared.dhi.to_numpy(), expected.dhi.to_numpy())

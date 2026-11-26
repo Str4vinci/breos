@@ -10,7 +10,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   model (`erbs_driesse`, recommended, `erbs`, `dirint`, `disc`, `dirindex`,
   `boland`, `orgill_hollands` or `louche`) that estimates DNI and DHI from GHI
   when the weather has GHI alone; DHI is taken from closure so the split
-  always adds up. It only fills the gap: weather with DNI and DHI is used as
+  always adds up. DNI never exceeds the irradiance at the top of the
+  atmosphere, and a negative GHI reading is set to zero. It only fills the gap: weather with DNI and DHI is used as
   supplied, and weather with only one of them is refused. It runs on the
   restamped weather at its own resolution, with the run's `solar_position`,
   before 15-minute resampling (any `irradiance_resampling`, including

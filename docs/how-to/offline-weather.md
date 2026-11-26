@@ -104,8 +104,10 @@ or `breos run --config config.toml --irradiance-decomposition erbs_driesse`.
 The models are `erbs_driesse` (recommended), `erbs`, `dirint`, `disc`,
 `dirindex`, `boland`, `orgill_hollands` and `louche`. BREOS keeps each
 model's DNI and takes DHI from closure, `GHI = DNI·cos(zenith) + DHI`, so the
-split always adds up and DHI never exceeds GHI; DNI is zero with the sun
-below the horizon. The sun is placed where the PV model places it, so set
+split always adds up and DHI never exceeds GHI. DNI is zero with the sun
+below the horizon and never exceeds the irradiance at the top of the
+atmosphere, so GHI recorded near or below the horizon counts as diffuse. A
+negative GHI reading, a sensor offset, is set to zero. The sun is placed where the PV model places it, so set
 `solar_position` to match the file's timestamps as you would for any
 weather. `disc`, `dirint` and `dirindex` take the air pressure from the site
 altitude.

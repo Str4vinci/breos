@@ -66,10 +66,14 @@ def resolve_decomposition_model(model: str) -> str:
 
 
 def _weather_step(index: pd.DatetimeIndex) -> str:
-    """The weather's own step as a frequency string, for the sun-position offset."""
+    """The weather's own step as a frequency string, for the sun-position offset.
+
+    Read from the sorted stamps, so rows in any order give the same step.
+    """
     if len(index) < 2:
         raise ValueError("irradiance decomposition needs at least two timestamped weather rows")
-    return pd.tseries.frequencies.to_offset(index[1] - index[0]).freqstr
+    ordered = index.sort_values()
+    return pd.tseries.frequencies.to_offset(ordered[1] - ordered[0]).freqstr
 
 
 def _dni(model: str, ghi: pd.Series, sun: pd.DataFrame, location: Location) -> pd.Series:
@@ -86,9 +90,12 @@ def _dni(model: str, ghi: pd.Series, sun: pd.DataFrame, location: Location) -> p
         return pvlib.irradiance.disc(ghi, zenith, times, pressure=pressure)["dni"]
     if model == "dirint":
         return pvlib.irradiance.dirint(ghi, zenith, times, pressure=pressure)
-    # dirindex scales DIRINT by a clear-sky reference.
+    # dirindex scales DIRINT by a clear-sky reference. It divides by the
+    # clear-sky DIRINT, which reaches zero at low sun; there DIRINT stands in.
     clearsky = location.get_clearsky(times, model="ineichen", solar_position=sun)
-    return pvlib.irradiance.dirindex(ghi, clearsky["ghi"], clearsky["dni"], zenith, times, pressure=pressure)
+    dirindex = pvlib.irradiance.dirindex(ghi, clearsky["ghi"], clearsky["dni"], zenith, times, pressure=pressure)
+    dirint = pvlib.irradiance.dirint(ghi, zenith, times, pressure=pressure)
+    return dirindex.where(np.isfinite(dirindex), dirint)
 
 
 def decompose_ghi(
@@ -106,9 +113,13 @@ def decompose_ghi(
     only one of the two is refused rather than half-modelled, as is weather
     without GHI.
 
-    The estimate is written to ``dni`` and ``dhi`` columns of a copy, both
-    non-negative and zero at night, and the copy's weather metadata records
-    the model under ``"irradiance_decomposition"``. ``solar_position`` must
+    The estimate is written to ``dni`` and ``dhi`` columns of a copy. Both
+    are non-negative and add up to GHI: ``GHI = DNI cos(zenith) + DHI``.
+    DNI is zero with the sun at or below the horizon and never exceeds the
+    extraterrestrial irradiance, so GHI recorded at night or near the
+    horizon is kept as diffuse. Negative GHI, a sensor offset, is set to
+    zero in the copy. The copy's weather metadata records the model under
+    ``"irradiance_decomposition"``. ``solar_position`` must
     match the PV model's setting so the decomposition and the transposition
     use the same sun.
 
@@ -145,6 +156,9 @@ def decompose_ghi(
     index = weather.index
     sun, method = solar_position_at_labels(location, index, weather, _weather_step(index), solar_position)
     zenith = sun["zenith"]
+    # A negative reading is a sensor offset, not energy: zero it in the
+    # returned GHI as well, so the split still adds up to the GHI the PV
+    # model reads.
     ghi = weather[columns["ghi"]].astype(float).clip(lower=0.0)
 
     dni_values = np.asarray(_dni(model, ghi, sun, location), dtype=float)
@@ -154,6 +168,10 @@ def decompose_ghi(
     # dirindex divides by a clear-sky DIRINT that reaches zero at low sun.
     daylight = cos_zenith > 0.0
     dni_values = np.where(daylight & np.isfinite(dni_values), np.maximum(dni_values, 0.0), 0.0)
+    # The beam cannot exceed the irradiance at the top of the atmosphere;
+    # the diffuse-fraction models can ask for more near the horizon.
+    dni_extra = np.asarray(pvlib.irradiance.get_extra_radiation(index), dtype=float)
+    dni_values = np.minimum(dni_values, dni_extra)
     # Cap the horizontal beam at GHI so the diffuse part is never negative,
     # then take DHI by closure.
     beam_horizontal = np.minimum(dni_values * np.where(daylight, cos_zenith, 0.0), np.nan_to_num(ghi_values))
@@ -167,6 +185,7 @@ def decompose_ghi(
     dhi[missing] = np.nan
 
     result = weather.copy()
+    result[columns["ghi"]] = ghi
     result["dni"] = dni
     result["dhi"] = dhi
     existing = weather.attrs.get(WEATHER_METADATA_KEY)

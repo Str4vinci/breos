@@ -64,7 +64,12 @@ from breos.solar import (
 )
 from breos.tariffs import DEFAULT_CURRENCY, ResolvedTariff, reference_tariff_provenance, tariff_provenance
 from breos.utils import package_version
-from breos.weather import build_battery_temperature_series, resample_to_15min, weather_metadata
+from breos.weather import (
+    build_battery_temperature_series,
+    relabel_right_labeled_interval_means,
+    resample_to_15min,
+    weather_metadata,
+)
 
 
 @dataclass
@@ -708,6 +713,10 @@ def _prepare_study_weather(weather: pd.DataFrame, config: dict[str, Any], loc_ob
     """
     decomposition = config["simulation"].get("irradiance_decomposition")
     if decomposition is not None:
+        # Relabel right-labelled interval means to their interval starts
+        # first, as App does, so the decomposition places the sun where the
+        # transposition will.
+        weather = relabel_right_labeled_interval_means(weather)
         weather = decompose_ghi(
             weather,
             loc_obj,
