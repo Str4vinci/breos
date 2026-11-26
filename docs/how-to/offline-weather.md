@@ -87,3 +87,43 @@ and a `--weather-file` flag replaces a config file's `weather_source`. The
 file's absolute path and SHA-256 digest are recorded as
 `provenance.weather.path` and `provenance.weather.sha256`, and the path as
 given as `provenance.resolved_config.weather_file`.
+
+## Weather with GHI only
+
+BREOS's PV model needs all three irradiance components: GHI, DNI and DHI.
+Many measured series have only GHI, for example a pyranometer, an inverter
+logger or some weather APIs. Set `irradiance_decomposition` to estimate DNI
+and DHI from GHI with one of pvlib's decomposition models:
+
+```toml
+weather_file = "inputs/site_ghi.csv"   # columns: time, ghi, temp_air, wind_speed
+irradiance_decomposition = "erbs_driesse"
+```
+
+or `breos run --config config.toml --irradiance-decomposition erbs_driesse`.
+The models are `erbs_driesse` (recommended), `erbs`, `dirint`, `disc`,
+`dirindex`, `boland`, `orgill_hollands` and `louche`. BREOS keeps each
+model's DNI and takes DHI from closure, `GHI = DNI·cos(zenith) + DHI`, so the
+split always adds up and DHI never exceeds GHI. DNI is zero with the sun
+below the horizon and never exceeds the irradiance at the top of the
+atmosphere, so GHI recorded near or below the horizon counts as diffuse. A
+negative GHI reading, a sensor offset, is set to zero. The sun is placed where the PV model places it, so set
+`solar_position` to match the file's timestamps as you would for any
+weather. `disc`, `dirint` and `dirindex` take the air pressure from the site
+altitude.
+
+The key only fills a gap. Weather that already has DNI and DHI is used as
+supplied, whatever the key says, and weather with GHI and only one of the
+other two is refused. Without the key, GHI-only weather stops the run with
+an error that names the key. Decomposition runs on the restamped weather at
+its own resolution, before 15-minute resampling (any
+`irradiance_resampling`, including `"quadrature"`) and any
+`horizon_profile`, so both see a complete split.
+`provenance.weather.irradiance_decomposition` records the model, the GHI
+column it read and the sun-position method. Monte Carlo reads the same key,
+and the optimizer reads `[simulation].irradiance_decomposition`. For a frame
+in Python, call `breos.decompose_ghi(weather, location, "erbs_driesse")`.
+
+A modelled split is an estimate. On the repository's PVGIS-SARAH3 TMY for
+Porto, Erbs-Driesse's split of the same GHI changes annual yield by well
+under 1 %; other models and other climates can differ by a few percent.

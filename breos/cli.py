@@ -615,6 +615,8 @@ def _montecarlo(args: argparse.Namespace) -> int:
         config["rlp_directory"] = str(args.rlp_directory)
     if getattr(args, "irradiance_resampling", None) is not None:
         config["irradiance_resampling"] = args.irradiance_resampling
+    if getattr(args, "irradiance_decomposition", None) is not None:
+        config["irradiance_decomposition"] = args.irradiance_decomposition
 
     # Report a typo such as [montecarlo].weather_fille before a missing-file
     # error. The runner validates the full App config before weather access.
@@ -852,6 +854,10 @@ def build_parser() -> argparse.ArgumentParser:
     mc.add_argument("--weather-file", help="Multi-year historical weather CSV (overrides [montecarlo].weather_file).")
     policy_field = APP_CONFIG_FIELDS["irradiance_resampling"]
     mc.add_argument(*policy_field.cli_flags, choices=policy_field.cli_choices, help=policy_field.cli_help)
+    decomposition_field = APP_CONFIG_FIELDS["irradiance_decomposition"]
+    mc.add_argument(
+        *decomposition_field.cli_flags, choices=decomposition_field.cli_choices, help=decomposition_field.cli_help
+    )
     mc.add_argument("--rlp-directory", type=Path, help="Directory containing a licensed external RLP CSV.")
     mc.add_argument("--runs", type=int, help="Number of Monte Carlo runs (trajectories).")
     mc.add_argument(

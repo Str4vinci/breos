@@ -100,6 +100,20 @@ recorded diagnostics are described under
    breos.weather.resample_to_15min
 ```
 
+## GHI-only weather
+
+Estimate DNI and DHI from GHI with a pvlib decomposition model when the
+weather has GHI only. The App, Monte Carlo and the optimizer do this when
+`irradiance_decomposition` is set; see
+[Weather with GHI only](../how-to/offline-weather.md#weather-with-ghi-only).
+
+```{eval-rst}
+.. autosummary::
+   :toctree: generated/
+
+   breos.pv.decomposition.decompose_ghi
+```
+
 ## Helpers
 
 ```{eval-rst}

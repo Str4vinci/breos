@@ -25,6 +25,7 @@ from breos.app_config import (
 from breos.electrical import string_cable_loss, string_limited_dc
 from breos.inverter import AcCable, InverterConversion, InverterUnits, ac_derate
 from breos.pv import _solver
+from breos.pv.decomposition import decompose_ghi
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs, solar_position_warning_scope
 from breos.pv.shading import ModuleMeanShading
@@ -439,6 +440,7 @@ def load_weather_for_simulation(
     weather_source: str | None = None,
     period: SimulationPeriod | None = None,
     weather_file: str | None = None,
+    irradiance_decomposition: str | None = None,
 ) -> pd.DataFrame:
     """Load TMY weather, falling back to PVGIS fetch.
 
@@ -458,6 +460,12 @@ def load_weather_for_simulation(
     ``weather_source`` (the App ``weather_source`` key) picks one by the
     filename's source part. A requested source with no matching file is also
     an error, so it never silently becomes a PVGIS fetch.
+
+    ``irradiance_decomposition`` names the pvlib model that estimates DNI and
+    DHI for weather with GHI only (see :func:`breos.pv.decomposition.decompose_ghi`).
+    It runs on the restamped weather at its own resolution, before the
+    15-minute resampler and the terrain horizon, which both need the split
+    and validate it.
     """
     weather = None
     weather_path = weather_dir or Path.cwd() / "weather"
@@ -508,6 +516,13 @@ def load_weather_for_simulation(
     weather = relabel_right_labeled_interval_means(weather)
     weather = remap_tmy_year(weather, start_year)
     require_hourly_weather_on_local_hours(weather, freq, resolved.timezone)
+    if irradiance_decomposition is not None:
+        weather = decompose_ghi(
+            weather,
+            Location(resolved.lat, resolved.lon, tz=resolved.timezone),
+            irradiance_decomposition,
+            solar_position=solar_position,
+        )
     # The resampler carries the weather metadata over and adds its own
     # resolution and method fields to it.
     weather = resample_hourly_weather(
@@ -671,8 +686,8 @@ def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies, 
     )
 
 
-# Terrain shading and every PV array compute the sun position: one
-# solar_position = "auto" fallback warning for them all.
+# GHI decomposition, terrain shading and every PV array compute the sun
+# position: one solar_position = "auto" fallback warning for them all.
 @solar_position_warning_scope()
 def prepare_simulation_inputs(
     cfg: dict[str, Any], resolved: ResolvedAppConfig, deps: AppRuntimeDependencies
@@ -689,6 +704,7 @@ def prepare_simulation_inputs(
         horizon_profile=cfg["horizon_profile"],
         solar_position=cfg["solar_position"],
         irradiance_resampling=cfg["irradiance_resampling"],
+        irradiance_decomposition=cfg["irradiance_decomposition"],
         weather_source=cfg["weather_source"],
         period=period,
         weather_file=cfg["weather_file"],
@@ -914,6 +930,7 @@ def prepare_planner_forecast(
             horizon_profile=cfg["horizon_profile"],
             solar_position=cfg["solar_position"],
             irradiance_resampling=cfg["irradiance_resampling"],
+            irradiance_decomposition=cfg["irradiance_decomposition"],
             period=resolved.period,
             weather_file=path,
         )
