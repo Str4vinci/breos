@@ -2,7 +2,13 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.8.1] - 2026-11-25
+
+BREOS 0.8.1 fixes wrong results and crashes found after 0.8.0, mostly in
+weather and load-profile handling, vehicle runs and battery temperature. No
+configuration key or CLI flag is added, renamed or removed. Some results
+change and some inputs that 0.8.0 accepted are now refused; each entry that
+changes results says which studies to rerun.
 
 ### Changed
 
@@ -24,7 +30,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `Grid_Independence_%` and the Monte Carlo grid independence of vehicle
   runs only. `breos run` shows it again for vehicle runs. With no demand
   at all, the `simulate_energy_balance` summary now reports 0 % like the
-  other results, not 100 % (#503).
+  other results, not 100 %. Rerun any vehicle study that reports grid
+  independence (#503).
 - An App run with both `[vehicle]` and `[ac_cable]` no longer stops after
   the simulation with "output array is read-only" while it reports the
   cable's loss (#506).
@@ -44,12 +51,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   the same small fraction more cycles than the dispatch made. And
   `nmc622_gr_denso_50ah` can gain capacity when it is stored at a very low
   state of charge, where its calendar-ageing fit is extrapolated below the
-  10 % its storage data start at.
+  10 % its storage data start at. Rerun any one-year study with these two
+  models that reported health above 100 %.
 - Three configuration checks no longer let a bad value through:
   - A `pv_arrays` entry that sets a model option (`temperature_model`, `gcr`,
     `transposition_model`, `albedo`, `surface_type`, `model_perez`,
     `bifacial_model`, `pvrow_height`, `pvrow_pitch`) or a mounting key to null
-    now inherits the top-level value, as a null tilt or azimuth already did,
+    now inherits the top-level value, as a null tilt or azimuth now does,
     and is checked as inherited. 0.8.0 accepted some of these nulls and then
     failed inside `simulate()`, and refused others.
   - `battery_indoor_model` with only `ceiling_c` or only `floor_c` is now
@@ -88,9 +96,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   hour keep their mean, and the year's energy is unchanged. A file that does
   not cover one calendar year exactly once is refused instead of filled. In a
   15-minute profile, the first occurrence of the repeated autumn hour holds
-  that hour's mean in each quarter.
-  Files with naive timestamps,
-  undated files and E-REDES files are unchanged. Rerun any study that loaded
+  that hour's mean in each quarter. Files with naive timestamps, undated
+  files and E-REDES files are unchanged. Rerun any study that loaded
   an offset-stamped `custom` or external profile.
 - Annual App runs now refuse weather with rows outside the simulated year.
   0.8.0 refused weather that missed rows at either end of the year but
@@ -100,7 +107,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   matches the year, to within one step at each end, on the file's clock, on
   UTC or on the location's timezone. Duplicate timestamps are refused too.
   Rerun any 0.8.0 study whose weather file held rows before 1 January or
-  after 31 December of its year; such files now need trimming first (#480).
+  after 31 December of its year; such files now need those rows removed
+  first. A right-labelled file keeps its 00:00 row of the next 1 January,
+  which holds the year's last hour (#480).
 - Historical weather years must now contain every expected timestamp, in
   order, on the file's clock. 0.8.0 checked only the row count, so a
   duplicate timestamp could stand in for a missing reading. Such years are
@@ -158,7 +167,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Packs below 5 kWh now run slightly warmer than before while they charge
   and discharge (an idle pack stays at ambient either way): a 1 kWh pack gets
   0.25 K/W, and in Porto runs about 0.3 K warmer and ends 0.2 points lower.
-  A `thermal_resistance_k_per_w` you set on `BatteryConfig` is used as it is
+  A `thermal_resistance_k_per_w` you set on `BatteryConfig` is used as it is.
+  Rerun any study with a battery other than 5 kWh that did not set it
   (#492).
 
 ### Documentation
@@ -169,7 +179,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   of filling the missing value with zero. Klucher now has a result (west-to-north
   ratio error `1.29%`); the other models move by at most `0.00134` percentage
   points. The validation page lists the five affected samples (#471).
-
 - A new entry path for new users: the README, the docs landing page, the
   installation page and the quickstart are built around a first `breos run`
   and the summary it prints, and the interpreting-results page maps each
