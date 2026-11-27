@@ -281,6 +281,18 @@ _PROJECTED_END_OF_LIFE_METRICS = {
 }
 
 
+def _battery_degradation_model(battery: Mapping[str, Any]) -> Dict[str, Any]:
+    """The ageing model the study scores its batteries with, for the provenance."""
+    engine = str(battery.get("degradation_engine", "native"))
+    return {
+        "degradation_engine": engine,
+        "calendar_model": str(battery.get("calendar_model", BatteryConfig.calendar_model))
+        if engine == "native"
+        else None,
+        "blast_model": battery.get("blast_model") if engine == "blast" else None,
+    }
+
+
 def _battery_replacement_treatment(
     battery: Mapping[str, Any], costs: Optional[Mapping[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -1098,6 +1110,7 @@ class _DesignStudy:
             "weather": weather_metadata(self.weather),
             "solar_position": dict(self.solar_position),
             **({"weather_by_year": [weather_metadata(frame) for frame in frames]} if frames is not None else {}),
+            "battery_degradation_model": _battery_degradation_model(config.get("battery") or {}),
             **extra,
             "battery_replacement_treatment": dict(self.battery_replacement_treatment),
         }

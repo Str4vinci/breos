@@ -48,7 +48,7 @@ EXPECTED_DEFAULTS = {
     "emissions_country": None,
     "export_emissions_factor_gco2_kwh": None,
     "pv_degradation_rate": 0.005,
-    "calendar_model": "naumann_lam_field_calibrated",
+    "calendar_model": "naumann_lam_field_calibrated_v2",
     "degradation_engine": "native",
     "blast_model": None,
     "battery_min_soc": 0.10,

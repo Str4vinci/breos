@@ -18,6 +18,7 @@ from breos.battery import EndOfLifeEvent
 from breos.degradation.native import (
     _get_degradation_params,
     _update_battery_soh_from_cycles,
+    check_carried_calendar_model,
     update_battery_soh_calendar,
 )
 from breos.degradation.protocol import (
@@ -50,8 +51,7 @@ def _build_vehicle_lifecycle(
             initial_fec=float(state.get("fec_cum", 0.0)),
             initial_calendar_seconds=float(state.get("cumulative_calendar_seconds", 0.0)),
         )
-    if state and state.get("calendar_model", config.calendar_model) != config.calendar_model:
-        raise ValueError("vehicle calendar model differs from the carried lifecycle")
+    check_carried_calendar_model(state, config.calendar_model, "vehicle")
     if (
         carry is not None
         and "soh_fraction" in state

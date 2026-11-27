@@ -496,3 +496,13 @@ def test_project_years_preserves_real_lifecycle_in_frame_and_summary_paths(backe
     assert actual.fec_all_packs == expected.fec_all_packs
     assert actual.end_of_life_events == expected.end_of_life_events
     np.testing.assert_equal(actual.degradation_state, expected.degradation_state)
+
+
+def test_carried_vehicle_state_matches_calendar_models_by_parameters():
+    from breos.vehicle.lifecycle import _build_vehicle_lifecycle
+
+    state = {"degradation_engine": "native", "calendar_model": "naumann_lam_field_calibrated"}
+    carry = VehicleCarry(20000.0, degradation_state=state)
+    _build_vehicle_lifecycle(vehicle(calendar_model="naumann_lam_field_calibrated_v1"), carry)
+    with pytest.raises(ValueError, match="differs from the carried state"):
+        _build_vehicle_lifecycle(vehicle(), carry)

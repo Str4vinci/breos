@@ -55,7 +55,7 @@ inverter_loading_ratio = 1.25      # [1.25] DC/AC oversizing ratio
 # inverter_ac_rating_kw = 4.0      # AC rating in kW, instead of the ratio; set only one
 
 # --- Battery detail (advanced) ----------------------------------------------
-calendar_model = "naumann_lam_field_calibrated"  # ["naumann_lam_field_calibrated"] calendar aging
+calendar_model = "naumann_lam_field_calibrated_v2"  # ["naumann_lam_field_calibrated_v2"] calendar aging
 battery_min_soc = 0.10             # [0.10] lower SoC limit, fraction of capacity
 battery_max_soc = 0.90             # [0.90] upper SoC limit, fraction of capacity
 battery_eol_percentage = 0.70      # [0.70] SoH fraction at end of life

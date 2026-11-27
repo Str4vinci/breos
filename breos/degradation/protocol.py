@@ -472,6 +472,7 @@ class NativeDegradationAdapter:
     def snapshot(self, *, day_start_soc: float, day_start_temperature_c: float) -> dict[str, Any]:
         return {
             "degradation_engine": "native",
+            "calendar_model": self.model_key,
             "soh_fraction": self._soh,
             "fec_cum": self._fec,
             "cumulative_calendar_seconds": self._calendar_seconds,

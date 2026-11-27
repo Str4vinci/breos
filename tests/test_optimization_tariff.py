@@ -481,3 +481,25 @@ def test_a_fixed_ac_design_records_its_settings_and_prices_no_inverter_below_one
         assert small.metrics["Projected_Battery_Inverter_Cost"] == 0.0
     dc = evaluate(tariff_case, battery_kwh=4.0)
     assert "battery_inverter" not in dc.provenance["battery_replacement_treatment"]
+
+
+@pytest.mark.parametrize(
+    ("battery", "expected"),
+    [
+        (
+            {},
+            {"degradation_engine": "native", "calendar_model": "naumann_lam_field_calibrated_v2", "blast_model": None},
+        ),
+        (
+            {"calendar_model": "naumann_lam_field_calibrated_v1"},
+            {"degradation_engine": "native", "calendar_model": "naumann_lam_field_calibrated_v1", "blast_model": None},
+        ),
+    ],
+)
+def test_a_projected_design_records_its_battery_ageing_model(tariff_case, battery, expected):
+    weather, load, config = tariff_case
+    config = {**config, "battery": {**(config.get("battery") or {}), **battery}}
+    design = optimization.evaluate_projected_design(
+        weather, load, config, n_modules=4, battery_kwh=4.0, tilt=30.0, azimuth=180.0
+    )
+    assert design.provenance["battery_degradation_model"] == expected

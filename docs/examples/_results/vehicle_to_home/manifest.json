@@ -2,8 +2,8 @@
  "case": "vehicle_to_home",
  "title": "Vehicle-to-home on a bi-hourly tariff in Porto",
  "breos_version": "0.8.1",
- "git_describe": "v0.8.0-96-g76b3c76",
- "generated_utc": "2026-11-25T15:47:22+00:00",
+ "git_describe": "v0.8.0-103-ga1d8681",
+ "generated_utc": "2026-11-26T00:57:41+00:00",
  "runtime_s": 1.1,
  "cheap": true,
  "configs": {
@@ -80,7 +80,7 @@
   "fixed_charge_per_day": 0.3
  },
  "files": {
-  "households.csv": "be3b738e610c9ed395b161160b8533238b0d2bbcd0e183ee1dc91aacf123b03d",
-  "comparisons.json": "e67c0864f0c701dd534fff85466c3cf150b609e4af27f78ec3c3056619f534e3"
+  "households.csv": "94330882f26fb4ee112b4436626447a543941f549d6cb973d5bb41d501fdff2c",
+  "comparisons.json": "3282db550689e4ac91af8a8a28c5417f8d067207959d600ad7f5ac5ec2069b8c"
  }
 }

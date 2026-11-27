@@ -60,7 +60,7 @@ class TestBatteryConfig:
         assert cfg.eol_percentage == 0.70
         assert cfg.inverter_efficiency == 0.96
         assert cfg.thermal_resistance_k_per_w == 0.05
-        assert cfg.calendar_model == "naumann_lam_field_calibrated"
+        assert cfg.calendar_model == "naumann_lam_field_calibrated_v2"
 
     @pytest.mark.parametrize(
         ("nominal_energy_wh", "expected"), [(5000.0, 0.05), (10000.0, 0.025), (60e6, 0.05 / 12000), (0.0, 0.0)]
@@ -214,23 +214,23 @@ class TestBatteryConfig:
 
         assert actual == expected
 
-    def test_field_calibrated_default_is_v1(self):
+    def test_unversioned_field_calibrated_name_is_v1(self):
         assert _get_degradation_params("naumann_lam_field_calibrated") == _get_degradation_params(
             "naumann_lam_field_calibrated_v1"
         )
 
     def test_field_calibrated_v2_uses_lam_fixed_params(self):
-        default_k0, default_ea, default_b, default_n = _get_degradation_params("naumann_lam_field_calibrated")
+        v1_k0, v1_ea, v1_b, v1_n = _get_degradation_params("naumann_lam_field_calibrated_v1")
         v2_k0, v2_ea, v2_b, v2_n = _get_degradation_params("naumann_lam_field_calibrated_v2")
 
         assert v2_k0 == pytest.approx(3.6244128958919006e-07)
-        assert v2_k0 != default_k0
+        assert v2_k0 != v1_k0
         assert v2_ea == LAM_EA_J_MOL
         assert v2_b == pytest.approx(0.7108636007561147)
-        assert v2_b != default_b
+        assert v2_b != v1_b
         assert v2_n == LAM_SOC_EXPONENT_N
-        assert v2_ea > default_ea
-        assert v2_n > default_n
+        assert v2_ea > v1_ea
+        assert v2_n > v1_n
 
 
 class TestResistanceToEfficiency:
@@ -1176,6 +1176,20 @@ class TestSimulateEnergyBalance:
         config = BatteryConfig(nominal_energy_wh=5000, **config_kwargs)
         with pytest.raises(ValueError, match=message):
             _simulate([0.0], [0.0], config, temperature=None, **engine_kwargs)
+
+    def test_native_state_resumes_only_under_its_calendar_model(self):
+        saved_with = BatteryConfig(nominal_energy_wh=5000, calendar_model="naumann_lam_field_calibrated")
+        *_, state = _simulate(0.0, 0.0, saved_with, periods=24, return_degradation_state=True)
+        assert state["calendar_model"] == "naumann_lam_field_calibrated"
+
+        with pytest.raises(ValueError, match="differs from the carried state"):
+            _simulate(0.0, 0.0, BatteryConfig(nominal_energy_wh=5000), periods=24, initial_degradation_state=state)
+        same_parameters = BatteryConfig(nominal_energy_wh=5000, calendar_model="naumann_lam_field_calibrated_v1")
+        _simulate(0.0, 0.0, same_parameters, periods=24, initial_degradation_state=state)
+        state_before_090 = {key: value for key, value in state.items() if key != "calendar_model"}
+        _simulate(
+            0.0, 0.0, BatteryConfig(nominal_energy_wh=5000), periods=24, initial_degradation_state=state_before_090
+        )
 
     @pytest.mark.parametrize(
         ("engine", "engine_kwargs"),

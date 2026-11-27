@@ -25,18 +25,18 @@ System: 5.5 kWp PV (10 modules), 4.4 kW inverter, 5 kWh battery (DC)
 Year 1 energy
   PV delivered (AC)             8143 kWh
   House load                    4000 kWh
-  Self-consumed PV              3153 kWh       38.7 % of delivered PV
-  Grid import                    843 kWh       78.9 % grid independence
-  Grid export                   4991 kWh
+  Self-consumed PV              3157 kWh       38.8 % of delivered PV
+  Grid import                    839 kWh       79.0 % grid independence
+  Grid export                   4986 kWh
 
 Battery over 20 years
-  Health at the end             70.5 %         replaced in year 11
+  Health at the end             86.2 %         replaced in year 16
 
 Economics, 20 years, EUR, 3 % discount rate
   Investment                    7789 EUR
-  Net present value             4717 EUR
-  Discounted payback              13 years
-  LCOE                         0.102 EUR/kWh
+  Net present value             4888 EUR
+  Discounted payback              10 years
+  LCOE                         0.101 EUR/kWh
 ```
 
 Your last digits can differ: PVGIS updates its typical year from time to
@@ -141,8 +141,8 @@ What just happened, end-to-end:
    4000 kWh/yr.
 4. **Energy balance** — Per-timestep energy-flow accounting determined how
    much PV is self-consumed, stored, or exported.
-5. **Battery degradation** — Twenty years of operation with Naumann calendar
-   aging and field-calibrated LFP cycle aging.
+5. **Battery degradation** — Twenty years of operation with field-calibrated
+   calendar aging (v2) and Naumann's LFP cycle aging.
 6. **Economics** — Costs derived from the `residential_pt` preset, NPV /
    LCOE / payback computed over the projection horizon.
 7. **Emissions** — CO2 savings computed against the Portuguese grid

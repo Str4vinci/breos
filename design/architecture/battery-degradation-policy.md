@@ -22,17 +22,57 @@ behavior require focused `App` tests and an explicit changelog migration note.
 
 ## Default-change evidence
 
-Keep `naumann_lam_field_calibrated` as the residential-LFP default. It maps to
-native v1; native v2 remains an explicit sensitivity model. The recorded
+From 0.9.0 the residential-LFP default is `naumann_lam_field_calibrated_v2`.
+`naumann_lam_field_calibrated_v1` and the unversioned
+`naumann_lam_field_calibrated` select v1, the default before 0.9.0, so a
+config that names a model gives the same results as before. The recorded
 calibration evidence is:
 
 | Native calibration | Full-fit RMSE | Leave-one-system-out result | Policy |
 | --- | ---: | ---: | --- |
-| v1 | 4.40 percentage points | mean RMSE 6.00 pp | Current default |
-| v2 | 4.65 percentage points | mean RMSE 5.49 pp; pooled RMSE 5.61 pp | Sensitivity model |
+| v1 | 4.40 percentage points | mean RMSE 6.00 pp | Default before 0.9.0 |
+| v2 | 4.65 percentage points | mean RMSE 5.49 pp; pooled RMSE 5.61 pp | Default from 0.9.0 |
 
-V2's cross-validation result is encouraging, but the systems used in model
-selection are not a genuinely held-out validation set. Do not change the
+The change does not meet the evidence bar below, and was made on these grounds:
+
+- V1 fits all four calendar parameters to five field systems. The fit traded
+  physics for in-sample error: an activation energy of 11.9 kJ/mol and a
+  state-of-charge exponent of 0.10. Calendar ageing under v1 barely changes
+  with temperature or with the state of charge the battery is held at, so v1
+  misleads exactly the comparisons users run: climates, installation places,
+  SOC windows and dispatch strategies that hold a high state of charge.
+- V2 fixes those two parameters at the `naumann_lam` values: Lam's laboratory
+  activation energy (38.5 kJ/mol) and an SOC exponent of 0.75 taken from
+  Naumann, and fits only the rate and the time exponent. It fits the field
+  systems almost as well and does better on the systems left out.
+
+The case below compares the models on one residential system: Porto, hourly
+PVGIS TMY weather, 14 Suntech 550 W modules (7.7 kWp), a 10 kWh battery,
+5500 kWh a year on the bundled H0 profile, the Portuguese daily two-period
+tariff and a 20-year horizon. For reference, Figgener et al. (2024) report an
+average capacity loss of about 2 percentage points a year for the LFP home
+storage systems in the field data set, over 3 to 8 years, with about
+2 percentage points a year between similar systems.
+
+| Model | SOH year 8 | First end of life | Replacements | SOH year 20 | NPV of savings |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Native v1 | 74.7 % | 10.2 years | 1 | 70.7 % | 2498 EUR |
+| Native v2 | 79.5 % | 14.4 years | 1 | 83.4 % | 2707 EUR |
+| Native `naumann` (laboratory) | 84.8 % | not reached | 0 | 76.0 % | 7060 EUR |
+| Native `naumann_lam` (laboratory) | 89.4 % | not reached | 0 | 81.0 % | 7143 EUR |
+| BLAST `lfp_gr_sonymurata_3ah` | 90.1 % | not reached | 0 | 83.5 % | 7163 EUR |
+| BLAST `lfp_gr_250ah_prismatic` | 91.9 % | not reached | 0 | 84.4 % | 7187 EUR |
+
+Both field fits lose capacity faster than the field average over the observed
+years; the field capacity tests they were fitted to read low for LFP
+(Figgener et al. 2024). The laboratory and cell models lose it at or below
+that average, and none of them reaches end of life in 20 years. The study
+outcome turns on whether a replacement falls inside the horizon, so the
+documentation asks users to run a laboratory or BLAST model beside the
+default. No model here has a late-life knee or failures other than capacity
+fade, and the field data stop at 8 years.
+
+Further default changes still need the full evidence. Do not change the
 generic default based only on synthetic trajectories, in-sample fit, or
 upstream BLAST parity. A default change requires frozen model choices,
 pack-level field data excluded from fitting and model selection, per-system as

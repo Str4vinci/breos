@@ -33,6 +33,7 @@ def _golden_battery_inputs():
         inverter_efficiency=0.96,
         enable_replacement=False,
         standby_loss_wh=0.0,
+        calendar_model="naumann_lam_field_calibrated_v1",
     )
     return pv_dc, load, temperature, config
 

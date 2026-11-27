@@ -43,9 +43,10 @@ LAM_EA_J_MOL = 38500.0  # Activation Energy (0.4 eV converted to J/mol)
 LAM_EXPONENT_B = 0.75  # Time exponent (Based on Lam Fig 5A LFP cluster)
 LAM_SOC_EXPONENT_N = 0.75  # Assume same SOC exponent as Naumann/general LFP
 
-# === Naumann + Lam field-calibrated parameters v1 (default, 15-min) ===
-# Selected by "naumann_lam_field_calibrated" and its explicit alias
-# "naumann_lam_field_calibrated_v1".
+# === Naumann + Lam field-calibrated parameters v1 (15-min) ===
+# Selected by "naumann_lam_field_calibrated_v1" and the unversioned
+# "naumann_lam_field_calibrated", which stays v1 so that older configs give
+# the same results. The default until 0.9.0.
 # Re-run on 2026-04-12 against the effective 5-system Zenodo LFP field set
 # (systems 14, 15, 17, 20, 21) using the finalized validation pipeline.
 # Mean RMSE = 4.40pp on the full calibration fit; LOO mean CV RMSE = 6.0pp.
@@ -54,11 +55,12 @@ NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL = 11876.09
 NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B = 0.7701374
 NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N = 0.1010299
 
-# === Naumann + Lam field-calibrated parameters v2 (15-min) ===
+# === Naumann + Lam field-calibrated parameters v2 (default, 15-min) ===
 # Revalidation on 2026-06-12, Variant C2: Ea and n fixed to Lam lab defaults,
 # fitting only k0_frac and cal_b against the Zenodo LFP field set.
 # Full-fit RMSE = 4.65pp; LOO mean CV RMSE = 5.49pp; pooled LOO RMSE = 5.61pp.
-# Retained as a v2 sensitivity; v1 remains the default.
+# The default from 0.9.0: v1's fitted Ea and n made ageing almost insensitive
+# to temperature and state of charge.
 NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC = 3.6244128958919006e-07
 NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL = LAM_EA_J_MOL
 NAUMANN_LAM_FIELD_CALIBRATED_V2_EXPONENT_B = 0.7108636007561147

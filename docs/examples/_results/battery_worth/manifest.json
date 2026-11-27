@@ -2,9 +2,9 @@
  "case": "battery_worth",
  "title": "Battery size and storage price",
  "breos_version": "0.8.1",
- "git_describe": "v0.8.0-96-g76b3c76",
- "generated_utc": "2026-11-25T15:43:59+00:00",
- "runtime_s": 5.5,
+ "git_describe": "v0.8.0-103-ga1d8681",
+ "generated_utc": "2026-11-26T00:54:48+00:00",
+ "runtime_s": 3.6,
  "cheap": true,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
@@ -60,7 +60,7 @@
  ],
  "preset_storage_cost_per_kwh": 500.0,
  "files": {
-  "designs.json": "64c516c59ddb35efeeb32b69817a9097f25977e0be1722e4d6897030b5649851",
-  "storage_prices.csv": "2c4935afd0ab091d6c528db51fd33a0c926f20f2cc2e4696ff22511ed7450946"
+  "designs.json": "702dd0ec9a607971f99fe186f4b81c81c29dcb855745cbaa472ebcdd9e22f01d",
+  "storage_prices.csv": "ac03a373673599edfda50ebcf9e848884df8b94e86ebc90b9bbcfa9137cf91bb"
  }
 }

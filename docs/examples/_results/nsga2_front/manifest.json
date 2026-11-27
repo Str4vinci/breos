@@ -2,12 +2,12 @@
  "case": "nsga2_front",
  "title": "Multi-objective sizing with NSGA-II",
  "breos_version": "0.8.1",
- "git_describe": "v0.8.0-96-g76b3c76",
- "generated_utc": "2026-11-25T16:30:32+00:00",
- "runtime_s": 165.6,
+ "git_describe": "v0.8.0-103-ga1d8681",
+ "generated_utc": "2026-11-26T02:10:21+00:00",
+ "runtime_s": 280.1,
  "cheap": false,
  "configs": {
-  "configs/optimization/projected-optimization.toml": "c0f8303aff05aaf8a021102deb049569615d8c5e8b0208172e1c21c808ff7cae"
+  "configs/optimization/projected-optimization.toml": "98398cda2d23e6f0eb2c1ced099921cf72883218c79455b0c205454f00c264fa"
  },
  "weather": {
   "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
@@ -27,7 +27,7 @@
  "currency": "EUR",
  "annual_consumption_kwh": 4000.0,
  "load_profile": "demandlib_h0",
- "n_procs": 8,
+ "n_procs": 4,
  "execution_backend": "python",
  "generations": 40,
  "constraints": {
@@ -41,6 +41,6 @@
  },
  "module_area_m2": 2.5833,
  "files": {
-  "pareto.csv": "e1f20476be1480eddb886ba368138971314194f8984296b93da305abe330553a"
+  "pareto.csv": "04b3fdf81970c6faa08053507fe9c1b76478d377939ce4c78897ba1908fc0a7e"
  }
 }

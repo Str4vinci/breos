@@ -1080,11 +1080,17 @@ def replacement_timing(ctx: Context) -> Output:
         row(ctx.simulate(with_overrides(base, {"projection_years": years})).result(), projection_years=years)
         for years in horizons
     ]
+    # The first replacement falls between 14.5 and 16.3 years across the
+    # module counts, so a 16-year horizon puts it on both sides of the end.
+    module_horizon = 16
     module_counts = list(range(8, 15))
     module_rows = []
     for count in module_counts:
         for allow in (True, False):
-            config = with_overrides(base, {"n_modules": count, "battery_allow_terminal_replacement": allow})
+            config = with_overrides(
+                base,
+                {"n_modules": count, "battery_allow_terminal_replacement": allow, "projection_years": module_horizon},
+            )
             result = ctx.simulate(config).result()
             module_rows.append(
                 row(
@@ -1101,6 +1107,7 @@ def replacement_timing(ctx: Context) -> Output:
             "overrides": {"terminal_value": {"basis": "battery_health_fraction"}},
             "projection_years": horizons,
             "n_modules": module_counts,
+            "module_sweep_projection_years": module_horizon,
         },
     )
 

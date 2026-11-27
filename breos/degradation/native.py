@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import Dict, List, Mapping, Sequence, Tuple, cast
+from typing import Any, Dict, List, Mapping, Sequence, Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -67,10 +67,10 @@ CALENDAR_PARAMETERS: Mapping[str, Tuple[float, float, float, float]] = {
     "naumann": (NAUMANN_K0_PERCENT / 100.0, NAUMANN_EA_J_MOL, NAUMANN_EXPONENT_B, NAUMANN_SOC_EXPONENT_N),
     # Naumann cycle + Lam 2025 lab-derived calendar.
     "naumann_lam": (LAM_K0_FRAC, LAM_EA_J_MOL, LAM_EXPONENT_B, LAM_SOC_EXPONENT_N),
-    # The v1 field-calibrated fit, under its default alias and its own name.
+    # The v1 field-calibrated fit, under its own name and the unversioned one.
     "naumann_lam_field_calibrated": _FIELD_CALIBRATED_V1,
     "naumann_lam_field_calibrated_v1": _FIELD_CALIBRATED_V1,
-    # The v2 field-calibrated fit: Lam's Ea and n fixed, k0 and b fitted.
+    # The v2 field-calibrated fit, the default: Lam's Ea and n fixed, k0 and b fitted.
     "naumann_lam_field_calibrated_v2": (
         NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC,
         NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL,
@@ -102,6 +102,20 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
             f"'naumann_lam', or 'naumann'."
         )
     return params
+
+
+def check_carried_calendar_model(state: Mapping[str, Any], calendar_model: str, owner: str) -> None:
+    """Refuse a carried native state whose calendar model has other parameters than ``calendar_model``.
+
+    Names are compared by parameters, so the unversioned field-calibrated name
+    and ``_v1`` match. A state without the key (saved before 0.9.0) is accepted.
+    """
+    carried = state.get("calendar_model")
+    if carried is not None and _get_degradation_params(str(carried)) != _get_degradation_params(calendar_model):
+        raise ValueError(
+            f"{owner} calendar model {calendar_model!r} differs from the carried state's {carried!r}; "
+            f"set calendar_model to the one the state was saved with"
+        )
 
 
 def _cycle_fade(

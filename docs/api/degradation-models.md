@@ -1,6 +1,6 @@
 # Battery degradation models
 
-Native Naumann/Lam degradation remains the default. BLAST-Lite is an explicit
+Native Naumann/Lam degradation is the default. BLAST-Lite is an explicit
 opt-in cell-model engine:
 
 ```toml
@@ -37,6 +37,32 @@ resistance outputs, and upstream BLAST provenance. All
 and trajectories are checked against fixtures generated from the pinned,
 unmodified BLAST-Lite source across storage, cycling, temperature, and C-rate
 conditions.
+
+## Checking a result with a second model
+
+The default native model, `naumann_lam_field_calibrated_v2`, is fitted to five
+LFP home storage systems observed for 3 to 8 years. On those years it loses
+capacity faster than the field average, and laboratory and BLAST cell models
+lose it more slowly. Whether a battery needs a replacement within a 20-year
+horizon often depends on the model, and a replacement can change the net
+present value by thousands of euros. Run the study again with one of these
+models and report both results:
+
+```toml
+calendar_model = "naumann"                 # native, Naumann laboratory calendar model
+```
+
+```toml
+degradation_engine = "blast"
+blast_model = "lfp_gr_sonymurata_3ah"      # or "lfp_gr_250ah_prismatic"
+```
+
+For one Porto household with a 10 kWh battery, the default reached end of life
+after 14.4 years and needed one replacement; `naumann` and both LFP BLAST
+models needed none. The
+[degradation policy](https://github.com/Str4vinci/breos/blob/main/design/architecture/battery-degradation-policy.md)
+gives the full comparison. No model in BREOS has a late-life knee or failures
+other than capacity fade.
 
 ## Configuration precedence
 

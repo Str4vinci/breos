@@ -46,6 +46,7 @@ from breos.constants import (
 from breos.degradation.native import (  # noqa: F401  -- the documented primitives stay importable here
     _get_degradation_params,
     _update_battery_soh_from_cycles,
+    check_carried_calendar_model,
     resistance_to_efficiency,
     update_battery_resistance_calendar,
     update_battery_resistance_cyclewise,
@@ -215,7 +216,7 @@ class BatteryConfig:
     # What a skipped swap does with the old pack: "keep" it in service or
     # "retire" it and finish the span PV-only.
     skipped_replacement_action: str = "keep"
-    calendar_model: str = "naumann_lam_field_calibrated"  # v1 field-calibrated default alias
+    calendar_model: str = "naumann_lam_field_calibrated_v2"
     # Resistance fade (opt-in): grows internal resistance daily and derates
     # the charge/discharge efficiencies in the energy loop so the effective
     # round-trip efficiency declines as the battery ages.
@@ -754,6 +755,8 @@ def _resolve_degradation_engine(
             engine_key == "blast" and state_engine not in (None, "blast")
         ):
             raise ValueError(f"initial_degradation_state requires degradation_engine={state_engine!r}")
+        if engine_key == "native":
+            check_carried_calendar_model(initial_degradation_state, battery_config.calendar_model, "battery")
     if engine_key == "blast" and not blast_model:
         raise ValueError("blast_model is required when degradation_engine='blast'")
     if engine_key == "blast" and battery_config.enable_resistance_fade:

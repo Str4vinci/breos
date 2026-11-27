@@ -44,7 +44,7 @@ is a `breos run` option that overrides the config file.
 | `battery_temperature` | `"weather"` | — | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path. The indoor model then remaps it unless `battery_indoor_model` disables it |
 | `bifacial_model` | `"none"` | `--bifacial-model` | Rear-irradiance model. `"none"` is front-only production; `"infinite_sheds"` needs sourced module bifaciality plus `gcr`, `pvrow_height` and `pvrow_pitch`. One of `"none"`, `"infinite_sheds"` |
 | `blast_model` | `None` | `--blast-model` | Stable BLAST model key; required with `degradation_engine = "blast"` and invalid with the native engine |
-| `calendar_model` | `"naumann_lam_field_calibrated"` | `--calendar-model` | Battery calendar aging model. The default is the v1 field calibration; `"naumann_lam_field_calibrated_v2"` is the v2 fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted |
+| `calendar_model` | `"naumann_lam_field_calibrated_v2"` | `--calendar-model` | Battery calendar aging model. The default is the v2 field calibration, with Lam `Ea`/`n` fixed and `k0`/`b` fitted; `"naumann_lam_field_calibrated_v1"` and the unversioned `"naumann_lam_field_calibrated"` select v1, the default before 0.9.0 |
 | `cost_preset` | `None` | `--cost-preset` | Cost preset key from the packaged defaults; see [Packaged options](options.md#cost-presets). `None` uses the {py:class}`~breos.economics.CostParams` defaults |
 | `costs` | *unset* | — | Cost overrides layered over the selected preset and the built-in defaults; see [`[costs]`](#costs) |
 | `cross_axis_tilt` | `0.0` | — | Cross-axis terrain slope for single-axis tracking (degrees) |
@@ -350,7 +350,7 @@ App and Monte Carlo simulate the no-system, reference and study households (ADR 
 | `battery_replacement_cost` |  | Optional price of one swap, including installation; terminal credit remains pack-only |
 | `battery_temperature` |  | "weather" (default), fixed °C or timestamped CSV; no indoor model |
 | `blast_model` |  | Enabled BLAST cell-model key; required with blast, refused with native |
-| `calendar_model` |  | Native calendar model; default "naumann_lam_field_calibrated" |
+| `calendar_model` |  | Native calendar model; default "naumann_lam_field_calibrated_v2" |
 | `charge_efficiency` |  | Battery DC-in to stored efficiency; default 0.974679 |
 | `charge_periods` |  | Disjoint tariff periods for grid charging; needs tariff; refused with uncontrolled |
 | `degradation_engine` |  | "native" (default) or "blast"; BLAST is refused with Monte Carlo |

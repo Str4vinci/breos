@@ -173,6 +173,9 @@ plus the tariff and smart-charging records when the config has them. Their
 configured `replacement_min_remaining_years` and `skipped_replacement_action`
 with a `minimum_service` description;
 `details["battery_replacement_treatment"]` holds the same record.
+`battery_degradation_model` records the ageing model the study scores
+batteries with: `degradation_engine`, and `calendar_model` (native) or
+`blast_model` (BLAST), the other one `null`.
 
 Both also carry an `execution` record, built as App and Monte Carlo build
 theirs: the backend that ran (`execution_backend`), the one asked for

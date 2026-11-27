@@ -103,7 +103,9 @@ def test_an_explicit_none_is_the_default(flat_app):
     ids=["flat", "bundled", "month"],
 )
 def test_app_accepts_zero_reference_fixed_charge_with_previous_results(reference, previous_npv):
-    app = simulate_offline({**BASE, "reference_tariff": {**reference, "fixed_charge_per_day": 0}})
+    # The pinned results predate 0.9.0, when v1 was the default calendar model.
+    config = {**BASE, "calendar_model": "naumann_lam_field_calibrated_v1"}
+    app = simulate_offline({**config, "reference_tariff": {**reference, "fixed_charge_per_day": 0}})
     result = app.result()
     # Pin the results from when an omitted reference fixed charge defaulted to zero.
     assert result["npv_savings"] == previous_npv

@@ -44,14 +44,14 @@ The run fetches a typical weather year from PVGIS and prints a summary:
 Year 1 energy
   PV delivered (AC)             8143 kWh
   House load                    4000 kWh
-  Self-consumed PV              3153 kWh       38.7 % of delivered PV
-  Grid import                    843 kWh       78.9 % grid independence
-  Grid export                   4991 kWh
+  Self-consumed PV              3157 kWh       38.8 % of delivered PV
+  Grid import                    839 kWh       79.0 % grid independence
+  Grid export                   4986 kWh
 ...
 Economics, 20 years, EUR, 3 % discount rate
   Investment                    7789 EUR
-  Net present value             4717 EUR
-  Discounted payback              13 years
+  Net present value             4888 EUR
+  Discounted payback              10 years
 ```
 
 Add `--output result.json` to save every result field. The

@@ -17,7 +17,9 @@ def replacement_app():
     from breos import App
 
     with offline_weather():
-        app = App({**SCENARIOS["native_h_replacement"], "execution_backend": "python"})
+        # v1 ages fast enough for two swaps in this scenario.
+        calendar = {"calendar_model": "naumann_lam_field_calibrated_v1"}
+        app = App({**SCENARIOS["native_h_replacement"], **calendar, "execution_backend": "python"})
         app.simulate()
         return app
 

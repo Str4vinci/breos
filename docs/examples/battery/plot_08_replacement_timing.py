@@ -103,8 +103,9 @@ say(*lines)
 # Adding modules
 # --------------
 # A bigger array charges the battery harder, so it ages slightly faster and
-# its first replacement comes a little earlier. Near the horizon that can
-# move the second replacement from just after the end to just before it.
+# its replacement comes a little earlier. Near the horizon that can move the
+# replacement from just after the end to just before it. This sweep uses a
+# 16-year horizon, where that happens.
 
 counts = modules[modules["terminal_replacement"]].set_index("n_modules")
 fig, ax = plt.subplots(figsize=(9, 4.5))
@@ -156,7 +157,7 @@ if cliff.any():
     before, after = counts.loc[count - 1], counts.loc[count]
     days = (horizon - after["last_replacement_years"]) * 365
     say(
-        f"Going from {count - 1} to {count} modules, the second replacement lands at "
+        f"Going from {count - 1} to {count} modules, the replacement lands at "
         f"{after['last_replacement_years']:.4f} years, about {days:.0f} days before the {horizon}-year horizon. "
         f"NPV savings fall from {money(before['npv_savings'], currency)} to {money(after['npv_savings'], currency)}, "
         f"a drop of {money(before['npv_savings'] - after['npv_savings'], currency)} for one more module. With the "
