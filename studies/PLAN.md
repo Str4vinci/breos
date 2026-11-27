@@ -29,3 +29,4 @@ Check: `systemctl --user status breos-s11-grid breos-s12-16-queue`; `tail studie
   lock-py313 reproduces the stored first_home result.json bit for bit.
 - 2026-11-27: study 14 enumeration failed on the old SolarDesignProblem API (pv_params/budget_limit moved to .study/.config); the replay Pool then respawned failing workers 19:35-02:00. Fixed, guarded, queue restarted 02:04.
 - 2026-11-27: study 15 failed in 14 s (TOML start_date not JSON serializable); fixed with default=str, rerun as service breos-s15 after the queue ends.
+- 2026-11-27: spot check on develop bd6c74b (after #517-#519, GHI decomposition, four-period tariffs): study 11 and 13 scores bit-identical.

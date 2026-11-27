@@ -42,7 +42,8 @@ comparison reports these as 52× changes, which misreads a different design in t
 
 1. The cent-level gallery drift seen earlier on this machine was not a Python-version effect. With
    locked dependencies, 3.11–3.13 are bit-identical. Different numpy versions cause it.
-2. CI for older numpy (the lowest-direct job) should compare with tolerances wider than
-   `--cross-machine`: about 1e-3 relative for money and energy, and set-level checks (HV, extremes)
-   for the NSGA-II front rather than row by row.
+2. CI's lowest-direct job runs only the test suite, not the gallery comparison, so nothing
+   fails today. If a gallery or golden check is ever added against older numpy, it needs
+   tolerances wider than `--cross-machine` (about 1e-3 relative for money and energy) and
+   set-level checks (hypervolume, extremes) for the NSGA-II front rather than row by row.
 3. pandas and pvlib across their supported ranges don't change any number in the gallery.
