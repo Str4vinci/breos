@@ -82,8 +82,16 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete list.
   - An optimizer cache of scored designs that returns every evaluated
     candidate (#416), and refetched PVWatts references so the PVWatts band
     test runs again (#422).
-- **0.9** — candidate: battery replacement decided on economics, not only on
-  a fixed state-of-health threshold (#403).
+- **0.9** — the 0.9.0 milestone on GitHub.
+  - Export to the grid in tariff periods from the vehicle (V2G) and from the
+    home battery, at one export price list, in that order (#465).
+  - A site grid connection limit in kVA for import and export, shared by PV,
+    the home battery and the vehicle (#520), after V2G.
+  - Candidate: battery replacement decided on economics, not only on a fixed
+    state-of-health threshold (#403).
+- **0.10** — prices per time step: dynamic tariffs, demand response signals,
+  and export decided from prices by the planner, for the home battery and the
+  vehicle.
 - **1.0** — flip to the recommended model defaults with a documented upgrade
   note.
 
@@ -114,6 +122,14 @@ Not yet scheduled: switching the system's tariff from a given project year
 - Price-aware dispatch strategies beyond the 0.7 fixed-target and daily
   persistence modes.
 - A tariff switch from a given project year (#402).
+- Export prices by energy origin: a separate price for stored PV, such as the
+  German market premium under §19(3b)–(3c) EEG, once the Bundesnetzagentur's
+  formulas for the eligible share are read.
+- A credit for network charges and levies on grid energy that a store feeds
+  back, where a jurisdiction relieves them, once its application to
+  households is confirmed.
+- An annual cost for exporting from storage, such as a second meter's fee,
+  and an annual limit on exported energy, such as a vehicle warranty's.
 
 ## Battery
 
