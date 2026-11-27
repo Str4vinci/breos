@@ -538,3 +538,57 @@ def test_revalue_replaces_a_custom_schedule_whole():
     recorded = revalued["provenance"]["resolved_config"]["tariff"]["custom_schedule"]
     assert "holidays" not in recorded
     assert result_fields(revalued) == result_fields(simulate_offline({**config, "tariff": without_holidays}).result())
+
+
+def test_custom_schedule_can_name_the_portuguese_holiday_calendar():
+    tariff = deepcopy(CUSTOM_TARIFF)
+    schedule = tariff["custom_schedule"]
+    for key in ("effective_from", "effective_to"):
+        schedule.pop(key)
+    schedule["holidays"] = {"day_type": "sunday", "calendar": "pt_national"}
+    resolved = resolve_app_config({**BASE, "tariff": tariff})
+    index = pd.date_range("2026-06-08", periods=7 * 24, freq="h", tz="Europe/Lisbon")
+    labels = resolved.tariff.resolve(index, "Europe/Lisbon").period_labels
+    # Wednesday 10 June is a national holiday; Thursday 11 June is not.
+    assert labels[index.get_loc(pd.Timestamp("2026-06-10 09:00", tz="Europe/Lisbon"))] == "off_peak"
+    assert labels[index.get_loc(pd.Timestamp("2026-06-11 09:00", tz="Europe/Lisbon"))] == "peak"
+
+
+@pytest.mark.parametrize(
+    ("holidays", "message"),
+    [
+        ({"day_type": "sunday", "calendar": "es_national"}, r"holidays\.calendar"),
+        ({"day_type": "sunday", "calendar": "pt_national", "dates": {"2023": [date(2023, 1, 2)]}}, "not both"),
+        ({"day_type": "sunday"}, "must name a 'calendar' or give 'dates'"),
+    ],
+)
+def test_custom_schedule_holidays_need_one_calendar_or_dates(holidays, message):
+    tariff = deepcopy(CUSTOM_TARIFF)
+    tariff["custom_schedule"]["holidays"] = holidays
+    with pytest.raises((TypeError, ValueError), match=message):
+        resolve_app_config({**BASE, "tariff": tariff})
+
+
+def test_four_period_schedule_with_equal_vazio_prices_matches_the_tri_hourly_tariff():
+    index = pd.date_range("2026-01-01", "2027-01-01", freq="15min", tz="Europe/Lisbon", inclusive="left")
+    tri = {
+        **TOU,
+        "schedule": "pt_mainland_2026_weekly_tri",
+        "import_prices": {"peak": 0.3, "mid_peak": 0.2, "off_peak": 0.1},
+    }
+    four = {
+        **tri,
+        "schedule": "pt_mainland_2026_weekly_four",
+        "import_prices": {**tri["import_prices"], "super_off_peak": 0.1},
+    }
+    tri_prices = (
+        resolve_app_config({**BASE, "resolution": "15min", "tariff": tri})
+        .tariff.resolve(index, "Europe/Lisbon")
+        .import_price_per_kwh
+    )
+    four_prices = (
+        resolve_app_config({**BASE, "resolution": "15min", "tariff": four})
+        .tariff.resolve(index, "Europe/Lisbon")
+        .import_price_per_kwh
+    )
+    np.testing.assert_array_equal(four_prices, tri_prices)

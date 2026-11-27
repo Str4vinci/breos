@@ -6,6 +6,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- Four-period Portuguese schedules for commercial and industrial supplies:
+  `pt_mainland_2026_daily_four`, `pt_mainland_2026_weekly_four`,
+  `pt_mainland_2026_weekly_four_mt` and their 2027 counterparts. They keep
+  super vazio as its own `super_off_peak` period, which the bi- and
+  tri-hourly schedules merge into `off_peak`. The `_four_mt` schedules are
+  for MAT, AT and MT on the weekly cycle and bill national holidays as
+  Sundays. Source: Diretiva ERSE n.º 1/2026, Art. 45.º, and n.º 3/2026,
+  Art. 2.º.
+- A schedule's holidays may name a built-in calendar instead of listing
+  dates: `calendar = "pt_national"` gives Portugal's mandatory national
+  holidays for any year from 2004, in bundled and custom schedules.
+
 - GHI-only weather can be run. `irradiance_decomposition` names a pvlib
   model (`erbs_driesse`, recommended, `erbs`, `dirint`, `disc`, `dirindex`,
   `boland`, `orgill_hollands` or `louche`) that estimates DNI and DHI from GHI
@@ -33,6 +45,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   arguments from calls; saved files lose the unused column (#515).
 
 ### Fixed
+
+- An annual run now cuts its monthly table on the clock its weather covers
+  the year on. It used the weather index's own clock, which can differ: local
+  weather saved with two UTC offsets (across DST) is read as UTC but covers
+  the local civil year, and a UTC year can be spelled in a local zone. Both
+  gave 13 monthly rows, the last holding the first hours of the next year,
+  with every month edge shifted by the UTC offset. Annual totals, the yearly
+  table and the timeseries are unchanged. Rerun monthly results of annual
+  runs on local-time weather in a zone with DST, or on weather given in a
+  zone other than the one its year is cut on (#514, #180).
 
 - Open-Meteo requests now time out after 120 s without a response, as the
   PVGIS request does. A server that accepted the connection and never
