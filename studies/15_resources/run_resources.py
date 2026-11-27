@@ -81,7 +81,7 @@ def specs() -> list[dict]:
 def run(spec: dict) -> dict:
     try:
         p = subprocess.run(
-            [sys.executable, str(HERE / "child.py"), json.dumps(spec)],
+            [sys.executable, str(HERE / "child.py"), json.dumps(spec, default=str)],
             capture_output=True, text=True, timeout=TIMEOUT_S, cwd=DATA,
         )
         lines = [ln for ln in p.stdout.splitlines() if ln.startswith("{")]
