@@ -43,23 +43,30 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `naumann_lam_field_calibrated_v2`, for the home battery and the vehicle.
   The v1 fit's activation energy (11.9 kJ/mol) and state-of-charge exponent
   (0.10) made calendar ageing almost insensitive to temperature and to the
-  state of charge the battery is held at. V2 fixes them at Lam's laboratory
-  values and fits the same field data almost as well. Results of a run that
+  state of charge the battery is held at. V2 fixes them at the values of the
+  `naumann_lam` model (Lam's laboratory activation energy, 38.5 kJ/mol, and
+  an SOC exponent of 0.75 taken from Naumann) and fits the same field data
+  almost as well. Results of a run that
   does not set `calendar_model` change. In the residential cases checked, the
   battery lasts longer under v2, by less in a hot place or at a high state of
   charge: for one Porto household with a 10 kWh battery, first end of life
   moved from 10.2 to 14.4 years, and for an outdoor battery in Seville from
-  10.4 to 13.6 years. A battery held at 35 °C ages faster under v2.
+  10.4 to 13.6 years. A Porto battery held at 35 °C with a 50 % reserve ages
+  faster under v2 (end of life after 4.5 instead of 8.0 years); at a low
+  state of charge v2 still ages it more slowly.
   **Migration:** to keep earlier results, set
   `calendar_model = "naumann_lam_field_calibrated_v1"` at the top level, and
   also in `[vehicle]` for a run with a vehicle (it does not follow the
-  top-level key) and in `[battery]` for the optimizer. The unversioned
+  top-level key), in `[battery]` for the optimizer, and in each battery
+  participant's `[[participants]]` entry of a community site. The unversioned
   `"naumann_lam_field_calibrated"` still selects v1. A native degradation
   state now records its calendar model, and resuming it under a model with
-  other parameters is refused; a state saved before 0.9.0 has no record, so
-  resume it with the model it was saved with. The documentation now asks users to repeat a study with a
-  laboratory or BLAST model, which often predict no replacement where the
-  field fits predict one.
+  other parameters is refused. A home-battery state saved before 0.9.0 has
+  no record, so resume it with the model it was saved with; a vehicle carry
+  already recorded its model. The optimizer's provenance now records
+  `battery_degradation_model`. The documentation now asks users to repeat a
+  study with a laboratory or BLAST model, which often predict no replacement
+  where the field fits predict one.
 
 ### Removed
 

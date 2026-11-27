@@ -224,8 +224,9 @@ field-calibrated fit, with Lam `Ea`/`n` fixed and `k0`/`b` fitted to field
 data. `"naumann_lam_field_calibrated_v1"` and the unversioned
 `"naumann_lam_field_calibrated"` select the v1 fit, the default before 0.9.0.
 
-The field fits lose capacity faster than laboratory and BLAST cell models, and
-the models often disagree on whether a battery needs a replacement within the
+In the residential cases the degradation policy compares, the field fits lose
+capacity faster than laboratory and BLAST cell models, and the models often
+disagree on whether a battery needs a replacement within the
 horizon. Run the study a second time with a laboratory or BLAST model, for
 example `calendar_model = "naumann"` or `degradation_engine = "blast"` with
 `blast_model = "lfp_gr_sonymurata_3ah"`, and report both results. See

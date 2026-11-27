@@ -41,8 +41,9 @@ The change does not meet the evidence bar below, and was made on these grounds:
   with temperature or with the state of charge the battery is held at, so v1
   misleads exactly the comparisons users run: climates, installation places,
   SOC windows and dispatch strategies that hold a high state of charge.
-- V2 fixes those two parameters at Lam's laboratory values (38.5 kJ/mol and
-  0.75) and fits only the rate and the time exponent. It fits the field
+- V2 fixes those two parameters at the `naumann_lam` values: Lam's laboratory
+  activation energy (38.5 kJ/mol) and an SOC exponent of 0.75 taken from
+  Naumann, and fits only the rate and the time exponent. It fits the field
   systems almost as well and does better on the systems left out.
 
 The case below compares the models on one residential system: Porto, hourly
