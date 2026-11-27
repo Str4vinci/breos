@@ -38,9 +38,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   charge: for one Porto household with a 10 kWh battery, first end of life
   moved from 10.2 to 14.4 years, and for an outdoor battery in Seville from
   10.4 to 13.6 years. A battery held at 35 °C ages faster under v2.
-  **Migration:** set `calendar_model = "naumann_lam_field_calibrated_v1"` to
-  keep earlier results. The unversioned `"naumann_lam_field_calibrated"` still
-  selects v1. The documentation now asks users to repeat a study with a
+  **Migration:** to keep earlier results, set
+  `calendar_model = "naumann_lam_field_calibrated_v1"` at the top level, and
+  also in `[vehicle]` for a run with a vehicle (it does not follow the
+  top-level key) and in `[battery]` for the optimizer. The unversioned
+  `"naumann_lam_field_calibrated"` still selects v1. A native degradation
+  state now records its calendar model, and resuming it under a model with
+  other parameters is refused; a state saved before 0.9.0 has no record, so
+  resume it with the model it was saved with. The documentation now asks users to repeat a study with a
   laboratory or BLAST model, which often predict no replacement where the
   field fits predict one.
 

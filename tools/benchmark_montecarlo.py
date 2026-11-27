@@ -134,7 +134,8 @@ def config(n_modules: int, battery_kwh: float, years: int) -> dict:
         "battery_temperature": 25.0,
         "inverter_efficiency": 0.96,
         "inverter_loading_ratio": 1.25,
-        "calendar_model": "naumann_lam_field_calibrated",
+        # v1, so timings stay comparable with benchmarks recorded before 0.9.0.
+        "calendar_model": "naumann_lam_field_calibrated_v1",
         "pv_degradation_rate": 0.005,
     }
 

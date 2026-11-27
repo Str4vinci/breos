@@ -1177,6 +1177,20 @@ class TestSimulateEnergyBalance:
         with pytest.raises(ValueError, match=message):
             _simulate([0.0], [0.0], config, temperature=None, **engine_kwargs)
 
+    def test_native_state_resumes_only_under_its_calendar_model(self):
+        saved_with = BatteryConfig(nominal_energy_wh=5000, calendar_model="naumann_lam_field_calibrated")
+        *_, state = _simulate(0.0, 0.0, saved_with, periods=24, return_degradation_state=True)
+        assert state["calendar_model"] == "naumann_lam_field_calibrated"
+
+        with pytest.raises(ValueError, match="differs from the carried state"):
+            _simulate(0.0, 0.0, BatteryConfig(nominal_energy_wh=5000), periods=24, initial_degradation_state=state)
+        same_parameters = BatteryConfig(nominal_energy_wh=5000, calendar_model="naumann_lam_field_calibrated_v1")
+        _simulate(0.0, 0.0, same_parameters, periods=24, initial_degradation_state=state)
+        state_before_090 = {key: value for key, value in state.items() if key != "calendar_model"}
+        _simulate(
+            0.0, 0.0, BatteryConfig(nominal_energy_wh=5000), periods=24, initial_degradation_state=state_before_090
+        )
+
     @pytest.mark.parametrize(
         ("engine", "engine_kwargs"),
         [

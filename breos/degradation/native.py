@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import Dict, List, Mapping, Sequence, Tuple, cast
+from typing import Any, Dict, List, Mapping, Sequence, Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -102,6 +102,20 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
             f"'naumann_lam', or 'naumann'."
         )
     return params
+
+
+def check_carried_calendar_model(state: Mapping[str, Any], calendar_model: str, owner: str) -> None:
+    """Refuse a carried native state whose calendar model has other parameters than ``calendar_model``.
+
+    Names are compared by parameters, so the unversioned field-calibrated name
+    and ``_v1`` match. A state without the key (saved before 0.9.0) is accepted.
+    """
+    carried = state.get("calendar_model")
+    if carried is not None and _get_degradation_params(str(carried)) != _get_degradation_params(calendar_model):
+        raise ValueError(
+            f"{owner} calendar model {calendar_model!r} differs from the carried state's {carried!r}; "
+            f"set calendar_model to the one the state was saved with"
+        )
 
 
 def _cycle_fade(

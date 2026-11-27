@@ -50,8 +50,7 @@ HISTORY_FIELDS = [
 ]
 
 
-# Native v1 on the test home crosses 93 % in year 2.
-# The v1 calendar model ages fast enough to cross 93 % during year 2.
+# The v1 calendar model ages fast enough to cross 93 % during year 2 on the test home.
 RETIRES_IN_YEAR_2 = {
     "projection_years": 3,
     "calendar_model": "naumann_lam_field_calibrated_v1",
