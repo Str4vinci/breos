@@ -35,7 +35,7 @@ plus `enable_replacement = false`: 92 policies.
 
 Cheaper storage (300 €/kWh) or 5 %/yr price learning halves the gains, but never-replace still wins
 every case. Of the existing knobs, lowering the threshold alone recovers about 55–100 % of the gain,
-and raising `replacement_min_remaining_years` alone recovers 0–45 %.
+and raising `replacement_min_remaining_years` alone recovers 0–48 %.
 
 Without replacements the battery ends the 20 years at 47–52 % health (v1), 52–65 % (v2) or
 29–48 % (BLAST LMO), and BREOS keeps dispatching it at that capacity.
