@@ -47,6 +47,7 @@ from breos.constants import (
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
     DEGRADATION_ENGINES,
+    REPLACEMENT_DECISIONS,
     RESOLUTIONS,
     SKIPPED_REPLACEMENT_ACTIONS,
 )
@@ -1239,6 +1240,20 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         ),
         summary="battery.skipped_replacement_action",
     ),
+    "battery_replacement_decision": AppConfigField(
+        affects_inputs=False,
+        check=choice(REPLACEMENT_DECISIONS, case_insensitive=False),
+        default="threshold",
+        doc=(
+            'How an end-of-life replacement is decided. `"threshold"` replaces the battery whenever its health '
+            'crosses `battery_eol_percentage`, unless a guard skips it. `"economic"` also compares, at each '
+            "crossing, replacing it with keeping or retiring it, over the rest of the horizon with perfect "
+            "foresight, and takes the alternative with the highest NPV. It runs the projection about twice per "
+            "threshold replacement more. See "
+            "[Deciding replacement on economics](configuration.md#deciding-replacement-on-economics)"
+        ),
+        summary="battery.replacement_decision",
+    ),
     "battery_rte": AppConfigField(
         affects_inputs=False,
         check=_EFFICIENCY_OR_NONE,
@@ -2038,10 +2053,24 @@ def validate_config(cfg: dict[str, Any]) -> ValidatedSpecs:
     _validate_battery_coupling(cfg)
     _validate_period(cfg)
     smart_charging, vehicle = _validate_tariff_controls(cfg, tariff_spec)
+    _validate_replacement_decision(cfg)
     _electrical_inputs(cfg)
     if cfg["electrical_fidelity"] == "string" and cfg.get("inverters") is None:
         raise ValueError("electrical_fidelity = 'string' needs 'inverters', 'pv_strings' and 'electrical_environment'")
     return ValidatedSpecs(tariff_spec, reference_spec, smart_charging, currency, vehicle)
+
+
+def _validate_replacement_decision(cfg: dict[str, Any]) -> None:
+    """The economic replacement decision prices one building's whole lifetime (ADR 0003 E14)."""
+    if cfg["battery_replacement_decision"] != "economic":
+        return
+    if cfg.get("period") is not None:
+        raise ValueError(
+            "'battery_replacement_decision' = 'economic' needs the lifetime economics, which a [period] window "
+            "does not price"
+        )
+    if "vehicle" in cfg:
+        raise ValueError("'battery_replacement_decision' = 'economic' is not supported with [vehicle] yet")
 
 
 def _validate_pricing(cfg: dict[str, Any], timezone: str) -> tuple[TariffSpec | None, ReferenceTariffSpec | None, str]:

@@ -224,7 +224,9 @@ def end_of_life_fields(events: Sequence[Mapping[str, Any]], soh_digits: int) -> 
     retirement at zero health (reason ``"zero_health"``), in project order:
     its project ``year``, ``time_years`` from commissioning (the instant a
     replacement is booked at), ``date``, the ``action`` taken, the
-    ``reason`` for it and the ``soh_pct`` at the crossing. The
+    ``reason`` for it and the ``soh_pct`` at the crossing; with
+    ``battery_replacement_decision = "economic"``, each decided crossing's
+    ``decision`` too (ADR 0003 E14). The
     ``battery_first_end_of_life_*`` fields repeat the first crossing, or are
     None without one, so a sweep CSV keeps them.
     """
@@ -233,6 +235,7 @@ def end_of_life_fields(events: Sequence[Mapping[str, Any]], soh_digits: int) -> 
             **event,
             "time_years": round(float(event["time_years"]), 4),
             "soh_pct": round(float(event["soh_pct"]), soh_digits),
+            **({"decision": _decision_dict(event["decision"])} if "decision" in event else {}),
         }
         for event in events
     ]
@@ -243,6 +246,25 @@ def end_of_life_fields(events: Sequence[Mapping[str, Any]], soh_digits: int) -> 
         "battery_first_end_of_life_action": first.get("action"),
         "battery_first_end_of_life_reason": first.get("reason"),
         "battery_first_end_of_life_soh_pct": first.get("soh_pct"),
+    }
+
+
+def _decision_dict(decision: Mapping[str, Any]) -> dict[str, Any]:
+    """An economic crossing's decision (ADR 0003 E14), its NPVs rounded to cents."""
+    return {**decision, "npv": {name: round(float(value), 2) for name, value in decision["npv"].items()}}
+
+
+def replacement_decision_dict(record: Mapping[str, Any]) -> dict[str, Any]:
+    """The economic replacement decision's record (ADR 0003 E14), its NPVs rounded to cents."""
+
+    def branch(row: Mapping[str, Any]) -> dict[str, Any]:
+        return {**row, "npv": round(float(row["npv"]), 2)}
+
+    return {
+        **record,
+        "chosen": branch(record["chosen"]),
+        "threshold_npv": round(float(record["threshold_npv"]), 2),
+        "branches": [branch(row) for row in record["branches"]],
     }
 
 
@@ -615,6 +637,10 @@ def build_result(
             round(float(cost_projection.attrs["replacement_cost_npv"]), 2) if cost_projection is not None else None
         )
         result.update(end_of_life_fields(artifacts.end_of_life_events, soh_digits))
+        decision = artifacts.projection.replacement_decision if artifacts.projection is not None else None
+        if decision is not None:
+            # Only an economic decision reports one, so threshold results are unchanged.
+            result["battery_replacement_decision"] = replacement_decision_dict(decision)
         result["battery_degradation_history"] = degradation_history_to_dicts(
             artifacts.yearly_df, artifacts.end_of_life_events, resolved, soh_digits
         )

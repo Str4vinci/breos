@@ -404,6 +404,7 @@ def parse_community_config(config: Mapping[str, Any]) -> CommunityConfig:
             site: ResolvedAppConfig | HouseholdConfig
             if "n_modules" in payload or "pv_arrays" in payload:
                 site = resolve_app_config({**shared.app_payload(), **payload})
+                _refuse_economic_replacement(site)
             else:
                 site = _household(payload, shared)
             participants.append(ParticipantConfig(site_id, coefficient, site))
@@ -419,6 +420,7 @@ def parse_community_config(config: Mapping[str, Any]) -> CommunityConfig:
             payload = _site_payload(row, asset=True)
             site = resolve_app_config({**shared.app_payload(), **payload, "annual_consumption_kwh": 1.0})
             site = replace(site, cfg={**site.cfg, "annual_consumption_kwh": 0.0, "load_profile": None})
+            _refuse_economic_replacement(site)
             if site.tariff is not None and site.tariff.prices.annual_network_credit is not None:
                 warnings.warn(
                     f"asset '{site_id}': a producer-only connection rarely qualifies for an annual network credit; "
@@ -444,3 +446,10 @@ def parse_community_config(config: Mapping[str, Any]) -> CommunityConfig:
         price_spec.study_date,
     )
     return CommunityConfig(community, tuple(participants), tuple(assets))
+
+
+def _refuse_economic_replacement(site: ResolvedAppConfig) -> None:
+    # A site's swaps would be decided on its standalone NPV, not the
+    # community's money (ADR 0003 E14).
+    if site.cfg.get("battery_replacement_decision") == "economic":
+        raise ValueError("'battery_replacement_decision' = 'economic' is not supported in a community yet")

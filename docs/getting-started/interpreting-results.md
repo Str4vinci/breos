@@ -270,6 +270,7 @@ than 1 Wh):
 | `battery_first_end_of_life_reason` | Why, as in `battery_end_of_life_events`; None without one |
 | `battery_first_end_of_life_soh_pct` | State of health at the first crossing; None without one |
 | `battery_degradation_history` | The battery's state at the end of each project year, with the year's use and stress; see [Degradation history](#degradation-history) |
+| `battery_replacement_decision` | Only with `battery_replacement_decision = "economic"`: the objective, the threshold rule's replacements and NPV, every simulated branch (`replacements`, then `"keep"`, `"retire"` or None for the threshold run, and `npv`), the branch `chosen` and the `extra_projections` run. See [Deciding replacement on economics](configuration.md#deciding-replacement-on-economics) |
 
 With `battery_allow_terminal_replacement = false`, a pack that reaches end of
 life in the final degradation period of the horizon is not replaced. The
@@ -292,8 +293,9 @@ records one:
 | `time_years` | Years from commissioning to the end of the closing step: the instant a replacement is booked at, equal to the `financial` row's `replacement_time_years` |
 | `date` | Calendar date of the closing step; every project year replays the simulated calendar, moved forward by its year |
 | `action` | `"replaced"`: a new pack was installed. `"kept"`: no pack was bought and the old one stays in service below its threshold. `"retired"`: no pack was bought and the old one was switched off; the project finishes PV-only (`battery_skipped_replacement_action = "retire"`, or a kept pack whose state of health reached 0) |
-| `reason` | `"end_of_life"` for a replacement. For a skipped one, `"replacement_disabled"` (`battery_enable_replacement = false`), `"min_remaining_years"` (less than `battery_replacement_min_remaining_years` was left) or `"terminal_period"` (the final period with `battery_allow_terminal_replacement = false`). `"zero_health"` for a kept pack retired when its state of health reached 0 |
+| `reason` | `"end_of_life"` for a replacement. For a skipped one, `"replacement_disabled"` (`battery_enable_replacement = false`), `"min_remaining_years"` (less than `battery_replacement_min_remaining_years` was left) or `"terminal_period"` (the final period with `battery_allow_terminal_replacement = false`). `"zero_health"` for a kept pack retired when its state of health reached 0. `"economic"` when `battery_replacement_decision = "economic"` found keeping or retiring the pack worth more than a new one |
 | `soh_pct` | State of health at the crossing, the value compared with the threshold |
+| `decision` | Only with `battery_replacement_decision = "economic"`, on each crossing it decided: `chosen` (`"replace"`, `"keep"` or `"retire"`), the crossing's number among the decided ones, and `npv`, the NPV of each alternative. Replacing is valued at its best continuation, with later crossings decided the same way |
 
 A replaced pack's successor can cross again, so a long horizon can list
 several replacements. A pack that is kept or retired crosses once: it stays below its

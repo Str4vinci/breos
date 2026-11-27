@@ -61,6 +61,7 @@ def test_the_vocabularies_are_closed_lists():
         "terminal_period",
         "replacement_disabled",
         "zero_health",
+        "economic",
     )
 
 

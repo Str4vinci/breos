@@ -46,7 +46,13 @@ from breos.config_schema import (
     table,
     text,
 )
-from breos.constants import BATTERY_COUPLINGS, DEGRADATION_ENGINES, RESOLUTIONS, SKIPPED_REPLACEMENT_ACTIONS
+from breos.constants import (
+    BATTERY_COUPLINGS,
+    DEGRADATION_ENGINES,
+    REPLACEMENT_DECISIONS,
+    RESOLUTIONS,
+    SKIPPED_REPLACEMENT_ACTIONS,
+)
 from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE, PANEL_WP_REMOVED
 from breos.emissions import EmissionsParams
 from breos.pv.decomposition import DECOMPOSITION_MODELS
@@ -259,6 +265,9 @@ BATTERY_TABLE = TableSpec(
         "replacement_min_remaining_years": number(minimum=0),
         # What a swap the two rules above skip does with the old pack.
         "skipped_replacement_action": choice(SKIPPED_REPLACEMENT_ACTIONS),
+        # "economic" decides each swap on the candidate's projected NPV
+        # (ADR 0003 E14); unset is "threshold".
+        "replacement_decision": choice(REPLACEMENT_DECISIONS),
         "initial_soh": number(minimum=0, maximum=100, min_exclusive=True),
         # The battery's topology, fixed for a study (ADR 0004 C2, C13), and
         # an AC-coupled battery's own inverter.

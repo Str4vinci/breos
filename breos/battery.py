@@ -184,6 +184,14 @@ class BatteryConfig:
     it retired from the returned degradation state, or takes
     ``battery_retired=True``.
 
+    ``replacement_limit`` caps the swaps this span may make; the default
+    None caps none. Once that many are made, the next crossing is not
+    replaced: the pack is kept or retired as ``replacement_limit_action``
+    says, with the reason ``"economic"``. The guards above still skip first.
+    A projection runs one span per year with what is left of a project-wide
+    limit; the economic replacement decision (ADR 0003 E14) runs one
+    projection per limit.
+
     ``thermal_resistance_k_per_w`` is the whole pack's resistance to ambient,
     in K per W of heat loss. ``None`` (the default) scales it with the pack:
     0.05 K/W for a 5 kWh pack, and inversely with nominal capacity, so packs
@@ -215,6 +223,12 @@ class BatteryConfig:
     # What a skipped swap does with the old pack: "keep" it in service or
     # "retire" it and finish the span PV-only.
     skipped_replacement_action: str = "keep"
+    # The swaps this span may still make; None makes as many as the pack
+    # needs. The crossing after the last allowed swap keeps or retires the
+    # pack, as replacement_limit_action says, with the reason "economic":
+    # the economic decision (ADR 0003 E14) runs one branch per limit.
+    replacement_limit: Optional[int] = None
+    replacement_limit_action: str = "keep"
     calendar_model: str = "naumann_lam_field_calibrated"  # v1 field-calibrated default alias
     # Resistance fade (opt-in): grows internal resistance daily and derates
     # the charge/discharge efficiencies in the energy loop so the effective
@@ -277,6 +291,16 @@ class BatteryConfig:
             raise ValueError("replacement_min_remaining_years must be non-negative")
         if self.skipped_replacement_action not in SKIPPED_REPLACEMENT_ACTIONS:
             raise ValueError(f"skipped_replacement_action must be one of: {', '.join(SKIPPED_REPLACEMENT_ACTIONS)}")
+        if self.replacement_limit is not None:
+            if (
+                isinstance(self.replacement_limit, (bool, np.bool_))
+                or not isinstance(self.replacement_limit, (int, np.integer))
+                or self.replacement_limit < 0
+            ):
+                raise ValueError("replacement_limit must be None or a non-negative integer")
+            self.replacement_limit = int(self.replacement_limit)
+        if self.replacement_limit_action not in SKIPPED_REPLACEMENT_ACTIONS:
+            raise ValueError(f"replacement_limit_action must be one of: {', '.join(SKIPPED_REPLACEMENT_ACTIONS)}")
 
         self.nominal_energy_wh = _finite("nominal_energy_wh", self.nominal_energy_wh)
         self.initial_soh = _finite("initial_soh", self.initial_soh)
@@ -1118,13 +1142,15 @@ END_OF_LIFE_ACTIONS: Tuple[str, ...] = ("replaced", "kept", "retired")
 # swap was skipped because less than the minimum service time remained, or
 # because it fell in the span's final period with terminal replacement off,
 # or because replacement is disabled; or a pack kept below its threshold
-# reached zero health and was retired.
+# reached zero health and was retired; or the economic decision (ADR 0003
+# E14) found keeping or retiring it worth more than a new pack.
 END_OF_LIFE_REASONS: Tuple[str, ...] = (
     "end_of_life",
     "min_remaining_years",
     "terminal_period",
     "replacement_disabled",
     "zero_health",
+    "economic",
 )
 
 
@@ -1632,6 +1658,15 @@ def _apply_daily_degradation(
         )
 
     reached_end_of_life = aging.soh_fraction <= battery_config.eol_percentage
+    skipped_action = battery_config.skipped_replacement_action
+    if (
+        replacement_skipped_by is None
+        and battery_config.replacement_limit is not None
+        and aging.n_replacements >= battery_config.replacement_limit
+    ):
+        # The span has made every swap its limit allows (ADR 0003 E14).
+        replacement_skipped_by = "economic"
+        skipped_action = battery_config.replacement_limit_action
     if (
         reached_end_of_life
         and replacement_skipped_by is None
@@ -1663,7 +1698,7 @@ def _apply_daily_degradation(
         if reached_end_of_life and not aging.past_end_of_life:
             reason = "replacement_disabled" if not battery_config.enable_replacement else replacement_skipped_by
             assert reason is not None
-            retire = battery_config.skipped_replacement_action == "retire"
+            retire = skipped_action == "retire"
             aging.end_of_life_events.append(
                 EndOfLifeEvent(
                     step_index, step_times[step_index], "retired" if retire else "kept", reason, aging.soh_percent

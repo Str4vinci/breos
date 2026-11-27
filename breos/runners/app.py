@@ -1012,12 +1012,17 @@ def revalue_app_simulation(
     charge alone is re-priced. A reference tariff added, changed or removed
     is always re-priced: it prices only the household load, which no
     dispatch changes. So is an annual network credit, of either household:
-    the dispatch never sees it.
+    the dispatch never sees it. A run whose replacements were decided on
+    economics (``battery_replacement_decision = "economic"``) re-simulates
+    on any change, since the prices decide them.
     """
     cfg = resolved.cfg
     run, old_tariff = artifacts.projection, artifacts.resolved_tariff
     if run is None:
         raise ValueError("these artifacts carry no projection to re-price")
+    if run.replacement_decision is not None:
+        # The prices decide which replacements the run makes (ADR 0003 E14).
+        return run_app_simulation(resolved, deps), "resimulated"
     tariff = (
         resolved.tariff.resolve(old_tariff.index if old_tariff else _simulated_index(artifacts), resolved.timezone)
         if resolved.tariff

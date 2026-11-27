@@ -6,6 +6,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- `battery_replacement_decision = "economic"` (App, Monte Carlo, and
+  `[battery] replacement_decision` in the projected optimizer) decides each
+  end-of-life replacement on NPV: at every crossing of
+  `battery_eol_percentage` it compares replacing the battery with keeping or
+  retiring it over the rest of the horizon, with perfect foresight, and
+  takes the best. Each decided crossing reports the NPV of every
+  alternative, and the result gains `battery_replacement_decision`. A run
+  that would replace `n` times simulates `2n` more projections. The default
+  `"threshold"` is unchanged, and results are bit-identical (#403, ADR 0003
+  E14).
+
 - Four-period Portuguese schedules for commercial and industrial supplies:
   `pt_mainland_2026_daily_four`, `pt_mainland_2026_weekly_four`,
   `pt_mainland_2026_weekly_four_mt` and their 2027 counterparts. They keep

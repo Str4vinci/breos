@@ -47,7 +47,15 @@ from breos.optimization_config import (
     resolve_optimization_config,
     resolve_run_settings,
 )
-from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years, site_demand_kwh
+from breos.projection import (
+    CarryState,
+    ProjectionRun,
+    ProjectionYear,
+    decide_replacements,
+    first_end_of_life_metrics,
+    project_years,
+    site_demand_kwh,
+)
 from breos.pv.decomposition import decompose_ghi, needs_decomposition, weather_step
 from breos.pv.model_options import (
     DEFAULT_SOLAR_POSITION,
@@ -316,6 +324,14 @@ def _battery_replacement_treatment(
             'project ("retire"), as skipped_replacement_action says.'
         ),
     }
+    if battery.get("replacement_decision", "threshold") == "economic":
+        # Only an economic study records it, so threshold provenance is unchanged.
+        treatment["replacement_decision"] = "economic"
+        treatment["economic_decision"] = (
+            "At each end-of-life crossing a new pack is bought only if replacing gives the highest Projected_NPV "
+            "of replace, keep and retire over the rest of the horizon, each alternative simulated with perfect "
+            "information (ADR 0003 E14)."
+        )
     if treatment["coupling"] == "ac":
         per_kwh = battery.get("inverter_kw_per_kwh")
         treatment["battery_inverter"] = {
@@ -503,35 +519,47 @@ def _evaluate_projected_design_metrics(
             pv_degradation_factor=degradation_factor, aligned=aligned.scaled(pv_factor=degradation_factor)
         )
 
-    projection = project_years(
-        years_projection,
-        year_inputs,
-        battery_config=battery_config,
-        freq=freq,
-        has_battery=has_battery,
-        execution_backend=execution_backend,
-        degradation_engine=degradation_engine,
-        blast_model=blast_model,
-        initial_carry=CarryState(soh_pct=float(batt_spec.get("initial_soh", 100.0)) if has_battery else 100.0),
-        tariff=tariff,
-        instructions=instructions if has_battery else None,
-        reference_tariff=reference_tariff,
-        # A one-design evaluation reports its compile cost, as an App run does.
-        observe_jit_per_year=return_tables,
-    )
-    # Priced here, as App and Monte Carlo price theirs (ADR 0003 E4, E7).
-    yearly_summary_df = price_year_rows(projection.yearly_df, costs)
+    def run(replacement_limit: tuple[int, str] | None) -> ProjectionRun:
+        return project_years(
+            years_projection,
+            year_inputs,
+            battery_config=battery_config,
+            freq=freq,
+            has_battery=has_battery,
+            execution_backend=execution_backend,
+            degradation_engine=degradation_engine,
+            blast_model=blast_model,
+            initial_carry=CarryState(soh_pct=float(batt_spec.get("initial_soh", 100.0)) if has_battery else 100.0),
+            tariff=tariff,
+            instructions=instructions if has_battery else None,
+            reference_tariff=reference_tariff,
+            # A one-design evaluation reports its compile cost, as an App run does.
+            observe_jit_per_year=return_tables,
+            replacement_limit=replacement_limit,
+        )
+
+    def value(projection: ProjectionRun) -> tuple[pd.DataFrame, pd.DataFrame]:
+        # Priced here, as App and Monte Carlo price theirs (ADR 0003 E4, E7).
+        yearly = price_year_rows(projection.yearly_df, costs)
+        return yearly, cost_analysis_projection(
+            yearly_summary_df=yearly,
+            costs=costs,
+            num_years=years_projection,
+            **_projection_rates(fin_cfg),
+            emissions_params=emissions_params,
+            currency=currency,
+            baseline_import_price_escalation=reference_import_price_escalation,
+        )
+
+    economic = has_battery and batt_spec.get("replacement_decision", "threshold") == "economic"
+    if economic:
+        # Each swap is decided on the Projected_NPV the search optimises (ADR 0003 E14).
+        projection = decide_replacements(run, lambda branch: float(value(branch)[1]["Savings_Cumulative_NPV"].iloc[-1]))
+    else:
+        projection = run(None)
+    yearly_summary_df, cost_projection = value(projection)
     total_replacements = projection.total_replacements
     current_soh = float(projection.carry.soh_pct)
-    cost_projection = cost_analysis_projection(
-        yearly_summary_df=yearly_summary_df,
-        costs=costs,
-        num_years=years_projection,
-        **_projection_rates(fin_cfg),
-        emissions_params=emissions_params,
-        currency=currency,
-        baseline_import_price_escalation=reference_import_price_escalation,
-    )
     payback_year = cost_projection.attrs.get("payback_year")
     payback_interpolated = find_payback_year_interpolated(cost_projection)
     metrics: Dict[str, Any] = {
@@ -565,6 +593,12 @@ def _evaluate_projected_design_metrics(
         "Projected_Inverter_Loss_Year1_kWh": float(yearly_summary_df["Inverter_Loss_kWh"].iloc[0]),
         "Projected_LCOE_per_kWh": float(cost_projection.attrs["lcoe_per_kwh"]),
     }
+    if economic:
+        decision = projection.replacement_decision
+        assert decision is not None
+        # What the threshold rule would have scored, and the projections the decision ran besides it.
+        metrics["Projected_Threshold_Rule_NPV"] = float(decision["threshold_npv"])
+        metrics["Projected_Replacement_Decision_Projections"] = int(decision["extra_projections"]) + 1
     if "CO2_Avoided_Total_Cumulative_kg" in cost_projection:
         metrics.update(
             {
