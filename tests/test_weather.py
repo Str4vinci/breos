@@ -157,9 +157,10 @@ def _install_fake_openmeteo(monkeypatch, captured):
         def __init__(self, *, session):
             captured["session"] = session
 
-        def weather_api(self, url, *, params):
+        def weather_api(self, url, *, params, **kwargs):
             captured["url"] = url
             captured["params"] = params
+            captured["kwargs"] = kwargs
             return [FakeResponse(params)]
 
     monkeypatch.setattr("breos.weather.requests_cache.CachedSession", lambda *_args, **_kwargs: FakeSession())
@@ -181,8 +182,6 @@ def test_fetch_weather_data_requests_selected_openmeteo_radiation(
         longitude=-8.6291,
         start_date="2024-06-01",
         end_date="2024-06-01",
-        tilt=0,
-        azimuth=0,
         save_to_file=False,
         radiation_time_basis=radiation_time_basis,
     )
@@ -194,7 +193,6 @@ def test_fetch_weather_data_requests_selected_openmeteo_radiation(
         f"direct_radiation{suffix}",
         f"diffuse_radiation{suffix}",
         f"direct_normal_irradiance{suffix}",
-        f"global_tilted_irradiance{suffix}",
         f"terrestrial_radiation{suffix}",
     ]
     assert list(weather.columns) == [
@@ -204,9 +202,11 @@ def test_fetch_weather_data_requests_selected_openmeteo_radiation(
         "direct_radiation",
         "diffuse_radiation",
         "direct_normal_irradiance",
-        "global_tilted_irradiance",
         "terrestrial_radiation",
     ]
+    assert "tilt" not in captured["params"] and "azimuth" not in captured["params"]
+    # A stalled server must raise instead of hanging the caller (#515).
+    assert captured["kwargs"]["timeout"] > 0
     metadata = weather.attrs["breos_weather_metadata"]
     assert metadata["radiation_time_basis"] == radiation_time_basis
     assert metadata["timestamp_label_basis"] == label_basis
@@ -219,8 +219,6 @@ def test_fetch_weather_data_rejects_unknown_radiation_time_basis():
             longitude=-8.6291,
             start_date="2024-06-01",
             end_date="2024-06-01",
-            tilt=0,
-            azimuth=0,
             save_to_file=False,
             radiation_time_basis="unknown",
         )
@@ -238,8 +236,6 @@ def test_fetch_weather_data_rejects_unsupported_frequency_before_fetching(monkey
             longitude=-8.6291,
             start_date="2024-06-01",
             end_date="2024-06-01",
-            tilt=0,
-            azimuth=0,
             freq=freq,
             save_to_file=False,
         )
@@ -265,8 +261,6 @@ def test_fetch_weather_data_covers_the_requested_hours(
         longitude=-8.6291,
         start_date="2024-01-01",
         end_date="2024-12-31",
-        tilt=0,
-        azimuth=0,
         save_to_file=False,
         radiation_time_basis=radiation_time_basis,
     )
@@ -285,8 +279,6 @@ def test_fetched_right_labelled_file_keeps_its_last_year(monkeypatch, tmp_path):
         longitude=-8.6291,
         start_date="2022-01-01",
         end_date="2024-12-31",
-        tilt=0,
-        azimuth=0,
         location_name="porto",
         output_dir=str(tmp_path),
     )
@@ -1137,3 +1129,64 @@ def test_preload_weather_fills_all_of_february_29_in_leap_targets(tmp_path, freq
     expected = pd.date_range("2028-01-01", "2029-01-01", inclusive="left", freq=freq, tz="UTC+01:00")
     assert year.index.equals(expected)
     np.testing.assert_array_equal(year.loc["2028-02-29", "ghi"], year.loc["2028-02-28", "ghi"])
+
+
+def _right_labelled_open_meteo_year(year):
+    from tests.conftest import _build_open_meteo_weather
+
+    labels = pd.date_range(f"{year}-01-01 01:00", f"{year + 1}-01-01 00:00", freq="h", tz="UTC")
+    weather = _build_open_meteo_weather(labels)
+    weather.attrs["breos_weather_metadata"] = {
+        "source": "OpenMeteo_historical",
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "right",
+        "timestamp_timezone": "GMT",
+    }
+    return weather
+
+
+def test_right_labelled_year_without_29_february_is_relabelled_with_the_day_missing():
+    weather = _right_labelled_open_meteo_year(2024)
+    starts = weather.index - pd.Timedelta(hours=1)
+    no_leap_day = weather[~((starts.month == 2) & (starts.day == 29))]
+
+    relabeled = relabel_right_labeled_interval_means(no_leap_day)
+
+    assert len(relabeled) == 8760
+    assert not ((relabeled.index.month == 2) & (relabeled.index.day == 29)).any()
+    assert relabeled.index[0] == pd.Timestamp("2024-01-01 00:00", tz="UTC")
+
+
+def test_right_labelled_weather_with_another_gap_names_the_missing_rows():
+    weather = _right_labelled_open_meteo_year(2023).drop(pd.Timestamp("2023-06-01 12:00", tz="UTC"))
+
+    with pytest.raises(ValueError, match=r"between 2023-06-01 11:00:00\+00:00 and 2023-06-01 13:00:00\+00:00 1 steps"):
+        relabel_right_labeled_interval_means(weather)
+
+
+def test_app_fills_29_february_of_a_right_labelled_year_from_28_february(tmp_path, monkeypatch, no_fetch):
+    # A 365-day pipeline drops 29 February from an Open-Meteo leap year (#516).
+    from breos.app import App
+
+    weather = _right_labelled_open_meteo_year(2024)
+    starts = weather.index - pd.Timedelta(hours=1)
+    save_weather_csv(weather[~((starts.month == 2) & (starts.day == 29))], tmp_path / "noleap.csv")
+    monkeypatch.chdir(tmp_path)
+    app = App(
+        {
+            "location": "porto",
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "projection_years": 1,
+            "start_date": "2024-01-01",
+            "weather_file": "noleap.csv",
+        }
+    )
+    app.simulate()
+    series = app.timeseries().set_index("Datetime")
+
+    assert len(series) == 8784
+    feb28 = series.loc["2024-02-28", "PV_DC"].to_numpy()
+    feb29 = series.loc["2024-02-29", "PV_DC"].to_numpy()
+    assert feb29.sum() > 0
+    assert feb29 == pytest.approx(feb28, rel=0.05)

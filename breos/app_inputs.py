@@ -189,6 +189,41 @@ def _weather_source_label(weather: pd.DataFrame) -> str:
     return "the injected weather provider"
 
 
+def _year_coverage_by_clock(
+    index: pd.DatetimeIndex, year: int, step: pd.Timedelta, timezone: str
+) -> list[tuple[Any, pd.Timedelta, pd.Timedelta, pd.Timedelta, pd.Timestamp, pd.Timestamp]]:
+    """How far ``index`` is from covering ``year`` on each clock it may be read on.
+
+    The clocks are the index's own, UTC and the location's ``timezone``, in
+    that order. Each entry is ``(clock, difference, leading, trailing,
+    year_start, year_end)``; the year is covered on a clock whose
+    ``difference`` is under one ``step``.
+    """
+    first, last = index.min(), index.max()
+    coverage = []
+    clocks = {str(clock): clock for clock in (index.tz, "UTC", timezone)}
+    for clock in clocks.values():
+        # Start each civil year at its first real instant, even if midnight is skipped or repeated.
+        year_start = pd.Timestamp(f"{year}-01-01").tz_localize(clock, nonexistent="shift_forward", ambiguous=True)
+        year_end = pd.Timestamp(f"{year + 1}-01-01").tz_localize(clock, nonexistent="shift_forward", ambiguous=True)
+        leading = first - year_start
+        trailing = year_end - (last + step)
+        coverage.append((clock, max(abs(leading), abs(trailing)), leading, trailing, year_start, year_end))
+    return coverage
+
+
+def full_year_clock(index: pd.DatetimeIndex, year: int, freq: str, timezone: str) -> Any:
+    """The first clock on which ``index`` covers ``year``, as :func:`require_full_year_weather` reads it.
+
+    Returns ``None`` when no clock covers the year.
+    """
+    step = pd.Timedelta(hours=get_hours_per_step(freq))
+    for clock, difference, *_ in _year_coverage_by_clock(index, year, step, timezone):
+        if difference < step:
+            return clock
+    return None
+
+
 def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timezone: str) -> None:
     """Raise unless the weather covers the whole calendar year the App simulates.
 
@@ -213,22 +248,12 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
         raise ValueError(f"Weather from {_weather_source_label(weather)} has a duplicate timestamp at {duplicate}")
     step = pd.Timedelta(hours=get_hours_per_step(freq))
     first, last = index.min(), index.max()
-
-    differences = []
-    clocks = {str(clock): clock for clock in (index.tz, "UTC", timezone)}
-    for clock in clocks.values():
-        # Start each civil year at its first real instant, even if midnight is skipped or repeated.
-        year_start = pd.Timestamp(f"{year}-01-01").tz_localize(clock, nonexistent="shift_forward", ambiguous=True)
-        year_end = pd.Timestamp(f"{year + 1}-01-01").tz_localize(clock, nonexistent="shift_forward", ambiguous=True)
-        leading = first - year_start
-        trailing = year_end - (last + step)
-        difference = max(abs(leading), abs(trailing))
-        if difference < step:
-            return
-        differences.append((difference, leading, trailing, year_start, year_end))
+    coverage = _year_coverage_by_clock(index, year, step, timezone)
+    if any(difference < step for _, difference, *_ in coverage):
+        return
 
     # Report on the clock the weather comes closest to covering.
-    _, leading, trailing, year_start, year_end = min(differences, key=lambda item: item[0])
+    _, _, leading, trailing, year_start, year_end = min(coverage, key=lambda item: item[1])
     missing = []
     if leading >= step:
         missing.append(

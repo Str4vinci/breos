@@ -437,8 +437,8 @@ def test_a_truncated_year_is_refused(monkeypatch):
     real = __import__("breos.weather", fromlist=["openmeteo_requests"]).openmeteo_requests.Client
 
     class Short(real):  # type: ignore[misc, valid-type]
-        def weather_api(self, url, *, params):
-            return super().weather_api(url, params={**params, "start_date": "2025-01-02"})
+        def weather_api(self, url, *, params, **kwargs):
+            return super().weather_api(url, params={**params, "start_date": "2025-01-02"}, **kwargs)
 
     monkeypatch.setattr("breos.weather.openmeteo_requests.Client", Short)
     with pytest.raises(ValueError, match="returned 8737 hours for 2025, not the 8760"):

@@ -277,17 +277,47 @@ def weather_representative_time_offset(weather: pd.DataFrame, freq: str) -> pd.T
     return _representative_time_offset(weather_metadata(weather), step, require_metadata=True)
 
 
+def _is_missing_leap_day(before: pd.Timestamp, after: pd.Timestamp, step: pd.Timedelta) -> bool:
+    """Whether right labels ``before`` and ``after`` skip exactly the intervals that start on a 29 February."""
+    return (
+        before.month == 2
+        and before.day == 29
+        and before == before.normalize()
+        and after - step == before + pd.Timedelta(days=1)
+    )
+
+
 def relabel_right_labeled_interval_means(weather: pd.DataFrame) -> pd.DataFrame:
-    """Move right-labeled interval means to the start of their source interval."""
+    """Move right-labeled interval means to the start of their source interval.
+
+    The step is the most common interval. The only gap allowed is a whole
+    missing 29 February (its intervals start on that day, on the index's own
+    clock), as a 365-day pipeline leaves; :func:`fill_leap_day` fills it later
+    from 28 February, as for a TMY. Any other uneven step is refused with the
+    rows around it named (#516).
+    """
     metadata = weather_metadata(weather)
     if metadata.get("radiation_time_basis") != "interval_mean" or metadata.get("timestamp_label_basis") != "right":
         return weather.copy()
     if len(weather.index) < 2:
         raise ValueError("right-labeled interval weather needs at least two timestamps")
-    intervals = weather.index[1:] - weather.index[:-1]
-    step = intervals[0]
-    if not np.all(intervals == step):
-        raise ValueError("right-labeled interval weather requires a regular index")
+    index = weather.index
+    intervals = index[1:] - index[:-1]
+    step = pd.Series(intervals).mode().iloc[0]
+    uneven = np.flatnonzero(intervals != step)
+    if len(uneven) and not (len(uneven) == 1 and _is_missing_leap_day(index[uneven[0]], index[uneven[0] + 1], step)):
+        position = uneven[0]
+        before, after = index[position], index[position + 1]
+        gap = after - before
+        problem = (
+            f"{int(gap // step) - 1} steps are missing"
+            if gap > step and gap % step == pd.Timedelta(0)
+            else "the step changes"
+        )
+        raise ValueError(
+            f"right-labeled interval weather must have a step of {step} throughout, but between {before} and {after} "
+            f"{problem}. Only a whole missing 29 February is filled; supply the other rows."
+        )
     relabeled = weather.copy()
     relabeled.index = relabeled.index - step
     metadata["timestamp_label_basis"] = "left"
@@ -770,6 +800,10 @@ FORECAST_ARCHIVE_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 SATELLITE_ARCHIVE_URL = "https://satellite-api.open-meteo.com/v1/archive"
 HISTORICAL_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
+# Seconds to wait for the server to connect or to send the next bytes. Without
+# it, a server that accepts the connection and never answers hangs the caller.
+_OPENMETEO_TIMEOUT_S = 120
+
 
 _OPENMETEO_IMPORT_HINT = (
     "openmeteo_requests is required to fetch Open-Meteo weather. Install with: pip install 'breos[weather]'"
@@ -781,7 +815,8 @@ def _openmeteo_hourly(url: str, request: dict[str, Any], names: Sequence[str]) -
 
     The client caches responses in ``.cache.sqlite`` in the working directory
     for 30 days, so a bad response is not served forever, and retries server
-    errors.
+    errors. A request that stalls for ``_OPENMETEO_TIMEOUT_S`` seconds fails
+    instead of waiting forever.
     """
     if not HAS_OPENMETEO:
         raise ImportError(_OPENMETEO_IMPORT_HINT)
@@ -789,7 +824,11 @@ def _openmeteo_hourly(url: str, request: dict[str, Any], names: Sequence[str]) -
     retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
     cache_session.mount("https://", HTTPAdapter(max_retries=retries))
     cache_session.mount("http://", HTTPAdapter(max_retries=retries))
-    hourly = openmeteo_requests.Client(session=cache_session).weather_api(url, params=request)[0].Hourly()
+    hourly = (
+        openmeteo_requests.Client(session=cache_session)
+        .weather_api(url, params=request, timeout=_OPENMETEO_TIMEOUT_S)[0]
+        .Hourly()
+    )
     index = pd.date_range(
         start=pd.to_datetime(hourly.Time(), unit="s"),
         end=pd.to_datetime(hourly.TimeEnd(), unit="s"),
@@ -805,8 +844,6 @@ def fetch_weather_data(
     longitude: float,
     start_date: str,
     end_date: str,
-    tilt: float,
-    azimuth: float,
     freq: str = "h",
     save_to_file: bool = True,
     location_name: Optional[str] = None,
@@ -828,8 +865,6 @@ def fetch_weather_data(
         longitude: Longitude of the location
         start_date: Start date in format 'YYYY-MM-DD'
         end_date: End date in format 'YYYY-MM-DD'
-        tilt: Tilt of the PV panel (degrees)
-        azimuth: Azimuth of the PV system (0° S, -90° E, 90° W, 180° N)
         freq: Output frequency ('h' for hourly, '15min' for 15-minute)
         save_to_file: Whether to save the data to CSV
         location_name: Location name for filename (e.g., 'porto'). If None, uses lat/lon.
@@ -862,7 +897,6 @@ def fetch_weather_data(
         (f"direct_radiation{radiation_suffix}", "direct_radiation"),
         (f"diffuse_radiation{radiation_suffix}", "diffuse_radiation"),
         (f"direct_normal_irradiance{radiation_suffix}", "direct_normal_irradiance"),
-        (f"global_tilted_irradiance{radiation_suffix}", "global_tilted_irradiance"),
         (f"terrestrial_radiation{radiation_suffix}", "terrestrial_radiation"),
     )
 
@@ -883,8 +917,6 @@ def fetch_weather_data(
         "hourly": [provider_name for provider_name, _output_name in hourly_fields],
         "wind_speed_unit": "ms",
         "timezone": "GMT",
-        "tilt": tilt,
-        "azimuth": azimuth,
     }
     hourly_dataframe = _openmeteo_hourly(
         HISTORICAL_ARCHIVE_URL, params, [output_name for _provider_name, output_name in hourly_fields]
