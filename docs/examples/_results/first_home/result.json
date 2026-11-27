@@ -985,6 +985,7 @@
    "model_perez": "allsitescomposite1990",
    "irradiance_resampling": "auto",
    "irradiance_decomposition": null,
+   "timeseries_pv_stages": false,
    "solar_position": "auto",
    "iam_model": "ashrae",
    "diffuse_iam": "none",
