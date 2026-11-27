@@ -1213,11 +1213,12 @@ fixed_charge_per_day = 0.25              # optional, default 0
   does not convert; see [Currency](#currency).
 - Holidays of a custom schedule are optional and explicit. The
   `[tariff.custom_schedule.holidays]` table needs `day_type`, the day type
-  holidays follow, and `dates`, which maps each covered year to its dates;
-  provide the complete calendar you intend for each year the simulation can
-  use. A run in a year absent from that map fails rather than guessing or
-  reusing dates. The bundled `es_2_0td` carries Spanish national holidays for
-  2026 only.
+  holidays follow, and either `dates`, which maps each covered year to its
+  dates, or `calendar = "pt_national"`, Portugal's mandatory national
+  holidays computed for any year from 2004. With `dates`, provide the
+  complete calendar you intend for each year the simulation can use. A run in
+  a year absent from that map fails rather than guessing or reusing dates.
+  The bundled `es_2_0td` carries Spanish national holidays for 2026 only.
 - The schedule must be defined in the location's timezone, and the
   resolution fine enough for its boundaries. Of the bundled schedules, only
   `pt_mainland_2026_daily_bi` and `es_2_0td` run at hourly resolution; the

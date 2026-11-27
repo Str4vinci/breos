@@ -132,6 +132,66 @@ PINS = {
         "bd5ce39ba0e38e7e",
         "b7213035f9be2b13b3868e166f098145829e650ae6032f734ba051e729f73dbe",
     ),
+    ("pt_mainland_2026_daily_four", 2024, "15min"): (
+        35136,
+        "044abf39df231f37",
+        "0d94aa13b887af6785c3fc7e6b8b1b3941f53d324b3bc4144a979da48a6d73f7",
+    ),
+    ("pt_mainland_2026_daily_four", 2026, "15min"): (
+        35040,
+        "b60002715cc084ec",
+        "25a6c4e4a8f7bb64814e710dc3467693e62eb9fb7e25c4a34e7408267a354198",
+    ),
+    ("pt_mainland_2026_weekly_four", 2024, "15min"): (
+        35136,
+        "93297250d16f412d",
+        "b1bb85092a30c5f3aabd2763602e1fe6cfded8cd9bab08f18b10e70ce5c0b5fe",
+    ),
+    ("pt_mainland_2026_weekly_four", 2026, "15min"): (
+        35040,
+        "ec79619cb633875f",
+        "4a55fbdad291e6f8c13dbc37afd21d371e3dab785c8a59ee767b483974738bb0",
+    ),
+    ("pt_mainland_2026_weekly_four_mt", 2024, "15min"): (
+        35136,
+        "f416b9faa41011b6",
+        "36db7a3a59583bed4ffa9495775271d28c2f287f0c3ada76eac9415b00c2a642",
+    ),
+    ("pt_mainland_2026_weekly_four_mt", 2026, "15min"): (
+        35040,
+        "ddb97e56b82b4fcd",
+        "5d211605654f56df8695e2a9be95ac2597ff27ad33b7af72d8547b1b525d3e5f",
+    ),
+    ("pt_mainland_2027_daily_four", 2024, "15min"): (
+        35136,
+        "872ec70148b942da",
+        "49df52f4a6e817c66590845e758e91079a99ba9112c332c488a10d192c9ea075",
+    ),
+    ("pt_mainland_2027_daily_four", 2026, "15min"): (
+        35040,
+        "28a31b22fc619067",
+        "bca38532c52ca761afcef5d008ba6e1d155f614b6bb579222b202537d7f7d2de",
+    ),
+    ("pt_mainland_2027_weekly_four", 2024, "15min"): (
+        35136,
+        "a7c31b2f5fb17020",
+        "2b25cfb4f4bc9ad3a338baf771c67edf9227bdf3c2dd488d407c20ec764230c8",
+    ),
+    ("pt_mainland_2027_weekly_four", 2026, "15min"): (
+        35040,
+        "23c24cf27494c754",
+        "b93c65dd4ae1ae3b426abc0004e06047b20864d13597f12a374fb4346293aa6e",
+    ),
+    ("pt_mainland_2027_weekly_four_mt", 2024, "15min"): (
+        35136,
+        "f2638ffb807b18b1",
+        "5f2531e2dbedacbe12b948d2a20200f07f6d782d6fa206ca8d8a3deb8c6aa421",
+    ),
+    ("pt_mainland_2027_weekly_four_mt", 2026, "15min"): (
+        35040,
+        "c7e6105435edc731",
+        "89289a2657473c9b0e02a55b3219fe42f58dd55dc4a3a54daae258f261698955",
+    ),
 }
 # Cases the same years and steps cannot resolve: half-hour boundaries on hourly
 # steps, and a Spanish year without a holiday calendar.
@@ -148,6 +208,12 @@ REJECTED = {
             "pt_mainland_2027_daily_tri",
             "pt_mainland_2027_weekly_bi",
             "pt_mainland_2027_weekly_tri",
+            "pt_mainland_2026_daily_four",
+            "pt_mainland_2026_weekly_four",
+            "pt_mainland_2026_weekly_four_mt",
+            "pt_mainland_2027_daily_four",
+            "pt_mainland_2027_weekly_four",
+            "pt_mainland_2027_weekly_four_mt",
         )
         for year in (2024, 2026)
     },
@@ -231,6 +297,12 @@ BOUNDARY_STEPS = {
     "pt_mainland_2027_daily_tri": 30,
     "pt_mainland_2027_weekly_bi": 30,
     "pt_mainland_2027_weekly_tri": 30,
+    "pt_mainland_2026_daily_four": 30,
+    "pt_mainland_2026_weekly_four": 15,
+    "pt_mainland_2026_weekly_four_mt": 15,
+    "pt_mainland_2027_daily_four": 30,
+    "pt_mainland_2027_weekly_four": 30,
+    "pt_mainland_2027_weekly_four_mt": 30,
 }
 
 

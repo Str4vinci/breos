@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from breos import App, tariffs
+from breos.holidays import NAMED_HOLIDAY_CALENDARS
 from breos.tariffs import (
     HolidayCalendar,
     MonthSeasons,
@@ -38,7 +39,13 @@ def _reference_classify(index, schedule, *, timezone):
     holidays = definition.holidays
     # Every known holiday applies; which years need a calendar is the
     # classifier's check, not part of the labels.
-    holiday_dates = holidays.dates if holidays is not None else frozenset()
+    if holidays is None:
+        holiday_dates = frozenset()
+    elif holidays.calendar is not None:
+        dates_of_year = NAMED_HOLIDAY_CALENDARS[holidays.calendar]
+        holiday_dates = frozenset().union(*(dates_of_year(year) for year in set(local_index.year)))
+    else:
+        holiday_dates = holidays.dates
     holiday_day_type = holidays.day_type if holidays is not None else "sunday"
     labels: list[str] = []
     seasons: list[str] = []

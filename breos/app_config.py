@@ -81,6 +81,7 @@ from breos.execution import (
     resolve_execution_backend,
     validate_requested_backend,
 )
+from breos.holidays import NAMED_HOLIDAY_CALENDARS
 from breos.inverter import AcCable, InverterConversion, inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
 from breos.pv.decomposition import DECOMPOSITION_MODELS
@@ -2136,8 +2137,13 @@ def _custom_rules(value: Any, where: str) -> list[dict[str, Any]]:
 
 _CUSTOM_HOLIDAYS_TABLE = TableSpec(
     "custom_schedule.holidays",
-    keys={"day_type": choice(("saturday", "sunday", "weekday")), "dates": _holiday_dates, "source": text},
-    required=frozenset({"day_type", "dates"}),
+    keys={
+        "day_type": choice(("saturday", "sunday", "weekday")),
+        "dates": _holiday_dates,
+        "calendar": choice(tuple(sorted(NAMED_HOLIDAY_CALENDARS))),
+        "source": text,
+    },
+    required=frozenset({"day_type"}),
 )
 _CUSTOM_SCHEDULE_TABLE = TableSpec(
     "custom_schedule",

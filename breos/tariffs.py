@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import numpy as np
 import pandas as pd
 
+from breos.holidays import NAMED_HOLIDAY_CALENDARS
 from breos.resources import load_config_json
 
 # The active ISO 4217 currency codes, without fund codes, precious metals and
@@ -544,16 +545,28 @@ class HolidayCalendar:
     ``years`` are the years ``dates`` is complete for: an index covering a
     day of any other year raises rather than miss a holiday. ``None`` means
     the dates are complete for every year.
+
+    ``calendar`` names a built-in calendar computed for any year it covers,
+    such as ``pt_national``, instead of ``dates`` and ``years``.
     """
 
     day_type: str
-    dates: frozenset[date]
+    dates: frozenset[date] = frozenset()
     years: frozenset[int] | None = None
     source: str | None = None
+    calendar: str | None = None
 
     def __post_init__(self) -> None:
         if self.day_type not in _DAY_TYPES:
             raise ValueError(f"'holidays.day_type' must be one of: {', '.join(_DAY_TYPES)}")
+        if self.calendar is not None:
+            if self.calendar not in NAMED_HOLIDAY_CALENDARS:
+                raise ValueError(
+                    f"'holidays.calendar' must be one of: {', '.join(sorted(NAMED_HOLIDAY_CALENDARS))}; "
+                    f"got {self.calendar!r}"
+                )
+            if self.dates or self.years is not None:
+                raise ValueError("'holidays' takes either a 'calendar' or 'dates', not both")
         dates = frozenset(self.dates)
         if any(not isinstance(day, date) or isinstance(day, datetime) for day in dates):
             raise TypeError("'holidays.dates' must hold dates")
@@ -716,8 +729,16 @@ def _parse_holidays(raw: object, where: str) -> HolidayCalendar | None:
     if day_type not in _DAY_TYPES:
         raise ValueError(f"'{where}.day_type' must be one of: {', '.join(_DAY_TYPES)}")
     raw_dates = raw.get("dates")
+    calendar = raw.get("calendar")
+    if calendar is not None:
+        if raw_dates is not None:
+            raise ValueError(f"'{where}' takes either a 'calendar' or 'dates', not both")
+        try:
+            return HolidayCalendar(day_type=day_type, calendar=calendar, source=raw.get("source"))
+        except (TypeError, ValueError) as exc:
+            raise type(exc)(f"'{where}': {exc}") from exc
     if not isinstance(raw_dates, Mapping) or not raw_dates:
-        raise TypeError(f"'{where}.dates' must map years to lists of ISO dates")
+        raise TypeError(f"'{where}' must name a 'calendar' or give 'dates' mapping years to lists of ISO dates")
     years: set[int] = set()
     dates: set[date] = set()
     for raw_year, values in raw_dates.items():
@@ -762,8 +783,8 @@ def parse_schedule_definition(
     ``effective_from``, ``effective_to``, ``holidays`` and ``seasons``. Each
     rule has a ``days`` selector, a ``season`` selector and ``intervals``
     mapping periods to ``["HH:MM", "HH:MM"]`` ranges; ``"24:00"`` closes the
-    day. Holidays have a ``day_type`` and ``dates`` mapping each year to its
-    dates. ``seasons`` maps season names to the calendar months, 1 through
+    day. Holidays have a ``day_type`` and either ``dates`` mapping each year
+    to its dates or a built-in ``calendar`` such as ``pt_national``. ``seasons`` maps season names to the calendar months, 1 through
     12, that make them up; together they hold every month once. The
     time resolution the schedule needs follows from the boundaries and the
     zone's UTC-offset changes.
@@ -888,6 +909,19 @@ def _holiday_dates(
     """The known holidays of every ``touched`` year; a calendar is required for each of ``years``."""
     if holidays is None:
         return frozenset()
+    if holidays.calendar is not None:
+        dates_of_year = NAMED_HOLIDAY_CALENDARS[holidays.calendar]
+        found: set[date] = set()
+        for year in sorted(touched):
+            # A named calendar computes any year it covers, so even a few
+            # hours in a year it does not cover are refused.
+            try:
+                found |= dates_of_year(year)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Schedule {identifier!r} treats national holidays as {holidays.day_type}s: {exc}"
+                ) from exc
+        return frozenset(found)
     if holidays.years is not None:
         missing = sorted(years - holidays.years)
         if missing:
