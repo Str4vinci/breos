@@ -156,6 +156,10 @@ def main() -> None:
         if path.exists():
             print(f"skip {path}")
             continue
+        if not (RUNS / a.space / scenario / "exact.pkl").exists():
+            # A Pool whose initializer raises respawns workers forever; fail fast instead.
+            print(f"no exact table for {a.space}/{scenario}; skipped", flush=True)
+            continue
         t = time.time()
         jobs = [(a.space, scenario, n, b, s) for n in OBJECTIVE_SETS for b in a.budgets.split(",") for s in parse_seeds(a.seeds)]
         with mp.Pool(a.workers, initializer=_init, initargs=(a.space, scenario)) as pool:

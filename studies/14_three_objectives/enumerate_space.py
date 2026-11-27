@@ -87,8 +87,8 @@ def main() -> None:
     problem = build_problem(args.scenario, args.space)
     X = full_grid(problem)
     capex, area = capex_and_area(problem, X[:, 0], X[:, 1])
-    g0 = capex - problem.budget_limit
-    g1 = area - problem.area_limit
+    g0 = capex - problem.config["constraints"]["budget"]
+    g1 = area - problem.config["constraints"]["max_area_m2"]
     feasible = (g0 <= 0) & (g1 <= 0)
     todo = X[feasible]
     chunks = [todo[i : i + args.chunk] for i in range(0, len(todo), args.chunk)]

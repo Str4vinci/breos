@@ -9,8 +9,8 @@ household, design study). Heavy runs: systemd user services with MemoryMax=16G.
 |---|---|---|---|---|
 | 11 | Sizing on TMY vs actual years (regret) | 11_sizing_regret/run_grid.py | done | NPV-best size robust (≤14 €); targets missed in 30–50 % of years by ~1 pp; >1 k€ regrets (5 %) are replacement cliffs, min_remaining 2 y cuts them to 1 % |
 | 12 | Order of weather years in a projection | 12_year_order/run_order.py (queue) | done | 305 orders of the same 19 years: NPV range 50–140 € (σ≈10 €), replacement count never changes; only outlier is a TMY-vs-sequence replacement cliff (1.2 k€) |
-| 13 | Replacement-rule family vs default (#403) | 13_replacement_policy/run_policy.py (queue) | running | |
-| 14 | NSGA-II with a third objective (lookup replays) | 14_three_objectives/{enumerate_space,run_3obj}.py (queue) | queued | |
+| 13 | Replacement-rule family vs default (#403) | 13_replacement_policy/run_policy.py (queue) | done | best rule in all 126 cases buys no replacement: +0.7–9.7 k€ NPV vs default (v1 5 kWh +2.9 k€), −2–8 pp self-sufficiency; retire never beats keep |
+| 14 | NSGA-II with a third objective (lookup replays) | 14_three_objectives/{enumerate_space,run_3obj}.py (queue) | running | |
 | 15 | Peak memory and wall time across configs | 15_resources/run_resources.py (queue) | queued | |
 | 16 | Result drift across Python / dependency versions | 16_version_drift/{build_envs.sh,run_gallery.py} (queue) | queued | |
 
@@ -27,3 +27,4 @@ Check: `systemctl --user status breos-s11-grid breos-s12-16-queue`; `tail studie
 - Study 15 child processes include the numba compile in simulate_s (a fresh process, as a CLI user sees it).
 - Study 16 envs: lock py3.11/3.12/3.13, pandas 2.3.3, pvlib 0.14, numpy 2.2, lowest-direct py3.11, highest py3.13.
   lock-py313 reproduces the stored first_home result.json bit for bit.
+- 2026-11-27: study 14 enumeration failed on the old SolarDesignProblem API (pv_params/budget_limit moved to .study/.config); the replay Pool then respawned failing workers 19:35-02:00. Fixed, guarded, queue restarted 02:04.

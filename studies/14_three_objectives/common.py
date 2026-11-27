@@ -238,7 +238,7 @@ def capex_and_area(problem, modules: np.ndarray, battery_kwh: np.ndarray) -> tup
             cache[key] = float(
                 calculate_costs(
                     n_modules=key[0],
-                    module_power_w=problem.pv_params.Mpp,
+                    module_power_w=problem.study.pv_params.Mpp,
                     battery_capacity_wh=key[1] * 1000.0,
                     cost_params=cost_params,
                     replacement_cost_each=replacement_event_cost(
@@ -247,5 +247,5 @@ def capex_and_area(problem, modules: np.ndarray, battery_kwh: np.ndarray) -> tup
                 )["total_initial_cost"]
             )
         capex[i] = cache[key]
-    area = np.round(modules).astype(int) * problem.module_area_m2
+    area = np.round(modules).astype(int) * problem.study.module_area_m2
     return capex, area
