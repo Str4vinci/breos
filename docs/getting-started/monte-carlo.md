@@ -32,8 +32,6 @@ fetch_weather_data(
     longitude=-8.6291,
     start_date="2005-01-01",
     end_date="2024-12-31",
-    tilt=35,
-    azimuth=0,
     location_name="porto",
 )
 ```

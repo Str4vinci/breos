@@ -37,6 +37,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   result value is unchanged; `provenance.resolved_config` records the key as
   `null`, like other unset keys.
 
+### Removed
+
+- `fetch_weather_data` no longer takes `tilt` and `azimuth`. They only set
+  the plane of Open-Meteo's `global_tilted_irradiance`, which BREOS never
+  read, and that field is no longer requested or saved. Drop the two
+  arguments from calls; saved files lose the unused column (#515).
+
 ### Fixed
 
 - An annual run now cuts its monthly table on the clock its weather covers
@@ -48,6 +55,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   table and the timeseries are unchanged. Rerun monthly results of annual
   runs on local-time weather in a zone with DST, or on weather given in a
   zone other than the one its year is cut on (#514, #180).
+
+- Open-Meteo requests now time out after 120 s without a response, as the
+  PVGIS request does. A server that accepted the connection and never
+  answered used to hang `fetch_weather_data`, `fetch_forecast_archive` and
+  `fetch_satellite_weather` forever (#515).
 
 ## [0.8.1] - 2026-11-25
 
