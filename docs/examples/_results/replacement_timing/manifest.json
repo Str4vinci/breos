@@ -2,9 +2,9 @@
  "case": "replacement_timing",
  "title": "Battery replacement timing",
  "breos_version": "0.8.1",
- "git_describe": "v0.8.0-103-ga1d8681",
- "generated_utc": "2026-11-26T00:58:40+00:00",
- "runtime_s": 43.5,
+ "git_describe": "v0.8.1-15-g41ea854",
+ "generated_utc": "2026-11-27T03:19:40+00:00",
+ "runtime_s": 114.3,
  "cheap": false,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
@@ -62,8 +62,9 @@
   13,
   14
  ],
+ "module_sweep_projection_years": 16,
  "files": {
   "horizons.csv": "698e98b58394bc4194817c7f6efff25f5aa82d546cf4db77a0e529ee2b9e004a",
-  "modules.csv": "4054cfaf95bc74b99a9aeb5169b4429bbedd17ba841c2da7e406ffdfce0d079e"
+  "modules.csv": "474cb0db20dd855004781de32c6f09bd8cbfa2b98461d34e6d5b2e205cde6b06"
  }
 }
