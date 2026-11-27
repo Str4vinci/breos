@@ -103,8 +103,6 @@ def fetch_historical(args):
         longitude=loc["longitude"],
         start_date=f"{args.start}-01-01",
         end_date=f"{args.end}-12-31",
-        tilt=0,
-        azimuth=0,
         freq="h",
         save_to_file=False,
         radiation_time_basis=args.radiation_time_basis,

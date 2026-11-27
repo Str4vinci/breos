@@ -9,14 +9,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from breos.holidays import _easter_sunday, _portugal_national_holidays
 from breos.load_profiles import (
     PROFILE_KEYS,
     PROFILES,
     _btn_day_type,
-    _easter_sunday,
     _localize_wall_clock_index,
     _parse_profile_timestamps,
-    _portugal_national_holidays,
     _resample_load_to_15min,
     load_profile,
     resolve_profile_key,

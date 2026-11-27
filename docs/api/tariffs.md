@@ -26,6 +26,12 @@ so a UTC, fixed-offset, or local index resolves to the same periods.
 | `pt_mainland_2027_daily_tri` | off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
 | `pt_mainland_2027_weekly_bi` | off_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
 | `pt_mainland_2027_weekly_tri` | off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
+| `pt_mainland_2026_daily_four` | super_off_peak, off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 1/2026, Art. 45.º |
+| `pt_mainland_2026_weekly_four` | super_off_peak, off_peak, mid_peak, peak | 15 min | Diretiva ERSE n.º 1/2026, Art. 45.º |
+| `pt_mainland_2026_weekly_four_mt` | super_off_peak, off_peak, mid_peak, peak | 15 min | Diretiva ERSE n.º 1/2026, Art. 45.º |
+| `pt_mainland_2027_daily_four` | super_off_peak, off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
+| `pt_mainland_2027_weekly_four` | super_off_peak, off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
+| `pt_mainland_2027_weekly_four_mt` | super_off_peak, off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 3/2026, de 19 de agosto, Art. 2.º |
 | `es_2_0td` | off_peak (P3), mid_peak (P2), peak (P1) | 60 min | CNMC Circular 3/2020, Art. 7.3 |
 
 The Portuguese schedules are the low-voltage (BTN) access cycles for mainland
@@ -34,6 +40,23 @@ bi-hourly `fora de vazio` is `peak`. The 2027 schedules replace the 2026 ones
 for each installation between 1 July and 31 December 2027, as its meter is
 reparametrised. They are never chosen by date: select one explicitly, and pass
 a `study_date` in its effective window when the simulated year is earlier.
+
+The `_four` schedules keep the four ERSE periods that the bi- and tri-hourly
+options merge: `super_off_peak` is super vazio and `off_peak` vazio normal.
+They are for commercial and industrial supplies priced on four periods: BTE
+on the daily or weekly cycle, and MAT, AT and MT on the weekly cycle, which
+use the `_four_mt` schedules because they bill national holidays as Sundays.
+BTN and BTE bill holidays as ordinary days. The 2027 four-period schedules
+apply to MAT, AT, MT and BTE from 1 April 2027, and the 2026 `_four_mt`
+schedule ends on 31 March 2027. BTE changes on 1 April 2027 as well, but
+BTN changes when its meter is reparametrised, between July and December
+2027, so BREOS accepts the shared 2026 BTN and BTE schedules up to the end
+of 2027. For a BTE supply after 31 March 2027, name the 2027 schedule.
+Pricing `super_off_peak` at the `off_peak` price gives the same prices as
+the three-period schedule of the same cycle, except on national holidays
+under a `_four_mt` schedule, which bills them as Sundays. The
+optional weekly cycle and the weekly cycle by seasons for MAT, AT and MT are
+not bundled; define them as a custom schedule.
 `es_2_0td` is the Spanish Peninsula 2.0TD access tariff (up to 15 kW); its
 weekends and national holidays are `off_peak` all day. BREOS carries the
 national holidays for 2026 only, so a simulated year without a holiday
@@ -116,8 +139,21 @@ only as an interval end.
 Holiday dates are never inferred or fetched. `holidays.dates` maps years to
 explicit date lists, and each date must belong to its mapped year. Include the
 complete calendar you intend for every simulated tariff year; resolving a
-year absent from the map raises an error. Omit the `holidays` table when the
-schedule has no separate holiday classification.
+year absent from the map raises an error. Instead of `dates`, a schedule can
+name a built-in calendar: `calendar = "pt_national"` gives Portugal's
+mandatory national holidays for any year from 2004, including the moveable
+feasts and the holidays suspended from 2013 to 2015. A run that touches a
+year the calendar does not cover raises. `calendar` and `dates` cannot both
+be set:
+
+```toml
+[tariff.custom_schedule.holidays]
+day_type = "sunday"
+calendar = "pt_national"
+```
+
+Omit the `holidays` table when the schedule has no separate holiday
+classification.
 
 ## Month seasons
 

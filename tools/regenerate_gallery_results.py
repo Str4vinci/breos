@@ -1317,8 +1317,6 @@ def _mc_history(ctx: Context) -> Path:
             site["longitude"],
             MC_HISTORY["start"],
             MC_HISTORY["end"],
-            tilt=35,
-            azimuth=0,
             location_name=MC_HISTORY["location"],
             output_dir="weather",
         )

@@ -157,9 +157,10 @@ def _install_fake_openmeteo(monkeypatch, captured):
         def __init__(self, *, session):
             captured["session"] = session
 
-        def weather_api(self, url, *, params):
+        def weather_api(self, url, *, params, **kwargs):
             captured["url"] = url
             captured["params"] = params
+            captured["kwargs"] = kwargs
             return [FakeResponse(params)]
 
     monkeypatch.setattr("breos.weather.requests_cache.CachedSession", lambda *_args, **_kwargs: FakeSession())
@@ -181,8 +182,6 @@ def test_fetch_weather_data_requests_selected_openmeteo_radiation(
         longitude=-8.6291,
         start_date="2024-06-01",
         end_date="2024-06-01",
-        tilt=0,
-        azimuth=0,
         save_to_file=False,
         radiation_time_basis=radiation_time_basis,
     )
@@ -194,7 +193,6 @@ def test_fetch_weather_data_requests_selected_openmeteo_radiation(
         f"direct_radiation{suffix}",
         f"diffuse_radiation{suffix}",
         f"direct_normal_irradiance{suffix}",
-        f"global_tilted_irradiance{suffix}",
         f"terrestrial_radiation{suffix}",
     ]
     assert list(weather.columns) == [
@@ -204,9 +202,11 @@ def test_fetch_weather_data_requests_selected_openmeteo_radiation(
         "direct_radiation",
         "diffuse_radiation",
         "direct_normal_irradiance",
-        "global_tilted_irradiance",
         "terrestrial_radiation",
     ]
+    assert "tilt" not in captured["params"] and "azimuth" not in captured["params"]
+    # A stalled server must raise instead of hanging the caller (#515).
+    assert captured["kwargs"]["timeout"] > 0
     metadata = weather.attrs["breos_weather_metadata"]
     assert metadata["radiation_time_basis"] == radiation_time_basis
     assert metadata["timestamp_label_basis"] == label_basis
@@ -219,8 +219,6 @@ def test_fetch_weather_data_rejects_unknown_radiation_time_basis():
             longitude=-8.6291,
             start_date="2024-06-01",
             end_date="2024-06-01",
-            tilt=0,
-            azimuth=0,
             save_to_file=False,
             radiation_time_basis="unknown",
         )
@@ -238,8 +236,6 @@ def test_fetch_weather_data_rejects_unsupported_frequency_before_fetching(monkey
             longitude=-8.6291,
             start_date="2024-06-01",
             end_date="2024-06-01",
-            tilt=0,
-            azimuth=0,
             freq=freq,
             save_to_file=False,
         )
@@ -265,8 +261,6 @@ def test_fetch_weather_data_covers_the_requested_hours(
         longitude=-8.6291,
         start_date="2024-01-01",
         end_date="2024-12-31",
-        tilt=0,
-        azimuth=0,
         save_to_file=False,
         radiation_time_basis=radiation_time_basis,
     )
@@ -285,8 +279,6 @@ def test_fetched_right_labelled_file_keeps_its_last_year(monkeypatch, tmp_path):
         longitude=-8.6291,
         start_date="2022-01-01",
         end_date="2024-12-31",
-        tilt=0,
-        azimuth=0,
         location_name="porto",
         output_dir=str(tmp_path),
     )
