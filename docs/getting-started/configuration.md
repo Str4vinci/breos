@@ -422,6 +422,73 @@ Carlo applies the key to each trajectory, and the optimizer takes it as
 its `replacement_policy`. A direct {py:class}`~breos.battery.BatteryConfig`
 call takes `enable_replacement`.
 
+### Deciding replacement on economics
+
+The rules above decide a replacement by health and by the time left. They do
+not ask whether the new battery pays for itself, and at current prices a
+replacement often does not: a pack bought at 70 % health in year 10 or 11
+usually costs more than the extra savings it brings. A threshold sweep over
+`battery_eol_percentage` and `battery_replacement_min_remaining_years` only
+finds the best of the values tried. `battery_replacement_decision =
+"economic"` decides each replacement on the money:
+
+```toml
+projection_years = 20
+battery_replacement_decision = "economic"  # "threshold" is the default
+```
+
+- At each end-of-life crossing BREOS compares three alternatives over the
+  rest of the horizon: **replace** the pack (and decide later crossings the
+  same way), **keep** the worn pack in service, or **retire** it and finish
+  PV-only. It takes the one with the highest NPV savings, or the NPV
+  including the estimated residual value when `[terminal_value]` is enabled.
+  The projected optimizer decides on `Projected_NPV`, the NPV it ranks
+  designs by, and ignores `[terminal_value]` there as it does everywhere.
+- Each alternative is a full simulation of the project with the same
+  weather, load, dispatch, tariff and degradation model, priced by the same
+  economics. Keeping or retiring ends the pack's crossings, so a run whose
+  threshold rule replaces `n` times needs `2n` simulations more: one
+  replacement takes 3 simulations, two take 5. The weather and PV are
+  prepared once, so on the quickstart home (hourly, warm caches) an App run
+  takes 3.0 s instead of 2.4 s over 20 years (one replacement), and 4.4 s
+  instead of 2.4 s over 25 years (two). The optimizer's projected scoring
+  is almost all simulation: across 126 test designs it took a median 4.7 times
+  as long per candidate.
+- The decision looks ahead with **perfect information**: it knows the
+  future weather, load, prices and ageing of the simulated project. It is
+  the best the replacement can be timed by these three choices, an upper
+  bound on what a real owner deciding without hindsight would get, not a
+  forecast of their behaviour.
+- It decides only at the crossings of `battery_eol_percentage`. A kept pack
+  is not reconsidered later, and a pack is never replaced before its
+  threshold. Lower the threshold to let the decision consider a later
+  replacement. A kept pack ages below the threshold, often far below it,
+  outside the ageing data the models were fitted to (see
+  [Running without replacement](#running-without-replacement)).
+- The other replacement keys still apply first. A crossing that
+  `battery_replacement_min_remaining_years` or
+  `battery_allow_terminal_replacement = false` skips is not decided and
+  keeps its reason; with `battery_enable_replacement = false` there is
+  nothing to decide.
+- A crossing decided not to replace is an end-of-life event with the action
+  `"kept"` or `"retired"` and the reason `"economic"`. Every decided
+  crossing in `battery_end_of_life_events` has a `decision` with the
+  alternative chosen and the NPV of each alternative (`replace` is valued
+  at its best continuation). The result's `battery_replacement_decision`
+  lists every simulated branch, its replacements and what it did next, its
+  NPV, the branch chosen and the threshold rule's NPV.
+- `App.revalue` simulates such a run again, since new prices can change the
+  decision.
+
+Monte Carlo decides each trajectory on its own sampled years. The
+optimizer's projected scoring takes it as `[battery] replacement_decision`,
+scores each candidate at its decided NPV, and adds
+`Projected_Threshold_Rule_NPV` and `Projected_Replacement_Decision_Projections`
+to its columns. It is not available with `[period]`, with `[vehicle]` or in
+a community yet. A direct {py:class}`~breos.battery.BatteryConfig` call caps
+its swaps with `replacement_limit` and `replacement_limit_action`, which is
+how each branch is run.
+
 ## Discovering available options
 
 Use the CLI to list packaged option keys:

@@ -871,6 +871,9 @@ class ProjectionRun:
     # reports it (ADR 0003 E11).
     end_of_life_events: tuple[dict[str, Any], ...] = ()
     vehicle_end_of_life_events: tuple[dict[str, Any], ...] = ()
+    # With battery_replacement_decision = "economic", the decision record
+    # (ADR 0003 E14): every branch priced and the one chosen.
+    replacement_decision: dict[str, Any] | None = None
 
 
 def end_of_life_record(event: EndOfLifeEvent, year_idx: int, n_steps: int) -> dict[str, Any]:
@@ -1163,6 +1166,7 @@ def project_years(
     vehicle_config: VehicleConfig | None = None,
     grid_import_limit_w: float = math.inf,
     vehicle_allow_terminal_replacement: bool | None = None,
+    replacement_limit: tuple[int, str] | None = None,
 ) -> ProjectionRun:
     """Simulate ``years`` project years, carrying both stores from one to the next.
 
@@ -1178,6 +1182,12 @@ def project_years(
     builds the battery at the carried SOH. The rainflow residue is counted
     once, at the end of the last year. ``observe_jit_per_year`` records the
     Numba cache state of every year, as App reports it.
+
+    ``replacement_limit``, a count and ``"keep"`` or ``"retire"``, caps the
+    stationary swaps of the whole projection: once that many are made, the
+    next crossing keeps or retires the pack with the reason ``"economic"``.
+    :func:`run_projection` runs one projection per limit to decide
+    replacement on economics (ADR 0003 E14); None caps nothing.
 
     The battery's ``allow_terminal_replacement`` is the project's policy for
     the final degradation period of its last year. Every earlier year runs a
@@ -1267,6 +1277,13 @@ def project_years(
             batt_cfg = replace(batt_cfg, allow_terminal_replacement=True)
         if batt_cfg.replacement_min_remaining_years > 0.0:
             batt_cfg = replace(batt_cfg, replacement_years_after_span=years - 1 - year_idx)
+        if replacement_limit is not None:
+            limit, limit_action = replacement_limit
+            batt_cfg = replace(
+                batt_cfg,
+                replacement_limit=max(limit - total_replacements, 0),
+                replacement_limit_action=limit_action,
+            )
         year_set = instructions_for_year(year_idx)
         planner = None if year_set is None or isinstance(year_set, DispatchInstructions) else year_set
         static = year_set if isinstance(year_set, DispatchInstructions) else None
@@ -1463,7 +1480,9 @@ def run_projection(
     """Run :func:`project_years` for an App configuration.
 
     The battery, the degradation engine and the resolution come from the
-    configuration; App and Monte Carlo call this.
+    configuration; App and Monte Carlo call this. With
+    ``battery_replacement_decision = "economic"`` and a battery, each
+    end-of-life swap is decided on NPV (:func:`decide_replacements`).
     """
 
     def battery_config(soh_pct: float) -> BatteryConfig:
@@ -1471,26 +1490,184 @@ def run_projection(
             return build_battery_config(cfg, resolved, initial_soh=soh_pct)
         return build_pv_only_battery_config(cfg, resolved)
 
-    return project_years(
-        years,
-        year_inputs,
-        battery_config=battery_config,
-        freq=cfg["resolution"],
-        has_battery=has_battery,
-        execution_backend=execution_backend,
-        degradation_engine=str(cfg.get("degradation_engine", "native")).strip().lower(),
-        blast_model=cfg.get("blast_model"),
-        observe_jit_per_year=observe_jit_per_year,
-        tariff=tariff,
-        instructions=instructions,
-        record_period_energy=record_period_energy,
-        day_controller=day_controller,
-        replay_seam=replay_seam,
-        reference_tariff=reference_tariff,
-        record_priced_flows=record_priced_flows,
-        vehicle_config=vehicle_config,
-        grid_import_limit_w=grid_import_limit_w,
+    economic = has_battery and cfg.get("battery_replacement_decision", "threshold") == "economic"
+    # Every economic branch runs the years the threshold run drew: Monte
+    # Carlo samples a year each time it is asked for one.
+    inputs = _drawn_once(year_inputs) if economic else year_inputs
+
+    def run(replacement_limit: tuple[int, str] | None) -> ProjectionRun:
+        return project_years(
+            years,
+            inputs,
+            battery_config=battery_config,
+            freq=cfg["resolution"],
+            has_battery=has_battery,
+            execution_backend=execution_backend,
+            degradation_engine=str(cfg.get("degradation_engine", "native")).strip().lower(),
+            blast_model=cfg.get("blast_model"),
+            observe_jit_per_year=observe_jit_per_year,
+            tariff=tariff,
+            instructions=instructions,
+            record_period_energy=record_period_energy,
+            day_controller=day_controller,
+            replay_seam=replay_seam,
+            reference_tariff=reference_tariff,
+            record_priced_flows=record_priced_flows,
+            vehicle_config=vehicle_config,
+            grid_import_limit_w=grid_import_limit_w,
+            replacement_limit=replacement_limit,
+        )
+
+    if economic:
+        return decide_replacements(
+            run, lambda projection: projection_npv(cfg, resolved, projection), objective=npv_objective(cfg, resolved)
+        )
+    return run(None)
+
+
+def _drawn_once(year_inputs: Callable[[int], ProjectionYear]) -> Callable[[int], ProjectionYear]:
+    """``year_inputs`` asked once per year; later asks return the same year."""
+    drawn: dict[int, ProjectionYear] = {}
+
+    def inputs(year_idx: int) -> ProjectionYear:
+        if year_idx not in drawn:
+            drawn[year_idx] = year_inputs(year_idx)
+        return drawn[year_idx]
+
+    return inputs
+
+
+# The alternatives to a new pack at an end-of-life crossing (ADR 0003 E14).
+_ECONOMIC_ALTERNATIVES = ("keep", "retire")
+
+
+def decide_replacements(
+    run: Callable[[tuple[int, str] | None], ProjectionRun],
+    npv: Callable[[ProjectionRun], float],
+    *,
+    objective: str = "npv",
+) -> ProjectionRun:
+    """The projection whose end-of-life swaps maximise the NPV, with its decision record (ADR 0003 E14).
+
+    ``run(limit)`` runs the projection with :func:`project_years`'s
+    ``replacement_limit`` and ``npv`` prices one. The threshold rule's run
+    comes first; when it makes ``n`` swaps, the crossings are decided by
+    running each policy that makes the first ``k < n`` swaps and then keeps
+    or retires the pack at crossing ``k + 1``. Keeping or retiring ends the
+    pack's crossings, so these ``2n`` policies and the threshold run are
+    every sequence of decisions the crossings allow, and the best of them is
+    what deciding each crossing by the best continuation of each choice
+    (backward induction) reaches. A tie keeps the threshold run, then the
+    policy with more swaps, then keep before retire.
+
+    Every branch runs the full horizon with the same inputs, dispatch,
+    tariff and degradation model, and is priced by the same valuation,
+    terminal value included; the decision therefore looks ahead with
+    perfect information over the simulated years. Crossings that a guard
+    (``battery_replacement_min_remaining_years``,
+    ``battery_allow_terminal_replacement``) skips stay skipped and are not
+    decided.
+
+    The chosen run's ``end_of_life_events`` carry a ``decision`` on each
+    decided crossing: what was chosen and the NPV of each alternative,
+    replacing valued at the best continuation after the swap.
+    """
+    threshold = run(None)
+    swaps = threshold.total_replacements
+    limits: list[tuple[int, str] | None] = [None]
+    limits += [(count, action) for count in range(swaps - 1, -1, -1) for action in _ECONOMIC_ALTERNATIVES]
+    # Each branch is priced as it finishes; only the best run so far is kept.
+    values = [float(npv(threshold))]
+    jit_cache_states = list(threshold.jit_cache_states)
+    best, chosen = 0, threshold
+    for index, limit in enumerate(limits[1:], start=1):
+        projection = run(limit)
+        values.append(float(npv(projection)))
+        jit_cache_states += projection.jit_cache_states
+        # Strictly greater, so a tie keeps the earlier branch.
+        if values[index] > values[best]:
+            best, chosen = index, projection
+    chosen_limit = limits[best]
+    chosen_swaps = swaps if chosen_limit is None else chosen_limit[0]
+
+    def npv_after(swaps_made: int, action: str | None) -> float:
+        # The value of a branch: the threshold run is the only one with every swap.
+        if action is None:
+            return max(
+                value for limit, value in zip(limits, values, strict=True) if limit is None or limit[0] >= swaps_made
+            )
+        return values[limits.index((swaps_made, action))]
+
+    events = [dict(event) for event in chosen.end_of_life_events]
+    crossing = 0
+    for event in events:
+        decided = event["action"] == "replaced" or event["reason"] == "economic"
+        if not decided or crossing >= swaps:
+            continue
+        crossing += 1
+        event["decision"] = {
+            "basis": "economic",
+            "crossing": crossing,
+            "chosen": "replace" if event["action"] == "replaced" else _ACTION_ALTERNATIVE[event["action"]],
+            "npv": {
+                "replace": npv_after(crossing, None),
+                **{action: npv_after(crossing - 1, action) for action in _ECONOMIC_ALTERNATIVES},
+            },
+        }
+    record = {
+        "mode": "economic",
+        "objective": objective,
+        "look_ahead": "perfect_information",
+        "threshold_replacements": swaps,
+        "chosen": {
+            "replacements": chosen_swaps,
+            "then": None if chosen_limit is None else chosen_limit[1],
+            "npv": values[best],
+        },
+        "threshold_npv": values[0],
+        "branches": [
+            {
+                "replacements": swaps if limit is None else limit[0],
+                "then": None if limit is None else limit[1],
+                "npv": value,
+            }
+            for limit, value in zip(limits, values, strict=True)
+        ],
+        # Projections run beside the threshold run, each over the full horizon.
+        "extra_projections": len(limits) - 1,
+    }
+    return replace(
+        chosen,
+        end_of_life_events=tuple(events),
+        # Every projection's cache observations, so a compile paid in the
+        # first is still reported.
+        jit_cache_states=jit_cache_states,
+        replacement_decision=record,
     )
+
+
+_ACTION_ALTERNATIVE = {"kept": "keep", "retired": "retire"}
+
+
+def npv_objective(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> str:
+    """Which NPV :func:`projection_npv` returns: with the terminal health credit, or without."""
+    if _terminal_credit_on(cfg, resolved):
+        return "npv_with_terminal_health_credit"
+    return "npv"
+
+
+def _terminal_credit_on(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> bool:
+    return (cfg.get("terminal_value") or {}).get(
+        "basis", "none"
+    ) == "battery_health_fraction" and resolved.period is None
+
+
+def projection_npv(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: ProjectionRun) -> float:
+    """The NPV a projection is reported with: with a terminal health credit, the adjusted NPV."""
+    value = value_projection(cfg, resolved, run)
+    if value.terminal_health is not None:
+        return float(value.terminal_health.adjusted_npv)
+    return float(value.cost_projection.attrs["final_npv_savings"])
 
 
 @dataclass(frozen=True)
@@ -1564,7 +1741,7 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         ),
     )
     terminal = None
-    if (cfg.get("terminal_value") or {}).get("basis", "none") == "battery_health_fraction" and resolved.period is None:
+    if _terminal_credit_on(cfg, resolved):
         terminal = terminal_health_credit(
             final_soh_fraction=run.carry.soh_pct / 100 if config_has_battery(cfg) else None,
             threshold=cfg["battery_eol_percentage"],

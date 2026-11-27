@@ -251,7 +251,9 @@ class App:
         them) the run is simulated again (``"resimulated"``). A
         ``reference_tariff`` added, changed or removed is always re-priced:
         it prices only the no-system household, which the dispatch never
-        sees. The result records the method in
+        sees. A run with ``battery_replacement_decision = "economic"`` is
+        always simulated again, since its replacements depend on the prices.
+        The result records the method in
         ``provenance["revaluation"]``, with the keys that changed. Flat
         prices and ``"repriced_by_step"`` give the same floats as a new
         simulation; a tariff re-priced on its own schedule sums energy by

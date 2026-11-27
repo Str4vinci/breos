@@ -46,7 +46,13 @@ from breos.config_schema import (
     table,
     text,
 )
-from breos.constants import BATTERY_COUPLINGS, DEGRADATION_ENGINES, RESOLUTIONS, SKIPPED_REPLACEMENT_ACTIONS
+from breos.constants import (
+    BATTERY_COUPLINGS,
+    DEGRADATION_ENGINES,
+    REPLACEMENT_DECISIONS,
+    RESOLUTIONS,
+    SKIPPED_REPLACEMENT_ACTIONS,
+)
 from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE, PANEL_WP_REMOVED
 from breos.emissions import EmissionsParams
 from breos.pv.decomposition import DECOMPOSITION_MODELS
@@ -259,6 +265,9 @@ BATTERY_TABLE = TableSpec(
         "replacement_min_remaining_years": number(minimum=0),
         # What a swap the two rules above skip does with the old pack.
         "skipped_replacement_action": choice(SKIPPED_REPLACEMENT_ACTIONS),
+        # "economic" decides each swap on the candidate's projected NPV
+        # (ADR 0003 E14); unset is "threshold".
+        "replacement_decision": choice(REPLACEMENT_DECISIONS),
         "initial_soh": number(minimum=0, maximum=100, min_exclusive=True),
         # The battery's topology, fixed for a study (ADR 0004 C2, C13), and
         # an AC-coupled battery's own inverter.
@@ -416,6 +425,15 @@ def _check_blast_model(battery: Mapping[str, Any]) -> None:
             raise ValueError(f"Unknown battery.blast_model {blast_model!r}. Available: {available}")
     elif blast_model is not None:
         raise ValueError("battery.blast_model requires battery.degradation_engine = 'blast'")
+
+
+def _check_replacement_decision(battery: Mapping[str, Any]) -> None:
+    """An economic decision needs a threshold a fresh pack is above (ADR 0003 E14)."""
+    if battery.get("replacement_decision", "threshold") != "economic":
+        return
+    eol = battery.get("eol_percentage")
+    if isinstance(eol, (int, float)) and not isinstance(eol, bool) and eol >= 1.0:
+        raise ValueError("battery.replacement_decision = 'economic' needs battery.eol_percentage below 1")
 
 
 def _currency(resolved: Mapping[str, Any], *, battery_kwh: float | None = None) -> str:
@@ -613,6 +631,7 @@ def resolve_optimization_config(config: Mapping[str, Any], *, battery_kwh: float
     battery.setdefault("degradation_engine", "native")
     battery.setdefault("blast_model", None)
     _check_blast_model(battery)
+    _check_replacement_decision(battery)
     battery.setdefault("replacement_cost", None)
     battery.setdefault("enable_replacement", True)
     battery.setdefault("allow_terminal_replacement", True)

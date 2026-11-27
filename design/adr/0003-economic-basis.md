@@ -1,11 +1,11 @@
 # 0003 — Economic basis, escalators, and currency-neutral results
 
 - **Status:** Accepted (E1–E10); implemented in 0.7.0. E11–E13
-  Proposed, implemented for 0.7.1
+  Proposed, implemented for 0.7.1. E14 Proposed
 - **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26; E2–E5, E7, E9 and
   the E6 inflation default accepted 2026-09-27; E10 accepted 2026-10-01; E9
   amended 2026-10-01; E11 and E12 proposed 2026-10-03; E13 proposed
-  2026-10-03
+  2026-10-03; E14 proposed 2026-11-27
 
 ## Context
 
@@ -564,6 +564,95 @@ EUR cost presets and defaults then mixed silently with them.
 A run that sets no `currency` resolves as before, and results are
 bit-identical. The result format stays `"1"`: the resolved config gains
 `currency`, the CSVs gain a column, and nothing is renamed or removed.
+
+### E14. Decide replacement on economics (#403) — Proposed 2026-11-27
+
+Adds an opt-in rule; it replaces no text. E4, E11 and E12 decide a
+replacement by health and time alone: a pack is bought at every crossing of
+`eol_percentage` unless a guard skips it. Long-run studies 3, 11, 12 and 13
+(branch `docs/0.9.0-long-studies-2`) found that rule to be the largest
+avoidable loss among the battery settings measured. In study 13 (7 sites ×
+3 ageing models × 3 cost cases × 5 and 10 kWh, 20 years), the best of 92
+threshold policies bought no replacement in all 126 cases and gained 0.7 to
+9.7 k€ of NPV over the default.
+
+- **Key.** `battery_replacement_decision` (App and Monte Carlo) and
+  `[battery] replacement_decision` (projected optimizer): `"threshold"`
+  (default) or `"economic"`. `BatteryConfig` gains the mechanism, not the
+  rule: `replacement_limit` (None, or the swaps the span may still make) and
+  `replacement_limit_action` (`"keep"` or `"retire"`), and the crossing after
+  the last allowed swap is an E11 event with the reason `"economic"`.
+- **Rule.** At each crossing the alternatives are replace, keep and retire
+  (E12), valued over the rest of the horizon; the highest NPV wins. Replace
+  is valued at its best continuation: later crossings of the new pack are
+  decided by the same rule. Keeping or retiring ends the pack's crossings,
+  so the decisions form a chain, not a tree. If the threshold rule swaps `n`
+  times, the policies "make the first `k < n` swaps, then keep or retire"
+  and the threshold run itself are every sequence of decisions, and the
+  best of these `2n + 1` runs is what backward induction over the crossings
+  gives. A tie keeps the threshold run, then more swaps, then keep before
+  retire.
+- **Where it is decided.** Outside the dispatch loop and the Numba kernel,
+  at the projection (`breos.projection.decide_replacements`). Each branch
+  is a full projection from year 1 with a replacement limit, so it uses the
+  same inputs, dispatch, tariff, degradation model and carried state as the
+  main run, and the crossing is exact to the step. Restarting branches from
+  the crossing year's carried state would save the years before it; it was
+  left out because a branch must still reproduce the main run's first-year
+  frame, and the cost is acceptable. Monte Carlo asks for each sampled year
+  once, so every branch of a trajectory runs the years the threshold run
+  drew and the random stream is unchanged.
+- **Objective and terminal value.** Each branch is priced by the run's own
+  valuation (`value_projection`, or the optimizer's projected scoring). The
+  objective is the NPV savings, or the E10 terminal-adjusted NPV when
+  `[terminal_value]` is enabled, so a late new pack's residual value and a
+  kept pack's zero credit enter every alternative the same way. The
+  optimizer decides on `Projected_NPV`, the objective it ranks designs by;
+  its projected scoring ignores `[terminal_value]`, so the decision does
+  too, and the decision record names the objective `"npv"`. Without a
+  terminal value the comparison is harsh on a late replacement and kind to
+  a worn pack; the docs say so.
+- **Information.** The decision looks ahead with perfect information over
+  the simulated project: weather, load, prices and ageing. It is the best
+  timing these three choices allow, an upper bound on a real decision
+  without hindsight.
+- **Scope.** Decisions are taken only at threshold crossings; a kept pack
+  is not reconsidered and no pack is replaced above its threshold. The E11
+  guards and `enable_replacement = false` still apply first, and a crossing
+  they skip is not decided. Not available with `[period]` (no lifetime
+  economics), `[vehicle]` (households valued together) or in a community
+  (the site's money is the community's); these are refused, as is an
+  optimizer `eol_percentage` of 1, where a fresh pack is already at its
+  threshold (the App's key is below 1 already).
+- **Reporting.** Each decided crossing in `battery_end_of_life_events`
+  carries a `decision`: what was chosen and the NPV of replace, keep and
+  retire. `battery_replacement_decision` in the result records the mode,
+  the objective, the look-ahead, the threshold rule's replacements and NPV,
+  every branch with its NPV, the branch chosen and the number of extra
+  projections. The optimizer adds `Projected_Threshold_Rule_NPV` and
+  `Projected_Replacement_Decision_Projections`, and its
+  `battery_replacement_treatment` names the rule. `App.revalue` simulates an
+  economic run again, since prices decide its replacements.
+- **Cost.** `2n` projections more than the threshold rule. Measured on
+  2026-11-27, hourly with warm caches: the quickstart App run with a
+  terminal credit takes 3.0 s instead of 2.4 s over 20 years (`n = 1`) and
+  4.4 s instead of 2.4 s over 25 years (`n = 2`), since its weather and PV
+  are prepared once. The optimizer's projected scoring of the 126 study-13
+  cases (`n` from 1 to 3) took a median 4.7 times as long per candidate.
+- **Validation.** Re-scoring all 126 study-13 cases with the rule matched
+  the best brute-force policy's NPV exactly in every case. That covers one
+  decision only: the rule keeps the pack at the first crossing in all of
+  them, and the study's best policies are equivalent no-replacement runs.
+  The tests check the other branches separately: each branch's NPV equals
+  a run without a limit that switches replacement off from the year of the
+  crossing it does not buy, and a replace-then-retire branch across a year
+  boundary has the same event times, retirement, final health and NPV as
+  that run. With `"threshold"` the scores were bit-identical to the study's
+  defaults.
+
+The default `"threshold"` adds nothing to the run, and results are
+bit-identical. The result format stays `"1"`: the new result field and the
+event `decision` appear only with `"economic"`.
 
 ## Consequences
 
