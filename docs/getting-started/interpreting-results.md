@@ -590,6 +590,42 @@ output and usable AC energy over the project years, and `replacement_years`
 to mark battery replacements on it. The diagram itself always shows year 1,
 or the simulated window of a `[period]` run.
 
+### PV stages per step
+
+`timeseries_pv_stages = true` adds the waterfall's inputs and stages to
+[`App.timeseries()`](../api/app.md), one column each, on the same steps as
+`PV_DC`. It is off by default because it adds about 30 columns; `result()`
+does not change.
+
+| Columns | Unit | Meaning |
+| --- | --- | --- |
+| `GHI`, `DNI`, `DHI` | W/m² | The weather the PV model read, after restamping, resampling and any `irradiance_decomposition`. |
+| `Air_Temperature`, `Wind_Speed` | °C, m/s | The same weather's air temperature and wind speed. |
+| `POA_Beam`, `POA_Sky_Diffuse`, `POA_Ground_Diffuse`, `POA_Global` | W/m² | Plane-of-array irradiance before near shading; the three parts add up to `POA_Global`. |
+| `POA_Global_Shaded` | W/m² | Plane-of-array irradiance after near shading. |
+| `POA_Effective` | W/m² | After near shading, the incidence-angle modifier and the bifacial rear side. |
+| `Cell_Temperature` | °C | The cell temperature the module model used. |
+| `PV_DC_Stage_Horizontal` … `PV_DC_Stage_Static_Losses` | W | The DC power after each step of the waterfall. |
+| `PV_DC_Loss_PVWatts_<Component>` | W | Each static PVWatts loss, for example `PV_DC_Loss_PVWatts_Soiling`. |
+| `PV_DC_Loss_Shading_Mismatch`, `PV_DC_Loss_String_Wiring`, `PV_DC_Loss_Parallel_Mismatch`, `PV_DC_Loss_MPPT_Limit` | W | The electrical losses after the static ones. A loss the run does not model is zero. |
+
+With several arrays, the irradiance and cell temperature columns are means
+weighted by each array's STC power. The weather is the first array's; all
+arrays share it.
+
+The DC stages are, in order, `PV_DC_Stage_Horizontal`, `_POA`
+(transposition), `_Shaded` (near shading), `_Effective` (incidence-angle
+modifier), `_Rear` (bifacial rear gain), `_Module` (cell temperature and the
+module's efficiency at low irradiance) and `_Static_Losses`. Each one is mean
+power over the step, as `PV_DC` is. `PV_DC_Stage_Module` minus the PVWatts
+losses is `PV_DC_Stage_Static_Losses`, and that minus the four electrical
+losses is `PV_DC`. Summed over the year, each stage is its waterfall stage's
+energy. Without a near-shading table, `PV_DC_Stage_Shaded` equals
+`PV_DC_Stage_POA`. When only some of several arrays have a table, the
+waterfall has no near-shading stage, and their shading is part of
+`PV_DC_Stage_Effective`. Year 1 has no module ageing, so no ageing column is
+needed.
+
 ## Economic conventions
 
 The projection is in nominal terms: `inflation_rate`, the escalators and

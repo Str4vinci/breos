@@ -6,6 +6,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- `timeseries_pv_stages = true` adds the PV model's inputs and loss stages
+  to `App.timeseries()`, one column per quantity on the steps of `PV_DC`:
+  the weather it read (`GHI`, `DNI`, `DHI`, `Air_Temperature`,
+  `Wind_Speed`), plane-of-array irradiance (`POA_Beam`, `POA_Sky_Diffuse`,
+  `POA_Ground_Diffuse`, `POA_Global`, `POA_Global_Shaded`,
+  `POA_Effective`), `Cell_Temperature`, the DC power after each loss step
+  (`PV_DC_Stage_Horizontal` to `PV_DC_Stage_Static_Losses`), each static
+  PVWatts loss (`PV_DC_Loss_PVWatts_<Component>`) and the electrical losses
+  (`PV_DC_Loss_Shading_Mismatch`, `PV_DC_Loss_String_Wiring`,
+  `PV_DC_Loss_Parallel_Mismatch`, `PV_DC_Loss_MPPT_Limit`). The stages add
+  up to `PV_DC` at every step, and over the year each is its loss waterfall
+  stage. Off by default; `result()` is unchanged either way.
+
 - Four-period Portuguese schedules for commercial and industrial supplies:
   `pt_mainland_2026_daily_four`, `pt_mainland_2026_weekly_four`,
   `pt_mainland_2026_weekly_four_mt` and their 2027 counterparts. They keep

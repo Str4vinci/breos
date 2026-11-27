@@ -119,6 +119,67 @@ class SimulationArtifacts:
     # W/m2 and "POA_STC_DC", the arrays' STC power at their unshaded
     # plane-of-array irradiance, in W. None when the PV model gave neither.
     irradiance: pd.DataFrame | None = None
+    # Year 1's (or the window's) weather, plane-of-array irradiance and DC
+    # stages on the results' steps, when timeseries_pv_stages is set
+    # (first_year_pv_stages); None otherwise.
+    pv_stages: pd.DataFrame | None = None
+
+
+# The electrical DC losses after the static PVWatts losses, in the waterfall's
+# order: column name and PVProductionBreakdown attribute.
+_ELECTRICAL_LOSS_COLUMNS = (
+    ("PV_DC_Loss_Shading_Mismatch", "shading_mismatch_loss"),
+    ("PV_DC_Loss_String_Wiring", "dc_wiring_loss"),
+    ("PV_DC_Loss_Parallel_Mismatch", "parallel_mismatch_loss"),
+    ("PV_DC_Loss_MPPT_Limit", "mppt_limit_loss"),
+)
+
+
+def pvwatts_loss_column(component: str) -> str:
+    """The per-step column of one static PVWatts loss component, for example ``PV_DC_Loss_PVWatts_Soiling``."""
+    return "PV_DC_Loss_PVWatts_" + "_".join(
+        part.upper() if part == "lid" else part.capitalize() for part in component.split("_")
+    )
+
+
+def first_year_pv_stages(pv_breakdown: PVProductionBreakdown, results_df: pd.DataFrame) -> pd.DataFrame:
+    """The weather, plane-of-array irradiance and DC loss stages on the steps of ``results_df``, in its row order.
+
+    Irradiance is in W/m2 and, with several arrays, weighted by array STC
+    power; temperatures are in C and wind speed in m/s. The ``PV_DC_Stage_*``
+    columns are the DC power (mean W over the step) after each step of the
+    loss chain and the ``PV_DC_Loss_*`` columns what a step removes, so that
+    ``PV_DC_Stage_Static_Losses`` minus the four electrical losses is
+    ``PV_DC``. A loss the run does not model is zero.
+    """
+    if pv_breakdown.weather_in is None or pv_breakdown.stc_weighted is None or not pv_breakdown.stc_power_kw:
+        raise ValueError("timeseries_pv_stages needs a PV model that records its weather and irradiance")
+    zero = pd.Series(0.0, index=pv_breakdown.module_dc.index)
+    weighted = pv_breakdown.stc_weighted / float(pv_breakdown.stc_power_kw)
+    columns: dict[str, pd.Series] = {
+        "GHI": pv_breakdown.ghi if pv_breakdown.ghi is not None else zero,
+        **{name: pv_breakdown.weather_in[name] for name in ("DNI", "DHI", "Air_Temperature", "Wind_Speed")},
+        **{name: weighted[name] for name in weighted.columns},
+        "PV_DC_Stage_Horizontal": pv_breakdown.horizontal_reference_dc,
+        "PV_DC_Stage_POA": pv_breakdown.poa_global_dc,
+        "PV_DC_Stage_Shaded": (
+            pv_breakdown.poa_shaded_dc if pv_breakdown.poa_shaded_dc is not None else pv_breakdown.poa_global_dc
+        ),
+        "PV_DC_Stage_Effective": pv_breakdown.front_effective_irradiance_dc,
+        "PV_DC_Stage_Rear": pv_breakdown.effective_irradiance_dc,
+        "PV_DC_Stage_Module": pv_breakdown.module_dc,
+        **{pvwatts_loss_column(name): loss for name, loss in pv_breakdown.pvwatts_component_losses.items()},
+        "PV_DC_Stage_Static_Losses": pv_breakdown.dc_after_static_losses,
+    }
+    for column, attribute in _ELECTRICAL_LOSS_COLUMNS:
+        loss = getattr(pv_breakdown, attribute)
+        columns[column] = loss if loss is not None else zero
+    frame = pd.DataFrame({name: series.to_numpy(dtype=float) for name, series in columns.items()}, index=zero.index)
+    times = pd.DatetimeIndex(results_df["Datetime"])
+    aligned = frame.reindex(times)
+    if aligned.isna().to_numpy().any():
+        raise ValueError("the PV breakdown does not cover every step of the first-year results")
+    return aligned.set_axis(results_df.index)
 
 
 def first_year_irradiance(pv_breakdown: PVProductionBreakdown, results_df: pd.DataFrame) -> pd.DataFrame | None:
@@ -916,6 +977,11 @@ def run_app_simulation(
         end_of_life_events=projection.end_of_life_events,
         solver_diagnostics=inputs.pv_breakdown.solver_diagnostics,
         irradiance=first_year_irradiance(inputs.pv_breakdown, first_year_results_df),
+        pv_stages=(
+            first_year_pv_stages(inputs.pv_breakdown, first_year_results_df)
+            if resolved.cfg["timeseries_pv_stages"]
+            else None
+        ),
         pv_loss_waterfall=_build_pv_loss_waterfall(
             inputs.pv_breakdown, first_year_results_df, resolved, inputs.inverter_ac_derate, inputs.inverter_units
         ),

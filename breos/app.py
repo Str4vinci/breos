@@ -339,6 +339,10 @@ class App:
         - ``Battery_SOC_Normalized``: state of charge in the usable window,
           from 0 to 1. ``Battery_SOH``: state of health, in %.
 
+        With ``timeseries_pv_stages = true`` the frame also has the weather,
+        plane-of-array irradiance, cell temperature and DC loss stages on the
+        same steps; see "PV stages per step" in Interpreting results.
+
         The energy-balance ledger schema in the API reference defines the
         other columns. A later release can add columns. The frame is a copy:
         a change to it does not change this App or its results.
@@ -348,7 +352,9 @@ class App:
         """
         if self._artifacts is None:
             raise RuntimeError("Call simulate() before timeseries().")
-        return self._artifacts.first_year_results_df.copy(deep=True)
+        frame = self._artifacts.first_year_results_df.copy(deep=True)
+        stages = self._artifacts.pv_stages
+        return frame if stages is None else pd.concat([frame, stages.copy(deep=True)], axis=1)
 
     @staticmethod
     def _runtime_dependencies() -> AppRuntimeDependencies:

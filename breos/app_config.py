@@ -653,6 +653,16 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         ),
         summary="simulation.irradiance_decomposition",
     ),
+    "timeseries_pv_stages": AppConfigField(
+        check=boolean,
+        default=False,
+        doc=(
+            "Add the weather, plane-of-array irradiance, cell temperature and DC loss stages to "
+            "`App.timeseries()`, one column each per step. They telescope to `PV_DC`. See "
+            "[PV stages per step](interpreting-results.md#pv-stages-per-step)"
+        ),
+        summary="simulation.timeseries_pv_stages",
+    ),
     "solar_position": AppConfigField(
         check=choice(SOLAR_POSITION_METHODS),
         default=DEFAULT_SOLAR_POSITION,

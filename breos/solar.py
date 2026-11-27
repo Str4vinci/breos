@@ -280,6 +280,18 @@ class PVProductionBreakdown:
     inverter_dc: Optional[Tuple[pd.Series, ...]] = None
     inverter_dc_voltage: Optional[Tuple[pd.Series, ...]] = None
     solver_diagnostics: Optional[dict[str, Any]] = None
+    # The weather the PV model read on these steps: columns DNI, DHI (W/m2),
+    # Air_Temperature (C) and Wind_Speed (m/s). None when not recorded.
+    weather_in: Optional[pd.DataFrame] = None
+    # Per-step plane-of-array irradiance (W/m2) and cell temperature (C), each
+    # times the array's STC power in kW and summed over arrays, like
+    # ``poa_global_stc_dc``. Divided by ``stc_power_kw`` they are means
+    # weighted by array power. Columns POA_Beam, POA_Sky_Diffuse,
+    # POA_Ground_Diffuse and POA_Global (unshaded), POA_Global_Shaded,
+    # POA_Effective (after shading, IAM and the rear side) and
+    # Cell_Temperature. None when not recorded.
+    stc_weighted: Optional[pd.DataFrame] = None
+    stc_power_kw: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -298,6 +310,16 @@ class _IrradianceModelResult:
     effective_irradiance_unshaded: Optional[np.ndarray] = None
     # The irradiance by how shading reaches it, for module-level shading.
     parts: Optional[IrradianceParts] = None
+    # The weather the model read (DNI, DHI in W/m2, air temperature in C, wind
+    # speed in m/s) and the unshaded transposition's beam, sky-diffuse and
+    # ground-diffuse parts (W/m2), for the per-step PV stages.
+    dni: Optional[np.ndarray] = None
+    dhi: Optional[np.ndarray] = None
+    temp_air: Optional[np.ndarray] = None
+    wind_speed: Optional[np.ndarray] = None
+    poa_beam: Optional[np.ndarray] = None
+    poa_sky_diffuse: Optional[np.ndarray] = None
+    poa_ground_diffuse: Optional[np.ndarray] = None
 
 
 class _SolarGrid(NamedTuple):
@@ -443,6 +465,7 @@ def _compute_irradiance_and_cell_temp_detail(
     # Finite weather can still yield NaN POA, e.g. Reindl with a small negative
     # GHI reading accepted by the measurement tolerances. Keep POA cleanup for
     # those model-domain cases, after refusing missing weather at extraction.
+    poa_unshaded = poa
     poa_global_unshaded = None
     front_unshaded = None
     components = None
@@ -573,6 +596,13 @@ def _compute_irradiance_and_cell_temp_detail(
         poa_global_unshaded=poa_global_unshaded,
         effective_irradiance_unshaded=(None if front_unshaded is None else front_unshaded + rear_effective_irradiance),
         parts=parts,
+        dni=np.asarray(dni, dtype=float),
+        dhi=np.asarray(dhi, dtype=float),
+        temp_air=np.asarray(temp_air, dtype=float),
+        wind_speed=np.asarray(wind_speed, dtype=float),
+        poa_beam=np.nan_to_num(np.asarray(poa_unshaded["poa_direct"], dtype=float), nan=0.0),
+        poa_sky_diffuse=np.nan_to_num(np.asarray(poa_unshaded["poa_sky_diffuse"], dtype=float), nan=0.0),
+        poa_ground_diffuse=np.nan_to_num(np.asarray(poa_unshaded["poa_ground_diffuse"], dtype=float), nan=0.0),
     )
 
 
@@ -955,6 +985,29 @@ def _array_breakdown(
             index=times,
             name="poa_global_stc_dc_W",
         ),
+        weather_in=pd.DataFrame(
+            {
+                "DNI": detail.dni,
+                "DHI": detail.dhi,
+                "Air_Temperature": detail.temp_air,
+                "Wind_Speed": detail.wind_speed,
+            },
+            index=times,
+        ),
+        stc_weighted=pd.DataFrame(
+            {
+                "POA_Beam": detail.poa_beam,
+                "POA_Sky_Diffuse": detail.poa_sky_diffuse,
+                "POA_Ground_Diffuse": detail.poa_ground_diffuse,
+                "POA_Global": detail.poa_global if detail.poa_global_unshaded is None else detail.poa_global_unshaded,
+                "POA_Global_Shaded": detail.poa_global,
+                "POA_Effective": detail.effective_irradiance,
+                "Cell_Temperature": detail.temp_cell,
+            },
+            index=times,
+        )
+        * (n_modules * pv_params.Mpp / 1000.0),
+        stc_power_kw=n_modules * pv_params.Mpp / 1000.0,
     )
 
 
@@ -1483,6 +1536,12 @@ def _sum_pv_breakdowns(breakdowns: list[PVProductionBreakdown]) -> PVProductionB
         total.name = series[0].name
         return total
 
+    def _sum_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+        total = frames[0].copy()
+        for other in frames[1:]:
+            total = total.add(other, fill_value=0.0)
+        return total
+
     def _sum_attr(name: str) -> pd.Series:
         return _sum([getattr(breakdown, name) for breakdown in breakdowns])
 
@@ -1509,6 +1568,17 @@ def _sum_pv_breakdowns(breakdowns: list[PVProductionBreakdown]) -> PVProductionB
         ghi=breakdowns[0].ghi,
         poa_global_stc_dc=(
             _sum_attr("poa_global_stc_dc") if all(b.poa_global_stc_dc is not None for b in breakdowns) else None
+        ),
+        weather_in=breakdowns[0].weather_in,
+        stc_weighted=(
+            _sum_frames([b.stc_weighted for b in breakdowns if b.stc_weighted is not None])
+            if all(b.stc_weighted is not None for b in breakdowns)
+            else None
+        ),
+        stc_power_kw=(
+            sum(float(b.stc_power_kw) for b in breakdowns if b.stc_power_kw is not None)
+            if all(b.stc_power_kw is not None for b in breakdowns)
+            else None
         ),
     )
 

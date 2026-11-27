@@ -844,3 +844,21 @@ def test_limits_on_parallel_strings_hold_on_their_exact_curves():
     np.testing.assert_allclose(limited[lit], (voltage * each.sum(axis=0))[lit], rtol=1e-10)
     assert np.any(np.isclose(each[:, lit].sum(axis=0), input_limit, rtol=1e-6))
     assert np.all(limited <= _dense_maximum([first, second]) * (1 + 1e-8))
+
+
+def test_pv_stages_carry_the_string_losses_and_the_shaded_irradiance(trina, _patch_weather):
+    from breos import App
+    from tests.test_app_timeseries import assert_stages_telescope
+
+    config = _module_shaded_config(trina, CHIMNEY)
+    config["pv_strings"][1]["mppt"] = 0
+    config["inverters"][0]["mppts"][0].update(max_input_current_a=32, max_short_circuit_current_a=40, max_strings=2)
+    for string in config["pv_strings"]:
+        string.update(cable_length_m=30, cable_cross_section_mm2=4)
+    app = App({**config, "timeseries_pv_stages": True})
+    app.simulate()
+    frame = assert_stages_telescope(app)
+    for column in ("PV_DC_Loss_Shading_Mismatch", "PV_DC_Loss_String_Wiring", "PV_DC_Loss_Parallel_Mismatch"):
+        assert frame[column].sum() > 0
+    assert frame["POA_Global_Shaded"].sum() < frame["POA_Global"].sum()
+    assert frame["PV_DC_Stage_Shaded"].sum() < frame["PV_DC_Stage_POA"].sum()

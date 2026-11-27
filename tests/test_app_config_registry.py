@@ -32,6 +32,7 @@ EXPECTED_DEFAULTS = {
     "solar_position": "auto",
     "irradiance_resampling": "auto",
     "irradiance_decomposition": None,
+    "timeseries_pv_stages": False,
     "iam_model": "ashrae",
     "diffuse_iam": "none",
     "temperature_model": "faiman",

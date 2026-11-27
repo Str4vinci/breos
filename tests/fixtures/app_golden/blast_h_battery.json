@@ -456,6 +456,7 @@
   "provenance.resolved_config.temperature_model": "faiman",
   "provenance.resolved_config.terminal_value": null,
   "provenance.resolved_config.tilt": 34.380004,
+  "provenance.resolved_config.timeseries_pv_stages": false,
   "provenance.resolved_config.tracking": "fixed",
   "provenance.resolved_config.transposition_model": "isotropic",
   "provenance.resolved_config.weather_file": null,
@@ -615,7 +616,7 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "2a964f2e76a7f25ffc50263d9a8f68512a30eb65",
+  "breos_commit": "bd6c74b14b2229a7bf34cffc829b1cddc70ec8f1",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
