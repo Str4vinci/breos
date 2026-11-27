@@ -442,6 +442,8 @@ battery_replacement_decision = "economic"  # "threshold" is the default
   same way), **keep** the worn pack in service, or **retire** it and finish
   PV-only. It takes the one with the highest NPV savings, or the NPV
   including the estimated residual value when `[terminal_value]` is enabled.
+  The projected optimizer decides on `Projected_NPV`, the NPV it ranks
+  designs by, and ignores `[terminal_value]` there as it does everywhere.
 - Each alternative is a full simulation of the project with the same
   weather, load, dispatch, tariff and degradation model, priced by the same
   economics. Keeping or retiring ends the pack's crossings, so a run whose

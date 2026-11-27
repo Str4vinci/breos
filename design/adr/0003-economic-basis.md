@@ -606,7 +606,10 @@ threshold policies bought no replacement in all 126 cases and gained 0.7 to
   valuation (`value_projection`, or the optimizer's projected scoring). The
   objective is the NPV savings, or the E10 terminal-adjusted NPV when
   `[terminal_value]` is enabled, so a late new pack's residual value and a
-  kept pack's zero credit enter every alternative the same way. Without a
+  kept pack's zero credit enter every alternative the same way. The
+  optimizer decides on `Projected_NPV`, the objective it ranks designs by;
+  its projected scoring ignores `[terminal_value]`, so the decision does
+  too, and the decision record names the objective `"npv"`. Without a
   terminal value the comparison is harsh on a late replacement and kind to
   a worn pack; the docs say so.
 - **Information.** The decision looks ahead with perfect information over
@@ -618,7 +621,9 @@ threshold policies bought no replacement in all 126 cases and gained 0.7 to
   guards and `enable_replacement = false` still apply first, and a crossing
   they skip is not decided. Not available with `[period]` (no lifetime
   economics), `[vehicle]` (households valued together) or in a community
-  (the site's money is the community's); these are refused.
+  (the site's money is the community's); these are refused, as is an
+  optimizer `eol_percentage` of 1, where a fresh pack is already at its
+  threshold (the App's key is below 1 already).
 - **Reporting.** Each decided crossing in `battery_end_of_life_events`
   carries a `decision`: what was chosen and the NPV of replace, keep and
   retire. `battery_replacement_decision` in the result records the mode,
@@ -635,10 +640,15 @@ threshold policies bought no replacement in all 126 cases and gained 0.7 to
   are prepared once. The optimizer's projected scoring of the 126 study-13
   cases (`n` from 1 to 3) took a median 4.7 times as long per candidate.
 - **Validation.** Re-scoring all 126 study-13 cases with the rule matched
-  the best brute-force policy's NPV exactly in every case: the rule keeps
-  the pack at the first crossing in all of them, and the study's best
-  policies are equivalent no-replacement runs. With `"threshold"` the
-  scores were bit-identical to the study's defaults.
+  the best brute-force policy's NPV exactly in every case. That covers one
+  decision only: the rule keeps the pack at the first crossing in all of
+  them, and the study's best policies are equivalent no-replacement runs.
+  The tests check the other branches separately: each branch's NPV equals
+  a run without a limit that switches replacement off from the year of the
+  crossing it does not buy, and a replace-then-retire branch across a year
+  boundary has the same event times, retirement, final health and NPV as
+  that run. With `"threshold"` the scores were bit-identical to the study's
+  defaults.
 
 The default `"threshold"` adds nothing to the run, and results are
 bit-identical. The result format stays `"1"`: the new result field and the

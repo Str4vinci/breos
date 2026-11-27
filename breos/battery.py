@@ -223,12 +223,6 @@ class BatteryConfig:
     # What a skipped swap does with the old pack: "keep" it in service or
     # "retire" it and finish the span PV-only.
     skipped_replacement_action: str = "keep"
-    # The swaps this span may still make; None makes as many as the pack
-    # needs. The crossing after the last allowed swap keeps or retires the
-    # pack, as replacement_limit_action says, with the reason "economic":
-    # the economic decision (ADR 0003 E14) runs one branch per limit.
-    replacement_limit: Optional[int] = None
-    replacement_limit_action: str = "keep"
     calendar_model: str = "naumann_lam_field_calibrated"  # v1 field-calibrated default alias
     # Resistance fade (opt-in): grows internal resistance daily and derates
     # the charge/discharge efficiencies in the energy loop so the effective
@@ -271,6 +265,12 @@ class BatteryConfig:
     # refused with "dc".
     battery_inverter_ac_capacity_w: Optional[float] = None
     battery_inverter_efficiency: Optional[float] = None
+    # The swaps this span may still make; None makes as many as the pack
+    # needs. The crossing after the last allowed swap keeps or retires the
+    # pack, as replacement_limit_action says, with the reason "economic":
+    # the economic decision (ADR 0003 E14) runs one branch per limit.
+    replacement_limit: Optional[int] = None
+    replacement_limit_action: str = "keep"
 
     def __post_init__(self):
         # Checked rather than coerced: a string such as "false" is truthy.
@@ -330,6 +330,10 @@ class BatteryConfig:
             raise ValueError("initial_soh must be between 0 and 100")
         if not 0.0 <= self.eol_percentage <= 1.0:
             raise ValueError("eol_percentage must be between 0 and 1")
+        if self.replacement_limit is not None and self.eol_percentage >= 1.0:
+            # A fresh pack would already be at its threshold, so no later
+            # crossing could be decided (ADR 0003 E14).
+            raise ValueError("replacement_limit needs eol_percentage below 1")
         if not 0.0 <= self.min_soc < self.max_soc <= 1.0:
             raise ValueError("SOC limits must satisfy 0 <= min_soc < max_soc <= 1")
         for name in ("charge_efficiency", "discharge_efficiency", "inverter_efficiency"):
@@ -1661,6 +1665,7 @@ def _apply_daily_degradation(
     skipped_action = battery_config.skipped_replacement_action
     if (
         replacement_skipped_by is None
+        and battery_config.enable_replacement
         and battery_config.replacement_limit is not None
         and aging.n_replacements >= battery_config.replacement_limit
     ):

@@ -1576,10 +1576,18 @@ def decide_replacements(
     swaps = threshold.total_replacements
     limits: list[tuple[int, str] | None] = [None]
     limits += [(count, action) for count in range(swaps - 1, -1, -1) for action in _ECONOMIC_ALTERNATIVES]
-    runs = [threshold] + [run(limit) for limit in limits[1:]]
-    values = [float(npv(projection)) for projection in runs]
-    best = max(range(len(runs)), key=values.__getitem__)
-    chosen, chosen_limit = runs[best], limits[best]
+    # Each branch is priced as it finishes; only the best run so far is kept.
+    values = [float(npv(threshold))]
+    jit_cache_states = list(threshold.jit_cache_states)
+    best, chosen = 0, threshold
+    for index, limit in enumerate(limits[1:], start=1):
+        projection = run(limit)
+        values.append(float(npv(projection)))
+        jit_cache_states += projection.jit_cache_states
+        # Strictly greater, so a tie keeps the earlier branch.
+        if values[index] > values[best]:
+            best, chosen = index, projection
+    chosen_limit = limits[best]
     chosen_swaps = swaps if chosen_limit is None else chosen_limit[0]
 
     def npv_after(swaps_made: int, action: str | None) -> float:
@@ -1626,14 +1634,14 @@ def decide_replacements(
             for limit, value in zip(limits, values, strict=True)
         ],
         # Projections run beside the threshold run, each over the full horizon.
-        "extra_projections": len(runs) - 1,
+        "extra_projections": len(limits) - 1,
     }
     return replace(
         chosen,
         end_of_life_events=tuple(events),
         # Every projection's cache observations, so a compile paid in the
         # first is still reported.
-        jit_cache_states=[state for projection in runs for state in projection.jit_cache_states],
+        jit_cache_states=jit_cache_states,
         replacement_decision=record,
     )
 

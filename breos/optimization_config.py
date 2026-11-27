@@ -427,6 +427,15 @@ def _check_blast_model(battery: Mapping[str, Any]) -> None:
         raise ValueError("battery.blast_model requires battery.degradation_engine = 'blast'")
 
 
+def _check_replacement_decision(battery: Mapping[str, Any]) -> None:
+    """An economic decision needs a threshold a fresh pack is above (ADR 0003 E14)."""
+    if battery.get("replacement_decision", "threshold") != "economic":
+        return
+    eol = battery.get("eol_percentage")
+    if isinstance(eol, (int, float)) and not isinstance(eol, bool) and eol >= 1.0:
+        raise ValueError("battery.replacement_decision = 'economic' needs battery.eol_percentage below 1")
+
+
 def _currency(resolved: Mapping[str, Any], *, battery_kwh: float | None = None) -> str:
     """The run's currency: ``currency``, else the tariff's, else EUR; and check the costs are in it.
 
@@ -622,6 +631,7 @@ def resolve_optimization_config(config: Mapping[str, Any], *, battery_kwh: float
     battery.setdefault("degradation_engine", "native")
     battery.setdefault("blast_model", None)
     _check_blast_model(battery)
+    _check_replacement_decision(battery)
     battery.setdefault("replacement_cost", None)
     battery.setdefault("enable_replacement", True)
     battery.setdefault("allow_terminal_replacement", True)

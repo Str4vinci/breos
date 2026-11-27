@@ -10,7 +10,9 @@ default ``"threshold"`` changes nothing.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import tomllib
+import weakref
 
 import pandas as pd
 import pytest
@@ -375,3 +377,134 @@ def test_a_community_site_cannot_decide_on_its_own_npv():
     config["participants"][1].update(battery_kwh=5.0, battery_replacement_decision="economic")
     with pytest.raises(ValueError, match="community"):
         parse_community_config(config)
+
+
+# -- review fixes ---------------------------------------------------------------------
+
+
+def test_the_limit_comes_after_every_released_field():
+    # A caller passing the released fields by position is not shifted.
+    names = [field.name for field in dataclasses.fields(BatteryConfig)]
+    assert names[-2:] == ["replacement_limit", "replacement_limit_action"]
+
+
+def test_disabled_replacement_keeps_the_pack_whatever_the_limit():
+    *_, deg_df, _state = _run(
+        24 * 3,
+        eol_percentage=EVERY_PERIOD_EOL,
+        enable_replacement=False,
+        skipped_replacement_action="keep",
+        replacement_limit=0,
+        replacement_limit_action="retire",
+    )
+    events = deg_df.attrs["end_of_life_events"]
+    assert [(e["action"], e["reason"]) for e in events] == [("kept", "replacement_disabled")]
+
+
+def test_a_limit_needs_a_threshold_below_a_fresh_pack():
+    with pytest.raises(ValueError, match="eol_percentage below 1"):
+        BatteryConfig(nominal_energy_wh=5000.0, eol_percentage=1.0, replacement_limit=0)
+    BatteryConfig(nominal_energy_wh=5000.0, eol_percentage=1.0)
+
+
+def test_the_optimizer_refuses_a_decision_at_a_threshold_of_one(monkeypatch):
+    monkeypatch.setattr("tests.test_economic_replacement.DESIGN_EOL", 1.0)
+    with pytest.raises(ValueError, match="replacement_decision = 'economic' needs battery.eol_percentage below 1"):
+        _design("economic")
+
+
+def test_the_branches_are_priced_without_keeping_every_run():
+    # Only the threshold run and the best run so far stay referenced.
+    made: list[weakref.ref] = []
+    values = {None: 1.0, (1, "keep"): 3.0, (1, "retire"): 2.0, (0, "keep"): 3.0, (0, "retire"): 0.0}
+    base = _fake_run(2, _crossings)
+
+    def run(limit):
+        projection = base(limit)
+        made.append(weakref.ref(projection.yearly_df))
+        return projection
+
+    def npv(projection):
+        # The threshold, the best so far and this branch.
+        assert sum(ref() is not None for ref in made) <= 3
+        return values[_limit_of(projection)]
+
+    chosen = decide_replacements(run, npv)
+    # A tie keeps the branch with more swaps.
+    assert chosen.replacement_decision["chosen"]["replacements"] == 1
+    assert chosen.replacement_decision["chosen"]["then"] == "keep"
+
+
+# Each branch run again without a limit: replacement is switched off, keeping
+# or retiring the pack, from the year of the crossing it does not buy.
+
+
+def _scheduled(monkeypatch, overrides, *, off_from_year: int | None, action: str):
+    import breos.projection as projection
+
+    built = projection.build_battery_config
+    years: list[int] = []
+
+    def battery_config(cfg, resolved, *, initial_soh):
+        year = len(years) + 1
+        years.append(year)
+        config = built(cfg, resolved, initial_soh=initial_soh)
+        if off_from_year is not None and year >= off_from_year:
+            config = dataclasses.replace(config, enable_replacement=False, skipped_replacement_action=action)
+        return config
+
+    with monkeypatch.context() as patch:
+        patch.setattr(projection, "build_battery_config", battery_config)
+        result = _app(**overrides).result()
+    assert years == list(range(1, overrides["projection_years"] + 1))
+    return result
+
+
+def _when(result):
+    return [(e["year"], e["date"], e["action"]) for e in _events(result)]
+
+
+def test_every_branch_matches_a_run_scheduled_without_a_limit(monkeypatch, dear, dear_threshold):
+    crossing_years = [e["year"] for e in _events(dear_threshold.result())]
+    assert crossing_years == [2, 3]
+    record = dear.result()["battery_replacement_decision"]
+    for branch in record["branches"]:
+        if branch["then"] is None:
+            continue
+        scheduled = _scheduled(
+            monkeypatch,
+            {**CROSSES_TWICE, **DEAR},
+            off_from_year=crossing_years[branch["replacements"]],
+            action=branch["then"],
+        )
+        assert branch["npv"] == pytest.approx(scheduled["npv_savings"], rel=0, abs=1e-9), branch
+
+
+def test_replace_then_retire_across_a_year_boundary_matches_its_schedule(monkeypatch):
+    import breos.projection as projection
+
+    priced = projection.projection_npv
+
+    def favour_replace_then_retire(cfg, resolved, run):
+        priced(cfg, resolved, run)
+        # Retiring, then each swap, outweighs any NPV difference.
+        return 1e9 * run.carry.battery_retired + 1e8 * run.total_replacements
+
+    overrides = {**CROSSES_TWICE, **DEAR}
+    with monkeypatch.context() as patch:
+        patch.setattr(projection, "projection_npv", favour_replace_then_retire)
+        decided = _app(**overrides, battery_replacement_decision="economic").result()
+    assert decided["battery_replacement_decision"]["chosen"]["replacements"] == 1
+    assert decided["battery_replacement_decision"]["chosen"]["then"] == "retire"
+    scheduled = _scheduled(monkeypatch, overrides, off_from_year=3, action="retire")
+    assert (
+        _when(decided)
+        == _when(scheduled)
+        == [
+            (2, _events(scheduled)[0]["date"], "replaced"),
+            (3, _events(scheduled)[1]["date"], "retired"),
+        ]
+    )
+    assert [e["reason"] for e in _events(decided)] == ["end_of_life", "economic"]
+    assert decided["battery_soh_end_pct"] == scheduled["battery_soh_end_pct"]
+    assert decided["npv_savings"] == scheduled["npv_savings"]
