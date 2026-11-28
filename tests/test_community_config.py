@@ -520,6 +520,7 @@ def test_app_several_inverter_checks_are_inherited(config, trina, mode):
 
     row = config["participants"][1]
     row.update({k: deepcopy(v) for k, v in TWO_INVERTERS.items() if k not in SHARED_APP_KEYS})
+    row.pop("n_modules")  # the arrays set the count
     row["battery_kwh"] = 5
     if mode != "dc":
         row.update(deepcopy(APP_AC))

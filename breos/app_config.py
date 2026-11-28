@@ -2843,6 +2843,12 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
                     f"'pv_arrays[{i}]' has a 'shading' table and strings with 'module_shading'; its modules' "
                     "shading sets its irradiance, so give one or the other"
                 )
+        total = sum(arr["modules"] for arr in cfg["pv_arrays"])
+        if cfg.get("n_modules") is not None and cfg["n_modules"] != total:
+            raise ValueError(
+                f"'n_modules' is {cfg['n_modules']!r}, but 'pv_arrays' has {total} modules, which set the count. "
+                "Drop 'n_modules' or change the arrays' 'modules'"
+            )
         shaded = ["shading" in arr or i in by_modules for i, arr in enumerate(cfg["pv_arrays"])]
         if any(shaded) and not all(shaded):
             raise ValueError(
@@ -3340,6 +3346,11 @@ def resolve_costs(cfg: dict[str, Any]) -> CostParams:
 def resolve_emissions(cfg: dict[str, Any]) -> EmissionsParams | None:
     """Resolve optional emissions preset."""
     if not cfg["emissions_country"]:
+        if cfg["export_emissions_factor_gco2_kwh"] is not None:
+            raise ValueError(
+                "'export_emissions_factor_gco2_kwh' needs 'emissions_country', which turns emissions on; "
+                "set it or drop the export factor"
+            )
         return None
 
     emissions_db = load_config_json("emissions.json")

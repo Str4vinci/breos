@@ -283,28 +283,30 @@ def test_diffuse_iam_none_reads_as_beam_only():
     assert resolve_pv_model_options(diffuse_iam=cfg["diffuse_iam"]).diffuse_iam == "none"
 
 
-def test_empty_normalized_cli_values_do_not_overwrite_config_file(tmp_path):
+@pytest.mark.parametrize("flag", ["--location", "--cost-preset", "--emissions-country"])
+def test_an_empty_cli_value_is_refused(tmp_path, flag):
+    # An empty flag used to keep the config file's value without a word.
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         'location = "berlin"\ncost_preset = "residential_de"\nemissions_country = "DE"\n',
         encoding="utf-8",
     )
-    args = cli.build_parser().parse_args(
-        [
-            "run",
-            "--config",
-            str(config_path),
-            "--location",
-            "",
-            "--cost-preset",
-            "",
-            "--emissions-country",
-            "",
-        ]
-    )
+    args = cli.build_parser().parse_args(["run", "--config", str(config_path), flag, ""])
 
-    config = cli._build_config(args)
+    with pytest.raises(ValueError, match=f"'{flag}' is empty"):
+        cli._build_config(args)
 
-    assert config["location"] == "berlin"
-    assert config["cost_preset"] == "residential_de"
-    assert config["emissions_country"] == "DE"
+
+def test_n_modules_must_match_the_arrays():
+    arrays = [{"modules": 6, "tilt": 30, "azimuth": 90}, {"modules": 4, "tilt": 30, "azimuth": 270}]
+    base = {"location": "porto", "annual_consumption_kwh": 4000, "pv_arrays": arrays}
+    assert resolve_app_config({**base, "n_modules": 10}).cfg["n_modules"] == 10
+    with pytest.raises(ValueError, match="'n_modules' is 20, but 'pv_arrays' has 10 modules"):
+        resolve_app_config({**base, "n_modules": 20})
+
+
+def test_an_export_emissions_factor_needs_a_country():
+    base = {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000}
+    with pytest.raises(ValueError, match="'export_emissions_factor_gco2_kwh' needs 'emissions_country'"):
+        resolve_app_config({**base, "export_emissions_factor_gco2_kwh": 300})
+    resolve_app_config({**base, "emissions_country": "PT", "export_emissions_factor_gco2_kwh": 300})

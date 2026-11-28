@@ -153,6 +153,16 @@ def _ac_output_scale(value: Any, where: str) -> float:
     return scale
 
 
+def _max_battery_kwh(value: Any, where: str) -> Any:
+    """A bound for the search, which steps in whole kWh, so one below 1 kWh leaves only no battery."""
+    bound = number(minimum=0)(value, where)
+    if bound is not None and 0 < bound < 1:
+        raise ValueError(
+            f"'{where}' is {value!r}; the search steps in whole kWh, so give 0 for no battery or at least 1"
+        )
+    return bound
+
+
 def _max_tilt(value: Any, where: str) -> Any:
     if isinstance(value, str):
         if value.strip().lower() == "adjust":
@@ -302,7 +312,7 @@ CONSTRAINTS_TABLE = TableSpec(
         "max_area_m2": number(minimum=0, min_exclusive=True),
         # A bound, not a count: the repair snaps candidates inside it.
         "max_modules": _real(1, float("inf")),
-        "max_battery_kwh": number(minimum=0),
+        "max_battery_kwh": _max_battery_kwh,
         "min_tilt_deg": number(minimum=0, maximum=90),
         "max_tilt_deg": _max_tilt,
         "tilt_margin_deg": number(minimum=0),

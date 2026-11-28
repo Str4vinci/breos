@@ -92,13 +92,28 @@ def _breakdown(weather, shading=None, freq="h", **options):
     return calculate_array_breakdowns(weather, PORTO, [array], freq=freq, **options)[0]
 
 
-def test_an_all_zero_table_changes_nothing(synthetic_weather):
-    plain = _breakdown(synthetic_weather)
+def test_an_all_zero_table_changes_nothing_but_the_flat_shading_loss(synthetic_weather):
+    plain = _breakdown(synthetic_weather, loss_overrides={"shading": 0.0})
     shaded = _breakdown(synthetic_weather, UNSHADED)
     np.testing.assert_allclose(shaded.dc_after_losses, plain.dc_after_losses, rtol=1e-12)
     np.testing.assert_allclose(shaded.poa_shaded_dc, plain.poa_global_dc, rtol=1e-12)
     np.testing.assert_allclose(shaded.poa_global_dc, plain.poa_global_dc, rtol=1e-12)
     assert plain.poa_shaded_dc is None
+
+
+def test_a_table_replaces_the_flat_shading_loss(synthetic_weather):
+    # The App sets the flat loss to 0 when tables model the shading; a direct
+    # call does the same, so the shading is not counted twice.
+    flat = _breakdown(synthetic_weather)
+    table = _breakdown(synthetic_weather, UNSHADED)
+    assert flat.pvwatts_components_pct["shading"] == 3.0
+    assert table.pvwatts_components_pct["shading"] == 0.0
+    assert table.dc_after_losses.sum() > flat.dc_after_losses.sum()
+
+
+def test_a_stated_flat_shading_loss_stays_on_top_of_a_table(synthetic_weather):
+    stated = _breakdown(synthetic_weather, UNSHADED, loss_overrides={"shading": 2.0})
+    assert stated.pvwatts_components_pct["shading"] == 2.0
 
 
 def test_the_beam_is_shaded_at_the_suns_position_and_the_sky_by_the_view_factor(synthetic_weather):

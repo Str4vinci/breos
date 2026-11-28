@@ -114,7 +114,7 @@ The search bounds:
 | --- | ---: | --- |
 | `constraints.budget` | 10000 | Maximum initial system cost, in the run's currency. A run in another currency than EUR must set it. `budget_eur`, its name before 0.7.0, is an error |
 | `constraints.max_area_m2` | 20 | Maximum PV-module frame area in m² |
-| `constraints.max_battery_kwh` | 30 | Maximum battery decision-variable value in kWh |
+| `constraints.max_battery_kwh` | 30 | Maximum battery size in kWh. The search steps in whole kWh, so a bound of 13.5 searches up to 13; 0 searches PV only, and a bound between 0 and 1 is refused |
 | `constraints.max_modules` | 60 | Maximum PV-module decision-variable value |
 | `constraints.min_tilt_deg` | 10 | Minimum tilt in degrees |
 | `constraints.max_tilt_deg` | 90 | Maximum tilt, or `"adjust"` for the latitude-based bound |

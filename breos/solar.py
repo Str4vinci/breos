@@ -925,6 +925,10 @@ def _array_breakdown(
         current_year=current_year,
         start_year=start_year,
     )
+    if array.shading is not None and "shading" not in (loss_overrides or {}):
+        # The table models the near shading. A stated flat loss stays, on top
+        # of it, for whatever it leaves out.
+        loss_overrides = {**(loss_overrides or {}), "shading": 0.0}
     dc_after_static, dc_after_losses, component_losses, loss_info = _apply_pvwatts_loss_series(
         module_dc,
         loss_overrides,
@@ -1024,6 +1028,8 @@ def calculate_pv_production_breakdown(
     parameters. ``shading`` is the array's near-shading table, a
     :class:`breos.pv.shading.ShadingTable` or its mapping; it reduces the
     front plane-of-array irradiance before the incidence-angle modifier.
+    With a table, the flat ``"shading"`` loss defaults to 0 instead of 3 %;
+    a ``"shading"`` entry in ``loss_overrides`` still applies on top.
 
     .. deprecated:: 0.8.0
        Use :func:`calculate_array_breakdowns` with one array; this function

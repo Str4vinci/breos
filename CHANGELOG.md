@@ -37,6 +37,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   result value is unchanged; `provenance.resolved_config` records the key as
   `null`, like other unset keys.
 
+### Changed
+
+- Inputs that ran while being ignored or cut are now refused (#525):
+  - `n_modules` that differs from the module count of `pv_arrays`. The
+    arrays set the count; drop `n_modules` or make it match.
+  - `export_emissions_factor_gco2_kwh` without `emissions_country`, which
+    left emissions off. Set the country or drop the factor.
+  - An empty CLI value such as `--location ""`, which kept the config
+    file's value. Leave the flag out instead.
+  - `constraints.max_battery_kwh` above 0 and below 1. The search steps in
+    whole kWh, so such a bound searched no battery. A bound of 1 or more is
+    still searched up to its whole kWh (13.5 searches up to 13), as now
+    documented.
+
 ### Removed
 
 - `fetch_weather_data` no longer takes `tilt` and `azimuth`. They only set
@@ -46,6 +60,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- A direct `breos.solar` call with a near-shading table no longer also
+  applies the default 3 % flat shading loss, which counted the shading
+  twice. The App already set it to 0. A `"shading"` entry in
+  `loss_overrides` still applies on top of the table (#526).
 - An annual run now cuts its monthly table on the clock its weather covers
   the year on. It used the weather index's own clock, which can differ: local
   weather saved with two UTC offsets (across DST) is read as UTC but covers
