@@ -43,7 +43,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   "perez"`, was `"isotropic"`) with Marion's diffuse incidence-angle loss
   (`diffuse_iam = "marion"`, was `"none"`). Perez is what PVWatts, SAM and
   PVsyst use, and the isotropic model underestimates tilted irradiance on
-  clear days. Annual AC yield of the 4 kWp south-facing reference system in
+  clear days. On the same weather, the new defaults are within 0.45 % of
+  PySAM PVWatts v8 annual AC at the seven validation sites; the old defaults
+  differed by up to 3.9 % (see the validation page). Annual AC yield of the 4 kWp south-facing reference system in
   the validation suite changes by:
 
   | Site | Before (kWh) | After (kWh) | Change |
