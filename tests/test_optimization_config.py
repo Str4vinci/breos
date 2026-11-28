@@ -343,3 +343,16 @@ def test_a_search_without_a_feasible_design_names_the_broken_constraint_and_keep
     total = len(evaluated)
     assert f"constraints.budget by every design ({total} of {total})" in str(raised.value)
     assert "constraints.max_area_m2" not in str(raised.value)
+
+
+@pytest.mark.parametrize("bound", [0.5, 0.001])
+def test_a_battery_bound_below_one_kwh_is_refused(bound):
+    # The search steps in whole kWh, so such a bound searched no battery.
+    with pytest.raises(ValueError, match="steps in whole kWh"):
+        resolve_optimization_config({**MINIMAL, "constraints": {"max_battery_kwh": bound}})
+
+
+@pytest.mark.parametrize("bound", [0, 1, 13.5])
+def test_a_battery_bound_of_zero_or_at_least_one_kwh_is_accepted(bound):
+    resolved = resolve_optimization_config({**MINIMAL, "constraints": {"max_battery_kwh": bound}})
+    assert resolved["constraints"]["max_battery_kwh"] == bound

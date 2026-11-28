@@ -79,10 +79,10 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
         value = getattr(args, key)
         if value is None:
             continue
+        if isinstance(value, str) and not value.strip():
+            raise ValueError(f"'{field.cli_flags[0]}' is empty; give a value or leave the flag out")
         if field.normalizer is not None:
             value = field.normalizer(value)
-        if value is None or value == "":
-            continue
         overrides[key] = value
 
     # Every flag sets one top-level scalar, which replaces the file's value.
