@@ -7,12 +7,12 @@
   "chemistry": "LFP/graphite",
   "cell_capacity_ah": null,
   "basis": "field calendar fit, laboratory cycle model",
-  "first_end_of_life_years": 10.0959,
-  "battery_soh_end_pct": 50.9,
+  "first_end_of_life_years": 10.074,
+  "battery_soh_end_pct": 50.85,
   "experimental_range_warnings": [],
   "input_ranges": null,
   "aging_horizon_days": null,
-  "imposed_first_end_of_life_years": 10.0822
+  "imposed_first_end_of_life_years": 10.0575
  },
  {
   "model": "native_v2",
@@ -22,12 +22,12 @@
   "chemistry": "LFP/graphite",
   "cell_capacity_ah": null,
   "basis": "field calendar fit, laboratory cycle model",
-  "first_end_of_life_years": 15.3452,
-  "battery_soh_end_pct": 64.29,
+  "first_end_of_life_years": 15.2904,
+  "battery_soh_end_pct": 64.21,
   "experimental_range_warnings": [],
   "input_ranges": null,
   "aging_horizon_days": null,
-  "imposed_first_end_of_life_years": 14.8959
+  "imposed_first_end_of_life_years": 14.8247
  },
  {
   "model": "lfp_gr_250ah_prismatic",
@@ -38,7 +38,7 @@
   "cell_capacity_ah": 250.0,
   "basis": "laboratory cell model",
   "first_end_of_life_years": null,
-  "battery_soh_end_pct": 83.3,
+  "battery_soh_end_pct": 83.2,
   "experimental_range_warnings": [
    "c_rate_charge",
    "dod"
@@ -49,12 +49,12 @@
     "limit_min": null,
     "limit_max": 0.65,
     "run_min": null,
-    "run_max": 0.7647,
-    "periods_outside": 23,
+    "run_max": 0.791,
+    "periods_outside": 41,
     "periods": 7300,
-    "first_year_outside": 2,
-    "run_max_nominal": 0.6409,
-    "periods_outside_nominal": 0
+    "first_year_outside": 1,
+    "run_max_nominal": 0.6647,
+    "periods_outside_nominal": 21
    },
    {
     "input": "dod",
@@ -62,7 +62,7 @@
     "limit_max": 1.0,
     "run_min": null,
     "run_max": 0.801,
-    "periods_outside": 6766,
+    "periods_outside": 6739,
     "periods": 7300,
     "first_year_outside": 1,
     "run_max_nominal": null,
@@ -73,7 +73,7 @@
     "limit_min": 10,
     "limit_max": 45,
     "run_min": 15.46,
-    "run_max": 27.4195,
+    "run_max": 27.4748,
     "periods_outside": 0,
     "periods": 7300,
     "first_year_outside": null,
@@ -93,7 +93,7 @@
   "cell_capacity_ah": 3.0,
   "basis": "laboratory cell model",
   "first_end_of_life_years": null,
-  "battery_soh_end_pct": 83.0,
+  "battery_soh_end_pct": 82.9,
   "experimental_range_warnings": [
    "dod",
    "temperature_c"
@@ -104,11 +104,11 @@
     "limit_min": null,
     "limit_max": 1.0,
     "run_min": null,
-    "run_max": 0.7682,
+    "run_max": 0.791,
     "periods_outside": 0,
     "periods": 7300,
     "first_year_outside": null,
-    "run_max_nominal": 0.6409,
+    "run_max_nominal": 0.6647,
     "periods_outside_nominal": 0
    },
    {
@@ -117,7 +117,7 @@
     "limit_max": 1.0,
     "run_min": null,
     "run_max": 0.801,
-    "periods_outside": 6748,
+    "periods_outside": 6725,
     "periods": 7300,
     "first_year_outside": 1,
     "run_max_nominal": null,
@@ -128,8 +128,8 @@
     "limit_min": 20,
     "limit_max": 40,
     "run_min": 15.46,
-    "run_max": 27.4195,
-    "periods_outside": 5143,
+    "run_max": 27.4748,
+    "periods_outside": 5156,
     "periods": 7300,
     "first_year_outside": 1,
     "run_max_nominal": null,
@@ -162,7 +162,7 @@
     "periods_outside": 0,
     "periods": 7300,
     "first_year_outside": null,
-    "run_max_nominal": 0.6409,
+    "run_max_nominal": 0.6647,
     "periods_outside_nominal": 0
    },
    {
@@ -171,7 +171,7 @@
     "limit_max": 1.0,
     "run_min": null,
     "run_max": 0.801,
-    "periods_outside": 6724,
+    "periods_outside": 6711,
     "periods": 7300,
     "first_year_outside": 1,
     "run_max_nominal": null,
@@ -182,7 +182,7 @@
     "limit_min": 10,
     "limit_max": 45,
     "run_min": 15.46,
-    "run_max": 27.4195,
+    "run_max": 27.4748,
     "periods_outside": 0,
     "periods": 7300,
     "first_year_outside": null,

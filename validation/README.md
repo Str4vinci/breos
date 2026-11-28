@@ -102,9 +102,9 @@ albedo 0.2, same tilt/azimuth per site.
   commit weather + reference + baseline + report.
 - **Measured-data checks**: see [external
   validation](../docs/modeling/validation.md) for the completed analyses.
-- **Same-weather oracle (future)**: run SAM/PySAM offline on the checked-in
-  TMY CSVs to remove the weather-source confound entirely; store its outputs
-  as another reference block.
+- **Same-weather oracle**: a PySAM PVWatts v8 run on the checked-in TMY CSVs
+  is reported in [external validation](../docs/modeling/validation.md). Its
+  outputs are not yet stored as a reference block.
 
 ## Data licensing
 

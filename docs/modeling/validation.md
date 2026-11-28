@@ -175,6 +175,42 @@ These results are evidence for calibration and boundary investigation. They
 do not validate either model for this installation, and the dataset has no
 SOC trace or nameplate data for a dispatch or degradation check.
 
+## PySAM PVWatts v8 on the same weather
+
+This check compares BREOS with another model, not with measurements. It shows
+that BREOS reproduces PVWatts when both use the same inputs. It does not show
+that either model is accurate.
+
+PySAM 8.0.0 (PVWatts v8) and BREOS at commit
+`bd6c74b14b2229a7bf34cffc829b1cddc70ec8f1` ran on the seven hourly PVGIS
+typical weather years in `validation/data/weather/`. Both used the 4 kWp
+south-facing reference system from `validation/locations.json`: fixed open
+rack, albedo `0.2`, DC/AC ratio `1.2`, `96%` nominal inverter efficiency and
+`14.08%` aggregate loss. Each engine kept its own module, optical and
+temperature models. BREOS ran with Perez transposition and Marion diffuse IAM,
+which are the defaults from 0.9.0. Annual AC energy:
+
+| Site | PySAM (kWh) | BREOS Perez + Marion | BREOS isotropic, no diffuse IAM |
+|---|---:|---:|---:|
+| Porto | 6243 | `-0.09%` | `-3.31%` |
+| Berlin | 4208 | `+0.13%` | `-3.90%` |
+| Golden, Colorado | 7393 | `-0.45%` | `-3.43%` |
+| Nairobi | 6105 | `-0.43%` | `+1.32%` |
+| New Delhi | 6637 | `+0.11%` | `-2.04%` |
+| Melbourne | 6094 | `-0.16%` | `-3.64%` |
+| São Paulo | 5490 | `-0.03%` | `-0.39%` |
+
+With Perez transposition but no diffuse IAM, BREOS was `0.63%` to `2.03%`
+above PySAM. Hourly AC RMSE was 27 to 73 W.
+
+The same replay ran PySAM's irradiance model on the 2016 DKA Solar Centre
+plane-of-array comparison. With the same sky model, the annual bias of PySAM
+and BREOS differed by at most `0.02` percentage points. Perez had the smallest
+bias against the pyranometer (`-0.48%`), and isotropic the largest (`-1.76%`).
+
+The benchmark scripts and outputs are not committed to this repository, like
+the measured-data drivers above.
+
 ## Evidence not used for the release claim
 
 The Esposende field comparison is part of the upcoming publication, but it is

@@ -2,9 +2,9 @@
  "case": "montecarlo",
  "title": "Monte Carlo analysis of weather and demand",
  "breos_version": "0.8.1",
- "git_describe": "v0.8.0-96-g76b3c76",
- "generated_utc": "2026-11-25T16:27:47+00:00",
- "runtime_s": 2337.6,
+ "git_describe": "v0.8.1-26-gbd6c74b-dirty",
+ "generated_utc": "2026-11-28T01:27:34+00:00",
+ "runtime_s": 7720.5,
  "cheap": false,
  "configs": {
   "configs/examples/montecarlo.toml": "f8aed7e52e2a98849b02c9337dbe73b90ffe1f35e9dcba0ac618cde84cd32442"
@@ -15,7 +15,7 @@
    "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
   },
   "weather/porto_historical_2005_2024_openmeteo.csv": {
-   "sha256": "cb1d28b19a1f465c81678944981a417f2ba240f2e7441bf14f9ca3be7207d741",
+   "sha256": "24a12fe2d5ba89e4c9fb81269869e20794df7c0b319148bc413281b7c35e7280",
    "attribution": "Weather data by Open-Meteo.com, licensed CC BY 4.0.",
    "note": "fetched at regeneration time; not committed"
   }
@@ -47,8 +47,8 @@
   "currency"
  ],
  "files": {
-  "runs.csv.gz": "cdb706aef8d374722b79c6d3ebba54594982a6a4dc843d12902f67bd63ea2937",
-  "summary.json": "a89a34171e349cc7e74ffa3ef9ddd9f997bfb1f2d3788823c600706df80447c4",
+  "runs.csv.gz": "c9384c854f52d56667251a3f64ad87641f3b4fdbb1e21db5de4660f3a96f3195",
+  "summary.json": "7a898b4e973c486069d815a059d20293423f36ec228087271da9c113f4d86266",
   "weather_years.csv": "e56deac7c5898d407d3d1f090e57c085a94f13adccf225ee8d9501e4f7a79709"
  }
 }

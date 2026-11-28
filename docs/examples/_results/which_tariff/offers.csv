@@ -1,13 +1,13 @@
 offer,battery_kwh,baseline,npv_savings,payback_year,bill_year1,no_system_bill_year1,project_cost,no_system_project_cost,grid_import_kwh
-simple,0.0,same offer,4820.28,9,185.26,889.5,10947.62,15767.9,2007.16
-simple,0.0,today's simple offer,4820.28,9,185.26,889.5,10947.62,15767.9,2007.16
-bi-hourly,0.0,same offer,5976.25,8,146.97,916.64,10272.78,16249.03,2007.16
-bi-hourly,0.0,today's simple offer,5495.12,9,146.97,889.5,10272.78,15767.9,2007.16
-tri-hourly,0.0,same offer,5406.73,9,156.37,893.72,10436.05,15842.78,2007.16
-tri-hourly,0.0,today's simple offer,5331.85,9,156.37,889.5,10436.05,15767.9,2007.16
-simple,5.0,same offer,2130.17,16,22.08,889.5,13637.72,15767.9,831.94
-simple,5.0,today's simple offer,2130.17,16,22.08,889.5,13637.72,15767.9,831.94
-bi-hourly,5.0,same offer,3363.52,15,-14.59,916.64,12885.5,16249.03,831.94
-bi-hourly,5.0,today's simple offer,2882.39,15,-14.59,889.5,12885.5,15767.9,831.94
-tri-hourly,5.0,same offer,3003.61,15,-16.3,893.72,12839.17,15842.78,831.94
-tri-hourly,5.0,today's simple offer,2928.73,15,-16.3,889.5,12839.17,15767.9,831.94
+simple,0.0,same offer,4986.57,9,173.35,889.5,10781.33,15767.9,2017.96
+simple,0.0,today's simple offer,4986.57,9,173.35,889.5,10781.33,15767.9,2017.96
+bi-hourly,0.0,same offer,6144.94,8,134.94,916.64,10104.09,16249.03,2017.96
+bi-hourly,0.0,today's simple offer,5663.8,9,134.94,889.5,10104.09,15767.9,2017.96
+tri-hourly,0.0,same offer,5569.59,9,144.67,893.72,10273.19,15842.78,2017.96
+tri-hourly,0.0,today's simple offer,5494.71,9,144.67,889.5,10273.19,15767.9,2017.96
+simple,5.0,same offer,2321.29,16,8.34,889.5,13446.6,15767.9,830.16
+simple,5.0,today's simple offer,2321.29,16,8.34,889.5,13446.6,15767.9,830.16
+bi-hourly,5.0,same offer,3574.46,14,-29.21,916.64,12674.57,16249.03,830.16
+bi-hourly,5.0,today's simple offer,3093.33,15,-29.21,889.5,12674.57,15767.9,830.16
+tri-hourly,5.0,same offer,3219.22,15,-31.27,893.72,12623.56,15842.78,830.16
+tri-hourly,5.0,today's simple offer,3144.34,15,-31.27,889.5,12623.56,15767.9,830.16

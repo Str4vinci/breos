@@ -251,8 +251,9 @@ def _held_floor_follows_the_target(instructions):
 def test_a_held_target_plan_replays_as_planned():
     # One civil day: the planner's fixed health is exact, so production
     # delivers every planned flow, here with a day target above the
-    # configured one that the held floor follows.
-    case = prepare_replay(_config(1, smart_charging=HOLD))
+    # configured one that the held floor follows. The pre-0.9.0 PV model keeps
+    # this day's PV short enough that grid charging above the target pays.
+    case = prepare_replay(_config(1, smart_charging=HOLD, transposition_model="isotropic", diffuse_iam="none"))
     result = run_daily_target_oracle(case, **PLANNER, tolerance=DEFAULT_TOLERANCE)
     assert result.plan.targets[0] > HOLD["target_usable_fraction"]
     _held_floor_follows_the_target(result.instructions)

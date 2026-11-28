@@ -65,7 +65,8 @@ def test_timeseries_has_one_row_per_step_of_the_first_year(_patch_weather, resol
         assert frame[column].sum() * hours_per_step / 1000 == pytest.approx(result[key], abs=0.01)
     # Only the first of the two project years is kept step by step.
     assert len(result["yearly"]) == 2
-    assert frame["Battery_SOH"].iloc[-1] == pytest.approx(result["yearly"][0]["soh_pct"], abs=0.01)
+    # The yearly soh_pct is rounded to one decimal.
+    assert frame["Battery_SOH"].iloc[-1] == pytest.approx(result["yearly"][0]["soh_pct"], abs=0.05)
 
 
 def test_timeseries_returns_a_copy(_patch_weather):

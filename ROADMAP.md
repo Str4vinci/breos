@@ -96,9 +96,9 @@ Not yet scheduled: switching the system's tariff from a given project year
   [external validation](docs/modeling/validation.md) page into the standing
   drift suite, so per-dataset deltas are tracked in CI alongside PVGIS and
   PVWatts.
-- A documented "recommended" model profile (haydavies/perez transposition,
-  diffuse IAM, mount-appropriate thermal coefficients) to become the default
-  at 1.0.
+- The rest of the documented "recommended" model profile (physical beam IAM,
+  mount-appropriate thermal coefficients) to become the default at 1.0. Perez
+  transposition and Marion diffuse IAM became the defaults in 0.9.0.
 - More pvlib physics behind the self-contained PV stage: extended
   cell-temperature and IAM options, and optional DC-side loss models
   (soiling, snow). DC cable losses are modelled from the string topology.

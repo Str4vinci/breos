@@ -28,9 +28,10 @@ from breos.weather import weather_metadata, weather_representative_time_offset
 
 # Sky-diffusion (transposition) models for projecting GHI/DHI/DNI onto the
 # plane of array, as supported by pvlib.irradiance.get_total_irradiance.
-# ``isotropic`` is the simple, robust baseline (and the default); the
-# anisotropic models are more accurate on clear days but need extra inputs
-# (extraterrestrial DNI and, for the Perez variants, relative airmass).
+# ``perez`` is the default from 0.9.0 (``isotropic`` before): it is what PVWatts,
+# SAM and PVsyst use, and the anisotropic models are more accurate on clear days.
+# They need extraterrestrial DNI and, for the Perez variants, relative airmass,
+# which BREOS computes. ``isotropic`` remains the simple baseline.
 TRANSPOSITION_MODELS = (
     "isotropic",
     "klucher",
@@ -40,7 +41,7 @@ TRANSPOSITION_MODELS = (
     "perez",
     "perez-driesse",
 )
-DEFAULT_TRANSPOSITION_MODEL = "isotropic"
+DEFAULT_TRANSPOSITION_MODEL = "perez"
 
 # Perez sky-diffusion coefficient sets accepted by pvlib's perez model. Only
 # used when ``transposition_model == "perez"``; the default is pvlib's
@@ -100,16 +101,16 @@ IAM_MODELS = (
 DEFAULT_IAM_MODEL = "ashrae"
 
 # Whether the incidence-angle modifier is applied to the diffuse POA
-# components. ``none`` applies IAM to beam only, with diffuse passing at 1.0
-# — the default and the only prior behaviour, a known ~0.5-1% systematic
-# overestimate. ``marion`` additionally weighs the sky- and ground-diffuse
-# components with the selected beam IAM integrated over their view factors
-# (Marion 2017, via pvlib's ``iam.marion_diffuse``).
+# components. ``marion`` (the default from 0.9.0) weighs the sky- and
+# ground-diffuse components with the selected beam IAM integrated over their
+# view factors (Marion 2017, via pvlib's ``iam.marion_diffuse``). ``none``
+# applies IAM to beam only, with diffuse passing at 1.0 — the default before
+# 0.9.0, a known ~0.5-1% systematic overestimate.
 DIFFUSE_IAM_METHODS = (
     "none",
     "marion",
 )
-DEFAULT_DIFFUSE_IAM = "none"
+DEFAULT_DIFFUSE_IAM = "marion"
 
 # Rear-side irradiance is opt-in. ``none`` preserves the historical front-only
 # model exactly; ``infinite_sheds`` uses pvlib's row-geometry model for the back
