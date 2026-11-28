@@ -289,12 +289,13 @@ def test_overlap_controller_carries_exact_instructions_across_the_year_seam(freq
 # environments, so its default path is pinned by the App goldens instead.
 # Re-pinned once when calendar resistance growth started running from each
 # period's start (#436); the scenario enables resistance fade. Re-pinned
-# again when the default thermal resistance began to scale with the pack (#492).
+# again when the default thermal resistance began to scale with the pack (#492),
+# and when resistance fade began to grow the losses, not divide the efficiency (#524).
 @pytest.mark.parametrize(
     ("name", "freq", "digest"),
     [
-        ("fixed_target", "h", "413478829b1fea32e872bbb2ede9ce4cead904b11d8d91ac1c09ec24e12401a4"),
-        ("fixed_target", "15min", "b43e483d658b8378ed41287ecd8829a452c3da313206b530f57610501ca8b8f4"),
+        ("fixed_target", "h", "92a6f43e02eb51a9865b70ce668177308d7acb7e78fc43617398c790ca336540"),
+        ("fixed_target", "15min", "bbed687364fd41fff902445f11be1b0f74cdb6ae628e8df4d4823385272beca2"),
     ],
 )
 def test_default_reject_preserves_the_existing_ledger_bits(name, freq, digest):

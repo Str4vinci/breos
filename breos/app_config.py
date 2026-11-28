@@ -1254,8 +1254,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         check=boolean,
         default=False,
         doc=(
-            "Grow the battery's internal resistance as it ages (Naumann), which lowers its charge and discharge "
-            'efficiencies. Native engine only: it cannot be combined with `degradation_engine = "blast"`'
+            "Grow the battery's internal resistance as it ages (Naumann). The charge and discharge losses grow "
+            "in proportion to the resistance, treating the whole loss as ohmic. Native engine only: it cannot "
+            'be combined with `degradation_engine = "blast"`'
         ),
         summary="battery.enable_resistance_fade",
     ),

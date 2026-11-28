@@ -199,7 +199,8 @@ def test_resistance_fade_reports_growth_and_efficiency():
     growth = app._artifacts.yearly_df["Battery_Resistance_Growth"].to_numpy()
     assert [entry["resistance_growth_pct"] for entry in history] == list(np.round(growth * 100, 2))
     assert 0.0 < history[0]["resistance_growth_pct"] < history[1]["resistance_growth_pct"]
-    assert history[0]["round_trip_efficiency"] == round(0.9 / (1 + growth[0]), 4)
+    one_way_loss = (1 - np.sqrt(0.9)) * (1 + growth[0])
+    assert history[0]["round_trip_efficiency"] == round((1 - one_way_loss) ** 2, 4)
     assert 0.9 > history[0]["round_trip_efficiency"] > history[1]["round_trip_efficiency"]
 
 

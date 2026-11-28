@@ -20,7 +20,7 @@ from breos.battery import (
     update_battery_resistance_cyclewise,
     update_battery_soh_cyclewise,
 )
-from breos.constants import DEFAULT_STANDBY_LOSS_WH, LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
+from breos.constants import DEFAULT_STANDBY_LOSS_WH, LAM_EA_J_MOL, LAM_SOC_EXPONENT_N, RESISTANCE_FADE_MIN_EFFICIENCY
 from breos.degradation.engine import BlastEngine
 from breos.degradation.native import (
     _detect_cycles_rainflow_arrays,
@@ -238,23 +238,25 @@ class TestResistanceToEfficiency:
     def test_non_positive_growth_preserves_base_efficiencies(self, resistance_growth):
         assert resistance_to_efficiency(resistance_growth, 0.98, 0.91) == (0.98, 0.91)
 
-    def test_asymmetric_efficiencies_keep_the_same_ratio(self):
-        growth = 0.44
-        expected_derate = np.sqrt(1.0 + growth)
+    def test_each_loss_grows_with_resistance(self):
+        # 44 % more resistance: 1 % and 19 % losses become 1.44 % and 27.36 %.
+        eff_charge, eff_discharge = resistance_to_efficiency(0.44, 0.99, 0.81)
 
-        eff_charge, eff_discharge = resistance_to_efficiency(growth, 0.99, 0.81)
+        assert eff_charge == pytest.approx(0.9856)
+        assert eff_discharge == pytest.approx(0.7264)
 
-        assert eff_charge == pytest.approx(0.99 / expected_derate)
-        assert eff_discharge == pytest.approx(0.81 / expected_derate)
-        assert eff_charge / eff_discharge == pytest.approx(0.99 / 0.81)
+    def test_round_trip_loss_grows_with_resistance(self):
+        # 95 % round trip and 18 % growth: the 5 % loss becomes about 5.9 %,
+        # not the 19.5 % of dividing the efficiency by 1.18.
+        one_way = np.sqrt(0.95)
+        eff_charge, eff_discharge = resistance_to_efficiency(0.18, one_way, one_way)
 
-    def test_high_growth_has_no_efficiency_floor(self):
+        assert eff_charge * eff_discharge == pytest.approx(0.941, abs=0.001)
+
+    def test_very_high_growth_stops_at_the_efficiency_floor(self):
         eff_charge, eff_discharge = resistance_to_efficiency(9999.0, 0.98, 0.82)
 
-        assert eff_charge == pytest.approx(0.0098)
-        assert eff_discharge == pytest.approx(0.0082)
-        assert eff_charge < 0.01
-        assert eff_discharge < 0.01
+        assert (eff_charge, eff_discharge) == (RESISTANCE_FADE_MIN_EFFICIENCY, RESISTANCE_FADE_MIN_EFFICIENCY)
 
 
 class TestRemovedBatteryApi:

@@ -47,6 +47,7 @@ from breos.constants import (
     NAUMANN_SOC_EXPONENT_N,
     NAUMANN_SOC_EXPONENT_N_R,
     R_GAS,
+    RESISTANCE_FADE_MIN_EFFICIENCY,
     T_REF_K,
     Z_Q,
     Z_R,
@@ -259,11 +260,16 @@ def resistance_to_efficiency(
     """
     Convert resistance growth to effective charge/discharge efficiencies.
 
-    Internal resistance growth increases ohmic losses proportionally. Both
-    baseline efficiencies receive the same ``sqrt(1 + growth)`` derating,
-    preserving their original ratio.
+    Ohmic loss is proportional to internal resistance, so each one-way loss
+    grows with it:
 
-    RTE_new = RTE_base / (1 + resistance_growth)
+    eff_new = 1 - (1 - eff_base) * (1 + resistance_growth)
+
+    The whole baseline loss is treated as ohmic. Part of it is conversion
+    loss that does not grow with the cell's resistance, so this is an upper
+    bound on the efficiency loss. Each efficiency stays at or above
+    ``RESISTANCE_FADE_MIN_EFFICIENCY``, which only very large growth
+    reaches, because the dispatch divides by it.
 
     Args:
         resistance_growth: Relative resistance growth (fraction, 0=new cell)
@@ -276,8 +282,11 @@ def resistance_to_efficiency(
     if resistance_growth <= 0:
         return base_charge_eff, base_discharge_eff
 
-    derate = math.sqrt(1.0 + resistance_growth)
-    return base_charge_eff / derate, base_discharge_eff / derate
+    scale = 1.0 + resistance_growth
+    return (
+        max(RESISTANCE_FADE_MIN_EFFICIENCY, 1.0 - (1.0 - base_charge_eff) * scale),
+        max(RESISTANCE_FADE_MIN_EFFICIENCY, 1.0 - (1.0 - base_discharge_eff) * scale),
+    )
 
 
 def _update_battery_soh_from_cycles(
