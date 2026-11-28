@@ -46,6 +46,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- Resistance fade (`enable_resistance_fade`, off by default) now grows each
+  one-way loss in proportion to the resistance:
+  `efficiency = 1 - (1 - base) × (1 + growth)`. It divided each efficiency by
+  `sqrt(1 + growth)`, which overstated the loss several times over: at 18 %
+  growth a 95 % round trip fell to 80.5 % instead of about 94.1 %. The extra
+  loss also heated the cells, which sped up calendar ageing. Runs with
+  resistance fade on now keep a higher efficiency, age more slowly and
+  report a higher NPV. Each efficiency is kept at or above 1 %, which only
+  very large growth reaches (#524).
 - An annual run now cuts its monthly table on the clock its weather covers
   the year on. It used the weather index's own clock, which can differ: local
   weather saved with two UTC offsets (across DST) is read as UTC but covers

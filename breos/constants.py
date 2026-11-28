@@ -35,6 +35,9 @@ NAUMANN_EA_R_J_MOL = 14406.0  # Activation Energy for resistance (J/mol)
 NAUMANN_EXPONENT_B_R = 0.5  # Time exponent (same sqrt-time as capacity)
 NAUMANN_SOC_EXPONENT_N_R = 0.75  # SOC exponent for resistance
 
+# Lowest one-way efficiency resistance fade can give; the dispatch divides by it.
+RESISTANCE_FADE_MIN_EFFICIENCY = 0.01
+
 # === Lam 2025 Parameters (Derived for LFP, lab conditions) ===
 # k0 derived from Lam Fig 3A (0.135% loss per week^0.75) and converted to seconds.
 # (0.00135 / (604800^0.75))
