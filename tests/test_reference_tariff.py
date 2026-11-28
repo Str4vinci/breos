@@ -96,6 +96,8 @@ def test_an_explicit_none_is_the_default(flat_app):
 
 # --- Flat and scheduled references ---------------------------------------------
 
+PRE_090_PV_MODEL = {"transposition_model": "isotropic", "diffuse_iam": "none"}
+
 
 @pytest.mark.parametrize(
     ("reference", "previous_npv"),
@@ -103,9 +105,10 @@ def test_an_explicit_none_is_the_default(flat_app):
     ids=["flat", "bundled", "month"],
 )
 def test_app_accepts_zero_reference_fixed_charge_with_previous_results(reference, previous_npv):
-    app = simulate_offline({**BASE, "reference_tariff": {**reference, "fixed_charge_per_day": 0}})
+    app = simulate_offline({**BASE, **PRE_090_PV_MODEL, "reference_tariff": {**reference, "fixed_charge_per_day": 0}})
     result = app.result()
-    # Pin the results from when an omitted reference fixed charge defaulted to zero.
+    # Pin the results from when an omitted reference fixed charge defaulted to
+    # zero, which predates the 0.9.0 PV model defaults.
     assert result["npv_savings"] == previous_npv
     assert result["no_system_fixed_charge_year1_prices"] == 0
     assert result["fixed_charge_year1_prices"] > 0

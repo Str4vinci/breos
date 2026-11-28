@@ -252,7 +252,7 @@ def test_app_reports_the_near_shading_stage(shaded_config, _patch_weather):
         "azimuth_periodic": True,
         "sky_view_factor": 0.9,
         "sky_view_factor_stated": True,
-        "circumsolar_shaded_with_beam": False,
+        "circumsolar_shaded_with_beam": True,
     }
     assert summary["arrays"][1]["sky_view_factor_stated"] is False
     json.dumps(result)
@@ -329,6 +329,7 @@ def test_the_circumsolar_flag_reads_any_spelling(shaded_config, _patch_weather):
     from breos import App
 
     shaded_config["pv_arrays"][0]["transposition_model"] = " Perez "
+    shaded_config["pv_arrays"][1]["transposition_model"] = "isotropic"
     app = App(shaded_config)
     app.simulate()
     arrays = app.result()["pv_loss_waterfall"]["near_shading"]["arrays"]

@@ -2,10 +2,11 @@
 
 ## Anisotropic sky-diffusion model
 
-The default `isotropic` transposition underestimates plane-of-array
-irradiance on clear days. Switch to an anisotropic model — here Perez — to
-capture circumsolar and horizon brightening. No extra weather inputs are
-needed; see [Sky-diffusion model](../getting-started/configuration.md#sky-diffusion-transposition-model):
+BREOS uses the Perez model by default, which captures circumsolar and horizon
+brightening. Choose another model with `transposition_model`, for example
+`"haydavies"`, or `"isotropic"` to reproduce results from before 0.9.0. No
+extra weather inputs are needed; see
+[Sky-diffusion model](../getting-started/configuration.md#sky-diffusion-transposition-model):
 
 ```toml
 location = "porto"
@@ -13,7 +14,7 @@ n_modules = 10
 annual_consumption_kwh = 4000
 cost_preset = "residential_pt"
 emissions_country = "PT"
-transposition_model = "perez"
+transposition_model = "haydavies"
 surface_type = "grass"          # or a numeric albedo, e.g. albedo = 0.2
 ```
 
@@ -21,7 +22,7 @@ surface_type = "grass"          # or a numeric albedo, e.g. albedo = 0.2
 the ground-diffuse component; a snowy or sandy foreground (`"snow"`, `"sand"`)
 raises annual yield further. Leave both unset to keep pvlib's 0.25 default.
 
-From the CLI, the equivalent flag is `--transposition-model perez`
+From the CLI, the equivalent flag is `--transposition-model haydavies`
 (alias `--sky-model`).
 
 ## Apply a custom terrain horizon

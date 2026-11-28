@@ -2,9 +2,9 @@
  "case": "ageing",
  "title": "Battery ageing with different degradation models",
  "breos_version": "0.8.1",
- "git_describe": "v0.8.0-96-g76b3c76",
- "generated_utc": "2026-11-25T15:47:38+00:00",
- "runtime_s": 15.7,
+ "git_describe": "v0.8.1-26-gbd6c74b-dirty",
+ "generated_utc": "2026-11-27T23:17:34+00:00",
+ "runtime_s": 16.2,
  "cheap": false,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
@@ -37,13 +37,13 @@
  ],
  "imposed_stress": {
   "source": "native_v1",
-  "mean_soc_pct": 44.48,
+  "mean_soc_pct": 44.56,
   "mean_cell_temperature_c": 20.5,
-  "fec_per_year": 270.9
+  "fec_per_year": 273.77
  },
  "files": {
-  "models.json": "0ca9fdbd86eed8897550a998741de36ced36eabbe279b983d31daa8ff2efdaf5",
-  "simulated.csv": "a452fce917d3b0b38ac203263805dad05887a58aa193ca42f869032e4e1e99e2",
-  "imposed.csv": "56e3e929f15203b565f06cb438ad69de9deb9541dcfed34fa993fe8138cd8423"
+  "models.json": "2eaf900d35a215968d9f93fc4078ad24817f68821ffcc13959ebee81738dde1b",
+  "simulated.csv": "abd85c6e8ac304b48ca76383bfa41e64449a538b0092534f3f7aeaa6de0ff229",
+  "imposed.csv": "631e0c8a878d9bbe2267d9ee5eaeba6c9cc3cb7f282143ed7e1335161d007e29"
  }
 }

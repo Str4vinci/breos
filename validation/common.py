@@ -25,10 +25,10 @@ REPORT_PATH = VALIDATION_DIR / "REPORT.md"
 
 MONTH_LABELS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
-# Model configs the suite runs BREOS with. isotropic = shipped default;
-# perez = what the external references effectively use; perez_mid = perez plus
-# mid-interval solar position (the full PVWatts/SAM convention); perez_diffuse
-# = perez plus Marion diffuse IAM; perez_physical and perez_martin_ruiz select
+# Model configs the suite runs BREOS with. isotropic = the default before
+# 0.9.0; perez = what the external references effectively use; perez_mid =
+# perez plus mid-interval solar position (the full PVWatts/SAM convention);
+# perez_diffuse = perez plus Marion diffuse IAM, the shipped default from 0.9.0; perez_physical and perez_martin_ruiz select
 # alternative beam/diffuse optics; perez_roof = perez with the PVsyst
 # semi-integrated (close roof mount) thermal preset; perez_sapm_roof is the
 # comparable Sandia close-mount glass/glass preset. Both measure rooftop yield
@@ -37,11 +37,12 @@ MONTH_LABELS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 # calculate_pv_production_ac keyword overrides. ``pv_module`` and ``n_modules``
 # are consumed by the harness before calling that function, allowing
 # same-weather and equal-nameplate comparisons. The drift test recomputes from
-# this same mapping.
+# this same mapping. Every entry states ``diffuse_iam`` so a change of library
+# default never moves a stored baseline.
 MODEL_CONFIGS = {
-    "isotropic": {"transposition_model": "isotropic"},
-    "perez": {"transposition_model": "perez"},
-    "perez_mid": {"transposition_model": "perez", "solar_position": "mid-interval"},
+    "isotropic": {"transposition_model": "isotropic", "diffuse_iam": "none"},
+    "perez": {"transposition_model": "perez", "diffuse_iam": "none"},
+    "perez_mid": {"transposition_model": "perez", "solar_position": "mid-interval", "diffuse_iam": "none"},
     "perez_diffuse": {"transposition_model": "perez", "diffuse_iam": "marion"},
     "perez_physical": {"transposition_model": "perez", "iam_model": "physical", "diffuse_iam": "marion"},
     "perez_martin_ruiz": {
@@ -49,12 +50,21 @@ MODEL_CONFIGS = {
         "iam_model": "martin_ruiz",
         "diffuse_iam": "marion",
     },
-    "perez_roof": {"transposition_model": "perez", "temperature_model": "pvsyst-semi-integrated"},
-    "perez_sapm_roof": {"transposition_model": "perez", "temperature_model": "sapm-close-mount-glass-glass"},
-    "bifacial_front": {"pv_module": "Generic_600W_Bifacial", "transposition_model": "perez"},
+    "perez_roof": {
+        "transposition_model": "perez",
+        "temperature_model": "pvsyst-semi-integrated",
+        "diffuse_iam": "none",
+    },
+    "perez_sapm_roof": {
+        "transposition_model": "perez",
+        "temperature_model": "sapm-close-mount-glass-glass",
+        "diffuse_iam": "none",
+    },
+    "bifacial_front": {"pv_module": "Generic_600W_Bifacial", "transposition_model": "perez", "diffuse_iam": "none"},
     "bifacial_rear": {
         "pv_module": "Generic_600W_Bifacial",
         "transposition_model": "perez",
+        "diffuse_iam": "none",
         "bifacial_model": "infinite_sheds",
         "gcr": 0.35,
         "pvrow_height": 1.5,

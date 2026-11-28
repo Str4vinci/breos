@@ -378,9 +378,10 @@ def _compute_irradiance_and_cell_temp_detail(
     ``model_options`` must come from
     :func:`breos.pv.model_options.resolve_pv_model_options`; every model name
     and geometry value it carries is taken as already validated. Its BREOS
-    defaults (isotropic transposition, beam-only IAM, faiman cell temperature,
-    no rear-side model, pvlib's own 0.25 albedo) reproduce pre-0.4 behaviour
-    bit-for-bit — see ``breos.pv.model_options`` for what each choice means.
+    defaults are Perez transposition with Marion diffuse IAM (from 0.9.0),
+    faiman cell temperature, no rear-side model and pvlib's own 0.25 albedo;
+    ``transposition_model="isotropic"`` with ``diffuse_iam="none"`` reproduces
+    earlier releases. See ``breos.pv.model_options`` for what each choice means.
 
     The cell-temperature model is driven by front-side ``poa_global`` plus the
     bifaciality-weighted rear irradiance, so rear gain contributes heat as well
@@ -425,20 +426,23 @@ def _compute_irradiance_and_cell_temp_detail(
                 "Klucher transposition divides DHI by GHI. "
                 "Repair these values explicitly before computing PV."
             )
-    poa = pvlib.irradiance.get_total_irradiance(
-        surface_tilt=surface_tilt,
-        surface_azimuth=surface_azimuth,
-        solar_zenith=solarpos.apparent_zenith,
-        solar_azimuth=solarpos.azimuth,
-        dni=dni,
-        ghi=ghi,
-        dhi=dhi,
-        dni_extra=dni_extra,
-        airmass=airmass,
-        model=model_options.transposition_model,
-        model_perez=model_options.model_perez,
-        **ground_kwargs,
-    )
+    # pvlib's Perez clearness divides by DHI and guards only the 0/0 case, so a
+    # step with beam but no diffuse would warn on every run of the default model.
+    with np.errstate(divide="ignore"):
+        poa = pvlib.irradiance.get_total_irradiance(
+            surface_tilt=surface_tilt,
+            surface_azimuth=surface_azimuth,
+            solar_zenith=solarpos.apparent_zenith,
+            solar_azimuth=solarpos.azimuth,
+            dni=dni,
+            ghi=ghi,
+            dhi=dhi,
+            dni_extra=dni_extra,
+            airmass=airmass,
+            model=model_options.transposition_model,
+            model_perez=model_options.model_perez,
+            **ground_kwargs,
+        )
 
     # Finite weather can still yield NaN POA, e.g. Reindl with a small negative
     # GHI reading accepted by the measurement tolerances. Keep POA cleanup for
@@ -615,9 +619,10 @@ def _shaded_poa(
         if model == "haydavies":
             parts = pvlib.irradiance.haydavies(**common, return_components=True)
         elif model == "perez":
-            parts = pvlib.irradiance.perez(
-                **common, airmass=airmass, model=model_options.model_perez, return_components=True
-            )
+            with np.errstate(divide="ignore"):
+                parts = pvlib.irradiance.perez(
+                    **common, airmass=airmass, model=model_options.model_perez, return_components=True
+                )
         else:
             parts = pvlib.irradiance.perez_driesse(**common, airmass=airmass, return_components=True)
         # Not capped at the sky total: Perez's isotropic and horizon terms
@@ -1111,7 +1116,7 @@ def calculate_pv_production_dc(
             loss. ``None`` means no age loss.
         loss_overrides: Per-component PVWatts loss overrides (percent)
         transposition_model: Sky-diffusion model for POA transposition
-            (one of ``TRANSPOSITION_MODELS``); defaults to ``"isotropic"``.
+            (one of ``TRANSPOSITION_MODELS``); defaults to ``"perez"``.
         albedo: Ground reflectance (0-1) for the ground-diffuse component;
             ``None`` uses pvlib's 0.25 default. Mutually exclusive with
             ``surface_type``.
@@ -1128,10 +1133,10 @@ def calculate_pv_production_dc(
             irradiance; ``"interval-start"`` reproduces the results of
             BREOS before 0.8.0 bit-for-bit.
         diffuse_iam: Whether IAM is also applied to the diffuse POA
-            components (one of ``DIFFUSE_IAM_METHODS``). ``"marion"``
-            weighs sky- and ground-diffuse with the view-factor-integrated
-            ashrae IAM; the default ``"none"`` (beam-only IAM) reproduces
-            prior behaviour bit-for-bit.
+            components (one of ``DIFFUSE_IAM_METHODS``). ``"marion"``, the
+            default, weighs sky- and ground-diffuse with the
+            view-factor-integrated IAM; ``"none"`` (beam-only IAM)
+            reproduces releases before 0.9.0.
         temperature_model: Cell-temperature model / mounting preset (one of
             ``TEMPERATURE_MODELS``). The ``pvsyst-*`` presets use pvlib's
             PVsyst cell model with its documented mounting coefficients;
@@ -1224,7 +1229,7 @@ def calculate_pv_production_dc_tracking(
             loss. ``None`` means no age loss.
         loss_overrides: Per-component PVWatts loss overrides (percent).
         transposition_model: Sky-diffusion model for POA transposition
-            (one of ``TRANSPOSITION_MODELS``); defaults to ``"isotropic"``.
+            (one of ``TRANSPOSITION_MODELS``); defaults to ``"perez"``.
         albedo: Ground reflectance (0-1) for the ground-diffuse component;
             ``None`` uses pvlib's 0.25 default. Mutually exclusive with
             ``surface_type``.
@@ -1236,8 +1241,8 @@ def calculate_pv_production_dc_tracking(
             evaluated (one of ``SOLAR_POSITION_METHODS``); also drives the
             tracker rotation angles.
         diffuse_iam: Whether IAM is also applied to the diffuse POA
-            components (one of ``DIFFUSE_IAM_METHODS``); the default
-            ``"none"`` reproduces prior behaviour bit-for-bit.
+            components (one of ``DIFFUSE_IAM_METHODS``); the default is
+            ``"marion"``, and ``"none"`` reproduces releases before 0.9.0.
         temperature_model: Cell-temperature model / mounting preset (one of
             ``TEMPERATURE_MODELS``); the default ``"faiman"`` (open rack)
             reproduces prior behaviour bit-for-bit.

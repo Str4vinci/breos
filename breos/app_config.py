@@ -586,7 +586,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default=DEFAULT_TRANSPOSITION_MODEL,
         cli_flags=("--transposition-model", "--sky-model"),
         cli_choices=tuple(TRANSPOSITION_MODELS),
-        cli_help="Sky-diffusion model for POA transposition (default: isotropic).",
+        cli_help="Sky-diffusion model for POA transposition (default: perez).",
         doc=(
             "Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion "
             "model](configuration.md#sky-diffusion-transposition-model)"

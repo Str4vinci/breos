@@ -607,7 +607,7 @@ class TestTracking:
         "option",
         [
             {"solar_position": "mid-interval"},
-            {"diffuse_iam": "marion"},
+            {"diffuse_iam": "none"},
             {"temperature_model": "pvsyst-semi-integrated"},
         ],
         ids=lambda option: next(iter(option)),
@@ -795,6 +795,7 @@ class TestSolarPosition:
                 pv_params=pv_params,
                 freq="h",
                 solar_position=sp,
+                transposition_model="isotropic",
             )
 
         def morning_share(series):
@@ -953,9 +954,9 @@ class TestPerezCoefficients:
 @pytest.mark.parametrize(
     ("option_name", "value"),
     [
-        ("transposition_model", "isotropic"),
+        ("transposition_model", "perez"),
         ("solar_position", "interval-start"),
-        ("diffuse_iam", "none"),
+        ("diffuse_iam", "marion"),
         ("iam_model", "ashrae"),
         ("temperature_model", "faiman"),
         # pvlib's own ground albedo default.
@@ -980,6 +981,29 @@ def test_each_default_is_its_named_value(synthetic_weather, porto_location, pv_p
     pd.testing.assert_series_equal(dc(), dc(**{option_name: value}))
 
 
+def test_perez_is_silent_on_beam_without_diffuse(synthetic_weather, porto_location, pv_params):
+    # pvlib's Perez clearness divides by DHI; a sunlit step with no diffuse
+    # must not warn on every default run.
+    weather = synthetic_weather.copy()
+    noon = weather.index[weather.index.hour == 12][:30]
+    weather.loc[noon, "dhi"] = 0.0
+    weather.loc[noon, "ghi"] = weather.loc[noon, "dni"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        dc = calculate_pv_production_dc(
+            weather_data=weather,
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            transposition_model="perez",
+        )
+    assert np.isfinite(dc.to_numpy()).all()
+    assert (dc.loc[noon] > 0).all()
+
+
 class TestModelOptionNames:
     """Every named PV model option is normalised the same way and rejects unknown names.
 
@@ -999,7 +1023,7 @@ class TestModelOptionNames:
             pytest.param(
                 "solar_position", "mid-interval", "midpoint", "Unknown solar position method", {}, id="solar_position"
             ),
-            pytest.param("diffuse_iam", "marion", "martin", "Unknown diffuse IAM method", {}, id="diffuse_iam"),
+            pytest.param("diffuse_iam", "none", "martin", "Unknown diffuse IAM method", {}, id="diffuse_iam"),
             pytest.param("iam_model", "physical", "not-an-iam", "Unknown IAM model", {}, id="iam_model"),
             pytest.param("iam_model", "martin_ruiz", "not-an-iam", "Unknown IAM model", {}, id="iam_model-martin_ruiz"),
             pytest.param(

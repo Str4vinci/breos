@@ -2,9 +2,9 @@
  "case": "orientation",
  "title": "Array tilt and azimuth",
  "breos_version": "0.8.1",
- "git_describe": "v0.8.0-96-g76b3c76",
- "generated_utc": "2026-11-25T15:46:50+00:00",
- "runtime_s": 158.7,
+ "git_describe": "v0.8.1-26-gbd6c74b-dirty",
+ "generated_utc": "2026-11-27T23:16:45+00:00",
+ "runtime_s": 135.3,
  "cheap": false,
  "configs": {
   "configs/examples/pv-only.toml": "b05d6a251ee3a4b9a4510866f9268b740434280ced704f9e8e4654363c35c8b0"
@@ -140,8 +140,8 @@
   200
  ],
  "files": {
-  "orientations.csv": "9f00eb24a6084786c36d4e39fec8667a89b67e966ee3b022e7991e1c9e95497c",
-  "fine.csv": "d5016b00dc8ca2d8a74355d3caf1384ee15f7da6f1c13423cf122e5f0bc2ed32",
-  "default.json": "0b4068916766ca35daca8bb78914e654d98a97e148558f819069134bf222160b"
+  "orientations.csv": "5bfef3651fadcd2f9102a9fb1236d806ffad372f9c76bb41c0ebb8a0b413f6a8",
+  "fine.csv": "5ab947f5c3a13396b1c54ea2bc6486096e00e43fe4807ccd7503225957d69449",
+  "default.json": "536c5e599a1ec15f7ab8ad30dae676fd8b9ac19f204be21f81fb962541718fa3"
  }
 }

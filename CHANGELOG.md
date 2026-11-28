@@ -37,6 +37,31 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   result value is unchanged; `provenance.resolved_config` records the key as
   `null`, like other unset keys.
 
+### Changed
+
+- PV runs now default to Perez sky transposition (`transposition_model =
+  "perez"`, was `"isotropic"`) with Marion's diffuse incidence-angle loss
+  (`diffuse_iam = "marion"`, was `"none"`). Perez is what PVWatts, SAM and
+  PVsyst use, and the isotropic model underestimates tilted irradiance on
+  clear days. Annual AC yield of the 4 kWp south-facing reference system in
+  the validation suite changes by:
+
+  | Site | Before (kWh) | After (kWh) | Change |
+  |---|---:|---:|---:|
+  | Porto | 6043 | 6243 | +3.3 % |
+  | Berlin | 4045 | 4215 | +4.2 % |
+  | Golden, Colorado | 6940 | 7162 | +3.2 % |
+  | Nairobi | 6199 | 6092 | −1.7 % |
+  | New Delhi | 6350 | 6486 | +2.1 % |
+  | Melbourne | 5768 | 5974 | +3.6 % |
+  | São Paulo | 5463 | 5483 | +0.4 % |
+
+  Every result that depends on PV production moves with it: self-consumption,
+  grid import and export, battery cycling, NPV and emissions. To reproduce a
+  result from an earlier release, set `transposition_model = "isotropic"` and
+  `diffuse_iam = "none"`. The validation suite states both keys in every
+  configuration, so its stored baselines are unchanged.
+
 ### Removed
 
 - `fetch_weather_data` no longer takes `tilt` and `azimuth`. They only set
@@ -46,6 +71,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- Perez transposition no longer emits a NumPy `RuntimeWarning: divide by zero`
+  on steps with beam but no diffuse irradiance. pvlib's clearness index
+  divides by DHI; the result on those steps was already correct.
 - An annual run now cuts its monthly table on the clock its weather covers
   the year on. It used the weather index's own clock, which can differ: local
   weather saved with two UTC offsets (across DST) is read as UTC but covers

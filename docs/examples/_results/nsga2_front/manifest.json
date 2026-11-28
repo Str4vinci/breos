@@ -2,9 +2,9 @@
  "case": "nsga2_front",
  "title": "Multi-objective sizing with NSGA-II",
  "breos_version": "0.8.1",
- "git_describe": "v0.8.0-96-g76b3c76",
- "generated_utc": "2026-11-25T16:30:32+00:00",
- "runtime_s": 165.6,
+ "git_describe": "v0.8.1-26-gbd6c74b-dirty",
+ "generated_utc": "2026-11-28T01:38:25+00:00",
+ "runtime_s": 650.5,
  "cheap": false,
  "configs": {
   "configs/optimization/projected-optimization.toml": "c0f8303aff05aaf8a021102deb049569615d8c5e8b0208172e1c21c808ff7cae"
@@ -41,6 +41,6 @@
  },
  "module_area_m2": 2.5833,
  "files": {
-  "pareto.csv": "e1f20476be1480eddb886ba368138971314194f8984296b93da305abe330553a"
+  "pareto.csv": "e09d7457f5cf071818cb08274495ac8b415f18b53b28982c5147610dcd0efe82"
  }
 }

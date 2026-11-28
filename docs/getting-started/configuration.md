@@ -453,16 +453,17 @@ percentage after applying any `pv_loss_overrides`.
 ## Recommended PV-model starting point
 
 BREOS keeps most historical defaults stable so existing studies remain
-reproducible; the solar-position default changed in 0.8.0. For a new hourly
+reproducible. The solar-position default changed in 0.8.0, and the sky
+transposition and diffuse IAM defaults changed in 0.9.0. For a new hourly
 study using interval-averaged weather, the explicit profile in
 `configs/examples/recommended-pv.toml` is a stronger starting point:
 
 | Choice | Default | Recommended starting point |
 |---|---|---|
-| Sky transposition | `isotropic` | `perez` |
+| Sky transposition | `perez` (`isotropic` before 0.9.0) | `perez` |
 | Solar position | `auto` (see [Solar position](#solar-position)) | `weather` when the input has content-bound timing metadata; otherwise choose a label-aware explicit method |
 | Beam IAM | `ashrae` | `physical` |
-| Diffuse IAM | `none` | `marion` |
+| Diffuse IAM | `marion` (`none` before 0.9.0) | `marion` |
 | Cell temperature | `faiman` open rack | A mount-appropriate PVsyst or SAPM preset |
 
 These are explicit modeling assumptions, not universally correct replacements.
@@ -521,6 +522,13 @@ historical default, `"ashrae"`, remains the compatible choice. Set it to
 for its empirical model. BREOS deliberately uses pvlib's published default
 parameters for both alternatives; it does not fabricate module-specific
 optical inputs.
+
+`diffuse_iam` sets whether that optical loss also applies to the diffuse
+components. `"marion"` (the default from 0.9.0) weighs the sky- and
+ground-diffuse irradiance with the selected IAM integrated over their view
+factors (Marion 2017). `"none"`, the default before 0.9.0, lets diffuse
+irradiance pass without optical loss, which overestimates yield by about
+0.5–1%.
 
 For `diffuse_iam = "marion"`, fixed-tilt arrays use pvlib's exact Marion
 diffuse integration with that same selected IAM model. Tracking arrays
@@ -1011,23 +1019,26 @@ it is the run they share; see [Several inverters](#several-inverters).
 
 To compute plane-of-array (POA) irradiance, BREOS transposes the horizontal
 irradiance components (GHI/DHI/DNI) onto the tilted module surface using a
-*sky-diffusion* (transposition) model. The default, `"isotropic"`, treats
-diffuse sky radiance as uniform — simple and robust, but it underestimates POA
-on clear days because it ignores circumsolar and horizon brightening.
+*sky-diffusion* (transposition) model. The default, `"perez"`, captures
+circumsolar and horizon brightening, as PVWatts, SAM and PVsyst do.
+`"isotropic"` treats diffuse sky radiance as uniform. It is simple and robust,
+but it underestimates POA on clear days, and over a full year it gives a few
+percent less POA than Perez at mid-latitude sites. Set `transposition_model`
+to any of:
 
-Anisotropic models capture those effects and are generally more accurate; over
-a full year, Perez can raise modeled POA by a few percent relative to
-isotropic at mid-latitude sites. Set `transposition_model` to any of:
-
-`isotropic` (default), `klucher`, `haydavies`, `reindl`, `king`, `perez`,
+`isotropic`, `klucher`, `haydavies`, `reindl`, `king`, `perez` (default),
 `perez-driesse`.
+
+Before 0.9.0 the default was `isotropic`, with `diffuse_iam = "none"`. To
+reproduce results from an earlier version, set both:
 
 ```python
 breos.App({
     "location": "porto",
     "n_modules": 10,
     "annual_consumption_kwh": 4000,
-    "transposition_model": "perez",
+    "transposition_model": "isotropic",
+    "diffuse_iam": "none",
 })
 ```
 
